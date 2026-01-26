@@ -67,6 +67,10 @@ module.exports = grammar({
     [$.type_identifier, $.upper_identifier],
     [$.row_extension, $._identifier],
     [$.record_update, $._identifier],
+    // BDD testing conflicts
+    [$.test_fixture, $.let_expression],
+    [$.effect_binding, $.record_field_expression],
+    [$._expect_statement, $.expect_clause],
   ],
 
   rules: {
@@ -118,7 +122,8 @@ module.exports = grammar({
         $.type_declaration,
         $.effect_declaration,
         $.function_declaration,
-        $.spec_declaration
+        $.spec_declaration,
+        $.describe_block
       ),
 
     // Type declarations
@@ -235,6 +240,191 @@ module.exports = grammar({
 
     parameter_list: ($) =>
       commaSep1(seq($.lower_identifier, ":", $._type_expression, optional($.refinement))),
+
+    // =========================================================================
+    // BDD Testing
+    // =========================================================================
+
+    // describe "Name" { ... }
+    describe_block: ($) =>
+      seq(
+        "describe",
+        $.string_literal,
+        "{",
+        repeat($._describe_member),
+        "}"
+      ),
+
+    _describe_member: ($) =>
+      choice(
+        $.describe_block,
+        $.context_block,
+        $.it_block,
+        $.property_test,
+        $.test_fixture,
+        $.before_all_hook,
+        $.before_each_hook,
+        $.after_each_hook,
+        $.after_all_hook
+      ),
+
+    // context "when something" { ... }
+    context_block: ($) =>
+      seq(
+        "context",
+        $.string_literal,
+        "{",
+        repeat($._describe_member),
+        "}"
+      ),
+
+    // it "does something" { given ... when ... expect ... }
+    // it.only "focused" { ... }
+    // it.skip "pending" { ... }
+    // it.skip("reason") "pending" { ... }
+    it_block: ($) =>
+      seq(
+        "it",
+        optional($.it_modifier),
+        $.string_literal,
+        "{",
+        optional($.with_clause),
+        optional($.given_clause),
+        optional($.when_clause),
+        repeat1($.expect_statement),
+        "}",
+        optional($.examples_block)
+      ),
+
+    it_modifier: ($) =>
+      choice(
+        ".only",
+        ".skip",
+        seq(".skip", "(", $.string_literal, ")")
+      ),
+
+    // with { http: mock_http, db: mock_db }
+    with_clause: ($) =>
+      seq(
+        "with",
+        "{",
+        commaSep1($.effect_binding),
+        "}",
+        optional(",")
+      ),
+
+    effect_binding: ($) =>
+      seq($.lower_identifier, ":", $._expression),
+
+    // given expression or { record }
+    given_clause: ($) =>
+      seq("given", $._expression),
+
+    // when function_name or |x| expression
+    when_clause: ($) =>
+      seq("when", choice($._identifier, $.qualified_identifier, $.lambda_expression)),
+
+    // expect expression [matcher]
+    // expect value to_equal 5
+    // expect result to_be Ok(_)
+    expect_statement: ($) =>
+      seq(
+        "expect",
+        $._expression,
+        optional($.matcher)
+      ),
+
+    matcher: ($) =>
+      seq(
+        $.matcher_name,
+        optional($._expression)
+      ),
+
+    matcher_name: ($) =>
+      choice(
+        "to_equal",
+        "to_be",
+        "to_be_ok",
+        "to_be_err",
+        "to_be_some",
+        "to_be_none",
+        "to_be_empty",
+        "to_be_type",
+        "to_contain",
+        "to_have_length",
+        "to_start_with",
+        "to_end_with",
+        "to_match",
+        "to_satisfy",
+        "to_be_greater_than",
+        "to_be_less_than",
+        "to_be_between"
+      ),
+
+    // Table-driven tests: examples { (col1, col2) => (val1, val2) ... }
+    // Alternative tuple-based syntax to avoid | conflicts
+    examples_block: ($) =>
+      seq(
+        "examples",
+        "{",
+        $.examples_header,
+        repeat1($.examples_row),
+        "}"
+      ),
+
+    examples_header: ($) =>
+      seq("(", commaSep1($.lower_identifier), ")"),
+
+    examples_row: ($) =>
+      seq("(", commaSep1($._expression), ")"),
+
+    // let fixture = value (inside describe)
+    test_fixture: ($) =>
+      seq("let", $.lower_identifier, "=", $._expression),
+
+    // Hooks
+    before_all_hook: ($) =>
+      seq("before_all", $.block_expression),
+
+    before_each_hook: ($) =>
+      seq("before_each", $.block_expression),
+
+    after_each_hook: ($) =>
+      seq("after_each", $.block_expression),
+
+    after_all_hook: ($) =>
+      seq("after_all", $.block_expression),
+
+    // property "name" { forall x: Type ... expect ... }
+    property_test: ($) =>
+      seq(
+        "property",
+        $.string_literal,
+        choice(
+          // Short form: property "name" = expression
+          seq("=", $._expression),
+          // Block form with forall
+          seq(
+            "{",
+            $.forall_clause,
+            optional($.where_constraint),
+            $.expect_clause,
+            "}"
+          )
+        )
+      ),
+
+    forall_clause: ($) =>
+      seq(
+        "forall",
+        commaSep1($.forall_binding)
+      ),
+
+    forall_binding: ($) =>
+      seq($.lower_identifier, ":", $._type_expression),
+
+    where_constraint: ($) =>
+      seq("where", $._expression),
 
     // =========================================================================
     // Type expressions

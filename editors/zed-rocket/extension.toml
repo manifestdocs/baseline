@@ -1,0 +1,12 @@
+id = "rocket"
+name = "Rocket"
+description = "Rocket programming language support"
+version = "0.1.0"
+schema_version = 1
+authors = ["Rocket Language Team"]
+repository = "https://github.com/rocket-lang/rocket-lang"
+
+[grammars.rocket]
+repository = "file:///Users/alastair/Documents/work/rocket-tycoon/rocket-lang"
+rev = "main"
+path = "crates/tree-sitter-rocket"
