@@ -78,12 +78,12 @@
 ; Functions
 ; ============================================================================
 
-; Function declarations
+; Function declarations - first identifier is the function name
 (function_declaration
-  (lower_identifier) @function)
+  (lower_identifier) @function.definition)
 
 (function_declaration
-  (effectful_identifier) @function.effectful)
+  (effectful_identifier) @function.definition)
 
 ; Effect operations
 (effect_operation
@@ -96,18 +96,23 @@
 (call_expression
   (qualified_identifier) @function.call)
 
-; Lambda
-(lambda_expression
-  "|" @punctuation.delimiter
-  "|" @punctuation.delimiter)
+; Lambda parameters - must come before generic variable captures
+(lambda_parameter
+  (identifier_pattern
+    (lower_identifier) @variable.parameter))
 
 (lambda_parameter
   (lower_identifier) @variable.parameter)
+
+(lambda_expression
+  "|" @punctuation.delimiter
+  "|" @punctuation.delimiter)
 
 ; ============================================================================
 ; Variables and Identifiers
 ; ============================================================================
 
+; Generic fallbacks - must come AFTER specific patterns
 (lower_identifier) @variable
 (upper_identifier) @type
 (effectful_identifier) @function.effectful
