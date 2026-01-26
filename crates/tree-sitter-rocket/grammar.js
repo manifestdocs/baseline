@@ -70,7 +70,7 @@ module.exports = grammar({
     // BDD testing conflicts
     [$.test_fixture, $.let_expression],
     [$.effect_binding, $.record_field_expression],
-    [$._expect_statement, $.expect_clause],
+    [$._identifier, $.constructor_expression],
   ],
 
   rules: {
@@ -408,7 +408,7 @@ module.exports = grammar({
             "{",
             $.forall_clause,
             optional($.where_constraint),
-            $.expect_clause,
+            $.expect_statement,
             "}"
           )
         )
@@ -509,6 +509,7 @@ module.exports = grammar({
         $.tuple_expression,
         $.list_expression,
         $.record_expression,
+        $.constructor_expression,
         $.call_expression,
         $.field_expression
       ),
@@ -657,6 +658,18 @@ module.exports = grammar({
       seq($.lower_identifier, optional(seq(":", $._expression))),
 
     record_update: ($) => seq("..", $._expression),
+
+    // Constructor expression: TypeName { field: value, ... }
+    constructor_expression: ($) =>
+      seq(
+        $.upper_identifier,
+        "{",
+        optional(seq(
+          commaSep1($.record_field_expression),
+          optional(",")
+        )),
+        "}"
+      ),
 
     // Operations
     unary_expression: ($) =>

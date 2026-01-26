@@ -1136,20 +1136,11 @@
           ]
         },
         {
-          "type": "CHOICE",
-          "members": [
-            {
-              "type": "SYMBOL",
-              "name": "expect_clause"
-            },
-            {
-              "type": "REPEAT1",
-              "content": {
-                "type": "SYMBOL",
-                "name": "_expect_statement"
-              }
-            }
-          ]
+          "type": "REPEAT1",
+          "content": {
+            "type": "SYMBOL",
+            "name": "expect_statement"
+          }
         },
         {
           "type": "STRING",
@@ -1313,20 +1304,7 @@
         }
       ]
     },
-    "expect_clause": {
-      "type": "SEQ",
-      "members": [
-        {
-          "type": "STRING",
-          "value": "expect"
-        },
-        {
-          "type": "SYMBOL",
-          "name": "_expression"
-        }
-      ]
-    },
-    "_expect_statement": {
+    "expect_statement": {
       "type": "SEQ",
       "members": [
         {
@@ -1674,7 +1652,7 @@
                 },
                 {
                   "type": "SYMBOL",
-                  "name": "expect_clause"
+                  "name": "expect_statement"
                 },
                 {
                   "type": "STRING",
@@ -2180,6 +2158,10 @@
         {
           "type": "SYMBOL",
           "name": "record_expression"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "constructor_expression"
         },
         {
           "type": "SYMBOL",
@@ -3091,6 +3073,73 @@
         {
           "type": "SYMBOL",
           "name": "_expression"
+        }
+      ]
+    },
+    "constructor_expression": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "upper_identifier"
+        },
+        {
+          "type": "STRING",
+          "value": "{"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "SEQ",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "record_field_expression"
+                    },
+                    {
+                      "type": "REPEAT",
+                      "content": {
+                        "type": "SEQ",
+                        "members": [
+                          {
+                            "type": "STRING",
+                            "value": ","
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "record_field_expression"
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "STRING",
+                      "value": ","
+                    },
+                    {
+                      "type": "BLANK"
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "STRING",
+          "value": "}"
         }
       ]
     },
@@ -4731,8 +4780,8 @@
       "record_field_expression"
     ],
     [
-      "_expect_statement",
-      "expect_clause"
+      "_identifier",
+      "constructor_expression"
     ]
   ],
   "precedences": [],
