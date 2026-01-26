@@ -1,0 +1,39 @@
+# Build outputs
+target/
+dist/
+build/
+*.wasm
+
+# Dependencies
+node_modules/
+.packages/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+logs/
+
+# Test artifacts
+coverage/
+.nyc_output/
+*.snap.new
+
+# Temporary files
+tmp/
+temp/
+*.tmp

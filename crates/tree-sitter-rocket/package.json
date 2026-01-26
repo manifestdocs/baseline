@@ -1,0 +1,36 @@
+{
+  "name": "tree-sitter-rocket",
+  "version": "0.1.0",
+  "description": "Tree-sitter grammar for the Rocket programming language",
+  "main": "bindings/node",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rocket-lang/tree-sitter-rocket"
+  },
+  "keywords": [
+    "tree-sitter",
+    "parser",
+    "rocket",
+    "language"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "tree-sitter-cli": "^0.25.0"
+  },
+  "scripts": {
+    "generate": "tree-sitter generate",
+    "test": "tree-sitter test",
+    "parse": "tree-sitter parse"
+  },
+  "tree-sitter": [
+    {
+      "scope": "source.rocket",
+      "file-types": [
+        "rk",
+        "rocket"
+      ],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm"
+    }
+  ]
+}

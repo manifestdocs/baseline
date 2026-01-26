@@ -1,0 +1,34 @@
+// A simple Rocket program demonstrating basic features
+
+/// Greets a user by name
+greet : String -> String
+greet = |name| "Hello, ${name}!"
+
+/// Adds two integers
+add : (Int, Int) -> Int
+add = |a, b| a + b
+
+/// Checks if a number is positive
+is_positive : Int -> Bool
+is_positive = |n| n > 0
+
+/// A simple sum type for results
+type Status =
+  | Active
+  | Inactive
+  | Pending(String)
+
+/// A record type for users
+type User = {
+  name: String,
+  age: Int,
+  status: Status,
+}
+
+/// Main entry point
+main! : {Console} ()
+main! =
+  let message = greet("World")
+  Console.print!(message)
+  let sum = add(1, 2)
+  Console.print!("1 + 2 = ${sum}")

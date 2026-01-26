@@ -1,0 +1,200 @@
+================================================================================
+Effect declaration
+================================================================================
+
+effect Console {
+  print! : String -> ()
+  read_line! : () -> String
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (effect_declaration
+    (upper_identifier)
+    (effect_operation
+      (effectful_identifier)
+      (function_type
+        (primitive_type)
+        (tuple_type)))
+    (effect_operation
+      (effectful_identifier)
+      (function_type
+        (tuple_type)
+        (primitive_type)))))
+
+================================================================================
+Effect with generic operations
+================================================================================
+
+effect Random {
+  int! : (Int, Int) -> Int
+  float! : () -> Float
+  shuffle! : List<T> -> List<T>
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (effect_declaration
+    (upper_identifier)
+    (effect_operation
+      (effectful_identifier)
+      (function_type
+        (tuple_type
+          (primitive_type)
+          (primitive_type))
+        (primitive_type)))
+    (effect_operation
+      (effectful_identifier)
+      (function_type
+        (tuple_type)
+        (primitive_type)))
+    (effect_operation
+      (effectful_identifier)
+      (function_type
+        (generic_type
+          (upper_identifier)
+          (type_identifier))
+        (generic_type
+          (upper_identifier)
+          (type_identifier))))))
+
+================================================================================
+Effect set in function type
+================================================================================
+
+fetch! : String -> {Http} Response
+fetch! = |url| Http.get!(url)
+
+process! : Data -> {Log, Db} Result
+process! = |data| Db.save!(data)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (effectful_identifier)
+    (type_annotation
+      (function_type
+        (primitive_type)
+        (effect_type
+          (effect_set
+            (effect_reference
+              (upper_identifier)))
+          (type_identifier))))
+    (effectful_identifier)
+    (lambda_expression
+      (lambda_parameter
+        (identifier_pattern
+          (lower_identifier)))
+      (call_expression
+        (qualified_identifier
+          (upper_identifier)
+          (effectful_identifier))
+        (argument
+          (lower_identifier)))))
+  (function_declaration
+    (effectful_identifier)
+    (type_annotation
+      (function_type
+        (type_identifier)
+        (effect_type
+          (effect_set
+            (effect_reference
+              (upper_identifier))
+            (effect_reference
+              (upper_identifier)))
+          (type_identifier))))
+    (effectful_identifier)
+    (lambda_expression
+      (lambda_parameter
+        (identifier_pattern
+          (lower_identifier)))
+      (call_expression
+        (qualified_identifier
+          (upper_identifier)
+          (effectful_identifier))
+        (argument
+          (lower_identifier))))))
+
+================================================================================
+Effect with sub-capability
+================================================================================
+
+query! : String -> {Db.read} List<Row>
+query! = |sql| Db.execute!(sql)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (effectful_identifier)
+    (type_annotation
+      (function_type
+        (primitive_type)
+        (effect_type
+          (effect_set
+            (effect_reference
+              (upper_identifier)
+              (lower_identifier)))
+          (generic_type
+            (upper_identifier)
+            (type_identifier)))))
+    (effectful_identifier)
+    (lambda_expression
+      (lambda_parameter
+        (identifier_pattern
+          (lower_identifier)))
+      (call_expression
+        (qualified_identifier
+          (upper_identifier)
+          (effectful_identifier))
+        (argument
+          (lower_identifier))))))
+
+================================================================================
+Export effect
+================================================================================
+
+export effect MyEffect {
+  do_thing! : Int -> String
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (effect_declaration
+    (upper_identifier)
+    (effect_operation
+      (effectful_identifier)
+      (function_type
+        (primitive_type)
+        (primitive_type)))))
+
+================================================================================
+Calling effectful operations
+================================================================================
+
+main! : {Console} ()
+main! = Console.print!("Hello!")
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (effectful_identifier)
+    (type_annotation
+      (effect_type
+        (effect_set
+          (effect_reference
+            (upper_identifier)))
+        (tuple_type)))
+    (effectful_identifier)
+    (call_expression
+      (qualified_identifier
+        (upper_identifier)
+        (effectful_identifier))
+      (argument
+        (string_literal
+          (string_content))))))

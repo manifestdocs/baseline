@@ -1,0 +1,441 @@
+================================================================================
+Binary expressions - arithmetic
+================================================================================
+
+sum = a + b
+diff = a - b
+prod = a * b
+quot = a / b
+rem = a % b
+pow = a ** b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier))))
+
+================================================================================
+Binary expressions - comparison
+================================================================================
+
+eq = a == b
+ne = a != b
+lt = a < b
+gt = a > b
+le = a <= b
+ge = a >= b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier))))
+
+================================================================================
+Binary expressions - logical
+================================================================================
+
+both = a && b
+either = a || b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (lower_identifier))))
+
+================================================================================
+Unary expressions
+================================================================================
+
+neg = -x
+not = !b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (unary_expression
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (unary_expression
+      (lower_identifier))))
+
+================================================================================
+Pipe expressions
+================================================================================
+
+piped = x |> f |> g
+composed = f >> g >> h
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (pipe_expression
+      (pipe_expression
+        (lower_identifier)
+        (lower_identifier))
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (pipe_expression
+      (pipe_expression
+        (lower_identifier)
+        (lower_identifier))
+      (lower_identifier))))
+
+================================================================================
+Field access
+================================================================================
+
+name = user.name
+nested = response.body.data
+index = tuple.0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (field_expression
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (field_expression
+      (field_expression
+        (lower_identifier)
+        (lower_identifier))
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (field_expression
+      (lower_identifier)
+      (integer_literal))))
+
+================================================================================
+Call expressions
+================================================================================
+
+simple = f(x)
+multi = add(1, 2)
+named = create_user(name: "Alice", age: 30)
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (call_expression
+      (lower_identifier)
+      (argument
+        (lower_identifier))))
+  (function_declaration
+    (lower_identifier)
+    (call_expression
+      (lower_identifier)
+      (argument
+        (integer_literal))
+      (argument
+        (integer_literal))))
+  (function_declaration
+    (lower_identifier)
+    (call_expression
+      (lower_identifier)
+      (argument
+        (lower_identifier)
+        (string_literal
+          (string_content)))
+      (argument
+        (lower_identifier)
+        (integer_literal)))))
+
+================================================================================
+If expressions
+================================================================================
+
+simple = if a then b else c
+chained = if a then x else if b then y else z
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (if_expression
+      (lower_identifier)
+      (lower_identifier)
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (if_expression
+      (lower_identifier)
+      (lower_identifier)
+      (if_expression
+        (lower_identifier)
+        (lower_identifier)
+        (lower_identifier)))))
+
+================================================================================
+Match expressions
+================================================================================
+
+result = match x
+  Some(v) -> v
+  None -> 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (match_expression
+      (lower_identifier)
+      (match_arm
+        (variant_pattern
+          (upper_identifier)
+          (identifier_pattern
+            (lower_identifier)))
+        (lower_identifier))
+      (match_arm
+        (variant_pattern
+          (upper_identifier))
+        (integer_literal)))))
+
+================================================================================
+Match expressions with guards
+================================================================================
+
+guarded = match n
+  x if x > 0 -> "positive"
+  _ -> "other"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (match_expression
+      (lower_identifier)
+      (match_arm
+        (identifier_pattern
+          (lower_identifier))
+        (binary_expression
+          (lower_identifier)
+          (integer_literal))
+        (string_literal
+          (string_content)))
+      (match_arm
+        (wildcard_pattern)
+        (string_literal
+          (string_content))))))
+
+================================================================================
+Let expressions
+================================================================================
+
+result =
+  let x = 10 in
+  let y = 20 in
+  x + y
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (let_expression
+      (identifier_pattern
+        (lower_identifier))
+      (integer_literal)
+      (let_expression
+        (identifier_pattern
+          (lower_identifier))
+        (integer_literal)
+        (binary_expression
+          (lower_identifier)
+          (lower_identifier))))))
+
+================================================================================
+List expressions
+================================================================================
+
+empty = []
+simple = [1, 2, 3]
+spread = [0, ..rest]
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (list_expression))
+  (function_declaration
+    (lower_identifier)
+    (list_expression
+      (integer_literal)
+      (integer_literal)
+      (integer_literal)))
+  (function_declaration
+    (lower_identifier)
+    (list_expression
+      (integer_literal)
+      (spread_element
+        (lower_identifier)))))
+
+================================================================================
+Record expressions
+================================================================================
+
+simple = { name: "Alice", age: 30 }
+shorthand = { name, age }
+update = { ..user, age: 31 }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (record_expression
+      (record_field_expression
+        (lower_identifier)
+        (string_literal
+          (string_content)))
+      (record_field_expression
+        (lower_identifier)
+        (integer_literal))))
+  (function_declaration
+    (lower_identifier)
+    (record_expression
+      (record_field_expression
+        (lower_identifier))
+      (record_field_expression
+        (lower_identifier))))
+  (function_declaration
+    (lower_identifier)
+    (record_expression
+      (record_update
+        (lower_identifier))
+      (record_field_expression
+        (lower_identifier)
+        (integer_literal)))))
+
+================================================================================
+Block expressions
+================================================================================
+
+result = {
+  let temp = compute();
+  transform(temp)
+}
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (block_expression
+      (let_expression
+        (identifier_pattern
+          (lower_identifier))
+        (call_expression
+          (lower_identifier)))
+      (call_expression
+        (lower_identifier)
+        (argument
+          (lower_identifier))))))
+
+================================================================================
+Error handling expressions
+================================================================================
+
+propagate = fallible()?
+unwrap = maybe!
+default = maybe ?? 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (postfix_expression
+      (call_expression
+        (lower_identifier))))
+  (function_declaration
+    (lower_identifier)
+    (postfix_expression
+      (lower_identifier)))
+  (function_declaration
+    (lower_identifier)
+    (binary_expression
+      (lower_identifier)
+      (integer_literal))))

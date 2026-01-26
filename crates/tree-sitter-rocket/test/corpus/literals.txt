@@ -1,0 +1,172 @@
+================================================================================
+Integer literals
+================================================================================
+
+x = 42
+y = -17
+z = 1_000_000
+hex = 0xFF
+bin = 0b1010
+oct = 0o755
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (integer_literal))
+  (function_declaration
+    (lower_identifier)
+    (integer_literal))
+  (function_declaration
+    (lower_identifier)
+    (integer_literal))
+  (function_declaration
+    (lower_identifier)
+    (integer_literal))
+  (function_declaration
+    (lower_identifier)
+    (integer_literal))
+  (function_declaration
+    (lower_identifier)
+    (integer_literal)))
+
+================================================================================
+Float literals
+================================================================================
+
+pi = 3.14159
+neg = -0.001
+sci = 1.5e10
+sci_neg = 1.5e-10
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (float_literal))
+  (function_declaration
+    (lower_identifier)
+    (float_literal))
+  (function_declaration
+    (lower_identifier)
+    (float_literal))
+  (function_declaration
+    (lower_identifier)
+    (float_literal)))
+
+================================================================================
+Boolean literals
+================================================================================
+
+t = true
+f = false
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (boolean_literal))
+  (function_declaration
+    (lower_identifier)
+    (boolean_literal)))
+
+================================================================================
+String literals
+================================================================================
+
+simple = "Hello, World"
+escaped = "Line 1\nLine 2"
+quotes = "Say \"hello\""
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (string_literal
+      (string_content)))
+  (function_declaration
+    (lower_identifier)
+    (string_literal
+      (string_content)
+      (escape_sequence)
+      (string_content)))
+  (function_declaration
+    (lower_identifier)
+    (string_literal
+      (string_content)
+      (escape_sequence)
+      (string_content)
+      (escape_sequence))))
+
+================================================================================
+String interpolation
+================================================================================
+
+greeting = "Hello, ${name}"
+complex = "${a} + ${b} = ${a + b}"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (string_literal
+      (string_content)
+      (interpolation
+        (interpolation_start)
+        (lower_identifier))))
+  (function_declaration
+    (lower_identifier)
+    (string_literal
+      (interpolation
+        (interpolation_start)
+        (lower_identifier))
+      (string_content)
+      (interpolation
+        (interpolation_start)
+        (lower_identifier))
+      (string_content)
+      (interpolation
+        (interpolation_start)
+        (binary_expression
+          (lower_identifier)
+          (lower_identifier))))))
+
+================================================================================
+Character literals
+================================================================================
+
+ch = 'a'
+emoji = '😀'
+escape = '\n'
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (char_literal))
+  (function_declaration
+    (lower_identifier)
+    (char_literal))
+  (function_declaration
+    (lower_identifier)
+    (char_literal
+      (escape_sequence))))
+
+================================================================================
+Unit literal
+================================================================================
+
+empty = ()
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_declaration
+    (lower_identifier)
+    (unit_literal)))
