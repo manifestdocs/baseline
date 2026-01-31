@@ -54,6 +54,41 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
     Ok(CheckResult { status, diagnostics })
 }
 
+/// Parse a source string and return check results (used by tests and API).
+pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load Baseline grammar");
+
+    let tree = parser.parse(source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    let mut diagnostics = Vec::new();
+
+    collect_errors(root, source, file_name, &mut diagnostics);
+
+    if diagnostics.is_empty() {
+        let root_node = tree.root_node();
+        let type_diagnostics = crate::analysis::check_types(&root_node, source, file_name);
+        diagnostics.extend(type_diagnostics);
+
+        let effect_diagnostics = crate::analysis::check_effects(&tree, source, file_name);
+        diagnostics.extend(effect_diagnostics);
+
+        let refinement_diagnostics = crate::analysis::check_refinements(&tree, source, file_name);
+        diagnostics.extend(refinement_diagnostics);
+    }
+
+    let status = if diagnostics.is_empty() {
+        "success".to_string()
+    } else {
+        "failure".to_string()
+    };
+
+    CheckResult { status, diagnostics }
+}
+
 /// Recursively collect ERROR and MISSING nodes from the syntax tree.
 fn collect_errors(
     node: tree_sitter::Node,

@@ -1,5 +1,4 @@
-; Rocket syntax highlighting queries
-; Based on tree-sitter highlight conventions
+; Baseline syntax highlighting queries
 
 ; ============================================================================
 ; Comments
@@ -8,10 +7,6 @@
 (line_comment) @comment
 (block_comment) @comment
 
-; Doc comments get special treatment
-((line_comment) @comment.documentation
-  (#match? @comment.documentation "^///"))
-
 ; ============================================================================
 ; Literals
 ; ============================================================================
@@ -19,28 +14,25 @@
 (integer_literal) @number
 (float_literal) @number.float
 (boolean_literal) @boolean
-(char_literal) @character
-(unit_literal) @constant.builtin
 
 ; Strings
 (string_literal) @string
 (escape_sequence) @string.escape
 (interpolation
-  (interpolation_start) @punctuation.special
+  "${" @punctuation.special
   "}" @punctuation.special)
 
 ; ============================================================================
 ; Types
 ; ============================================================================
 
-(primitive_type) @type.builtin
 (type_identifier) @type
-(type_parameters
-  (upper_identifier) @type.parameter)
+(type_params
+  (type_identifier) @type.parameter)
 
 ; Generic types
 (generic_type
-  (upper_identifier) @type)
+  (type_identifier) @type)
 
 ; ============================================================================
 ; Keywords
@@ -56,17 +48,13 @@
   "for"
   "in"
   "do"
-  "try"
-  "catch"
+  "test"
 ] @keyword
 
 [
   "type"
   "effect"
-  "@module"
-  "import"
   "export"
-  "as"
 ] @keyword.declaration
 
 [
@@ -78,56 +66,45 @@
 ; Functions
 ; ============================================================================
 
-; Function declarations
-(function_declaration
-  (lower_identifier) @function)
+; Function definitions
+(function_def
+  name: (identifier) @function)
 
-(function_declaration
-  (effectful_identifier) @function.effectful)
+(function_def
+  name: (effect_identifier) @function.effectful)
 
 ; Effect operations
-(effect_operation
-  (effectful_identifier) @function.method)
+(function_signature
+  (effect_identifier) @function.method)
 
 ; Function calls - highlight the callable identifier
 (call_expression
-  (lower_identifier) @function.call)
-
-(call_expression
-  (qualified_identifier) @function.call)
+  (identifier) @function.call)
 
 ; Lambda
-(lambda_expression
-  "|" @punctuation.delimiter
+(lambda
   "|" @punctuation.delimiter)
-
-(lambda_parameter
-  (lower_identifier) @variable.parameter)
 
 ; ============================================================================
 ; Variables and Identifiers
 ; ============================================================================
 
-(lower_identifier) @variable
-(upper_identifier) @type
-(effectful_identifier) @function.effectful
+(identifier) @variable
+(effect_identifier) @function.effectful
 
-; Pattern matching identifiers
-(identifier_pattern
-  (lower_identifier) @variable)
-
+; Wildcard pattern
 (wildcard_pattern) @variable.builtin
 
 ; Record fields
-(record_field
-  (lower_identifier) @property)
+(record_field_def
+  (identifier) @property)
 
-(record_field_expression
-  (lower_identifier) @property)
+(record_field_init
+  (identifier) @property)
 
 (field_expression
   "." @punctuation.delimiter
-  (lower_identifier) @property)
+  (identifier) @property)
 
 ; ============================================================================
 ; Operators
@@ -139,7 +116,6 @@
   "*"
   "/"
   "%"
-  "**"
   "=="
   "!="
   "<"
@@ -150,17 +126,8 @@
   "||"
   "!"
   "|>"
-  "<|"
-  ">>"
-  "<<"
-  "?"
-  "??"
-  "++"
   ".."
 ] @operator
-
-(type_annotation
-  ":" @punctuation.delimiter)
 
 (function_type
   "->" @punctuation.delimiter)
@@ -179,64 +146,30 @@
 "=" @operator
 
 ; ============================================================================
-; Attributes
-; ============================================================================
-
-(attribute
-  "@" @attribute.delimiter
-  (lower_identifier) @attribute)
-
-(spec_declaration
-  "@spec" @attribute)
-
-(module_declaration
-  "@module" @attribute)
-
-; Spec attributes
-[
-  "@given"
-  "@returns"
-  "@requires"
-  "@ensures"
-  "@effects"
-  "@pure"
-  "@total"
-] @attribute
-
-; ============================================================================
 ; Effects
 ; ============================================================================
 
-(effect_declaration
+(effect_def
   "effect" @keyword.declaration
-  (upper_identifier) @type.effect)
+  (type_identifier) @type.effect)
 
 (effect_set
   "{" @punctuation.bracket
   "}" @punctuation.bracket)
-
-(effect_reference
-  (upper_identifier) @type.effect)
 
 ; ============================================================================
 ; Sum types (variants)
 ; ============================================================================
 
 (variant
-  (upper_identifier) @constructor)
+  name: (type_identifier) @constructor)
 
-(variant_pattern
-  (upper_identifier) @constructor)
+(constructor_pattern
+  (type_identifier) @constructor)
 
 ; ============================================================================
 ; Modules
 ; ============================================================================
 
-(module_path
-  (upper_identifier) @module)
-
-(import_statement
-  "import" @keyword.import)
-
-(qualified_identifier
-  (upper_identifier) @module)
+(module_decl) @keyword
+(prelude_decl) @keyword

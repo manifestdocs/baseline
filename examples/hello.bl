@@ -26,9 +26,10 @@ type User = {
 }
 
 /// Main entry point
-main! : {Console} ()
-main! =
+main! : () -> {Console} ()
+main! = {
   let message = greet("World")
   Console.print!(message)
   let sum = add(1, 2)
   Console.print!("1 + 2 = ${sum}")
+}

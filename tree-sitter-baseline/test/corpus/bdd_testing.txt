@@ -1,493 +1,170 @@
 ================================================================================
-Simple describe block
+Top-level inline test
 ================================================================================
 
-describe "List.sort" {
-  it "sorts numbers" {
-    given [3, 1, 2]
-    when List.sort
-    expect [1, 2, 3]
-  }
-}
+test "basic addition" = 1 + 1 == 2
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (it_block
-      (string_literal
-        (string_content))
-      (given_clause
-        (list_expression
-          (integer_literal)
-          (integer_literal)
-          (integer_literal)))
-      (when_clause
-        (qualified_identifier
-          (upper_identifier)
-          (lower_identifier)))
-      (expect_statement
-        (list_expression
-          (integer_literal)
-          (integer_literal)
-          (integer_literal))))))
-
-================================================================================
-Nested describe with context
-================================================================================
-
-describe "UserService" {
-  describe "create_user" {
-    context "with valid data" {
-      it "creates the user" {
-        given { name: "Alice", email: "alice@test.com" }
-        when create_user
-        expect Ok(_)
-      }
-    }
-  }
-}
-
---------------------------------------------------------------------------------
-
-(source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (describe_block
-      (string_literal
-        (string_content))
-      (context_block
-        (string_literal
-          (string_content))
-        (it_block
-          (string_literal
-            (string_content))
-          (given_clause
-            (record_expression
-              (record_field_expression
-                (lower_identifier)
-                (string_literal
-                  (string_content)))
-              (record_field_expression
-                (lower_identifier)
-                (string_literal
-                  (string_content)))))
-          (when_clause
-            (lower_identifier))
-          (expect_statement
-            (call_expression
-              (upper_identifier)
-              (argument))))))))
-
-================================================================================
-Test with fixtures and hooks
-================================================================================
-
-describe "Database" {
-  let user = User { id: 1, name: "Test" }
-
-  before_each {
-    Db.begin_transaction!()
-  }
-
-  after_each {
-    Db.rollback!()
-  }
-
-  it "inserts records" {
-    given user
-    when Db.insert
-    expect Ok(_)
-  }
-}
-
---------------------------------------------------------------------------------
-
-(source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (test_fixture
-      (lower_identifier)
-      (constructor_expression
-        (upper_identifier)
-        (record_field_expression
-          (lower_identifier)
+  (inline_test
+    (string_literal)
+    (binary_expression
+      (binary_expression
+        (literal
           (integer_literal))
-        (record_field_expression
-          (lower_identifier)
-          (string_literal
-            (string_content)))))
-    (before_each_hook
-      (block_expression
-        (call_expression
-          (qualified_identifier
-            (upper_identifier)
-            (effectful_identifier)))))
-    (after_each_hook
-      (block_expression
-        (call_expression
-          (qualified_identifier
-            (upper_identifier)
-            (effectful_identifier)))))
-    (it_block
-      (string_literal
-        (string_content))
-      (given_clause
-        (lower_identifier))
-      (when_clause
-        (qualified_identifier
-          (upper_identifier)
-          (lower_identifier)))
-      (expect_statement
-        (call_expression
-          (upper_identifier)
-          (argument))))))
-
-================================================================================
-Test with effect mocking
-================================================================================
-
-describe "WeatherService" {
-  it "fetches weather" {
-    with { http: mock_http }
-    given "New York"
-    when get_weather
-    expect Ok(_)
-  }
-}
-
---------------------------------------------------------------------------------
-
-(source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (it_block
-      (string_literal
-        (string_content))
-      (with_clause
-        (effect_binding
-          (lower_identifier)
-          (lower_identifier)))
-      (given_clause
-        (string_literal
-          (string_content)))
-      (when_clause
-        (lower_identifier))
-      (expect_statement
-        (call_expression
-          (upper_identifier)
-          (argument))))))
-
-================================================================================
-Table-driven tests
-================================================================================
-
-describe "Port.parse" {
-  it "validates ports" {
-    given port
-    when Port.parse
-    expect result
-  } examples {
-    (port, result)
-    (80, Ok(80))
-    (0, Err(OutOfRange))
-  }
-}
-
---------------------------------------------------------------------------------
-
-(source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (it_block
-      (string_literal
-        (string_content))
-      (given_clause
-        (lower_identifier))
-      (when_clause
-        (qualified_identifier
-          (upper_identifier)
-          (lower_identifier)))
-      (expect_statement
-        (lower_identifier))
-      (examples_block
-        (examples_header
-          (lower_identifier)
-          (lower_identifier))
-        (examples_row
-          (integer_literal)
-          (call_expression
-            (upper_identifier)
-            (argument
-              (integer_literal))))
-        (examples_row
-          (integer_literal)
-          (call_expression
-            (upper_identifier)
-            (argument
-              (upper_identifier))))))))
-
-================================================================================
-Property-based testing with forall
-================================================================================
-
-describe "List.sort" {
-  property "preserves length" {
-    forall xs: List<Int>
-    expect sort(xs).len == xs.len
-  }
-
-  property "is idempotent" {
-    forall xs: List<Int>
-    expect sort(sort(xs)) == sort(xs)
-  }
-}
-
---------------------------------------------------------------------------------
-
-(source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (property_test
-      (string_literal
-        (string_content))
-      (forall_clause
-        (forall_binding
-          (lower_identifier)
-          (generic_type
-            (upper_identifier)
-            (primitive_type))))
-      (expect_statement
-        (binary_expression
-          (field_expression
-            (call_expression
-              (lower_identifier)
-              (argument
-                (lower_identifier)))
-            (lower_identifier))
-          (field_expression
-            (lower_identifier)
-            (lower_identifier)))))
-    (property_test
-      (string_literal
-        (string_content))
-      (forall_clause
-        (forall_binding
-          (lower_identifier)
-          (generic_type
-            (upper_identifier)
-            (primitive_type))))
-      (expect_statement
-        (binary_expression
-          (call_expression
-            (lower_identifier)
-            (argument
-              (call_expression
-                (lower_identifier)
-                (argument
-                  (lower_identifier)))))
-          (call_expression
-            (lower_identifier)
-            (argument
-              (lower_identifier))))))))
-
-================================================================================
-Property with where constraint
-================================================================================
-
-describe "List.head" {
-  property "returns first" {
-    forall xs: List<Int>
-    where xs.len > 0
-    expect xs.first == Some(xs.get(0)!)
-  }
-}
-
---------------------------------------------------------------------------------
-
-(source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (property_test
-      (string_literal
-        (string_content))
-      (forall_clause
-        (forall_binding
-          (lower_identifier)
-          (generic_type
-            (upper_identifier)
-            (primitive_type))))
-      (where_constraint
-        (binary_expression
-          (field_expression
-            (lower_identifier)
-            (lower_identifier))
+        (literal
           (integer_literal)))
-      (expect_statement
-        (binary_expression
-          (field_expression
-            (lower_identifier)
-            (lower_identifier))
-          (call_expression
-            (upper_identifier)
-            (argument
-              (postfix_expression
-                (call_expression
-                  (field_expression
-                    (lower_identifier)
-                    (lower_identifier))
-                  (argument
-                    (integer_literal)))))))))))
-
-================================================================================
-Focused and skipped tests
-================================================================================
-
-describe "Feature" {
-  it.only "focused test" {
-    given 1
-    when identity
-    expect 1
-  }
-
-  it.skip "pending test" {
-    given 1
-    when identity
-    expect 1
-  }
-
-  it.skip("waiting for API") "future test" {
-    given 1
-    when identity
-    expect 1
-  }
-}
-
---------------------------------------------------------------------------------
-
-(source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (it_block
-      (it_modifier)
-      (string_literal
-        (string_content))
-      (given_clause
-        (integer_literal))
-      (when_clause
-        (lower_identifier))
-      (expect_statement
-        (integer_literal)))
-    (it_block
-      (it_modifier)
-      (string_literal
-        (string_content))
-      (given_clause
-        (integer_literal))
-      (when_clause
-        (lower_identifier))
-      (expect_statement
-        (integer_literal)))
-    (it_block
-      (it_modifier
-        (string_literal
-          (string_content)))
-      (string_literal
-        (string_content))
-      (given_clause
-        (integer_literal))
-      (when_clause
-        (lower_identifier))
-      (expect_statement
+      (literal
         (integer_literal)))))
 
 ================================================================================
-Test with matchers
+Multiple top-level inline tests
 ================================================================================
 
-describe "Matchers" {
-  it "uses matchers" {
-    expect 1 + 1 to_equal 2
-    expect result to_be_ok
-    expect list to_contain 42
-    expect user to_satisfy |u| u.age >= 18
-  }
-}
+test "integers" = 42 == 42
+test "floats" = 3.14 == 3.14
+test "booleans" = true == true
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (it_block
-      (string_literal
-        (string_content))
-      (expect_statement
-        (binary_expression
-          (integer_literal)
+  (inline_test
+    (string_literal)
+    (binary_expression
+      (literal
+        (integer_literal))
+      (literal
+        (integer_literal))))
+  (inline_test
+    (string_literal)
+    (binary_expression
+      (literal
+        (float_literal))
+      (literal
+        (float_literal))))
+  (inline_test
+    (string_literal)
+    (binary_expression
+      (literal
+        (boolean_literal))
+      (literal
+        (boolean_literal)))))
+
+================================================================================
+Inline test with string comparison
+================================================================================
+
+test "strings" = "hello" == "hello"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (inline_test
+    (string_literal)
+    (binary_expression
+      (literal
+        (string_literal))
+      (literal
+        (string_literal)))))
+
+================================================================================
+Inline test with function call
+================================================================================
+
+test "add works" = add(1, 2) == 3
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (inline_test
+    (string_literal)
+    (binary_expression
+      (call_expression
+        (identifier)
+        (literal
           (integer_literal))
-        (matcher
-          (matcher_name)
+        (literal
           (integer_literal)))
-      (expect_statement
-        (lower_identifier)
-        (matcher
-          (matcher_name)))
-      (expect_statement
-        (lower_identifier)
-        (matcher
-          (matcher_name)
-          (integer_literal)))
-      (expect_statement
-        (lower_identifier)
-        (matcher
-          (matcher_name)
-          (lambda_expression
-            (lambda_parameter
-              (identifier_pattern
-                (lower_identifier)))
-            (binary_expression
-              (field_expression
-                (lower_identifier)
-                (lower_identifier))
-              (integer_literal))))))))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
-Short property syntax
+Function with where block containing tests
 ================================================================================
 
-describe "reverse" {
-  property "is involution" = involution(reverse)
-  property "preserves length" = preserves_len(reverse)
-}
+add : Int -> Int
+add = |a| a + 1
+where
+  test "basic" = add(1) == 2
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (describe_block
-    (string_literal
-      (string_content))
-    (property_test
-      (string_literal
-        (string_content))
-      (call_expression
-        (lower_identifier)
-        (argument
-          (lower_identifier))))
-    (property_test
-      (string_literal
-        (string_content))
-      (call_expression
-        (lower_identifier)
-        (argument
-          (lower_identifier))))))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (binary_expression
+        (identifier)
+        (literal
+          (integer_literal))))
+    (where_block
+      (inline_test
+        (string_literal)
+        (binary_expression
+          (call_expression
+            (identifier)
+            (literal
+              (integer_literal)))
+          (literal
+            (integer_literal)))))))
+
+================================================================================
+Where block with multiple tests
+================================================================================
+
+add : Int -> Int
+add = |a| a + 1
+where
+  test "basic" = add(1) == 2
+  test "zero" = add(0) == 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (binary_expression
+        (identifier)
+        (literal
+          (integer_literal))))
+    (where_block
+      (inline_test
+        (string_literal)
+        (binary_expression
+          (call_expression
+            (identifier)
+            (literal
+              (integer_literal)))
+          (literal
+            (integer_literal))))
+      (inline_test
+        (string_literal)
+        (binary_expression
+          (call_expression
+            (identifier)
+            (literal
+              (integer_literal)))
+          (literal
+            (integer_literal)))))))

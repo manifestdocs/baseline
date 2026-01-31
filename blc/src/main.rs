@@ -1,12 +1,9 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-mod analysis;
-mod diagnostics;
-mod interpreter;
-mod parse;
-
-use diagnostics::CheckResult;
+use blc::diagnostics::{self, CheckResult};
+use blc::interpreter;
+use blc::parse;
 
 #[derive(Parser)]
 #[command(name = "blc")]

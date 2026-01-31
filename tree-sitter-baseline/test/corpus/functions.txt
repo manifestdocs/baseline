@@ -1,260 +1,228 @@
 ================================================================================
-Simple function declaration
+Simple function definition
 ================================================================================
 
+add : Int -> Int
+add = |a| a + 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (binary_expression
+        (identifier)
+        (literal
+          (integer_literal))))))
+
+================================================================================
+Function with tuple type signature
+================================================================================
+
+add : (Int, Int) -> Int
+add = |a, b| a + b
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (tuple_type
+        (type_identifier)
+        (type_identifier))
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (identifier)
+      (binary_expression
+        (identifier)
+        (identifier)))))
+
+================================================================================
+Function with string interpolation
+================================================================================
+
+greet : String -> String
 greet = |name| "Hello, ${name}"
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (lambda_expression
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (string_literal
-        (string_content)
-        (interpolation
-          (interpolation_start)
-          (lower_identifier))))))
-
-================================================================================
-Function with type annotation
-================================================================================
-
-add : (Int, Int) -> Int
-add = |a, b| a + b
-
---------------------------------------------------------------------------------
-
-(source_file
-  (function_declaration
-    (lower_identifier)
-    (type_annotation
-      (function_type
-        (tuple_type
-          (primitive_type)
-          (primitive_type))
-        (primitive_type)))
-    (lower_identifier)
-    (lambda_expression
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (binary_expression
-        (lower_identifier)
-        (lower_identifier)))))
-
-================================================================================
-Generic function
-================================================================================
-
-identity : T -> T
-identity = |x| x
-
---------------------------------------------------------------------------------
-
-(source_file
-  (function_declaration
-    (lower_identifier)
-    (type_annotation
-      (function_type
-        (type_identifier)
-        (type_identifier)))
-    (lower_identifier)
-    (lambda_expression
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (lower_identifier))))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (string_literal
+          (interpolation
+            (identifier)))))))
 
 ================================================================================
 Effectful function
 ================================================================================
 
-fetch_user! : Id -> {Http, Log} User?
-fetch_user! = |id| {
-  Log.debug!("Fetching user ${id}");
-  Http.get!("/users/${id}")
-}
+fetch! : String -> {Http} String
+fetch! = |url| Http.get!(url)
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (effectful_identifier)
-    (type_annotation
-      (function_type
-        (type_identifier)
-        (effect_type
-          (effect_set
-            (effect_reference
-              (upper_identifier))
-            (effect_reference
-              (upper_identifier)))
-          (optional_type
-            (type_identifier)))))
-    (effectful_identifier)
-    (lambda_expression
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (block_expression
-        (call_expression
-          (qualified_identifier
-            (upper_identifier)
-            (effectful_identifier))
-          (argument
-            (string_literal
-              (string_content)
-              (interpolation
-                (interpolation_start)
-                (lower_identifier)))))
-        (call_expression
-          (qualified_identifier
-            (upper_identifier)
-            (effectful_identifier))
-          (argument
-            (string_literal
-              (string_content)
-              (interpolation
-                (interpolation_start)
-                (lower_identifier)))))))))
+  (function_def
+    name: (effect_identifier)
+    signature: (type_signature
+      (type_identifier)
+      (effect_set
+        (type_identifier))
+      (type_identifier))
+    name: (effect_identifier)
+    body: (lambda
+      (identifier)
+      (call_expression
+        (field_expression
+          (type_identifier)
+          (effect_identifier))
+        (identifier)))))
 
 ================================================================================
-Function with multiple statements
+Function with block body
 ================================================================================
 
+process : String -> String
 process = |input| {
   let validated = validate(input);
-  let transformed = transform(validated);
-  save(transformed)
+  transform(validated)
 }
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (lambda_expression
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (block_expression
-        (let_expression
-          (identifier_pattern
-            (lower_identifier))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (block
+        (let_binding
+          (identifier)
           (call_expression
-            (lower_identifier)
-            (argument
-              (lower_identifier))))
-        (let_expression
-          (identifier_pattern
-            (lower_identifier))
-          (call_expression
-            (lower_identifier)
-            (argument
-              (lower_identifier))))
+            (identifier)
+            (identifier)))
         (call_expression
-          (lower_identifier)
-          (argument
-            (lower_identifier)))))))
+          (identifier)
+          (identifier))))))
 
 ================================================================================
-Function with inline tests
+Function with where block
 ================================================================================
 
-add : (Int, Int) -> Int
-add = |a, b| a + b
+add : Int -> Int
+add = |a| a + 1
 where
-  test "basic addition" = add(1, 2) == 3
-  property "commutative" = |a: Int, b: Int| add(a, b) == add(b, a)
+  test "basic" = add(1) == 2
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (type_annotation
-      (function_type
-        (tuple_type
-          (primitive_type)
-          (primitive_type))
-        (primitive_type)))
-    (lower_identifier)
-    (lambda_expression
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
       (binary_expression
-        (lower_identifier)
-        (lower_identifier)))
-    (function_where_clause
-      (test_block
-        (string_literal
-          (string_content))
+        (identifier)
+        (literal
+          (integer_literal))))
+    (where_block
+      (inline_test
+        (string_literal)
         (binary_expression
           (call_expression
-            (lower_identifier)
-            (argument
-              (integer_literal))
-            (argument
+            (identifier)
+            (literal
               (integer_literal)))
-          (integer_literal)))
-      (property_block
-        (string_literal
-          (string_content))
-        (lambda_expression
-          (lambda_parameter
-            (lower_identifier)
-            (primitive_type))
-          (lambda_parameter
-            (lower_identifier)
-            (primitive_type))
-          (binary_expression
-            (call_expression
-              (lower_identifier)
-              (argument
-                (lower_identifier))
-              (argument
-                (lower_identifier)))
-            (call_expression
-              (lower_identifier)
-              (argument
-                (lower_identifier))
-              (argument
-                (lower_identifier)))))))))
+          (literal
+            (integer_literal)))))))
 
 ================================================================================
 Export function
 ================================================================================
 
 export greet : String -> String
-greet = |name| "Hello, ${name}"
+greet = |name| "Hello"
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (type_annotation
-      (function_type
-        (primitive_type)
-        (primitive_type)))
-    (lower_identifier)
-    (lambda_expression
-      (lambda_parameter
-        (identifier_pattern
-          (lower_identifier)))
-      (string_literal
-        (string_content)
-        (interpolation
-          (interpolation_start)
-          (lower_identifier))))))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (string_literal)))))
+
+================================================================================
+Function with multiple where tests
+================================================================================
+
+add : Int -> Int
+add = |a| a + 1
+where
+  test "basic" = add(1) == 2
+  test "zero" = add(0) == 1
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (binary_expression
+        (identifier)
+        (literal
+          (integer_literal))))
+    (where_block
+      (inline_test
+        (string_literal)
+        (binary_expression
+          (call_expression
+            (identifier)
+            (literal
+              (integer_literal)))
+          (literal
+            (integer_literal))))
+      (inline_test
+        (string_literal)
+        (binary_expression
+          (call_expression
+            (identifier)
+            (literal
+              (integer_literal)))
+          (literal
+            (integer_literal)))))))
