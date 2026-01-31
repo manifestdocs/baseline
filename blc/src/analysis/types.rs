@@ -492,6 +492,11 @@ fn check_node(
                 Type::Unknown
             }
         }
+        "effect_identifier" | "effectful_identifier" => {
+            // TODO: Lookup in a real Effect Registry for return types.
+            // For now, assume most effects return Unit or Unknown to allow flow.
+            Type::Unknown 
+        }
         "literal" | "parenthesized_expression" => {
              if let Some(child) = node.named_child(0) {
                  check_node(&child, source, file, symbols, diagnostics)

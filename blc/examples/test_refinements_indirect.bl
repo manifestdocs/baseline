@@ -1,0 +1,8 @@
+type Port = Int where self > 1024
+
+main : () -> {Console} Unit
+main = {
+    let x = 80
+    let p : Port = x
+    print!("Done")
+}

@@ -1,0 +1,18 @@
+main : () -> {Console} Unit
+main = {
+    print!("Hello")
+}
+
+time_check : () -> {Time} Unit
+time_check = {
+    let t = now!
+    ()
+}
+
+mixed : () -> {Console, Time} Unit
+mixed = {
+    print!("Starting...")
+    let t = now!
+    print!("Done")
+    ()
+}
