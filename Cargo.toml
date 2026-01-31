@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/*"]
+members = ["rocketc", "tree-sitter-rocket", "pyrocket"]
 
 [workspace.package]
 version = "0.1.0"

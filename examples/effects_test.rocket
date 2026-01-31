@@ -1,0 +1,14 @@
+// Test file for effect checking
+// This file contains intentional effect violations
+
+// Function declares {Log} but calls Http.get! which requires {Http}
+process! : String -> {Log} String
+process! = |data| Http.get!(data)
+
+// Function with no declared effects calling effectful operations
+fetch_data! : String -> String
+fetch_data! = |url| Http.get!(url)
+
+// Correct function - effects properly declared
+correct_fetch! : String -> {Http} String
+correct_fetch! = |url| Http.get!(url)

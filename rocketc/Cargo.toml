@@ -1,0 +1,13 @@
+[package]
+name = "rocketc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tree-sitter.workspace = true
+tree-sitter-rocket = { path = "../tree-sitter-rocket" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"

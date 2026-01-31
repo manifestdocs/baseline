@@ -1241,6 +1241,38 @@ let doubled = nums.map(|x| x * 2) // Inferred
 
 ---
 
+### 3.7 Tiered Refinement Types
+
+Rocket implements a **tiered refinement system** designed to balance verification power with ease of use.
+
+#### Tier 1: Automatic Refinements (Zero Annotation)
+Common safety properties are handled automatically by the compiler without user intervention:
+
+- **Null Safety**: `T?` is checked exhaustively.
+- **Division by Zero**: `x / y` requires `y` to be non-zero (via control flow analysis).
+- **Array Bounds**: Static analysis eliminates bounds checks where possible.
+
+#### Tier 2: Simple Refinements
+Users can define refined types using simple predicates (Linear Arithmetic):
+
+```rocket
+type Port = Int where self > 0 && self < 65536
+type Probability = Float where self >= 0.0 && self <= 1.0
+
+connect : (Host, Port) -> Connection
+connect = |host, port| ... // port is guaranteed valid
+```
+
+#### Tier 3: Contracts
+For critical boundaries, explicit pre- and post-conditions can be added:
+
+```rocket
+// "Parse, Don't Validate"
+// Instead of validating 'email' inside the function, 
+// require a valid Email type as input.
+send_email! : Email -> {Http} Result
+```
+
 ## 4. Expressions
 
 ### 4.1 Let Bindings
@@ -1735,6 +1767,26 @@ This dramatically reduces boilerplate for LLM-generated code while maintaining e
 
 ---
 
+### 6.4 Row Polymorphism
+
+Rocket's effect system is built on **row polymorphism**. This enables:
+
+1.  **Inference**: Functions that pass effects through don't need explicit annotations.
+2.  **Composition**: Effects combine naturally without the ordering issues of Monad Transformers.
+
+```rocket
+// 'e' is a row variable capturing "other effects"
+// map works regardless of what effects 'f' performs
+map : (List<a, e>, a -> {e} b) -> {e} List<b, e>
+```
+
+### 6.5 Direct Style
+
+Rocket compiles algebraic effects to **Direct Style** code (using standard control flow or delimited continuations), avoiding the "colored function" problem of async/await.
+
+- **No `async`/`await` keywords**: Asynchronous IO is just an effect.
+- **Unified abstraction**: Async, Generators, and Exceptions are all just Effects.
+
 ## 7. Modules
 
 ### 7.1 Module Declaration
@@ -2029,6 +2081,19 @@ Assumptions are:
 - Candidates for future formal proofs
 
 ---
+
+### 8.4 The Neurosymbolic Feedback Loop
+
+Rocket is architected to close the loop between LLM generation and formal verification.
+
+1.  **Prompt**: The Agent is given a type signature with refinements.
+    `split_bill : (Total: Money, People: Int where self > 0) -> List<Money>`
+2.  **Generation**: The Agent generates code.
+3.  **Verification**: The compiler checks the code against the refinement types using SMT.
+4.  **Feedback**: If verification fails, the compiler produces a **counter-example** (e.g., "Verification failed when People = 0").
+5.  **Repair**: The Agent attempts to fix the code (e.g., adding a check `if people == 0`) based on the counter-example.
+
+This turns the compiler into a **verifier** for the probabilistic output of the LLM.
 
 ## 9. Testing
 
@@ -2728,54 +2793,46 @@ it "creates user with provided data" {
 
 ## 10. Memory Model
 
-### 10.1 Overview
+### 10.1 Perceus Reference Counting
 
-Rocket uses a region-based memory model with automatic management. There is no garbage collector in the traditional sense—memory is freed deterministically when regions end.
+Rocket utilizes **Perceus**, a precise, deterministic reference counting system that enables functional programming with C-like performance.
 
-**Key Design Principle**: Regions are **lexical scopes**, not type annotations. Unlike Rust's borrow checker, Rocket does not require lifetime parameters in function signatures. This makes Rocket significantly easier to learn and to generate code for.
+**Key Characteristics:**
+- **No Garbage Collection**: Memory is freed immediately when the last reference is dropped.
+- **Deterministic Latency**: No stop-the-world pauses, making Rocket suitable for real-time systems.
+- **Reuse Analysis**: The compiler detects when a unique reference is dropped and immediately reuses its memory for a new allocation of the same size.
 
-```rust
-// Rust: Lifetime annotations required
-fn get_name<'a>(user: &'a User) -> &'a str {
-    &user.name
-}
+### 10.2 FBIP (Functional But In Place)
 
-fn process<'a, 'b>(data: &'a Data, config: &'b Config) -> &'a Result 
-where 'b: 'a {
-    // Complex lifetime reasoning required
-}
-```
+Perceus enables **FBIP**, where purely functional algorithms compile to efficient in-place mutations.
 
 ```rocket
-// Rocket: No lifetime annotations, just scopes
-get_name : User -> String
-get_name = |user| user.name
+// Source: Pure functional map
+map : (List<T>, T -> U) -> List<U>
+map = |list, f| match list
+  Cons(head, tail) -> Cons(f(head), map(tail, f))
+  Nil -> Nil
 
-process : (Data, Config) -> Result
-process = |data, config|
-  // Values are copied or reference-counted as needed
-  // The compiler optimizes automatically
-  transform(data, config)
+// Compiled (Conceptual):
+// If 'list' is unique (ref_count == 1), 'Cons' cell is reused!
+// No new allocation occurs.
 ```
 
-### 10.2 Regions
+### 10.3 Region-Based Local Memory
 
-A region is a scope for memory allocation:
+For short-lived scopes (like HTTP requests), Rocket employs **Region Inference**.
 
-```rocket
-handle_request! : Request -> {Http} Response
-handle_request! = |req| region request_arena
-  // All allocations happen in request_arena
-  let user = fetch_user!(req.user_id)?
-  let data = process(user)
-  render(data)  // Return value escapes, rest freed
-// request_arena freed here (single deallocation)
-```
+- **Arena Allocation**: Data that does not escape the request handler is allocated in a linear arena.
+- **O(1) Deallocation**: The entire region is freed at once when the handler returns.
+- **Thread Safety**: Regions are thread-local by default, eliminating synchronization overhead for request-local data.
 
-Region rules:
+### 10.4 Ownership and Borrowing
 
-1. Values allocated in a region cannot escape unless explicitly returned
-2. When a region ends, all its memory is freed in one operation
+While Perceus handles deallocation, Rocket enforces ownership rules to ensure safety:
+
+- **Values are owned**: Passing a value translates to a move or a copy (if ref count > 1).
+- **Borrowing is implicit**: The compiler optimizes moves to borrows where possible.
+- **No explicit lifetimes**: Unlike Rust, lifetimes are inferred from lexical scopes and function boundaries.
 3. Regions can be nested
 4. **The compiler tracks region lifetimes statically—no annotations required**
 
