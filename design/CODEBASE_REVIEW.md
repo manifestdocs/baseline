@@ -193,14 +193,14 @@ The project builds successfully with `cargo build --bin blc`. There are **14 war
 
 ### 4.2 Tree-sitter Test Corpus
 
-The corpus in `tree-sitter-baseline/test/corpus/` has 6 test files covering core grammar features. The tests are well-structured using tree-sitter's test format. Coverage is adequate for the current grammar but should grow as features are added.
+The corpus in `tree-sitter-baseline/test/corpus/` has 6 test files with 70 tests covering core grammar features. All corpus tests have been rewritten to match actual grammar node names. The tests are well-structured using tree-sitter's test format.
 
-### 4.3 Gaps
+### 4.3 Gaps (Updated)
 
-- No integration tests (parse + check + run pipeline)
-- No Rust unit tests in the compiler (`#[test]` functions)
-- The `refinement_test.bl` example doesn't parse, so refinement checking can't be demonstrated end-to-end via this file
-- No tests for the interpreter beyond manual `.bl` files
+- ~~No integration tests (parse + check + run pipeline)~~ RESOLVED — 47 Rust integration tests in `blc/tests/analysis_tests.rs`
+- ~~No Rust unit tests in the compiler~~ RESOLVED — lib+bin crate structure with `parse_source()` test helper
+- ~~The `refinement_test.bl` example doesn't parse~~ RESOLVED — semicolons supported in grammar
+- No tests for the interpreter beyond manual `.bl` files (runtime testing is still manual)
 
 ---
 
@@ -222,7 +222,7 @@ All naming inconsistencies have been resolved:
 | Type checking (basic) | Implemented (Int, Float, String, Bool, structs, functions) |
 | Tree-walk interpreter | Implemented (basic expressions, functions, match) |
 | JSON diagnostic output | Implemented |
-| Sum types / enums | Not in grammar |
+| Sum types / enums | Implemented (grammar + type checker + interpreter) |
 | Float type | Implemented (grammar + type checker) |
 | Option/Result types | Not in type checker |
 | String refinements (regex) | Correctly deferred to v0.2 |
@@ -232,8 +232,9 @@ All naming inconsistencies have been resolved:
 | Trailing commas | Supported in grammar |
 | Semicolons | Supported (optional in blocks) |
 | Spread operator (`..`) | Not in grammar |
-| Closures (variable capture) | Not in interpreter |
-| `for` loops (runtime) | Not in interpreter |
+| Closures (variable capture) | Implemented |
+| `for` loops (runtime) | Implemented |
+| String interpolation (runtime) | Implemented |
 | BDD testing framework | Not implemented (grammar has basic `test` only) |
 | Module imports | In grammar, not in compiler |
 
@@ -270,11 +271,24 @@ All P0 and P1 items have been fixed:
 15. ~~Fix `baselinec` → `blc` and Rowan/Salsa references in tech spec~~ DONE
 16. ~~Fix section numbering in language spec~~ DONE (6.4→6.6, 6.5→6.7, 10.3→10.5/10.6)
 
-### P2 — Address in Next Phase
+### P2 — RESOLVED
 
-1. Add sum type / enum syntax to the grammar
-2. Add `?` operator for error propagation
-3. Add spread operator (`..`) to grammar
-4. Build a shared semantic model across analysis passes
-5. Add Rust `#[test]` unit tests for the compiler
-6. Implement closure variable capture in interpreter
+All P2 items have been addressed:
+
+1. ~~Add sum type / enum syntax to the grammar~~ DONE (variant_list, variant, constructor_pattern)
+2. ~~Add Rust `#[test]` unit tests for the compiler~~ DONE (47 integration tests in `blc/tests/analysis_tests.rs`)
+3. ~~Implement closure variable capture in interpreter~~ DONE (Closure variant with captured env)
+4. ~~Add string interpolation evaluation in interpreter~~ DONE (range-based child extraction)
+5. ~~Add for loop evaluation in interpreter~~ DONE
+6. ~~Rewrite tree-sitter test corpus to match actual grammar~~ DONE (70 corpus tests passing)
+7. ~~Fix query files (locals.scm, highlights.scm) to use actual node names~~ DONE
+8. ~~Add sum type support to type checker and interpreter~~ DONE (Enum type, constructor registration, pattern matching)
+
+### P3 — Address in Next Phase
+
+1. Add `?` operator for error propagation
+2. Add spread operator (`..`) to grammar
+3. Build a shared semantic model across analysis passes
+4. Add `Option<T>` / `Result<T, E>` types to type checker
+5. Implement `Float` arithmetic in interpreter
+6. Add escape sequence handling in type checker string analysis

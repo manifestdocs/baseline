@@ -1,37 +1,4 @@
 ================================================================================
-Primitive types
-================================================================================
-
-type MyBool = Bool
-type MyInt = Int
-type MyFloat = Float
-type MyChar = Char
-type MyString = String
-type MyUnit = Unit
-
---------------------------------------------------------------------------------
-
-(source_file
-  (type_declaration
-    (upper_identifier)
-    (primitive_type))
-  (type_declaration
-    (upper_identifier)
-    (primitive_type))
-  (type_declaration
-    (upper_identifier)
-    (primitive_type))
-  (type_declaration
-    (upper_identifier)
-    (primitive_type))
-  (type_declaration
-    (upper_identifier)
-    (primitive_type))
-  (type_declaration
-    (upper_identifier)
-    (primitive_type)))
-
-================================================================================
 Type alias
 ================================================================================
 
@@ -41,48 +8,56 @@ type Email = String
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (primitive_type))
-  (type_declaration
-    (upper_identifier)
-    (primitive_type)))
+  (type_def
+    name: (type_identifier)
+    def: (type_identifier))
+  (type_def
+    name: (type_identifier)
+    def: (type_identifier)))
 
 ================================================================================
-Generic type alias
+Generic type alias with tuple
 ================================================================================
 
 type Pair<A, B> = (A, B)
-type Handler<T> = Request -> Response<T>
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (type_parameters
-      (upper_identifier)
-      (upper_identifier))
-    (tuple_type
+  (type_def
+    name: (type_identifier)
+    (type_params
       (type_identifier)
-      (type_identifier)))
-  (type_declaration
-    (upper_identifier)
-    (type_parameters
-      (upper_identifier))
-    (function_type
+      (type_identifier))
+    def: (tuple_type
       (type_identifier)
-      (generic_type
-        (upper_identifier)
-        (type_identifier)))))
+      (type_identifier))))
 
 ================================================================================
-Sum type (enum)
+Sum type with leading pipe
 ================================================================================
 
 type Option<T> =
   | Some(T)
   | None
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_def
+    name: (type_identifier)
+    (type_params
+      (type_identifier))
+    def: (variant_list
+      (variant
+        name: (type_identifier)
+        (type_identifier))
+      (variant
+        name: (type_identifier)))))
+
+================================================================================
+Sum type with multiple type parameters
+================================================================================
 
 type Result<T, E> =
   | Ok(T)
@@ -91,27 +66,17 @@ type Result<T, E> =
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (type_parameters
-      (upper_identifier))
-    (variant_list
+  (type_def
+    name: (type_identifier)
+    (type_params
+      (type_identifier)
+      (type_identifier))
+    def: (variant_list
       (variant
-        (upper_identifier)
+        name: (type_identifier)
         (type_identifier))
       (variant
-        (upper_identifier))))
-  (type_declaration
-    (upper_identifier)
-    (type_parameters
-      (upper_identifier)
-      (upper_identifier))
-    (variant_list
-      (variant
-        (upper_identifier)
-        (type_identifier))
-      (variant
-        (upper_identifier)
+        name: (type_identifier)
         (type_identifier)))))
 
 ================================================================================
@@ -123,15 +88,15 @@ type Status = Active | Inactive | Pending
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (variant_list
+  (type_def
+    name: (type_identifier)
+    def: (variant_list
       (variant
-        (upper_identifier))
+        name: (type_identifier))
       (variant
-        (upper_identifier))
+        name: (type_identifier))
       (variant
-        (upper_identifier)))))
+        name: (type_identifier)))))
 
 ================================================================================
 Record type
@@ -146,119 +111,91 @@ type User = {
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (record_type
-      (record_field
-        (lower_identifier)
-        (primitive_type))
-      (record_field
-        (lower_identifier)
-        (primitive_type))
-      (record_field
-        (lower_identifier)
-        (primitive_type)))))
-
-================================================================================
-Record type with row extension
-================================================================================
-
-type Named = { name: String, ..rest }
-
---------------------------------------------------------------------------------
-
-(source_file
-  (type_declaration
-    (upper_identifier)
-    (record_type
-      (record_field
-        (lower_identifier)
-        (primitive_type))
-      (row_extension
-        (lower_identifier)))))
+  (type_def
+    name: (type_identifier)
+    def: (record_type
+      (record_field_def
+        (identifier)
+        (type_identifier))
+      (record_field_def
+        (identifier)
+        (type_identifier))
+      (record_field_def
+        (identifier)
+        (type_identifier)))))
 
 ================================================================================
 Refinement type
 ================================================================================
 
-type Port = Int where 1 <= self <= 65535
-type NonEmpty<T> = List<T> where self.len > 0
+type Port = Int where self > 0
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (primitive_type)
-    (where_clause
-      (refinement
+  (type_def
+    name: (type_identifier)
+    def: (type_identifier)
+    (refinement_clause
+      (predicate
         (binary_expression
-          (binary_expression
-            (integer_literal)
-            (lower_identifier))
-          (integer_literal)))))
-  (type_declaration
-    (upper_identifier)
-    (type_parameters
-      (upper_identifier))
-    (generic_type
-      (upper_identifier)
+          (identifier)
+          (literal
+            (integer_literal)))))))
+
+================================================================================
+Generic refinement type
+================================================================================
+
+type NonEmpty<T> = List<T> where self > 0
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_def
+    name: (type_identifier)
+    (type_params
       (type_identifier))
-    (where_clause
-      (refinement
+    def: (generic_type
+      (type_identifier)
+      (type_identifier))
+    (refinement_clause
+      (predicate
         (binary_expression
-          (field_expression
-            (lower_identifier)
-            (lower_identifier))
-          (integer_literal))))))
+          (identifier)
+          (literal
+            (integer_literal)))))))
 
 ================================================================================
 Function type
 ================================================================================
 
-type Transform = Int -> String
 type BinaryOp = (Int, Int) -> Int
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (function_type
-      (primitive_type)
-      (primitive_type)))
-  (type_declaration
-    (upper_identifier)
-    (function_type
-      (tuple_type
-        (primitive_type)
-        (primitive_type))
-      (primitive_type))))
+  (type_def
+    name: (type_identifier)
+    def: (function_type
+      (type_identifier)
+      (type_identifier)
+      (type_identifier))))
 
 ================================================================================
-Optional and result types
+Single argument function type
 ================================================================================
 
-type MaybeInt = Int?
-type IntResult = Int!Error
-type DefaultResult = Int!
+type Transform = (Int) -> String
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (optional_type
-      (primitive_type)))
-  (type_declaration
-    (upper_identifier)
-    (result_type
-      (primitive_type)
-      (type_identifier)))
-  (type_declaration
-    (upper_identifier)
-    (result_type
-      (primitive_type))))
+  (type_def
+    name: (type_identifier)
+    def: (function_type
+      (type_identifier)
+      (type_identifier))))
 
 ================================================================================
 Export type
@@ -272,12 +209,12 @@ export type User = {
 --------------------------------------------------------------------------------
 
 (source_file
-  (type_declaration
-    (upper_identifier)
-    (record_type
-      (record_field
-        (lower_identifier)
-        (primitive_type))
-      (record_field
-        (lower_identifier)
-        (primitive_type)))))
+  (type_def
+    name: (type_identifier)
+    def: (record_type
+      (record_field_def
+        (identifier)
+        (type_identifier))
+      (record_field_def
+        (identifier)
+        (type_identifier)))))

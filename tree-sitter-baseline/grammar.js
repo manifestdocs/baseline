@@ -32,10 +32,6 @@ module.exports = grammar({
   ],
 
   conflicts: $ => [
-    // Ambiguity between (x) as grouping vs tuple
-    [$._type_expr, $.tuple_type],
-    [$._expression, $.tuple_expression],
-    [$._pattern, $.tuple_pattern],
     // Ambiguity between () -> T as function_type vs tuple_type followed by ->
     [$.tuple_type, $.function_type],
     // Ambiguity between (expr) as tuple vs parenthesized
@@ -46,6 +42,10 @@ module.exports = grammar({
     [$._expression, $._pattern],
     // Ambiguity between () as tuple_expression vs tuple_pattern
     [$.tuple_expression, $.tuple_pattern],
+    // type_identifier in expression context vs struct_expression start
+    [$._expression, $.struct_expression],
+    // type_identifier ( could be expression or constructor pattern
+    [$._expression, $.constructor_pattern],
   ],
 
   rules: {
@@ -83,13 +83,27 @@ module.exports = grammar({
     ),
 
     // type Port = Int where self > 0
+    // type Status = | Active | Inactive | Pending(String)
     type_def: $ => seq(
       optional('export'),
       'type', field('name', $.type_identifier),
       optional($.type_params),
       '=',
-      field('def', $._type_expr),
-      optional($.refinement_clause)
+      choice(
+        field('def', $.variant_list),
+        seq(field('def', $._type_expr), optional($.refinement_clause))
+      )
+    ),
+
+    // Sum type variants: | A | B(T) or A | B | C
+    variant_list: $ => choice(
+      repeat1(seq('|', $.variant)),
+      seq($.variant, repeat1(seq('|', $.variant)))
+    ),
+
+    variant: $ => seq(
+      field('name', $.type_identifier),
+      optional(seq('(', commaSep1($._type_expr), ')'))
     ),
 
     // explicit node for highlighting
@@ -149,6 +163,7 @@ module.exports = grammar({
       $.range_expression,
       $.literal,
       $._name, // includes identifier and effect_identifier
+      $.type_identifier, // for nullary constructors: Active, None
       $.list_expression,
       $.struct_expression, // User { id: 1 }
       $.tuple_expression,
@@ -179,7 +194,7 @@ module.exports = grammar({
 
     // req.params.id or Log.info!
     field_expression: $ => prec.left(PREC.MEMBER, seq(
-      choice($._expression, $.type_identifier),
+      $._expression,
       '.',
       choice($.identifier, $.effect_identifier)
     )),
@@ -229,11 +244,13 @@ module.exports = grammar({
 
     _pattern: $ => choice(
       $.identifier,
-      $.type_identifier, // Matches 'None'
+      $.type_identifier, // Matches nullary constructors: None, Active
+      $.constructor_pattern, // Matches constructors with payload: Some(v)
       $.literal,
       $.tuple_pattern,
       $.wildcard_pattern
     ),
+    constructor_pattern: $ => seq($.type_identifier, '(', commaSep($._pattern), ')'),
     tuple_pattern: $ => seq('(', commaSep($._pattern), ')'),
     wildcard_pattern: $ => '_',
 

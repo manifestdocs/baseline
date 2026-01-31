@@ -13,6 +13,7 @@ pub enum Type {
     List(Box<Type>),
     Struct(String, HashMap<String, Type>), // Name, Fields
     Record(HashMap<String, Type>),         // Anonymous record
+    Enum(String, Vec<(String, Vec<Type>)>), // Name, [(VariantName, PayloadTypes)]
     Module(String),                        // Module/Effect namespace
     Unknown,
 }
@@ -37,6 +38,7 @@ impl std::fmt::Display for Type {
                 let fields_str = sorted_fields.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join(", ");
                 write!(f, "{{ {} }}", fields_str)
             }
+            Type::Enum(name, _) => write!(f, "{}", name),
             Type::Module(name) => write!(f, "Module({})", name),
             Type::Unknown => write!(f, "<unknown>"),
         }
@@ -134,6 +136,7 @@ fn check_node(
         }
         "type_def" => {
             // type Point = { x: Int, y: Int }
+            // type Status = | Active | Inactive | Pending(String)
             let name_node = node.child_by_field_name("name")
                 .unwrap_or_else(|| node.child(1).unwrap());
             let name = name_node.utf8_text(source.as_bytes()).unwrap_or("Unknown").to_string();
@@ -141,15 +144,59 @@ fn check_node(
             // Def node is after '=' — use field if available, else positional
             let def_node_candidate = node.child_by_field_name("def")
                 .unwrap_or_else(|| node.child(3).unwrap());
-            let ty = parse_type(&def_node_candidate, source, symbols); 
-            
-            // If it's a record, wrap it in a Struct with the name
-            let defined_type = match ty {
-                Type::Record(fields) => Type::Struct(name.clone(), fields),
-                _ => ty,
-            };
 
-            symbols.insert_type(name, defined_type);
+            if def_node_candidate.kind() == "variant_list" {
+                // Sum type / enum
+                let mut variants = Vec::new();
+                let mut cursor = def_node_candidate.walk();
+                for child in def_node_candidate.children(&mut cursor) {
+                    if child.kind() == "variant" {
+                        let vname_node = child.child_by_field_name("name").unwrap();
+                        let vname = vname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                        let mut payload_types = Vec::new();
+
+                        // Collect payload types: variant children after name that are type exprs
+                        let vcount = child.child_count();
+                        for vi in 0..vcount {
+                            let vc = child.child(vi).unwrap();
+                            if vc.kind() != "type_identifier" || vc.id() != vname_node.id() {
+                                if vc.kind() != "|" && vc.kind() != "(" && vc.kind() != ")" && vc.kind() != "," {
+                                    let pt = parse_type(&vc, source, symbols);
+                                    if pt != Type::Unknown {
+                                        payload_types.push(pt);
+                                    }
+                                }
+                            }
+                        }
+
+                        variants.push((vname, payload_types));
+                    }
+                }
+
+                let enum_type = Type::Enum(name.clone(), variants.clone());
+                symbols.insert_type(name.clone(), enum_type.clone());
+
+                // Register constructors as functions or values in the symbol table
+                for (vname, payload) in &variants {
+                    if payload.is_empty() {
+                        // Nullary constructor: Active -> Enum type directly
+                        symbols.insert(vname.clone(), enum_type.clone());
+                    } else {
+                        // Constructor with payload: Some(T) -> function T -> Enum
+                        symbols.insert(vname.clone(), Type::Function(payload.clone(), Box::new(enum_type.clone())));
+                    }
+                }
+            } else {
+                let ty = parse_type(&def_node_candidate, source, symbols);
+
+                // If it's a record, wrap it in a Struct with the name
+                let defined_type = match ty {
+                    Type::Record(fields) => Type::Struct(name.clone(), fields),
+                    _ => ty,
+                };
+
+                symbols.insert_type(name, defined_type);
+            }
             Type::Unit
         }
         "function_def" => {
@@ -727,13 +774,16 @@ fn check_node(
             }
         }
         "type_identifier" => {
-             // In expression context, this is a module/effect reference
+             // In expression context, could be a constructor, module, or type reference
              let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
-             if let Some(ty) = symbols.lookup_type(&name) {
+             // First check if it's a constructor in the value namespace
+             if let Some(ty) = symbols.lookup(&name) {
+                 ty.clone()
+             } else if let Some(ty) = symbols.lookup_type(&name) {
                  ty.clone()
              } else {
                  // Assume it might be a module not yet defined or external
-                 Type::Module(name) 
+                 Type::Module(name)
              }
         }
         _ => {
@@ -858,6 +908,32 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
         "identifier" => {
              let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
              symbols.insert(name, expected_type.clone());
+        },
+        "type_identifier" => {
+            // Nullary constructor pattern: None, Active
+            // Verify it's a valid constructor for the expected type
+        },
+        "constructor_pattern" => {
+            // Constructor pattern: Some(v), Pending(msg)
+            let ctor_name_node = node.child(0).unwrap();
+            let ctor_name = ctor_name_node.utf8_text(source.as_bytes()).unwrap();
+
+            // Look up constructor to get payload types
+            if let Some(Type::Function(param_types, _)) = symbols.lookup(ctor_name).cloned() {
+                // Bind each sub-pattern to its payload type
+                let mut pattern_idx = 0;
+                let child_count = node.child_count();
+                for ci in 0..child_count {
+                    let child = node.child(ci).unwrap();
+                    if child.kind() != "type_identifier" && child.kind() != "(" && child.kind() != ")" && child.kind() != "," {
+                        if pattern_idx < param_types.len() {
+                            check_pattern(&child, &param_types[pattern_idx], source, symbols, diagnostics);
+                            pattern_idx += 1;
+                        }
+                    }
+                }
+            }
+            // If constructor not found, sub-patterns get Unknown type
         },
         "literal" => {
              if let Some(child) = node.named_child(0) {

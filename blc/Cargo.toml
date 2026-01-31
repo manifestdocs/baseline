@@ -6,6 +6,14 @@ license.workspace = true
 repository.workspace = true
 description = "The Baseline programming language compiler"
 
+[lib]
+name = "blc"
+path = "src/lib.rs"
+
+[[bin]]
+name = "blc"
+path = "src/main.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tree-sitter.workspace = true

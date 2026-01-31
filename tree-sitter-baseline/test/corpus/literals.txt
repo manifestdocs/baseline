@@ -1,172 +1,244 @@
 ================================================================================
-Integer literals
+Integer literal
 ================================================================================
 
-x = 42
-y = -17
-z = 1_000_000
-hex = 0xFF
-bin = 0b1010
-oct = 0o755
+id : Int -> Int
+id = |x| 42
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (integer_literal))
-  (function_declaration
-    (lower_identifier)
-    (integer_literal))
-  (function_declaration
-    (lower_identifier)
-    (integer_literal))
-  (function_declaration
-    (lower_identifier)
-    (integer_literal))
-  (function_declaration
-    (lower_identifier)
-    (integer_literal))
-  (function_declaration
-    (lower_identifier)
-    (integer_literal)))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (integer_literal)))))
 
 ================================================================================
-Float literals
+Negative integer (unary expression)
 ================================================================================
 
-pi = 3.14159
-neg = -0.001
-sci = 1.5e10
-sci_neg = 1.5e-10
+id : Int -> Int
+id = |x| -17
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (float_literal))
-  (function_declaration
-    (lower_identifier)
-    (float_literal))
-  (function_declaration
-    (lower_identifier)
-    (float_literal))
-  (function_declaration
-    (lower_identifier)
-    (float_literal)))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (unary_expression
+        (literal
+          (integer_literal))))))
 
 ================================================================================
-Boolean literals
+Float literal
 ================================================================================
 
-t = true
-f = false
+id : Int -> Int
+id = |x| 3.14
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (boolean_literal))
-  (function_declaration
-    (lower_identifier)
-    (boolean_literal)))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (float_literal)))))
 
 ================================================================================
-String literals
+Scientific notation float
 ================================================================================
 
-simple = "Hello, World"
-escaped = "Line 1\nLine 2"
-quotes = "Say \"hello\""
+id : Int -> Int
+id = |x| 1.5e10
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (string_literal
-      (string_content)))
-  (function_declaration
-    (lower_identifier)
-    (string_literal
-      (string_content)
-      (escape_sequence)
-      (string_content)))
-  (function_declaration
-    (lower_identifier)
-    (string_literal
-      (string_content)
-      (escape_sequence)
-      (string_content)
-      (escape_sequence))))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (float_literal)))))
+
+================================================================================
+Boolean literal true
+================================================================================
+
+id : Int -> Boolean
+id = |x| true
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (boolean_literal)))))
+
+================================================================================
+Boolean literal false
+================================================================================
+
+id : Int -> Boolean
+id = |x| false
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (boolean_literal)))))
+
+================================================================================
+Simple string literal
+================================================================================
+
+id : Int -> String
+id = |x| "Hello, World"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (string_literal)))))
+
+================================================================================
+String with escape sequences
+================================================================================
+
+id : Int -> String
+id = |x| "Line 1\nLine 2"
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (string_literal
+          (escape_sequence))))))
+
+================================================================================
+String with escaped quotes
+================================================================================
+
+id : Int -> String
+id = |x| "Say \"hello\""
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (string_literal
+          (escape_sequence)
+          (escape_sequence))))))
 
 ================================================================================
 String interpolation
 ================================================================================
 
-greeting = "Hello, ${name}"
-complex = "${a} + ${b} = ${a + b}"
+id : Int -> String
+id = |x| "Hello, ${name}"
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (string_literal
-      (string_content)
-      (interpolation
-        (interpolation_start)
-        (lower_identifier))))
-  (function_declaration
-    (lower_identifier)
-    (string_literal
-      (interpolation
-        (interpolation_start)
-        (lower_identifier))
-      (string_content)
-      (interpolation
-        (interpolation_start)
-        (lower_identifier))
-      (string_content)
-      (interpolation
-        (interpolation_start)
-        (binary_expression
-          (lower_identifier)
-          (lower_identifier))))))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (string_literal
+          (interpolation
+            (identifier)))))))
 
 ================================================================================
-Character literals
+Complex string interpolation
 ================================================================================
 
-ch = 'a'
-emoji = '😀'
-escape = '\n'
+id : Int -> String
+id = |x| "${a} + ${b} = ${a + b}"
 
 --------------------------------------------------------------------------------
 
 (source_file
-  (function_declaration
-    (lower_identifier)
-    (char_literal))
-  (function_declaration
-    (lower_identifier)
-    (char_literal))
-  (function_declaration
-    (lower_identifier)
-    (char_literal
-      (escape_sequence))))
-
-================================================================================
-Unit literal
-================================================================================
-
-empty = ()
-
---------------------------------------------------------------------------------
-
-(source_file
-  (function_declaration
-    (lower_identifier)
-    (unit_literal)))
+  (function_def
+    name: (identifier)
+    signature: (type_signature
+      (type_identifier)
+      (type_identifier))
+    name: (identifier)
+    body: (lambda
+      (identifier)
+      (literal
+        (string_literal
+          (interpolation
+            (identifier))
+          (interpolation
+            (identifier))
+          (interpolation
+            (binary_expression
+              (identifier)
+              (identifier))))))))

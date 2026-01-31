@@ -8,9 +8,12 @@ pub enum RuntimeValue<'a> {
     Bool(bool),
     Unit,
     Function(Vec<String>, Node<'a>),
+    /// Closure: params, body, captured environment
+    Closure(Vec<String>, Node<'a>, HashMap<String, RuntimeValue<'a>>),
     Struct(String, HashMap<String, RuntimeValue<'a>>),
     Record(HashMap<String, RuntimeValue<'a>>),
     List(Vec<RuntimeValue<'a>>),
+    Enum(String, Vec<RuntimeValue<'a>>), // VariantName, PayloadValues
 }
 
 impl<'a> std::fmt::Display for RuntimeValue<'a> {
@@ -21,6 +24,7 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
             RuntimeValue::Bool(b) => write!(f, "{}", b),
             RuntimeValue::Unit => write!(f, "()"),
             RuntimeValue::Function(args, _) => write!(f, "|{}| ...", args.join(", ")),
+            RuntimeValue::Closure(args, _, _) => write!(f, "|{}| <closure>", args.join(", ")),
             RuntimeValue::Struct(name, _fields) => {
                  write!(f, "{} {{ ... }}", name)
             }
@@ -28,6 +32,14 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
             RuntimeValue::List(vals) => {
                  let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
                  write!(f, "[{}]", s)
+            }
+            RuntimeValue::Enum(name, payload) => {
+                if payload.is_empty() {
+                    write!(f, "{}", name)
+                } else {
+                    let s = payload.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                    write!(f, "{}({})", name, s)
+                }
             }
         }
     }
@@ -66,6 +78,17 @@ impl<'a> Context<'a> {
         }
         None
     }
+
+    /// Snapshot the entire environment (all scopes) into a flat HashMap.
+    /// Used for closure capture.
+    pub fn snapshot(&self) -> HashMap<String, RuntimeValue<'a>> {
+        let mut env = HashMap::new();
+        // Iterate from outermost to innermost so inner scopes shadow outer
+        for scope in &self.scopes {
+            env.extend(scope.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        env
+    }
 }
 
 pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Result<RuntimeValue<'a>, String> {
@@ -79,15 +102,39 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             Ok(last_val)
         }
         "function_def" => {
-            // main = |args| { ... }
-            // Bind name to the function value (which is likely a lambda)
             let name_node = node.child_by_field_name("name").unwrap();
             let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-            
+
             let body_node = node.child_by_field_name("body").unwrap();
-            let body_val = eval(&body_node, source, context)?;
-            
-            context.set(name, body_val);
+
+            if body_node.kind() == "lambda" {
+                // Lambda evaluates to Function(args, body) — store it
+                let body_val = eval(&body_node, source, context)?;
+                context.set(name, body_val);
+            } else {
+                // Non-lambda body (block, expression, constructor, etc.)
+                // Store as zero-arg function for deferred evaluation
+                context.set(name, RuntimeValue::Function(Vec::new(), body_node));
+            }
+            Ok(RuntimeValue::Unit)
+        }
+        "type_def" => {
+            // Register enum constructors as values in context
+            if let Some(def_node) = node.child_by_field_name("def") {
+                if def_node.kind() == "variant_list" {
+                    let mut cursor = def_node.walk();
+                    for child in def_node.children(&mut cursor) {
+                        if child.kind() == "variant" {
+                            if let Some(vname_node) = child.child_by_field_name("name") {
+                                let vname = vname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                                // Register nullary constructors as enum values
+                                // Constructors with payload will be created via call_expression
+                                context.set(vname.clone(), RuntimeValue::Enum(vname, Vec::new()));
+                            }
+                        }
+                    }
+                }
+            }
             Ok(RuntimeValue::Unit)
         }
         "lambda" => {
@@ -100,9 +147,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                     args.push(child.utf8_text(source.as_bytes()).unwrap().to_string());
                 }
             }
-            
+
             let body = node.named_child(count-1).unwrap();
-            Ok(RuntimeValue::Function(args, body))
+            let captured = context.snapshot();
+            Ok(RuntimeValue::Closure(args, body, captured))
         }
         "call_expression" => {
              // func(arg1, arg2)
@@ -132,6 +180,42 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      let result = eval(&body_node, source, context);
                      context.exit_scope();
                      result
+                 }
+                 RuntimeValue::Closure(param_names, body_node, captured_env) => {
+                     // Eval args
+                     let mut arg_vals = Vec::new();
+                     let total_children = node.named_child_count();
+                     for i in 1..total_children {
+                         let arg_node = node.named_child(i).unwrap();
+                         arg_vals.push(eval(&arg_node, source, context)?);
+                     }
+
+                     if arg_vals.len() != param_names.len() {
+                         return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()));
+                     }
+
+                     // New scope with captured environment
+                     context.enter_scope();
+                     for (k, v) in &captured_env {
+                         context.set(k.clone(), v.clone());
+                     }
+                     for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
+                         context.set(name.clone(), val);
+                     }
+
+                     let result = eval(&body_node, source, context);
+                     context.exit_scope();
+                     result
+                }
+                RuntimeValue::Enum(ctor_name, _) => {
+                     // Constructor call: Some(42) -> Enum("Some", [Int(42)])
+                     let mut arg_vals = Vec::new();
+                     let total_children = node.named_child_count();
+                     for i in 1..total_children {
+                         let arg_node = node.named_child(i).unwrap();
+                         arg_vals.push(eval(&arg_node, source, context)?);
+                     }
+                     Ok(RuntimeValue::Enum(ctor_name, arg_vals))
                  }
                  _ => Err(format!("Not a function: {}", func_node.utf8_text(source.as_bytes()).unwrap()))
              }
@@ -163,16 +247,76 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             let name = node.utf8_text(source.as_bytes()).unwrap();
             context.get(name).cloned().ok_or_else(|| format!("Undefined variable: {}", name))
         }
+        "type_identifier" => {
+            // Nullary constructor or type reference in expression context
+            let name = node.utf8_text(source.as_bytes()).unwrap();
+            if let Some(val) = context.get(name) {
+                Ok(val.clone())
+            } else {
+                // Treat as nullary enum constructor
+                Ok(RuntimeValue::Enum(name.to_string(), Vec::new()))
+            }
+        }
         "integer_literal" => {
             let text = node.utf8_text(source.as_bytes()).unwrap();
             let val = text.parse::<i64>().map_err(|_| "Invalid integer".to_string())?;
             Ok(RuntimeValue::Int(val))
         }
         "string_literal" => {
-            let text = node.utf8_text(source.as_bytes()).unwrap();
-            // Remove quotes
-            let s = text.trim_matches('"').to_string(); // Simplified unescaping
-            Ok(RuntimeValue::String(s))
+            // Range-based approach: extract raw text between named children
+            // (interpolation and escape_sequence are named; raw text is absorbed by tree-sitter)
+            let mut result = String::new();
+            let bytes = source.as_bytes();
+
+            // Start after the opening quote
+            let str_start = node.start_byte() + 1; // skip "
+            let str_end = node.end_byte() - 1;     // skip "
+
+            let named_count = node.named_child_count();
+            if named_count == 0 {
+                // Simple string with no interpolation or escapes
+                let raw = &source[str_start..str_end];
+                result.push_str(raw);
+            } else {
+                let mut cursor = str_start;
+                for i in 0..named_count {
+                    let child = node.named_child(i).unwrap();
+                    let child_start = child.start_byte();
+                    let child_end = child.end_byte();
+
+                    // Raw text before this named child
+                    if cursor < child_start {
+                        result.push_str(&source[cursor..child_start]);
+                    }
+
+                    match child.kind() {
+                        "interpolation" => {
+                            let expr = child.named_child(0).unwrap();
+                            let val = eval(&expr, source, context)?;
+                            result.push_str(&val.to_string());
+                        }
+                        "escape_sequence" => {
+                            let esc = child.utf8_text(bytes).unwrap();
+                            match esc {
+                                "\\n" => result.push('\n'),
+                                "\\t" => result.push('\t'),
+                                "\\r" => result.push('\r'),
+                                "\\\\" => result.push('\\'),
+                                "\\\"" => result.push('"'),
+                                "\\0" => result.push('\0'),
+                                other => result.push_str(other),
+                            }
+                        }
+                        _ => {}
+                    }
+                    cursor = child_end;
+                }
+                // Raw text after the last named child
+                if cursor < str_end {
+                    result.push_str(&source[cursor..str_end]);
+                }
+            }
+            Ok(RuntimeValue::String(result))
         }
         "boolean_literal" => {
              let text = node.utf8_text(source.as_bytes()).unwrap();
@@ -296,19 +440,57 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              let left_val = eval(&left_node, source, context)?;
              let right_val = eval(&right_node, source, context)?;
              
-             if let RuntimeValue::Function(params, body_node) = right_val {
-                 if params.len() != 1 {
-                     return Err(format!("Pipe expects a function with 1 argument, found {}", params.len()));
+             match right_val {
+                 RuntimeValue::Function(params, body_node) => {
+                     if params.len() != 1 {
+                         return Err(format!("Pipe expects a function with 1 argument, found {}", params.len()));
+                     }
+                     context.enter_scope();
+                     context.set(params[0].clone(), left_val);
+                     let result = eval(&body_node, source, context);
+                     context.exit_scope();
+                     result
                  }
-                 
-                 context.enter_scope();
-                 context.set(params[0].clone(), left_val);
-                 let result = eval(&body_node, source, context);
-                 context.exit_scope();
-                 result
-             } else {
-                 Err("Pipe target must be a function".to_string())
+                 RuntimeValue::Closure(params, body_node, captured_env) => {
+                     if params.len() != 1 {
+                         return Err(format!("Pipe expects a function with 1 argument, found {}", params.len()));
+                     }
+                     context.enter_scope();
+                     for (k, v) in &captured_env {
+                         context.set(k.clone(), v.clone());
+                     }
+                     context.set(params[0].clone(), left_val);
+                     let result = eval(&body_node, source, context);
+                     context.exit_scope();
+                     result
+                 }
+                 _ => Err("Pipe target must be a function".to_string()),
              }
+        }
+        "for_expression" => {
+            // for <pattern> in <collection> do <body>
+            let pat_node = node.named_child(0).unwrap();
+            let collection_node = node.named_child(1).unwrap();
+            let body_node = node.named_child(2).unwrap();
+
+            let collection = eval(&collection_node, source, context)?;
+            match collection {
+                RuntimeValue::List(items) => {
+                    let mut last_val = RuntimeValue::Unit;
+                    for item in &items {
+                        if let Some(bindings) = match_pattern(&pat_node, item, source) {
+                            context.enter_scope();
+                            for (k, v) in bindings {
+                                context.set(k, v);
+                            }
+                            last_val = eval(&body_node, source, context)?;
+                            context.exit_scope();
+                        }
+                    }
+                    Ok(last_val)
+                }
+                _ => Err("for..in requires a List".to_string()),
+            }
         }
         "match_expression" => {
              // match expr { pat -> body, ... }
@@ -354,6 +536,54 @@ fn match_pattern<'a>(
             map.insert(name, value.clone());
             Some(map)
         }
+        "type_identifier" => {
+            // Nullary constructor pattern: Red, None, Active
+            let ctor_name = pattern.utf8_text(source.as_bytes()).unwrap();
+            if let RuntimeValue::Enum(vname, payload) = value {
+                if vname == ctor_name && payload.is_empty() {
+                    Some(HashMap::new())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        }
+        "constructor_pattern" => {
+            // Constructor pattern: Some(v), Pending(msg)
+            let ctor_name_node = pattern.child(0).unwrap();
+            let ctor_name = ctor_name_node.utf8_text(source.as_bytes()).unwrap();
+
+            if let RuntimeValue::Enum(vname, payload) = value {
+                if vname != ctor_name {
+                    return None;
+                }
+
+                // Collect sub-patterns (skip type_identifier, parens, commas)
+                let mut sub_patterns = Vec::new();
+                let child_count = pattern.child_count();
+                for i in 0..child_count {
+                    let child = pattern.child(i).unwrap();
+                    let k = child.kind();
+                    if k != "type_identifier" && k != "(" && k != ")" && k != "," {
+                        sub_patterns.push(child);
+                    }
+                }
+
+                if sub_patterns.len() != payload.len() {
+                    return None;
+                }
+
+                let mut bindings = HashMap::new();
+                for (sub_pat, sub_val) in sub_patterns.iter().zip(payload.iter()) {
+                    let sub_bindings = match_pattern(sub_pat, sub_val, source)?;
+                    bindings.extend(sub_bindings);
+                }
+                Some(bindings)
+            } else {
+                None
+            }
+        }
         "literal" => {
              if let Some(child) = pattern.named_child(0) {
                  match_pattern(&child, value, source)
@@ -374,6 +604,6 @@ fn match_pattern<'a>(
                 if *v == (text == "true") { Some(HashMap::new()) } else { None }
             } else { None }
         }
-        _ => None 
+        _ => None
     }
 }
