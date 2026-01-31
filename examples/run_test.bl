@@ -1,0 +1,16 @@
+@prelude(core)
+
+main : () -> Int
+main = || { 
+  let x = 10
+  let y = 20
+  
+  // Test binary ops
+  let sum = x + y      // 30
+  let prod = sum * 2   // 60
+  
+  // Test logic
+  let valid = if prod > 50 then true else false
+  
+  if valid then prod else 0
+}

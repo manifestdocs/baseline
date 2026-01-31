@@ -1,0 +1,19 @@
+@prelude(core)
+
+type Point = { x: Int, y: Int }
+
+main : () -> ()
+main = |args| {
+  let p = Point { x: 1, y: 2 }
+  let t = (1, 2)
+  let r = 1..10
+
+  // Match expression (grammar requires expr then arms)
+  let res = match t 
+    (a, b) -> a + b
+    _ -> 0
+  
+  let cond = if true then 1 else 0
+
+  let z = p.x
+}

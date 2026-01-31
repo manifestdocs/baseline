@@ -1,4 +1,4 @@
-Here are two idiomatic examples based on the Rocket v0.1.0 specification.
+Here are two idiomatic examples based on the Baseline v0.1.0 specification.
 
 ### 1. FizzBuzz
 
@@ -8,7 +8,7 @@ This example demonstrates the **"One Way" Principle** (Section 1.6) and the stri
 * **Effects**: The `main!` function handles the I/O. Note that `for` loops are *only* allowed for effectful iteration (Section 1.6.1).
 * **Formatting**: String interpolation (`"${n}"`) is the only formatting syntax.
 
-```rocket
+```baseline
 @prelude(script) // Auto-imports Console, standard types
 module FizzBuzz
 
@@ -44,7 +44,7 @@ This example leverages the **Server Prelude** (Section 6.7) and **Refinement Typ
 
 It demonstrates the **"Parse, Don't Validate"** philosophy (Section 1.7.2). Instead of writing defensive code inside the handler (e.g., `if id < 0 return 400`), we parse the input into a `UserId` type. If parsing fails, the error propagates automatically.
 
-```rocket
+```baseline
 @prelude(server) // Imports Http, Router, Log, Json, Server
 module Api
 
@@ -75,7 +75,7 @@ get_user! = |req|
   Response.ok({ 
     id: id, 
     username: "Agent_007", 
-    email: "agent@rocket.lang" 
+    email: "agent@baseline.lang" 
   })
 
 // 3. Server Composition

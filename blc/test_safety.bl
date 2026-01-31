@@ -1,0 +1,22 @@
+
+@module SafetyTest
+
+// 1. Refinement Types
+type Port = Int where self >= 0 && self <= 65535
+
+// 2. Effect Definitions
+effect Log {
+    info : String -> {Log} Unit
+}
+
+// 3. Test Cases
+main : () -> Unit
+main = || { 
+    // A. Refinement Violation
+    // Should be REF_001: Value 70000 is out of range [0..65535]
+    let bad_port : Port = 70000
+
+    // B. Effect Violation
+    // Should be CAP_001: Unauthorized Side Effect 'Log.info!'
+    Log.info!("Hello World") 
+}

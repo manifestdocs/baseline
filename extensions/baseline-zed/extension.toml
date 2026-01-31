@@ -1,0 +1,12 @@
+id = "baseline"
+name = "Baseline"
+description = "Baseline programming language support"
+version = "0.1.0"
+schema_version = 1
+authors = ["Baseline Language Team"]
+repository = "https://github.com/baseline-lang/baseline"
+
+[grammars.baseline]
+repository = "https://github.com/baseline-lang/baseline"
+rev = "main"
+path = "tree-sitter-baseline"

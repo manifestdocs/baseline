@@ -1,0 +1,15 @@
+type User = { id: Int, active: Bool }
+
+main : () -> List<Int>
+main = || {
+    let u = User { id: 1, active: true }
+    
+    let status = match u.active 
+        true -> 100
+        false -> 0
+    
+    let double = |x| x * 2
+    let res = 5 |> double
+    
+    [u.id, status, res]
+}

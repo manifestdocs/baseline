@@ -1,0 +1,29 @@
+@prelude(core)
+
+type Point = { x: Int, y: Int }
+
+// Function Signature Mismatch (Return Type)
+bad_ret : () -> Int
+bad_ret = |args| {
+    "string" // Returns String, expects Int
+}
+
+// Function Arg Mismatch
+bad_args : (Int, Int) -> Int
+bad_args = |a| { // Expects 2 args, provides 1
+    a
+}
+
+main : () -> Int
+main = || {
+  // Field Mismatch
+  let p = Point { x: true, y: 1 }
+
+  // Missing Field
+  let p2 = Point { x: 1 }
+  
+  // Call Mismatch
+  let res = bad_args(1, "2") // Arg 2 expects Int
+
+  0
+}

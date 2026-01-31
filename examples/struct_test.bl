@@ -1,0 +1,25 @@
+@prelude(core)
+
+type Point = { x: Int, y: Int }
+type User = { id: Int, active: Bool }
+
+main : () -> Int
+main = || {
+  let p = Point { x: 10, y: 20 }
+  let u = User { id: 1, active: true }
+  
+  // Valid Field Access
+  let x_val = p.x
+  let id_val = u.id
+  
+  // Invalid Field Access (Error TYP_001)
+  // let err1 = p.z 
+  
+  // Type Mismatch in Init (Error TYP_010)
+  // let err2 = Point { x: true, y: 1 }
+
+  // Missing Field (Error TYP_012)
+  // let err3 = Point { x: 1 }
+  
+  x_val
+}

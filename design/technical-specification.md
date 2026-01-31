@@ -1,8 +1,8 @@
-Here is the formal **Technical Specification for the Rocket Toolchain (v0.1.0)**. This document serves as the implementation blueprint for the engineering team.
+Here is the formal **Technical Specification for the Baseline Toolchain (v0.1.0)**. This document serves as the implementation blueprint for the engineering team.
 
 ---
 
-# Rocket Technical Specification
+# Baseline Technical Specification
 
 **Version:** 0.1.0 — Bootstrap Implementation
 **Target:** Compiler Engineering & Tooling
@@ -12,9 +12,9 @@ Here is the formal **Technical Specification for the Rocket Toolchain (v0.1.0)**
 
 ## 1. Executive Summary
 
-Rocket v0.1 is designed to be the "Correction Layer" for AI coding agents. Unlike traditional compilers that optimize for binary generation, the Rocket compiler is optimized for **structured feedback**.
+Baseline v0.1 is designed to be the "Correction Layer" for AI coding agents. Unlike traditional compilers that optimize for binary generation, the Baseline compiler is optimized for **structured feedback**.
 
-The system implements a **Dual-Head Architecture** powered by a single Rust binary (`rocketc`):
+The system implements a **Dual-Head Architecture** powered by a single Rust binary (`baselinec`):
 
 1. **Head A (The Agent):** A batch-processing CLI that emits structured JSON diagnostics with deterministic fix-patches, allowing Agents to self-repair code without human intervention.
 2. **Head B (The Human):** A real-time Language Server (LSP) and Zed Editor extension designed for "Cognitive Safety," using syntax highlighting to visually alert human reviewers to side effects and logic constraints.
@@ -29,10 +29,10 @@ The project is structured as a Monorepo to ensure the grammar, verification core
 
 ```mermaid
 graph TD
-    Source["Source Code (.rocket)"] --> TS["Tree-sitter Parser (Fault Tolerant)"]
+    Source["Source Code (.baseline)"] --> TS["Tree-sitter Parser (Fault Tolerant)"]
     TS --> CST["Concrete Syntax Tree"]
     
-    subgraph "rocketc (Rust Core)"
+    subgraph "baselinec (Rust Core)"
         CST --> AST["Rowan Typed AST"]
         AST --> Analysis["Semantic Analysis (Salsa)"]
         Analysis --> Refine["Refinement Checker (Interval Logic)"]
@@ -55,13 +55,13 @@ graph TD
 ### 2.1 Repository Structure
 
 ```text
-rocket-lang/
+baseline-lang/
 ├── Cargo.toml                  # Workspace definition
-├── tree-sitter-rocket/         # [SOURCE OF TRUTH] Syntax definition
+├── tree-sitter-baseline/         # [SOURCE OF TRUTH] Syntax definition
 │   ├── grammar.js              # JavaScript grammar definition
 │   ├── src/                    # Generated parser
 │   └── queries/                # Semantic highlighting rules (.scm)
-├── rocketc/                    # [CORE] Compiler & Analysis
+├── baselinec/                    # [CORE] Compiler & Analysis
 │   ├── src/
 │   │   ├── main.rs             # CLI entry point (Dual-mode)
 │   │   ├── syntax.rs           # Tree-sitter -> Rowan (Typed AST)
@@ -69,28 +69,28 @@ rocket-lang/
 │   │   ├── json_api.rs         # Agent Protocol implementation
 │   │   └── server.rs           # Tower-LSP server implementation
 ├── extensions/
-│   └── rocket-zed/             # [HUMAN UI] Zed Editor Extension
+│   └── baseline-zed/             # [HUMAN UI] Zed Editor Extension
 │       ├── extension.toml
 │       ├── languages/          # Zed language config
-│       └── tree-sitter-rocket.wasm
-└── pyrocket/                   # [INTEGRATION] Python bindings for Agents
+│       └── tree-sitter-baseline.wasm
+└── pybaseline/                   # [INTEGRATION] Python bindings for Agents
     └── src/lib.rs              # PyO3 bindings for the compiler
 
 ```
 
 ---
 
-## 3. Component A: Syntax Layer (`tree-sitter-rocket`)
+## 3. Component A: Syntax Layer (`tree-sitter-baseline`)
 
 **Goal:** Provide fault-tolerant parsing and specific semantic tagging for "Safety Highlighting."
 
 ### 3.1 Grammar Definition (`grammar.js`)
 
-We must capture Rocket's specific safety features as distinct nodes to enable the editor to color them differently (e.g., Red for side effects, Gold for capabilities).
+We must capture Baseline's specific safety features as distinct nodes to enable the editor to color them differently (e.g., Red for side effects, Gold for capabilities).
 
 ```javascript
 module.exports = grammar({
-  name: 'rocket',
+  name: 'baseline',
 
   extras: $ => [ /\s/, $.comment ],
 
@@ -130,7 +130,7 @@ module.exports = grammar({
 
 ---
 
-## 4. Component B: The Compiler Core (`rocketc`)
+## 4. Component B: The Compiler Core (`baselinec`)
 
 **Stack:** Rust (2024), `salsa` (Incremental Computation), `rowan` (Lossless Syntax Tree).
 
@@ -149,7 +149,7 @@ To achieve sub-50ms latency for Agents, verification uses heuristics rather than
 
 ### 4.2 The Agent Protocol (JSON Output)
 
-The CLI command `rocketc check file.rocket --json` emits a schema optimized for In-Context Learning. It prioritizes **Fix Diffs**.
+The CLI command `baselinec check file.baseline --json` emits a schema optimized for In-Context Learning. It prioritizes **Fix Diffs**.
 
 ```json
 {
@@ -158,7 +158,7 @@ The CLI command `rocketc check file.rocket --json` emits a schema optimized for 
     {
       "code": "CAP_004",
       "severity": "error",
-      "location": { "file": "src/api.rocket", "line": 12, "col": 4 },
+      "location": { "file": "src/api.baseline", "line": 12, "col": 4 },
       
       // Context: Explain WHY it failed in concepts the LLM understands
       "message": "Unauthorized Side Effect: 'Fs.write!'",
@@ -200,16 +200,16 @@ The CLI command `rocketc check file.rocket --json` emits a schema optimized for 
 
 ```toml
 [extension]
-id = "rocket"
-name = "Rocket"
+id = "baseline"
+name = "Baseline"
 version = "0.0.1"
 
-[grammars.rocket]
-repository = "https://github.com/rocket-lang/tree-sitter-rocket"
+[grammars.baseline]
+repository = "https://github.com/baseline-lang/tree-sitter-baseline"
 commit = "HEAD"
 
-[language_servers.rocket]
-command = "rocketc"
+[language_servers.baseline]
+command = "baselinec"
 args = ["lsp"]
 
 ```
@@ -244,9 +244,9 @@ We map the specific grammar nodes defined in Section 3.1 to visual alerts.
 
 * **Goal:** Visual validation in Zed.
 * **Deliverables:**
-* `tree-sitter-rocket` repo with grammar implementation.
+* `tree-sitter-baseline` repo with grammar implementation.
 * `.wasm` parser compiled.
-* `rocket-zed` extension demonstrating "Danger Highlighting" (Red `!`, Gold `{}`).
+* `baseline-zed` extension demonstrating "Danger Highlighting" (Red `!`, Gold `{}`).
 
 
 
@@ -254,7 +254,7 @@ We map the specific grammar nodes defined in Section 3.1 to visual alerts.
 
 * **Goal:** Agents can run a "Check Loop" and fix syntax/effect errors.
 * **Deliverables:**
-* `rocketc` binary with `clap` CLI.
+* `baselinec` binary with `clap` CLI.
 * Rust AST lowering (`rowan`).
 * Capability Checker (Effect system).
 * JSON Output formatting.
@@ -266,5 +266,5 @@ We map the specific grammar nodes defined in Section 3.1 to visual alerts.
 * **Goal:** "Hello World" execution inside a Python Agent environment.
 * **Deliverables:**
 * Tree-walk Interpreter in Rust (using `Arc` for memory).
-* `pyrocket` bindings (via `pyo3`) allowing `import rocket; rocket.run(code)`.
-* `rocket_context.md`: The "System Prompt" file that teaches LLMs the language syntax.
+* `pybaseline` bindings (via `pyo3`) allowing `import baseline; baseline.run(code)`.
+* `baseline_context.md`: The "System Prompt" file that teaches LLMs the language syntax.

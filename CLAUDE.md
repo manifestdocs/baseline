@@ -4,92 +4,73 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Rocket is a new programming language in the design phase. This repository contains the language specification only - there is no compiler implementation yet.
+Baseline is a strongly typed, effect-based programming language currently in **v0.1 Bootstrap Phase**.
+
+**Current Status:**
+- **Compiler:** `blc` (Baseline Compiler) implemented in Rust.
+- **Parser:** `tree-sitter-baseline` fully functional.
+- **Version:** v0.1 (Bootstrap), focusing on core grammar and type/effect checking.
 
 **Design Philosophy:**
-- "The type is the spec" - Types encode correctness, enabling verification and test generation
-- "Effects are data" - Side effects are explicit capabilities, pure functions are default
-- "LLM-native" - Designed for machine generation with unambiguous syntax and structured errors
+- "The type is the spec" - Types encode correctness using refinements.
+- "Effects are data" - Side effects are explicit capabilities.
+- "LLM-native" - Designed for machine generation with unambiguous syntax.
 
 ## Repository Structure
 
 ```
-rocket-lang/
-├── design/
-│   └── rocket-language-specification.md   # Complete language spec (v0.1.0 Draft)
+baseline/
+├── blc/                    # Self-contained compiler (Rust)
+│   ├── src/analysis/       # Type, Effect, and Refinement checkers
+│   └── src/parse.rs        # Tree-sitter integration
+├── tree-sitter-baseline/   # Grammar definition and parser
+├── examples/               # v0.1 Feature demonstrations
+├── extensions/             # Editor support (Zed, VS Code)
+├── SPEC_V0_1_DELTA.md      # v0.1 Implementation Constraints
 └── CLAUDE.md
 ```
 
-## Key Language Features
+## Implemented Features (v0.1)
 
-### Syntax Patterns
+### Syntax & Grammar
+- **Functions:** ML-style `name : Sig = body`
+- **Tuples:** `(1, "a")`, Unit `()`
+- **Records:** `{ x: Int, y: Int }`, `User { id: 1 }`, `obj.prop`
+- **Control Flow:** `if/else`, `match` (pattern matching), `1..10` (ranges)
+- **Modules:** `@prelude(core)`, `@module Name`
+- **Pipes:** `x |> f`
 
-Function definitions use ML-style type-first declarations:
-```rocket
-greet : String -> String
-greet = |name| "Hello, ${name}"
-```
+### Type System
+- **Core Types:** `Int`, `String`, `Boolean`, `List<T>`
+- **Refinements:** Integer Intervals (`type Port = Int where self > 0`)
+    - *Constraint:* Regex and custom predicates deferred to v0.2.
+- **Effects:** Built-in only (`Console`, `Http`, `Fs`, `Log`, `Time`)
+    - *Constraint:* No distinct `handle` blocks in v0.1.
 
-Effectful functions are marked with `!` suffix:
-```rocket
-fetch_user! : Id -> {Http, Log} User?
-```
+## Developer Workflow
 
-### The One Way Principle
+### Build & Test
+1. **Regenerate Grammar:**
+   ```bash
+   cd tree-sitter-baseline && npx tree-sitter generate && cargo build
+   ```
+2. **Build Compiler:**
+   ```bash
+   cargo build --bin blc
+   ```
+3. **Run Checks:**
+   ```bash
+   blc check examples/hello.bl --json
+   ```
 
-Rocket enforces single idiomatic patterns:
-- String formatting: always `"${expr}"` interpolation
-- Error handling: always `?` propagation or pattern matching
-- Data transformation: always combinators (map/filter/fold), not loops
-- Chaining: always `|>` pipes
+### Coding Guidelines
+- **Rust (Compiler):** Follow standard Rust idioms. Use `tree-sitter` for parsing.
+- **Grammar:** Resolve all conflicts in `grammar.js`. Prefer explicit precedence.
+- **Constraints:** Adhere to `SPEC_V0_1_DELTA.md`. Do not implement v0.2 features (macros, advanced refinements) yet.
 
-### Core Types
+## Future Work (v0.2+)
 
-- `Option<T>` (sugar: `T?`) - nullable values
-- `Result<T, E>` (sugar: `T!E`) - fallible operations
-- Refinement types: `type Port = Int where 1 <= self <= 65535`
-- Sum types: `type Status = Active | Inactive | Pending`
-- Row-polymorphic records: `{ name: String, ..rest }`
-
-### Effect System
-
-Effects declare capabilities required by functions:
-```rocket
-effect Http {
-  get! : String -> Response!HttpError
-  post! : (String, Body) -> Response!HttpError
-}
-```
-
-Built-in effects: Console, Http, Fs, Net, Db, Time, Random, Env, Process, Log, Metrics
-
-### Specifications
-
-Function contracts with compile-time verification:
-```rocket
-@spec divide
-@given numerator: Int, denominator: Int where denominator != 0
-@ensures result * denominator <= numerator
-```
-
-### Testing
-
-Inline tests co-located with code:
-```rocket
-add = |a, b| a + b
-where
-  test "basic addition" = add(1, 2) == 3
-  property "commutative" = |a: Int, b: Int| add(a, b) == add(b, a)
-```
-
-## When Working on This Specification
-
-- Focus on consistency with established patterns (ML/OCaml, Rust, Koka influences)
-- The language prioritizes LLM code generation - constrained solution space, deterministic verification
-- No classes or inheritance - use composition, row types, and effects
-- "Parse, don't validate" - types should make illegal states unrepresentable
-- All compiler output is structured JSON for machine consumption
-
-## Future Work
-
-The specification covers: lexical structure, types, expressions, functions, effects, modules, specifications, testing, memory model, compilation, tracing, LSP/compiler API, and standard library. No implementation exists yet.
+- Full Standard Library (Http, Json, Async)
+- Custom Effect Handlers
+- Regex/String Refinements
+- Region-based Memory Management (currently using `Arc<T>`)

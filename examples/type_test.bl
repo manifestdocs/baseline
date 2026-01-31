@@ -1,0 +1,20 @@
+@prelude(core)
+
+type Config = { port: Int, debug: Bool }
+
+main : () -> ()
+main = |args| {
+  // Valid types
+  let x = 1
+  let y = 2
+  let sum = x + y
+  
+  // Valid logic
+  let valid = if true then 1 else 0
+
+  // Type Errors
+  let err1 = 1 + "string"     // TYP_001: Binary op error
+  let err2 = undefined_var    // TYP_002: Undefined var error
+  let err3 = if 1 then 1 else 0 // TYP_003: Condition not bool
+  let err4 = if true then 1 else "no" // TYP_004: Mismatch
+}

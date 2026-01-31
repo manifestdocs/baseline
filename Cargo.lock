@@ -62,6 +62,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "blc"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-baseline",
+]
+
+[[package]]
 name = "cc"
 version = "1.2.54"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -185,10 +196,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pyrocket"
-version = "0.1.0"
-
-[[package]]
 name = "quote"
 version = "1.0.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -225,17 +232,6 @@ name = "regex-syntax"
 version = "0.8.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7a2d987857b319362043e95f5353c0535c1f58eec5336fdfcf626430af7def58"
-
-[[package]]
-name = "rocketc"
-version = "0.1.0"
-dependencies = [
- "clap",
- "serde",
- "serde_json",
- "tree-sitter",
- "tree-sitter-rocket",
-]
 
 [[package]]
 name = "serde"
@@ -325,18 +321,18 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-language"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ae62f7eae5eb549c71b76658648b72cc6111f2d87d24a1e31fa907f4943e3ce"
-
-[[package]]
-name = "tree-sitter-rocket"
+name = "tree-sitter-baseline"
 version = "0.1.0"
 dependencies = [
  "cc",
  "tree-sitter-language",
 ]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4ae62f7eae5eb549c71b76658648b72cc6111f2d87d24a1e31fa907f4943e3ce"
 
 [[package]]
 name = "unicode-ident"

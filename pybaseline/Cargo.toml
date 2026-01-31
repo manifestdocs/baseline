@@ -1,0 +1,9 @@
+[package]
+name = "pybaseline"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Python bindings for the Baseline programming language"
+
+[dependencies]
