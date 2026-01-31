@@ -208,13 +208,10 @@ The corpus in `tree-sitter-baseline/test/corpus/` has 6 test files covering core
 
 ### 5.1 Naming Inconsistencies
 
-| Location | Uses | Should Be |
-|----------|------|-----------|
-| `diagnostics.rs:8` | "Rocket" | "Baseline" |
-| `analysis/mod.rs:1` | "Rocket" | "Baseline" |
-| `examples/hello.bl:1` | "Rocket" (in comment) | "Baseline" |
-| Tech spec | `baselinec` | `blc` (or align the binary name) |
-| Language spec | `.baseline` extension | `.bl` (or align) |
+All naming inconsistencies have been resolved:
+- "Rocket" references fixed in `diagnostics.rs`, `analysis/mod.rs`, `examples/hello.bl`
+- `baselinec` → `blc` in tech spec
+- `.baseline` → `.bl` in language spec and tech spec
 
 ### 5.2 Spec vs. Implementation Gaps
 
@@ -222,18 +219,18 @@ The corpus in `tree-sitter-baseline/test/corpus/` has 6 test files covering core
 |------|------|
 | Integer refinements (`where self > 0`) | Implemented (literal + variable tracking) |
 | Effect checking (capability verification) | Implemented (heuristic-based) |
-| Type checking (basic) | Implemented (Int, String, Bool, structs, functions) |
+| Type checking (basic) | Implemented (Int, Float, String, Bool, structs, functions) |
 | Tree-walk interpreter | Implemented (basic expressions, functions, match) |
 | JSON diagnostic output | Implemented |
 | Sum types / enums | Not in grammar |
-| Float type | Not in grammar or type checker |
+| Float type | Implemented (grammar + type checker) |
 | Option/Result types | Not in type checker |
 | String refinements (regex) | Correctly deferred to v0.2 |
 | Custom effect handlers | Correctly deferred to v0.2 |
 | LSP server | Stub only |
 | `?` error propagation | Not in grammar |
-| Trailing commas | Not supported by grammar |
-| Semicolons | Not supported by grammar |
+| Trailing commas | Supported in grammar |
+| Semicolons | Supported (optional in blocks) |
 | Spread operator (`..`) | Not in grammar |
 | Closures (variable capture) | Not in interpreter |
 | `for` loops (runtime) | Not in interpreter |
@@ -252,32 +249,32 @@ The corpus in `tree-sitter-baseline/test/corpus/` has 6 test files covering core
 
 ## 6. Recommendations (Prioritized)
 
-### P0 — Fix Now
+### P0/P1 — RESOLVED
 
-1. Remove the debug `eprintln!` in `effects.rs:211`
-2. Fix stale "Rocket" references in `diagnostics.rs`, `analysis/mod.rs`, and `examples/hello.bl`
-3. Fix the duplicate `has_effect` binding in `effects.rs:304-311`
-4. Fix the duplicate `name` declaration in `types.rs:136-137`
-5. Remove dead `Value` enum from `interpreter.rs`
-6. Fix function name extraction in effect checker (use `child_by_field_name("name")`)
+All P0 and P1 items have been fixed:
 
-### P1 — Fix Soon
-
-7. Add trailing comma support to `commaSep` in the grammar
-8. Add semicolons to grammar (at least optional statement separators in blocks)
-9. Fix `refinement_test.bl` to use valid syntax
-10. Add `Float` to grammar and type checker
-11. Clean up all 14 compiler warnings
-12. Add division-by-zero guard in interpreter
-13. Remove dead functions `find_function_body` and `is_expression` from `effects.rs`
+1. ~~Remove the debug `eprintln!` in `effects.rs:211`~~ DONE
+2. ~~Fix stale "Rocket" references~~ DONE (diagnostics.rs, analysis/mod.rs, hello.bl)
+3. ~~Fix the duplicate `has_effect` binding in `effects.rs`~~ DONE
+4. ~~Fix the duplicate `name` declaration in `types.rs`~~ DONE
+5. ~~Remove dead `Value` enum from `interpreter.rs`~~ DONE
+6. ~~Fix function name extraction in effect checker~~ DONE (uses `child_by_field_name`)
+7. ~~Add trailing comma support to grammar~~ DONE
+8. ~~Add semicolons to grammar~~ DONE (optional in blocks)
+9. ~~Fix `refinement_test.bl` to use valid syntax~~ DONE
+10. ~~Add `Float` to grammar and type checker~~ DONE
+11. ~~Clean up compiler warnings~~ DONE (0 blc warnings)
+12. ~~Add division-by-zero guard in interpreter~~ DONE
+13. ~~Remove dead functions from `effects.rs`~~ DONE
+14. ~~Fix `.baseline` → `.bl` in language spec~~ DONE
+15. ~~Fix `baselinec` → `blc` and Rowan/Salsa references in tech spec~~ DONE
+16. ~~Fix section numbering in language spec~~ DONE (6.4→6.6, 6.5→6.7, 10.3→10.5/10.6)
 
 ### P2 — Address in Next Phase
 
-14. Add sum type / enum syntax to the grammar
-15. Add `?` operator for error propagation
-16. Add spread operator (`..`) to grammar
-17. Build a shared semantic model across analysis passes
-18. Add Rust `#[test]` unit tests for the compiler
-19. Implement closure variable capture in interpreter
-20. Reconcile `.baseline` vs `.bl` file extension across spec and implementation
-21. Fix section numbering in language spec (duplicated 6.4, 6.5, 10.3)
+1. Add sum type / enum syntax to the grammar
+2. Add `?` operator for error propagation
+3. Add spread operator (`..`) to grammar
+4. Build a shared semantic model across analysis passes
+5. Add Rust `#[test]` unit tests for the compiler
+6. Implement closure variable capture in interpreter

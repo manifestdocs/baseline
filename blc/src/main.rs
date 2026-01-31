@@ -70,7 +70,7 @@ fn main() {
              // 2. Interpreter
              let mut context = interpreter::Context::new();
              
-             // Evaluate top-top level (defines types/funcs)
+             // Evaluate top-level definitions (types/functions)
              if let Err(e) = interpreter::eval(&root, &source, &mut context) {
                  eprintln!("Runtime Error: {}", e);
                  std::process::exit(1);
@@ -79,13 +79,8 @@ fn main() {
              // 3. Find and run 'main'
              if let Some(main_val) = context.get("main").cloned() {
                  if let interpreter::RuntimeValue::Function(_, main_body) = main_val {
-                      // Execute main body in a new scope? Or same?
-                      // Main takes no args usually?
-                      // We need to verify if it takes args?
-                      // For now assume no args main.
-                      
-                      // We need to execute the BODY of main using context.
-                      context.enter_scope(); // Scope for main execution
+                      // Execute the body of main in a new scope (no arguments)
+                      context.enter_scope();
                       match interpreter::eval(&main_body, &source, &mut context) {
                           Ok(val) => println!("{}", val),
                           Err(e) => {

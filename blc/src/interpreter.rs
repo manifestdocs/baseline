@@ -2,28 +2,6 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Value {
-    Int(i64),
-    String(String),
-    Bool(bool),
-    Unit,
-    // Function: args, body_node
-    // We need to store the Node. But Node is not Clone (easily) and has lifetime issues if we keep it long term 
-    // without the source.
-    // simpler approach for this P1: Just pass source everywhere and store Node.
-    // tree-sitter Nodes are lightweight but need the tree alive? No, they are just copyable structs usually?
-    // tree_sitter::Node is Copy.
-    Function(Vec<String>, Node<'static>), 
-    // Wait, Node has a lifetime. We can't store Node<'a> in Value if Value has to live longer/independently?
-    // Actually, we are evaluating within the context of a "run" where source and tree keep living.
-    // We can use unsafe transmute to extend lifetime IF we guarantee source/tree don't move.
-    // Or, for P1, we can just define Function to hold the Node and we carry 'a lifetime everywhere.
-}
-
-// Since handling lifetimes in Value might be annoying for the simple Map,
-// let's try to define Value<'a>.
-
-#[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeValue<'a> {
     Int(i64),
     String(String),
@@ -43,8 +21,8 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
             RuntimeValue::Bool(b) => write!(f, "{}", b),
             RuntimeValue::Unit => write!(f, "()"),
             RuntimeValue::Function(args, _) => write!(f, "|{}| ...", args.join(", ")),
-            RuntimeValue::Struct(name, fields) => {
-                 write!(f, "{} {{ ... }}", name) // Simplified display
+            RuntimeValue::Struct(name, _fields) => {
+                 write!(f, "{} {{ ... }}", name)
             }
             RuntimeValue::Record(_) => write!(f, "{{ ... }}"),
             RuntimeValue::List(vals) => {
@@ -113,13 +91,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             Ok(RuntimeValue::Unit)
         }
         "lambda" => {
-            // Capture args
             let mut args = Vec::new();
-            let mut cursor = node.walk();
-            // Children: | arg1 , arg2 | body
-            // This is loose parsing again without named fields for parameters in grammar?
-            // "lambda": seq('|', commaSep($._pattern), '|', $._expression)
-            
             let count = node.named_child_count();
             // Last one is body
             for i in 0..count-1 {
@@ -216,8 +188,20 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      "+" => Ok(RuntimeValue::Int(l + r)),
                      "-" => Ok(RuntimeValue::Int(l - r)),
                      "*" => Ok(RuntimeValue::Int(l * r)),
-                     "/" => Ok(RuntimeValue::Int(l / r)),
-                     "%" => Ok(RuntimeValue::Int(l % r)),
+                     "/" => {
+                         if r == 0 {
+                             Err("Division by zero".to_string())
+                         } else {
+                             Ok(RuntimeValue::Int(l / r))
+                         }
+                     }
+                     "%" => {
+                         if r == 0 {
+                             Err("Modulo by zero".to_string())
+                         } else {
+                             Ok(RuntimeValue::Int(l % r))
+                         }
+                     }
                      "==" => Ok(RuntimeValue::Bool(l == r)),
                      "!=" => Ok(RuntimeValue::Bool(l != r)),
                      "<" => Ok(RuntimeValue::Bool(l < r)),
@@ -278,6 +262,19 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  fields.insert(fname, val);
             }
             Ok(RuntimeValue::Struct(type_name, fields))
+        }
+        "record_expression" => {
+            let mut fields = HashMap::new();
+            let count = node.named_child_count();
+            for i in 0..count {
+                 let field_init = node.named_child(i).unwrap();
+                 let fname_node = field_init.child(0).unwrap();
+                 let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                 let val_node = field_init.child(2).unwrap();
+                 let val = eval(&val_node, source, context)?;
+                 fields.insert(fname, val);
+            }
+            Ok(RuntimeValue::Record(fields))
         }
         "field_expression" => {
              let obj_node = node.named_child(0).unwrap();

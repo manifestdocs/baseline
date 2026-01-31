@@ -14,7 +14,7 @@ Here is the formal **Technical Specification for the Baseline Toolchain (v0.1.0)
 
 Baseline v0.1 is designed to be the "Correction Layer" for AI coding agents. Unlike traditional compilers that optimize for binary generation, the Baseline compiler is optimized for **structured feedback**.
 
-The system implements a **Dual-Head Architecture** powered by a single Rust binary (`baselinec`):
+The system implements a **Dual-Head Architecture** powered by a single Rust binary (`blc`):
 
 1. **Head A (The Agent):** A batch-processing CLI that emits structured JSON diagnostics with deterministic fix-patches, allowing Agents to self-repair code without human intervention.
 2. **Head B (The Human):** A real-time Language Server (LSP) and Zed Editor extension designed for "Cognitive Safety," using syntax highlighting to visually alert human reviewers to side effects and logic constraints.
@@ -29,12 +29,12 @@ The project is structured as a Monorepo to ensure the grammar, verification core
 
 ```mermaid
 graph TD
-    Source["Source Code (.baseline)"] --> TS["Tree-sitter Parser (Fault Tolerant)"]
+    Source["Source Code (.bl)"] --> TS["Tree-sitter Parser (Fault Tolerant)"]
     TS --> CST["Concrete Syntax Tree"]
-    
-    subgraph "baselinec (Rust Core)"
-        CST --> AST["Rowan Typed AST"]
-        AST --> Analysis["Semantic Analysis (Salsa)"]
+
+    subgraph "blc (Rust Core)"
+        CST --> AST["Typed AST"]
+        AST --> Analysis["Semantic Analysis"]
         Analysis --> Refine["Refinement Checker (Interval Logic)"]
         Analysis --> Effect["Capability Verifier"]
         Refine & Effect --> Diagnostics["Diagnostic Engine"]
@@ -55,25 +55,28 @@ graph TD
 ### 2.1 Repository Structure
 
 ```text
-baseline-lang/
+baseline/
 ├── Cargo.toml                  # Workspace definition
-├── tree-sitter-baseline/         # [SOURCE OF TRUTH] Syntax definition
+├── tree-sitter-baseline/       # [SOURCE OF TRUTH] Syntax definition
 │   ├── grammar.js              # JavaScript grammar definition
 │   ├── src/                    # Generated parser
 │   └── queries/                # Semantic highlighting rules (.scm)
-├── baselinec/                    # [CORE] Compiler & Analysis
+├── blc/                        # [CORE] Compiler & Analysis
 │   ├── src/
 │   │   ├── main.rs             # CLI entry point (Dual-mode)
-│   │   ├── syntax.rs           # Tree-sitter -> Rowan (Typed AST)
-│   │   ├── analysis.rs         # Verification logic
-│   │   ├── json_api.rs         # Agent Protocol implementation
-│   │   └── server.rs           # Tower-LSP server implementation
+│   │   ├── parse.rs            # Tree-sitter integration
+│   │   ├── diagnostics.rs      # Structured diagnostic types
+│   │   ├── interpreter.rs      # Tree-walk interpreter
+│   │   └── analysis/           # Verification logic
+│   │       ├── types.rs        # Type checker
+│   │       ├── effects.rs      # Capability verifier
+│   │       └── refinements.rs  # Refinement checker
+├── examples/                   # Language examples (.bl files)
 ├── extensions/
-│   └── baseline-zed/             # [HUMAN UI] Zed Editor Extension
+│   └── baseline-zed/           # [HUMAN UI] Zed Editor Extension
 │       ├── extension.toml
-│       ├── languages/          # Zed language config
-│       └── tree-sitter-baseline.wasm
-└── pybaseline/                   # [INTEGRATION] Python bindings for Agents
+│       └── languages/          # Zed language config
+└── pybaseline/                 # [INTEGRATION] Python bindings for Agents
     └── src/lib.rs              # PyO3 bindings for the compiler
 
 ```
@@ -130,9 +133,9 @@ module.exports = grammar({
 
 ---
 
-## 4. Component B: The Compiler Core (`baselinec`)
+## 4. Component B: The Compiler Core (`blc`)
 
-**Stack:** Rust (2024), `salsa` (Incremental Computation), `rowan` (Lossless Syntax Tree).
+**Stack:** Rust (2024), `tree-sitter` (Parser), `serde` (JSON diagnostics).
 
 ### 4.1 Verification Tiers (v0.1)
 
@@ -149,7 +152,7 @@ To achieve sub-50ms latency for Agents, verification uses heuristics rather than
 
 ### 4.2 The Agent Protocol (JSON Output)
 
-The CLI command `baselinec check file.baseline --json` emits a schema optimized for In-Context Learning. It prioritizes **Fix Diffs**.
+The CLI command `blc check file.bl --json` emits a schema optimized for In-Context Learning. It prioritizes **Fix Diffs**.
 
 ```json
 {
@@ -158,7 +161,7 @@ The CLI command `baselinec check file.baseline --json` emits a schema optimized 
     {
       "code": "CAP_004",
       "severity": "error",
-      "location": { "file": "src/api.baseline", "line": 12, "col": 4 },
+      "location": { "file": "src/api.bl", "line": 12, "col": 4 },
       
       // Context: Explain WHY it failed in concepts the LLM understands
       "message": "Unauthorized Side Effect: 'Fs.write!'",
@@ -204,12 +207,12 @@ id = "baseline"
 name = "Baseline"
 version = "0.0.1"
 
-[grammars.baseline]
+[grammars.bl]
 repository = "https://github.com/baseline-lang/tree-sitter-baseline"
 commit = "HEAD"
 
-[language_servers.baseline]
-command = "baselinec"
+[language_servers.bl]
+command = "blc"
 args = ["lsp"]
 
 ```
@@ -254,8 +257,8 @@ We map the specific grammar nodes defined in Section 3.1 to visual alerts.
 
 * **Goal:** Agents can run a "Check Loop" and fix syntax/effect errors.
 * **Deliverables:**
-* `baselinec` binary with `clap` CLI.
-* Rust AST lowering (`rowan`).
+* `blc` binary with `clap` CLI.
+* Tree-sitter AST traversal.
 * Capability Checker (Effect system).
 * JSON Output formatting.
 

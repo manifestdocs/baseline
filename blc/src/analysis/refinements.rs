@@ -1,5 +1,5 @@
 use tree_sitter::{Node, Tree};
-use crate::diagnostics::{Diagnostic, Location, Suggestion};
+use crate::diagnostics::{Diagnostic, Location};
 use std::collections::HashMap;
 
 /// Represents a numeric interval (inclusive).

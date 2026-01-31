@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// The result of checking a Rocket source file.
+/// The result of checking a Baseline source file.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CheckResult {
     pub status: String,

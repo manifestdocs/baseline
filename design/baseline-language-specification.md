@@ -417,17 +417,17 @@ Formatting rules are defined by the language specification, not user preference.
 ```bash
 $ baseline lint src/
 
-src/api.baseline:12:5 warning[W001]: use .map() instead of accumulator loop
+src/api.bl:12:5 warning[W001]: use .map() instead of accumulator loop
    |
 12 |   for x in items do
    |   ^^^ consider: items.map(|x| transform(x))
 
-src/api.baseline:45:1 warning[W002]: prefer explicit imports
+src/api.bl:45:1 warning[W002]: prefer explicit imports
    |
 45 | import Http.*
    | ^^^^^^^^^^^^^ list specific imports: import Http.{get!, post!}
 
-src/api.baseline:67:5 warning[W003]: use pipe for transformation chain
+src/api.bl:67:5 warning[W003]: use pipe for transformation chain
    |  
 67 |   let r = c(b(a(input)))
    |           ^^^^^^^^^^^^^^ consider: input |> a |> b |> c
@@ -724,7 +724,7 @@ These principles are not suggestions—they are enabled and enforced by Baseline
 
 ### 2.1 Source Encoding
 
-Baseline source files are UTF-8 encoded. The file extension is `.baseline`.
+Baseline source files are UTF-8 encoded. The file extension is `.bl`.
 
 ### 2.2 Comments
 
@@ -1767,7 +1767,7 @@ This dramatically reduces boilerplate for LLM-generated code while maintaining e
 
 ---
 
-### 6.4 Row Polymorphism
+### 6.6 Row Polymorphism
 
 Baseline's effect system is built on **row polymorphism**. This enables:
 
@@ -1780,7 +1780,7 @@ Baseline's effect system is built on **row polymorphism**. This enables:
 map : (List<a, e>, a -> {e} b) -> {e} List<b, e>
 ```
 
-### 6.5 Direct Style
+### 6.7 Direct Style
 
 Baseline compiles algebraic effects to **Direct Style** code (using standard control flow or delimited continuations), avoiding the "colored function" problem of async/await.
 
@@ -1794,7 +1794,7 @@ Baseline compiles algebraic effects to **Direct Style** code (using standard con
 Each file is a module. The module name matches the file path:
 
 ```baseline
-// File: src/api/users.baseline
+// File: src/api/users.bl
 
 @module Api.Users
 
@@ -1848,16 +1848,16 @@ export effect MyEffect { ... }
 my-project/
 ├── baseline.toml         // Project configuration
 ├── src/
-│   ├── main.baseline     // Entry point
-│   ├── lib.baseline      // Library root (optional)
+│   ├── main.bl     // Entry point
+│   ├── lib.bl      // Library root (optional)
 │   ├── api/
-│   │   ├── mod.baseline  // Api module
-│   │   ├── users.baseline
-│   │   └── posts.baseline
+│   │   ├── mod.bl  // Api module
+│   │   ├── users.bl
+│   │   └── posts.bl
 │   └── util/
-│       └── helpers.baseline
+│       └── helpers.bl
 └── test/
-    └── api_test.baseline
+    └── api_test.bl
 ```
 
 ### 7.5 Visibility
@@ -2499,15 +2499,15 @@ Updated 2 snapshots:
 ```
 my-project/
 ├── src/
-│   ├── user.baseline         // Contains inline tests
-│   └── api.baseline          // Contains inline tests
+│   ├── user.bl         // Contains inline tests
+│   └── api.bl          // Contains inline tests
 └── test/
-    ├── user_spec.baseline    // BDD specs for user module
-    ├── api_spec.baseline     // BDD specs for api module
+    ├── user_spec.bl    // BDD specs for user module
+    ├── api_spec.bl     // BDD specs for api module
     ├── integration/
-    │   └── full_flow_spec.baseline
+    │   └── full_flow_spec.bl
     └── fixtures/
-        └── test_data.baseline
+        └── test_data.bl
 ```
 
 #### Focused and Skipped Tests
@@ -2577,12 +2577,12 @@ $ baseline test
 
 Running tests...
 
-  src/math.baseline
+  src/math.bl
     ✓ add: adds positive numbers (0.1ms)
     ✓ add: handles negatives (0.1ms)
     ✓ add: zero identity (0.1ms)
 
-  test/user_spec.baseline
+  test/user_spec.bl
     UserService
       create_user
         with valid data
@@ -2608,7 +2608,7 @@ Time: 142ms
 ```bash
 $ baseline test --filter "UserService"
 $ baseline test --filter "create_user"
-$ baseline test user_spec.baseline
+$ baseline test user_spec.bl
 $ baseline test --tag integration
 $ baseline test --tag "not slow"
 ```
@@ -2619,10 +2619,10 @@ $ baseline test --tag "not slow"
 $ baseline test --watch
 
 Watching for changes...
-[12:34:56] Running tests affected by src/user.baseline...
+[12:34:56] Running tests affected by src/user.bl...
   ✓ 4 tests passed (23ms)
 
-[12:35:12] Running tests affected by src/api.baseline...
+[12:35:12] Running tests affected by src/api.bl...
   ✗ 1 test failed
 
   UserService > delete_post > when user does not own the post
@@ -2637,13 +2637,13 @@ $ baseline test --coverage
 
 Coverage: 87% (Lines: 412/474)
 
-  src/user.baseline        94%  ████████████████░░
-  src/api.baseline         82%  ████████████████░░░░
-  src/db.baseline          71%  ██████████████░░░░░░░
+  src/user.bl        94%  ████████████████░░
+  src/api.bl         82%  ████████████████░░░░
+  src/db.bl          71%  ██████████████░░░░░░░
 
 Uncovered:
-  src/api.baseline:47-52 (error handler branch)
-  src/db.baseline:89 (connection retry logic)
+  src/api.bl:47-52 (error handler branch)
+  src/db.bl:89 (connection retry logic)
 
 $ baseline test --mutate
 
@@ -2653,11 +2653,11 @@ Generated 156 mutants
   Survived: 7
 
 Surviving mutants:
-  src/math.baseline:12
+  src/math.bl:12
     - Changed `+` to `-`
     - No test catches this!
 
-  src/api.baseline:34
+  src/api.bl:34
     - Changed `>=` to `>`
     - Edge case not tested
 ```
@@ -2682,7 +2682,7 @@ $ baseline test --format json
   "failures": [
     {
       "name": "UserService > delete_post > returns unauthorized",
-      "location": "test/user_spec.baseline:45",
+      "location": "test/user_spec.bl:45",
       "given": { "user": "bob", "post": "alice_post" },
       "when": "delete_post",
       "expected": "Err(Unauthorized)",
@@ -2836,7 +2836,7 @@ While Perceus handles deallocation, Baseline enforces ownership rules to ensure 
 3. Regions can be nested
 4. **The compiler tracks region lifetimes statically—no annotations required**
 
-### 10.3 Why Regions Are Simpler Than Borrow Checking
+### 10.5 Why Regions Are Simpler Than Borrow Checking
 
 | Aspect | Rust Borrow Checker | Baseline Regions |
 |--------|---------------------|----------------|
@@ -2864,7 +2864,7 @@ process_all = |users|
   // Intermediates freed when function returns
 ```
 
-### 10.3 Persistent Data Structures
+### 10.6 Persistent Data Structures
 
 For data that outlives a region, use persistent data structures:
 
@@ -3006,7 +3006,7 @@ Research benchmarks show FBIP achieves **within 10% of C++** for tree-heavy algo
 ### 11.1 Compilation Pipeline
 
 ```
-Source (.baseline files)
+Source (.bl files)
         ↓
     Parsing (Tree-sitter)
         ↓
@@ -3058,12 +3058,12 @@ Baseline supports fine-grained incremental compilation:
 
 ```bash
 $ baseline build
-Compiling src/main.baseline... done (145ms)
+Compiling src/main.bl... done (145ms)
 
-# Edit src/api/users.baseline
+# Edit src/api/users.bl
 
 $ baseline build
-Recompiling src/api/users.baseline... done (23ms)
+Recompiling src/api/users.bl... done (23ms)
 Linking... done (12ms)
 ```
 
@@ -3122,7 +3122,7 @@ Trace format (binary, but shown as JSON for clarity):
   "events": [
     {
       "timestamp_ns": 142000,
-      "location": { "file": "api.baseline", "line": 47, "col": 12 },
+      "location": { "file": "api.bl", "line": 47, "col": 12 },
       "event": {
         "type": "function_call",
         "name": "get_user",
@@ -3131,7 +3131,7 @@ Trace format (binary, but shown as JSON for clarity):
     },
     {
       "timestamp_ns": 891000,
-      "location": { "file": "api.baseline", "line": 48, "col": 5 },
+      "location": { "file": "api.bl", "line": 48, "col": 5 },
       "event": {
         "type": "effect_executed",
         "effect": "Db.query",
@@ -3156,10 +3156,10 @@ Summary:
   Allocations: 2.3 MB
   
 Anomalies:
-  ⚠ Db.query at api.baseline:48 took 2.3s (expected <100ms)
+  ⚠ Db.query at api.bl:48 took 2.3s (expected <100ms)
     Hypothesis: missing index on users.email
     
-  ⚠ Unexpected None at api.baseline:52
+  ⚠ Unexpected None at api.bl:52
     get_user returned None for id=42
     Prior call showed user 42 exists
     Hypothesis: race condition or cache inconsistency
@@ -3174,9 +3174,9 @@ Hot paths:
 Replay execution deterministically:
 
 ```bash
-$ baseline trace replay myapp.trace --until "api.baseline:52"
+$ baseline trace replay myapp.trace --until "api.bl:52"
 
-State at api.baseline:52:
+State at api.bl:52:
   locals:
     id: 42
     user: None
@@ -3208,9 +3208,9 @@ Analysis:
 Test fixes against captured traces:
 
 ```bash
-$ baseline trace replay myapp.trace --patch fix.baseline --dry-run
+$ baseline trace replay myapp.trace --patch fix.bl --dry-run
 
-Original outcome: Error("unwrap on None at api.baseline:52")
+Original outcome: Error("unwrap on None at api.bl:52")
 Patched outcome: Ok(NotFound)
 
 Spec compliance: ✓
@@ -3227,7 +3227,7 @@ All errors are machine-parseable:
 {
   "error": {
     "type": "type_mismatch",
-    "location": { "file": "api.baseline", "line": 47, "col": 12 },
+    "location": { "file": "api.bl", "line": 47, "col": 12 },
     "expected": "User",
     "actual": "Option<User>",
     "context": {
@@ -3294,7 +3294,7 @@ Beyond standard LSP, Baseline provides semantic queries:
 {
   "method": "baseline/typeAt",
   "params": {
-    "file": "src/api.baseline",
+    "file": "src/api.bl",
     "position": { "line": 42, "character": 15 }
   }
 }
@@ -3346,7 +3346,7 @@ Beyond standard LSP, Baseline provides semantic queries:
 {
   "method": "baseline/availableEffects",
   "params": {
-    "file": "src/api.baseline",
+    "file": "src/api.bl",
     "position": { "line": 42, "character": 0 }
   }
 }
@@ -3444,7 +3444,7 @@ For LLM integration, a stateful session API:
   "method": "baseline/session/check",
   "params": {
     "sessionId": "abc123",
-    "file": "src/api.baseline",
+    "file": "src/api.bl",
     "source": "..."
   }
 }
@@ -3552,7 +3552,7 @@ baseline check src/ --format=json
       },
       "locations": [{
         "physicalLocation": {
-          "artifactLocation": { "uri": "src/server.baseline" },
+          "artifactLocation": { "uri": "src/server.bl" },
           "region": {
             "startLine": 42,
             "startColumn": 15,
@@ -3564,7 +3564,7 @@ baseline check src/ --format=json
       }],
       "relatedLocations": [{
         "physicalLocation": {
-          "artifactLocation": { "uri": "src/types.baseline" },
+          "artifactLocation": { "uri": "src/types.bl" },
           "region": { "startLine": 5 }
         },
         "message": { "text": "Port type defined here with refinement: 1 <= self <= 65535" }
@@ -3581,7 +3581,7 @@ baseline check src/ --format=json
       "fixes": [{
         "description": { "text": "Add guard clause" },
         "artifactChanges": [{
-          "artifactLocation": { "uri": "src/server.baseline" },
+          "artifactLocation": { "uri": "src/server.bl" },
           "replacements": [{
             "deletedRegion": { "startLine": 42, "startColumn": 1, "endColumn": 1 },
             "insertedContent": { "text": "if port < 1 then return Err(InvalidPort)\n" }
@@ -4555,10 +4555,10 @@ The recommended pipeline for Baseline training data:
 ```bash
 # Translate TypeScript to Baseline (best-effort)
 baseline synth translate src/api.ts
-# Output: src/api.baseline (may need manual review)
+# Output: src/api.bl (may need manual review)
 
 # Generate instruction prompt for existing code
-baseline synth instruct src/validated.baseline
+baseline synth instruct src/validated.bl
 # Output: "Write a function that validates email addresses
 #          and returns a typed Email value..."
 

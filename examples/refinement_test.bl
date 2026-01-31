@@ -1,14 +1,17 @@
+// Refinement type tests
+
 type ValidPort = Int where self > 0 && self < 65536
 type Probability = Int where self >= 0 && self <= 100
 
-main! = {
+check_refinements : () -> ()
+check_refinements = {
   // These should pass
-  let p1: ValidPort = 8080;
-  let prob1: Probability = 50;
+  let p1 : ValidPort = 8080
+  let prob1 : Probability = 50
 
   // These should fail
-  let p2: ValidPort = 70000;
-  let p3: ValidPort = 0;
-  let prob2: Probability = 101;
-  let prob3: Probability = -1;
+  let p2 : ValidPort = 70000
+  let p3 : ValidPort = 0
+  let prob2 : Probability = 101
+  let prob3 : Probability = -1
 }
