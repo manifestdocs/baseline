@@ -216,7 +216,7 @@ module.exports = grammar({
     // Lambdas: |x| x + 1
     lambda: $ => seq('|', commaSep($._pattern), '|', $._expression),
 
-    block: $ => seq('{', repeat1($._statement), '}'),
+    block: $ => seq('{', repeat1(seq($._statement, optional(';'))), '}'),
     _statement: $ => choice(
       $.let_binding,
       $._expression
@@ -246,7 +246,8 @@ module.exports = grammar({
 
     // --- Literals ---
 
-    literal: $ => choice($.integer_literal, $.string_literal, $.boolean_literal),
+    literal: $ => choice($.float_literal, $.integer_literal, $.string_literal, $.boolean_literal),
+    float_literal: $ => token(seq(/\d+/, '.', /\d+/, optional(seq(/[eE]/, optional(/[+-]/), /\d+/)))),
     integer_literal: $ => /\d+/,
     boolean_literal: $ => choice('true', 'false'),
 
@@ -279,9 +280,9 @@ module.exports = grammar({
 });
 
 function commaSep(rule) {
-  return optional(seq(rule, repeat(seq(',', rule))));
+  return optional(seq(rule, repeat(seq(',', rule)), optional(',')));
 }
 
 function commaSep1(rule) {
-  return seq(rule, repeat(seq(',', rule)));
+  return seq(rule, repeat(seq(',', rule)), optional(','));
 }

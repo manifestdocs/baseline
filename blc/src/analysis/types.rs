@@ -5,6 +5,7 @@ use crate::diagnostics::{Diagnostic, Location};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
     Int,
+    Float,
     String,
     Bool,
     Unit,
@@ -20,6 +21,7 @@ impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Int => write!(f, "Int"),
+            Type::Float => write!(f, "Float"),
             Type::String => write!(f, "String"),
             Type::Bool => write!(f, "Bool"),
             Type::Unit => write!(f, "Unit"),
@@ -132,26 +134,13 @@ fn check_node(
         }
         "type_def" => {
             // type Point = { x: Int, y: Int }
-            // type Point = { x: Int, y: Int }
-            let mut name = String::new();
-            let mut name = String::new();
-            
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                if child.kind() == "type_identifier" {
-                    name = child.utf8_text(source.as_bytes()).unwrap().to_string();
-                } else if child.kind().ends_with("_type") || child.kind().ends_with("_identifier") {
-                    // This is heuristic, better to check for non-keywords
-                    // but type_def has: 'type' name '=' def
-                    // def is after '='
-                }
-            }
-            // Explicit index fallback
-            let name_node = node.child(1).unwrap(); // 'type' is 0
-            name = name_node.utf8_text(source.as_bytes()).unwrap_or("Unknown").to_string();
-            
-            // Def node is after '=' (child 2 is '=')
-            let def_node_candidate = node.child(3).unwrap();
+            let name_node = node.child_by_field_name("name")
+                .unwrap_or_else(|| node.child(1).unwrap());
+            let name = name_node.utf8_text(source.as_bytes()).unwrap_or("Unknown").to_string();
+
+            // Def node is after '=' — use field if available, else positional
+            let def_node_candidate = node.child_by_field_name("def")
+                .unwrap_or_else(|| node.child(3).unwrap());
             let ty = parse_type(&def_node_candidate, source, symbols); 
             
             // If it's a record, wrap it in a Struct with the name
@@ -466,8 +455,6 @@ fn check_node(
                 } else if child.kind().ends_with("_expression") || child.kind() == "identifier" || child.kind().ends_with("_literal") || child.kind() == "literal" {
                     last_type = check_node(&child, source, file, symbols, diagnostics);
                 }
-                // DEBUG:
-                // println!("Block child {}: type {}", child.kind(), last_type);
             }
             symbols.exit_scope();
             last_type
@@ -505,6 +492,7 @@ fn check_node(
              }
         }
         "integer_literal" => Type::Int,
+        "float_literal" => Type::Float,
         "string_literal" => Type::String,
         "boolean_literal" => Type::Bool,
         "binary_expression" => {
@@ -516,6 +504,8 @@ fn check_node(
                 "+" | "-" | "*" | "/" | "%" => {
                     if left_type == Type::Int && right_type == Type::Int {
                         Type::Int
+                    } else if left_type == Type::Float && right_type == Type::Float {
+                        Type::Float
                     } else {
                         if left_type != Type::Unknown && right_type != Type::Unknown {
                             diagnostics.push(Diagnostic {
@@ -526,8 +516,8 @@ fn check_node(
                                     line: node.start_position().row + 1,
                                     col: node.start_position().column + 1,
                                 },
-                                message: format!("Binary operator `{}` requires Int operands, found {} and {}", op_str, left_type, right_type),
-                                context: "Arithmetic operations are only supported on Integers.".to_string(),
+                                message: format!("Binary operator `{}` requires matching Int or Float operands, found {} and {}", op_str, left_type, right_type),
+                                context: "Arithmetic operations require matching numeric types.".to_string(),
                                 suggestions: vec![],
                             });
                         }
@@ -758,6 +748,7 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
             let name = node.utf8_text(source.as_bytes()).unwrap();
             match name {
                 "Int" => Type::Int,
+                "Float" => Type::Float,
                 "String" => Type::String,
                 "Bool" => Type::Bool,
                 "Unit" => Type::Unit,

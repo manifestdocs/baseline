@@ -1,4 +1,4 @@
-// A simple Rocket program demonstrating basic features
+// A simple Baseline program demonstrating basic features
 
 /// Greets a user by name
 greet : String -> String

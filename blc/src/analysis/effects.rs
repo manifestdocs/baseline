@@ -65,12 +65,18 @@ fn check_function(node: Node, source: &str, file: &str, diagnostics: &mut Vec<Di
     }
 }
 
-/// Find the function name from a function_declaration node.
+/// Find the function name from a function_def node.
 fn find_function_name<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
+    // The grammar defines: field('name', $._name) twice in function_def.
+    // child_by_field_name("name") returns the first occurrence.
+    if let Some(name_node) = node.child_by_field_name("name") {
+        return name_node.utf8_text(source.as_bytes()).ok();
+    }
+    // Fallback: search children directly
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
-            "identifier" | "lower_identifier" | "effectful_identifier" => {
+            "identifier" | "effectful_identifier" => {
                 return child.utf8_text(source.as_bytes()).ok();
             }
             _ => continue,
@@ -122,57 +128,6 @@ fn collect_effects_from_type(node: Node, source: &str, effects: &mut Vec<String>
     }
 }
 
-/// Find the function body expression.
-fn find_function_body(node: Node) -> Option<Node> {
-    let mut found_equals = false;
-    let mut cursor = node.walk();
-
-    for child in node.children(&mut cursor) {
-        if child.kind() == "=" {
-            found_equals = true;
-            continue;
-        }
-
-        // The first expression after `=` is the body
-        if found_equals && is_expression(child.kind()) {
-            return Some(child);
-        }
-    }
-
-    None
-}
-
-/// Check if a node kind is an expression.
-fn is_expression(kind: &str) -> bool {
-    matches!(
-        kind,
-        "lambda_expression"
-            | "call_expression"
-            | "if_expression"
-            | "match_expression"
-            | "let_expression"
-            | "block_expression"
-            | "pipe_expression"
-            | "binary_expression"
-            | "unary_expression"
-            | "postfix_expression"
-            | "field_expression"
-            | "record_expression"
-            | "list_expression"
-            | "tuple_expression"
-            | "parenthesized_expression"
-            | "lower_identifier"
-            | "upper_identifier"
-            | "effectful_identifier"
-            | "qualified_identifier"
-            | "integer_literal"
-            | "float_literal"
-            | "string_literal"
-            | "boolean_literal"
-            | "unit_literal"
-    )
-}
-
 /// Recursively check a node and its children for effectful calls.
 fn check_node_for_effects(
     node: Node,
@@ -207,8 +162,6 @@ fn check_node_for_effects(
 
     // Check for field expressions (Log.info!)
     if node.kind() == "field_expression" {
-        // DEBUG
-        eprintln!("DEBUG: checking field expression: {}", node.to_sexp()); 
         // field_expression: expr . id
         let obj = node.named_child(0);
         let field = node.named_child(1);
@@ -305,16 +258,11 @@ fn check_effectful_call(
         .iter()
         .any(|e| e.eq_ignore_ascii_case(&required_effect));
 
-    // Check if the required effect is in the declared set
-    let has_effect = declared_effects
-        .iter()
-        .any(|e| e.eq_ignore_ascii_case(&required_effect));
-
     if !has_effect {
         let start = node.start_position();
 
         // Build the suggestion patch
-        let (patch, original_text) = build_effect_patch(func_node, source, &required_effect);
+        let (patch, _original_text) = build_effect_patch(func_node, source, &required_effect);
 
         diagnostics.push(Diagnostic {
             code: "CAP_001".to_string(),

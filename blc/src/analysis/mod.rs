@@ -1,4 +1,4 @@
-//! Semantic analysis passes for Rocket source files.
+//! Semantic analysis passes for Baseline source files.
 //!
 //! This module contains various analysis passes that run after parsing,
 //! including effect checking, refinement checking, and other verifications.
