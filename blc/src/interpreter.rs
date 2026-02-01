@@ -323,36 +323,72 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              Ok(RuntimeValue::Bool(text == "true"))
         }
         "binary_expression" => {
-             let left = eval(&node.named_child(0).unwrap(), source, context)?;
-             let right = eval(&node.named_child(1).unwrap(), source, context)?;
              let op = node.child(1).unwrap().utf8_text(source.as_bytes()).unwrap();
-             
-             match (left, right) {
-                 (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
-                     "+" => Ok(RuntimeValue::Int(l + r)),
-                     "-" => Ok(RuntimeValue::Int(l - r)),
-                     "*" => Ok(RuntimeValue::Int(l * r)),
-                     "/" => {
-                         if r == 0 {
-                             Err("Division by zero".to_string())
-                         } else {
-                             Ok(RuntimeValue::Int(l / r))
+
+             // Short-circuit logical operators: evaluate left first,
+             // only evaluate right if needed
+             match op {
+                 "&&" => {
+                     let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                     match left {
+                         RuntimeValue::Bool(false) => Ok(RuntimeValue::Bool(false)),
+                         RuntimeValue::Bool(true) => {
+                             let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                             match right {
+                                 RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
+                                 _ => Err("Right operand of && must be Bool".to_string()),
+                             }
                          }
+                         _ => Err("Left operand of && must be Bool".to_string()),
                      }
-                     "%" => {
-                         if r == 0 {
-                             Err("Modulo by zero".to_string())
-                         } else {
-                             Ok(RuntimeValue::Int(l % r))
+                 }
+                 "||" => {
+                     let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                     match left {
+                         RuntimeValue::Bool(true) => Ok(RuntimeValue::Bool(true)),
+                         RuntimeValue::Bool(false) => {
+                             let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                             match right {
+                                 RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
+                                 _ => Err("Right operand of || must be Bool".to_string()),
+                             }
                          }
+                         _ => Err("Left operand of || must be Bool".to_string()),
                      }
-                     "==" => Ok(RuntimeValue::Bool(l == r)),
-                     "!=" => Ok(RuntimeValue::Bool(l != r)),
-                     "<" => Ok(RuntimeValue::Bool(l < r)),
-                     ">" => Ok(RuntimeValue::Bool(l > r)),
-                     _ => Err(format!("Unknown int operator {}", op))
-                 },
-                 (l, r) => Err(format!("Invalid operands for {}: {} and {}", op, l, r))
+                 }
+                 _ => {
+                     let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                     let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                     match (left, right) {
+                         (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
+                             "+" => Ok(RuntimeValue::Int(l + r)),
+                             "-" => Ok(RuntimeValue::Int(l - r)),
+                             "*" => Ok(RuntimeValue::Int(l * r)),
+                             "/" => {
+                                 if r == 0 {
+                                     Err("Division by zero".to_string())
+                                 } else {
+                                     Ok(RuntimeValue::Int(l / r))
+                                 }
+                             }
+                             "%" => {
+                                 if r == 0 {
+                                     Err("Modulo by zero".to_string())
+                                 } else {
+                                     Ok(RuntimeValue::Int(l % r))
+                                 }
+                             }
+                             "==" => Ok(RuntimeValue::Bool(l == r)),
+                             "!=" => Ok(RuntimeValue::Bool(l != r)),
+                             "<" => Ok(RuntimeValue::Bool(l < r)),
+                             ">" => Ok(RuntimeValue::Bool(l > r)),
+                             "<=" => Ok(RuntimeValue::Bool(l <= r)),
+                             ">=" => Ok(RuntimeValue::Bool(l >= r)),
+                             _ => Err(format!("Unknown int operator {}", op))
+                         },
+                         (l, r) => Err(format!("Invalid operands for {}: {} and {}", op, l, r))
+                     }
+                 }
              }
         }
         "if_expression" => {
@@ -605,5 +641,145 @@ fn match_pattern<'a>(
             } else { None }
         }
         _ => None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tree_sitter::Parser;
+    use tree_sitter_baseline::LANGUAGE;
+
+    /// Parse and evaluate Baseline source, returning main's evaluated body.
+    /// Source should define main as: `main : () -> T\nmain = || expr`
+    fn eval_source(source: &str) -> Result<RuntimeValue<'static>, String> {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&LANGUAGE.into())
+            .expect("Failed to load language");
+        let tree = parser.parse(source, None).expect("Failed to parse");
+        let tree = Box::leak(Box::new(tree));
+        let root = tree.root_node();
+        let mut context = Context::new();
+        eval(&root, source, &mut context)?;
+
+        let main_val = context
+            .get("main")
+            .cloned()
+            .ok_or_else(|| "No 'main' binding found".to_string())?;
+
+        // main is a Function or Closure — evaluate its body to get the actual value
+        match main_val {
+            RuntimeValue::Function(_, body_node) => {
+                context.enter_scope();
+                let result = eval(&body_node, source, &mut context);
+                context.exit_scope();
+                result
+            }
+            RuntimeValue::Closure(_, body_node, captured_env) => {
+                context.enter_scope();
+                for (k, v) in &captured_env {
+                    context.set(k.clone(), v.clone());
+                }
+                let result = eval(&body_node, source, &mut context);
+                context.exit_scope();
+                result
+            }
+            other => Ok(other),
+        }
+    }
+
+    // -- Comparison operators --
+
+    #[test]
+    fn test_less_than_or_equal_true() {
+        let result = eval_source("main : () -> Bool\nmain = || 3 <= 5");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_less_than_or_equal_equal() {
+        let result = eval_source("main : () -> Bool\nmain = || 5 <= 5");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_less_than_or_equal_false() {
+        let result = eval_source("main : () -> Bool\nmain = || 7 <= 5");
+        assert_eq!(result, Ok(RuntimeValue::Bool(false)));
+    }
+
+    #[test]
+    fn test_greater_than_or_equal_true() {
+        let result = eval_source("main : () -> Bool\nmain = || 5 >= 3");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_greater_than_or_equal_equal() {
+        let result = eval_source("main : () -> Bool\nmain = || 5 >= 5");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_greater_than_or_equal_false() {
+        let result = eval_source("main : () -> Bool\nmain = || 3 >= 5");
+        assert_eq!(result, Ok(RuntimeValue::Bool(false)));
+    }
+
+    // -- Logical operators --
+
+    #[test]
+    fn test_and_true_true() {
+        let result = eval_source("main : () -> Bool\nmain = || true && true");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_and_true_false() {
+        let result = eval_source("main : () -> Bool\nmain = || true && false");
+        assert_eq!(result, Ok(RuntimeValue::Bool(false)));
+    }
+
+    #[test]
+    fn test_and_false_short_circuits() {
+        // false && <anything> should return false without evaluating right side
+        let result = eval_source("main : () -> Bool\nmain = || false && true");
+        assert_eq!(result, Ok(RuntimeValue::Bool(false)));
+    }
+
+    #[test]
+    fn test_or_false_false() {
+        let result = eval_source("main : () -> Bool\nmain = || false || false");
+        assert_eq!(result, Ok(RuntimeValue::Bool(false)));
+    }
+
+    #[test]
+    fn test_or_false_true() {
+        let result = eval_source("main : () -> Bool\nmain = || false || true");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_or_true_short_circuits() {
+        // true || <anything> should return true without evaluating right side
+        let result = eval_source("main : () -> Bool\nmain = || true || false");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    // -- Combined expressions --
+
+    #[test]
+    fn test_comparison_in_if() {
+        let source = "main : () -> Int\nmain = || if 3 <= 5 then 42 else 0";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    #[test]
+    fn test_logical_and_with_comparisons() {
+        let source = "main : () -> Bool\nmain = || 3 <= 5 && 10 >= 8";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 }
