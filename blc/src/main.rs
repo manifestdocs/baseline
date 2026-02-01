@@ -73,13 +73,20 @@ fn main() {
                  std::process::exit(1);
              }
              
-             // 3. Find and run 'main'
-             if let Some(main_val) = context.get("main").cloned() {
+             // 3. Find and run 'main' or 'main!'
+             let main_val = context.get("main!").cloned()
+                 .or_else(|| context.get("main").cloned());
+
+             if let Some(main_val) = main_val {
                  if let interpreter::RuntimeValue::Function(_, main_body) = main_val {
                       // Execute the body of main in a new scope (no arguments)
                       context.enter_scope();
                       match interpreter::eval(&main_body, &source, &mut context) {
-                          Ok(val) => println!("{}", val),
+                          Ok(val) => {
+                              if !matches!(val, interpreter::RuntimeValue::Unit) {
+                                  println!("{}", val);
+                              }
+                          }
                           Err(e) => {
                               eprintln!("Runtime Error in main: {}", e);
                               std::process::exit(1);
@@ -91,7 +98,7 @@ fn main() {
                      std::process::exit(1);
                  }
              } else {
-                 eprintln!("No 'main' function found");
+                 eprintln!("No 'main' or 'main!' function found");
                  std::process::exit(1);
              }
         }

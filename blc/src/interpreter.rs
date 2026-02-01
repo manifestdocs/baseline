@@ -10,6 +10,7 @@ pub enum RuntimeValue<'a> {
     Function(Vec<String>, Node<'a>),
     /// Closure: params, body, captured environment
     Closure(Vec<String>, Node<'a>, HashMap<String, RuntimeValue<'a>>),
+    Tuple(Vec<RuntimeValue<'a>>),
     Struct(String, HashMap<String, RuntimeValue<'a>>),
     Record(HashMap<String, RuntimeValue<'a>>),
     List(Vec<RuntimeValue<'a>>),
@@ -25,6 +26,10 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
             RuntimeValue::Unit => write!(f, "()"),
             RuntimeValue::Function(args, _) => write!(f, "|{}| ...", args.join(", ")),
             RuntimeValue::Closure(args, _, _) => write!(f, "|{}| <closure>", args.join(", ")),
+            RuntimeValue::Tuple(vals) => {
+                let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                write!(f, "({})", s)
+            }
             RuntimeValue::Struct(name, _fields) => {
                  write!(f, "{} {{ ... }}", name)
             }
@@ -137,18 +142,19 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             }
             Ok(RuntimeValue::Unit)
         }
-        "lambda" => {
+        "lambda" | "lambda_expression" => {
             let mut args = Vec::new();
             let count = node.named_child_count();
-            // Last one is body
-            for i in 0..count-1 {
+            // All named children except the last are parameters; last is body
+            for i in 0..count - 1 {
                 let child = node.named_child(i).unwrap();
-                if child.kind() == "identifier" {
-                    args.push(child.utf8_text(source.as_bytes()).unwrap().to_string());
+                let name = extract_param_name(&child, source);
+                if let Some(n) = name {
+                    args.push(n);
                 }
             }
 
-            let body = node.named_child(count-1).unwrap();
+            let body = node.named_child(count - 1).unwrap();
             let captured = context.snapshot();
             Ok(RuntimeValue::Closure(args, body, captured))
         }
@@ -220,30 +226,26 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  _ => Err(format!("Not a function: {}", func_node.utf8_text(source.as_bytes()).unwrap()))
              }
         }
-        "block" => {
+        "block" | "block_expression" => {
             context.enter_scope();
             let mut last_val = RuntimeValue::Unit;
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                 if child.kind().ends_with("_expression") || child.kind().ends_with("_literal") || child.kind() == "identifier" || child.kind() == "let_binding" || child.kind() == "literal" {
-                     last_val = eval(&child, source, context)?;
-                 }
+            let count = node.named_child_count();
+            for i in 0..count {
+                let child = node.named_child(i).unwrap();
+                last_val = eval(&child, source, context)?;
             }
             context.exit_scope();
             Ok(last_val)
         }
-        "let_binding" => {
+        "let_binding" | "let_expression" => {
             let pattern = node.named_child(0).unwrap();
             let expr = node.named_child(1).unwrap();
             let val = eval(&expr, source, context)?;
-            
-            if pattern.kind() == "identifier" {
-                let name = pattern.utf8_text(source.as_bytes()).unwrap().to_string();
-                context.set(name, val);
-            }
+
+            bind_pattern(&pattern, &val, source, context)?;
             Ok(RuntimeValue::Unit)
         }
-        "identifier" => {
+        "identifier" | "lower_identifier" | "effect_identifier" => {
             let name = node.utf8_text(source.as_bytes()).unwrap();
             context.get(name).cloned().ok_or_else(|| format!("Undefined variable: {}", name))
         }
@@ -450,6 +452,17 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  Ok(RuntimeValue::Unit)
              }
         }
+        "tuple_expression" => {
+             let count = node.named_child_count();
+             if count == 0 {
+                 return Ok(RuntimeValue::Unit);
+             }
+             let mut vals = Vec::new();
+             for i in 0..count {
+                 vals.push(eval(&node.named_child(i).unwrap(), source, context)?);
+             }
+             Ok(RuntimeValue::Tuple(vals))
+        }
         "list_expression" => {
              // [expr, expr]
              let mut vals = Vec::new();
@@ -594,6 +607,24 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
     }
 }
 
+/// Extract a parameter name from a pattern node (handles identifier,
+/// lower_identifier, identifier_pattern, lambda_parameter wrappers).
+fn extract_param_name(node: &Node, source: &str) -> Option<String> {
+    match node.kind() {
+        "identifier" | "lower_identifier" | "effect_identifier" => {
+            Some(node.utf8_text(source.as_bytes()).unwrap().to_string())
+        }
+        "identifier_pattern" | "lambda_parameter" => {
+            if let Some(child) = node.named_child(0) {
+                extract_param_name(&child, source)
+            } else {
+                Some(node.utf8_text(source.as_bytes()).unwrap().to_string())
+            }
+        }
+        _ => None,
+    }
+}
+
 fn match_pattern<'a>(
     pattern: &Node<'a>,
     value: &RuntimeValue<'a>,
@@ -675,7 +706,93 @@ fn match_pattern<'a>(
                 if *v == (text == "true") { Some(HashMap::new()) } else { None }
             } else { None }
         }
+        "tuple_pattern" => {
+            if let RuntimeValue::Tuple(vals) = value {
+                let count = pattern.named_child_count();
+                if count != vals.len() {
+                    return None;
+                }
+                let mut bindings = HashMap::new();
+                for i in 0..count {
+                    let sub_pat = pattern.named_child(i).unwrap();
+                    let sub_val = &vals[i];
+                    let sub_bindings = match_pattern(&sub_pat, sub_val, source)?;
+                    bindings.extend(sub_bindings);
+                }
+                Some(bindings)
+            } else {
+                None
+            }
+        }
+        "identifier_pattern" => {
+            // identifier_pattern wraps a lower_identifier
+            if let Some(child) = pattern.named_child(0) {
+                match_pattern(&child, value, source)
+            } else {
+                let name = pattern.utf8_text(source.as_bytes()).unwrap().to_string();
+                let mut map = HashMap::new();
+                map.insert(name, value.clone());
+                Some(map)
+            }
+        }
+        "lower_identifier" => {
+            let name = pattern.utf8_text(source.as_bytes()).unwrap().to_string();
+            let mut map = HashMap::new();
+            map.insert(name, value.clone());
+            Some(map)
+        }
         _ => None
+    }
+}
+
+/// Bind a pattern to a value in the current scope.
+fn bind_pattern<'a>(
+    pattern: &Node<'a>,
+    value: &RuntimeValue<'a>,
+    source: &str,
+    context: &mut Context<'a>,
+) -> Result<(), String> {
+    match pattern.kind() {
+        "identifier" | "lower_identifier" => {
+            let name = pattern.utf8_text(source.as_bytes()).unwrap().to_string();
+            context.set(name, value.clone());
+            Ok(())
+        }
+        "identifier_pattern" => {
+            if let Some(child) = pattern.named_child(0) {
+                bind_pattern(&child, value, source, context)
+            } else {
+                let name = pattern.utf8_text(source.as_bytes()).unwrap().to_string();
+                context.set(name, value.clone());
+                Ok(())
+            }
+        }
+        "tuple_pattern" => {
+            if let RuntimeValue::Tuple(vals) = value {
+                let count = pattern.named_child_count();
+                if count != vals.len() {
+                    return Err(format!(
+                        "Tuple pattern has {} elements but value has {}",
+                        count,
+                        vals.len()
+                    ));
+                }
+                for i in 0..count {
+                    let sub_pat = pattern.named_child(i).unwrap();
+                    bind_pattern(&sub_pat, &vals[i], source, context)?;
+                }
+                Ok(())
+            } else {
+                Err(format!("Cannot destructure {} as tuple", value))
+            }
+        }
+        "wildcard_pattern" => Ok(()),
+        _ => {
+            // Fallback: treat as identifier
+            let name = pattern.utf8_text(source.as_bytes()).unwrap().to_string();
+            context.set(name, value.clone());
+            Ok(())
+        }
     }
 }
 
@@ -699,9 +816,10 @@ mod tests {
         eval(&root, source, &mut context)?;
 
         let main_val = context
-            .get("main")
+            .get("main!")
+            .or_else(|| context.get("main"))
             .cloned()
-            .ok_or_else(|| "No 'main' binding found".to_string())?;
+            .ok_or_else(|| "No 'main' or 'main!' binding found".to_string())?;
 
         // main is a Function or Closure — evaluate its body to get the actual value
         match main_val {
@@ -899,5 +1017,63 @@ mod tests {
     fn test_range_empty() {
         let result = eval_source("main : () -> List\nmain = || 5..5");
         assert_eq!(result, Ok(RuntimeValue::List(vec![])));
+    }
+
+    // -- Tuple expressions --
+
+    #[test]
+    fn test_tuple_creation() {
+        let result = eval_source("main : () -> (Int, String)\nmain = || (1, \"a\")");
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Tuple(vec![
+                RuntimeValue::Int(1),
+                RuntimeValue::String("a".to_string()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_tuple_three_elements() {
+        let result = eval_source("main : () -> (Int, Int, Int)\nmain = || (1, 2, 3)");
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Tuple(vec![
+                RuntimeValue::Int(1),
+                RuntimeValue::Int(2),
+                RuntimeValue::Int(3),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_unit_literal() {
+        let result = eval_source("main : () -> Unit\nmain = || ()");
+        assert_eq!(result, Ok(RuntimeValue::Unit));
+    }
+
+    #[test]
+    fn test_tuple_destructuring() {
+        let source = "main : () -> Int\nmain = || {\n  let (x, y) = (10, 20)\n  x + y\n}";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Int(30)));
+    }
+
+    // -- Entry point detection --
+
+    #[test]
+    fn test_effectful_main() {
+        // main! should be found and executed
+        let result = eval_source("main! : () -> {Console} Int\nmain! = || 42");
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    // -- Block expressions --
+
+    #[test]
+    fn test_block_multiple_statements() {
+        let source = "main : () -> Int\nmain = || {\n  let x = 10\n  let y = 20\n  x + y\n}";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Int(30)));
     }
 }
