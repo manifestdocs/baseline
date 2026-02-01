@@ -386,9 +386,44 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                              ">=" => Ok(RuntimeValue::Bool(l >= r)),
                              _ => Err(format!("Unknown int operator {}", op))
                          },
+                         (RuntimeValue::String(l), RuntimeValue::String(r)) => match op {
+                             "+" => Ok(RuntimeValue::String(format!("{}{}", l, r))),
+                             "==" => Ok(RuntimeValue::Bool(l == r)),
+                             "!=" => Ok(RuntimeValue::Bool(l != r)),
+                             _ => Err(format!("Unknown string operator {}", op))
+                         },
+                         (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
+                             "==" => Ok(RuntimeValue::Bool(l == r)),
+                             "!=" => Ok(RuntimeValue::Bool(l != r)),
+                             _ => Err(format!("Unknown bool operator {}", op))
+                         },
                          (l, r) => Err(format!("Invalid operands for {}: {} and {}", op, l, r))
                      }
                  }
+             }
+        }
+        "unary_expression" => {
+             let op = node.child(0).unwrap().utf8_text(source.as_bytes()).unwrap();
+             let operand = eval(&node.named_child(0).unwrap(), source, context)?;
+             match (op, operand) {
+                 ("!", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
+                 ("-", RuntimeValue::Int(i)) => Ok(RuntimeValue::Int(-i)),
+                 ("!", v) => Err(format!("Cannot apply ! to {}", v)),
+                 ("-", v) => Err(format!("Cannot negate {}", v)),
+                 _ => Err(format!("Unknown unary operator {}", op)),
+             }
+        }
+        "range_expression" => {
+             let start = eval(&node.named_child(0).unwrap(), source, context)?;
+             let end = eval(&node.named_child(1).unwrap(), source, context)?;
+             match (start, end) {
+                 (RuntimeValue::Int(s), RuntimeValue::Int(e)) => {
+                     let vals: Vec<RuntimeValue<'a>> = (s..e)
+                         .map(RuntimeValue::Int)
+                         .collect();
+                     Ok(RuntimeValue::List(vals))
+                 }
+                 (s, e) => Err(format!("Range requires Int operands, got {} and {}", s, e)),
              }
         }
         "if_expression" => {
@@ -781,5 +816,88 @@ mod tests {
         let source = "main : () -> Bool\nmain = || 3 <= 5 && 10 >= 8";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    // -- String operations --
+
+    #[test]
+    fn test_string_concatenation() {
+        let result = eval_source("main : () -> String\nmain = || \"hello\" + \" world\"");
+        assert_eq!(result, Ok(RuntimeValue::String("hello world".to_string())));
+    }
+
+    #[test]
+    fn test_string_equality() {
+        let result = eval_source("main : () -> Bool\nmain = || \"abc\" == \"abc\"");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_inequality() {
+        let result = eval_source("main : () -> Bool\nmain = || \"abc\" != \"xyz\"");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_equality_false() {
+        let result = eval_source("main : () -> Bool\nmain = || \"abc\" == \"xyz\"");
+        assert_eq!(result, Ok(RuntimeValue::Bool(false)));
+    }
+
+    // -- Unary expressions --
+
+    #[test]
+    fn test_not_true() {
+        let result = eval_source("main : () -> Bool\nmain = || !true");
+        assert_eq!(result, Ok(RuntimeValue::Bool(false)));
+    }
+
+    #[test]
+    fn test_not_false() {
+        let result = eval_source("main : () -> Bool\nmain = || !false");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_negate_int() {
+        let result = eval_source("main : () -> Int\nmain = || -5");
+        assert_eq!(result, Ok(RuntimeValue::Int(-5)));
+    }
+
+    #[test]
+    fn test_negate_positive() {
+        let result = eval_source("main : () -> Int\nmain = || -42");
+        assert_eq!(result, Ok(RuntimeValue::Int(-42)));
+    }
+
+    // -- Range expressions --
+
+    #[test]
+    fn test_range_basic() {
+        let result = eval_source("main : () -> List\nmain = || 1..5");
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::List(vec![
+                RuntimeValue::Int(1),
+                RuntimeValue::Int(2),
+                RuntimeValue::Int(3),
+                RuntimeValue::Int(4),
+            ]))
+        );
+    }
+
+    #[test]
+    fn test_range_single() {
+        let result = eval_source("main : () -> List\nmain = || 3..4");
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::List(vec![RuntimeValue::Int(3)]))
+        );
+    }
+
+    #[test]
+    fn test_range_empty() {
+        let result = eval_source("main : () -> List\nmain = || 5..5");
+        assert_eq!(result, Ok(RuntimeValue::List(vec![])));
     }
 }
