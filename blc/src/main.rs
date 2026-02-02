@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use blc::diagnostics::{self, CheckResult};
 use blc::interpreter;
 use blc::parse;
+use blc::prelude;
 
 #[derive(Parser)]
 #[command(name = "blc")]
@@ -57,15 +58,22 @@ fn main() {
              // 1. Parse
              use tree_sitter::Parser;
              use tree_sitter_baseline::LANGUAGE;
-             
+
              let source = std::fs::read_to_string(&file).expect("Failed to read file");
              let mut parser = Parser::new();
              parser.set_language(&LANGUAGE.into()).expect("Failed to load language");
              let tree = parser.parse(&source, None).expect("Failed to parse");
              let root = tree.root_node();
-             
-             // 2. Interpreter
-             let mut context = interpreter::Context::new();
+
+             // 2. Extract prelude and create context
+             let active_prelude = match prelude::extract_prelude(&root, &source) {
+                 Ok(p) => p,
+                 Err(msg) => {
+                     eprintln!("Prelude Error: {}", msg);
+                     std::process::exit(1);
+                 }
+             };
+             let mut context = interpreter::Context::with_prelude(active_prelude);
              
              // Evaluate top-level definitions (types/functions)
              if let Err(e) = interpreter::eval(&root, &source, &mut context) {

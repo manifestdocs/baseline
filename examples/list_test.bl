@@ -1,3 +1,5 @@
+@prelude(script)
+
 // List module functions
 
 main! : () -> {Console} Unit

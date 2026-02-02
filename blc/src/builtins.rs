@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::time::{SystemTime, UNIX_EPOCH, Duration};
 
+use crate::prelude::Prelude;
+
 /// A native builtin function that takes a list of string-formatted arguments
 /// and returns a string result (or error).
 ///
@@ -15,47 +17,61 @@ pub struct BuiltinRegistry {
 }
 
 impl BuiltinRegistry {
+    /// Create a registry with ALL builtins (backwards compat for tests).
     pub fn new() -> Self {
+        Self::with_prelude(Prelude::Script)
+    }
+
+    /// Create a registry gated by the given prelude.
+    pub fn with_prelude(prelude: Prelude) -> Self {
         let mut registry = Self {
             builtins: HashMap::new(),
         };
+        let modules = prelude.builtin_modules();
 
-        // Console
-        registry.register("Console.println!", console_println);
-        registry.register("Console.print!", console_print);
-        registry.register("Console.error!", console_error);
-        registry.register("Console.read_line!", console_read_line);
+        if modules.contains(&"Console") {
+            registry.register("Console.println!", console_println);
+            registry.register("Console.print!", console_print);
+            registry.register("Console.error!", console_error);
+            registry.register("Console.read_line!", console_read_line);
+        }
 
-        // Log
-        registry.register("Log.info!", log_info);
-        registry.register("Log.warn!", log_warn);
-        registry.register("Log.error!", log_error);
-        registry.register("Log.debug!", log_debug);
+        if modules.contains(&"Log") {
+            registry.register("Log.info!", log_info);
+            registry.register("Log.warn!", log_warn);
+            registry.register("Log.error!", log_error);
+            registry.register("Log.debug!", log_debug);
+        }
 
-        // Time
-        registry.register("Time.now!", time_now);
-        registry.register("Time.sleep!", time_sleep);
+        if modules.contains(&"Time") {
+            registry.register("Time.now!", time_now);
+            registry.register("Time.sleep!", time_sleep);
+        }
 
-        // Random
-        registry.register("Random.int!", random_int);
-        registry.register("Random.bool!", random_bool);
+        if modules.contains(&"Random") {
+            registry.register("Random.int!", random_int);
+            registry.register("Random.bool!", random_bool);
+        }
 
-        // Env
-        registry.register("Env.get!", env_get);
-        registry.register("Env.set!", env_set);
+        if modules.contains(&"Env") {
+            registry.register("Env.get!", env_get);
+            registry.register("Env.set!", env_set);
+        }
 
-        // Fs
-        registry.register("Fs.read!", fs_read);
-        registry.register("Fs.write!", fs_write);
-        registry.register("Fs.exists!", fs_exists);
-        registry.register("Fs.delete!", fs_delete);
+        if modules.contains(&"Fs") {
+            registry.register("Fs.read!", fs_read);
+            registry.register("Fs.write!", fs_write);
+            registry.register("Fs.exists!", fs_exists);
+            registry.register("Fs.delete!", fs_delete);
+        }
 
-        // Math (pure — no ! suffix)
-        registry.register("Math.abs", math_abs);
-        registry.register("Math.min", math_min);
-        registry.register("Math.max", math_max);
-        registry.register("Math.clamp", math_clamp);
-        registry.register("Math.pow", math_pow);
+        if modules.contains(&"Math") {
+            registry.register("Math.abs", math_abs);
+            registry.register("Math.min", math_min);
+            registry.register("Math.max", math_max);
+            registry.register("Math.clamp", math_clamp);
+            registry.register("Math.pow", math_pow);
+        }
 
         registry
     }

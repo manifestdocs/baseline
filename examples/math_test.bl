@@ -1,7 +1,7 @@
+@prelude(script)
+
 // Math module demonstration
 // Pure functions — no effect annotation needed
-
-@prelude(core)
 
 main! : () -> {Console} ()
 main! = {

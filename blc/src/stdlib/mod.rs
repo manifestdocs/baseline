@@ -5,6 +5,7 @@ pub mod string;
 
 use std::collections::HashMap;
 use crate::interpreter::RuntimeValue;
+use crate::prelude::Prelude;
 
 /// Native function signature operating directly on RuntimeValues.
 pub type NativeFn = for<'a> fn(&[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String>;
@@ -15,14 +16,29 @@ pub struct NativeRegistry {
 }
 
 impl NativeRegistry {
+    /// Create a registry with ALL native modules (backwards compat for tests).
     pub fn new() -> Self {
+        Self::with_prelude(Prelude::Script)
+    }
+
+    /// Create a registry gated by the given prelude.
+    pub fn with_prelude(prelude: Prelude) -> Self {
         let mut registry = Self {
             fns: HashMap::new(),
         };
-        option::register(&mut registry);
-        result::register(&mut registry);
-        string::register(&mut registry);
-        list::register(&mut registry);
+        let modules = prelude.native_modules();
+        if modules.contains(&"Option") {
+            option::register(&mut registry);
+        }
+        if modules.contains(&"Result") {
+            result::register(&mut registry);
+        }
+        if modules.contains(&"String") {
+            string::register(&mut registry);
+        }
+        if modules.contains(&"List") {
+            list::register(&mut registry);
+        }
         registry
     }
 

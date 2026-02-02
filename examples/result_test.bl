@@ -1,3 +1,5 @@
+@prelude(script)
+
 // Result type - built-in Ok/Err constructors and module functions
 
 safe_divide : (Int, Int) -> Result

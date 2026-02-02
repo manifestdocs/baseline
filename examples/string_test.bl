@@ -1,3 +1,5 @@
+@prelude(script)
+
 // String module functions
 
 main! : () -> {Console} Unit

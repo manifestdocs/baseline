@@ -1,3 +1,5 @@
+@prelude(script)
+
 // Option type - built-in Some/None constructors and module functions
 
 // No type declaration needed - Option is built-in

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use tree_sitter::Node;
 use crate::diagnostics::{Diagnostic, Location};
+use crate::prelude::{self, Prelude};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -51,13 +52,13 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
-    fn new() -> Self {
+    fn with_prelude(prelude: Prelude) -> Self {
         let mut table = Self {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
         };
 
-        // Built-in Option type: Option = | Some(T) | None
+        // Option/Result types and constructors are language primitives — always registered.
         let option_type = Type::Enum(
             "Option".to_string(),
             vec![
@@ -66,13 +67,9 @@ impl SymbolTable {
             ],
         );
         table.insert_type("Option".to_string(), option_type.clone());
-        // Register constructors
         table.insert("None".to_string(), option_type.clone());
         table.insert("Some".to_string(), Type::Function(vec![Type::Unknown], Box::new(option_type.clone())));
-        // Register Option as module for Option.map, Option.unwrap, etc.
-        table.insert("Option".to_string(), Type::Module("Option".to_string()));
 
-        // Built-in Result type: Result = | Ok(T) | Err(E)
         let result_type = Type::Enum(
             "Result".to_string(),
             vec![
@@ -83,11 +80,11 @@ impl SymbolTable {
         table.insert_type("Result".to_string(), result_type.clone());
         table.insert("Ok".to_string(), Type::Function(vec![Type::Unknown], Box::new(result_type.clone())));
         table.insert("Err".to_string(), Type::Function(vec![Type::Unknown], Box::new(result_type.clone())));
-        table.insert("Result".to_string(), Type::Module("Result".to_string()));
 
-        // Register String and List as modules for their module functions
-        table.insert("String".to_string(), Type::Module("String".to_string()));
-        table.insert("List".to_string(), Type::Module("List".to_string()));
+        // Register module namespaces gated by prelude.
+        for module in prelude.type_modules() {
+            table.insert(module.to_string(), Type::Module(module.to_string()));
+        }
 
         table
     }
@@ -126,8 +123,28 @@ impl SymbolTable {
 
 pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
-    let mut symbols = SymbolTable::new();
 
+    // Extract prelude from the AST to gate module availability.
+    let prelude = match prelude::extract_prelude(root, source) {
+        Ok(p) => p,
+        Err(msg) => {
+            diagnostics.push(Diagnostic {
+                code: "PRE_001".to_string(),
+                severity: "error".to_string(),
+                location: Location {
+                    file: file.to_string(),
+                    line: 1,
+                    col: 1,
+                },
+                message: msg,
+                context: "Valid prelude variants are: core, script.".to_string(),
+                suggestions: vec![],
+            });
+            return diagnostics;
+        }
+    };
+
+    let mut symbols = SymbolTable::with_prelude(prelude);
     check_node(root, source, file, &mut symbols, &mut diagnostics);
     diagnostics
 }

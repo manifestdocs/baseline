@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 
 use crate::builtins::BuiltinRegistry;
+use crate::prelude::Prelude;
 use crate::stdlib::NativeRegistry;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -62,16 +63,21 @@ pub struct Context<'a> {
 }
 
 impl<'a> Context<'a> {
+    /// Create a context with ALL modules (backwards compat for tests).
     pub fn new() -> Self {
+        Self::with_prelude(Prelude::Script)
+    }
+
+    /// Create a context gated by the given prelude.
+    pub fn with_prelude(prelude: Prelude) -> Self {
         let mut ctx = Self {
             scopes: vec![HashMap::new()],
-            builtins: BuiltinRegistry::new(),
-            natives: NativeRegistry::new(),
+            builtins: BuiltinRegistry::with_prelude(prelude),
+            natives: NativeRegistry::with_prelude(prelude),
         };
-        // Pre-register Option constructors
+        // Option/Result constructors are language primitives — always available.
         ctx.set("None".to_string(), RuntimeValue::Enum("None".to_string(), Vec::new()));
         ctx.set("Some".to_string(), RuntimeValue::Enum("Some".to_string(), Vec::new()));
-        // Pre-register Result constructors
         ctx.set("Ok".to_string(), RuntimeValue::Enum("Ok".to_string(), Vec::new()));
         ctx.set("Err".to_string(), RuntimeValue::Enum("Err".to_string(), Vec::new()));
         ctx

@@ -1,3 +1,5 @@
+@prelude(script)
+
 // A simple Baseline program demonstrating basic features
 
 /// Greets a user by name
