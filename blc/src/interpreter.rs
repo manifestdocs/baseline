@@ -59,10 +59,17 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
     }
 }
 
+/// All known module names in the language (for error messages).
+const ALL_MODULES: &[&str] = &[
+    "Option", "Result", "String", "List", "Math",
+    "Console", "Log", "Time", "Random", "Env", "Fs",
+];
+
 pub struct Context<'a> {
     scopes: Vec<HashMap<String, RuntimeValue<'a>>>,
     builtins: BuiltinRegistry,
     natives: NativeRegistry,
+    prelude: Prelude,
 }
 
 impl<'a> Context<'a> {
@@ -77,6 +84,7 @@ impl<'a> Context<'a> {
             scopes: vec![HashMap::new()],
             builtins: BuiltinRegistry::with_prelude(prelude),
             natives: NativeRegistry::with_prelude(prelude),
+            prelude,
         };
         // Option/Result constructors are language primitives — always available.
         ctx.set("None".to_string(), RuntimeValue::Enum("None".to_string(), Vec::new()));
@@ -107,6 +115,23 @@ impl<'a> Context<'a> {
             }
         }
         None
+    }
+
+    /// Check if a name is a known module. If known but not in scope, return
+    /// an error message. If unknown, return None (not a module reference).
+    pub fn check_module_scope(&self, name: &str) -> Option<String> {
+        let in_scope: Vec<&str> = self.prelude.type_modules().to_vec();
+        if in_scope.contains(&name) {
+            None // in scope, no error
+        } else if ALL_MODULES.contains(&name) {
+            Some(format!(
+                "Module `{}` is not available with the current prelude. \
+                 Try using @prelude(script) or @prelude(core).",
+                name
+            ))
+        } else {
+            None // not a known module
+        }
     }
 
     /// Snapshot the entire environment (all scopes) into a flat HashMap.
@@ -412,6 +437,13 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          arg_vals.push(val);
                      }
                      return native_fn(&arg_vals);
+                 }
+
+                 // No builtin/native matched — check if it's a known module not in scope
+                 if obj_node.kind() == "type_identifier" {
+                     if let Some(err) = context.check_module_scope(obj_name) {
+                         return Err(err);
+                     }
                  }
              }
 
@@ -821,6 +853,14 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              let field_node = node.named_child(1).unwrap();
              let field_name = field_node.utf8_text(source.as_bytes()).unwrap();
 
+             // Check for module-not-in-scope before evaluating
+             if obj_node.kind() == "type_identifier" {
+                 let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
+                 if let Some(err) = context.check_module_scope(obj_name) {
+                     return Err(err);
+                 }
+             }
+
              let obj_val = eval(&obj_node, source, context)?;
              propagate!(obj_val);
              match obj_val {
@@ -1143,6 +1183,10 @@ mod tests {
     /// Parse and evaluate Baseline source, returning main's evaluated body.
     /// Source should define main as: `main : () -> T\nmain = || expr`
     fn eval_source(source: &str) -> Result<RuntimeValue<'static>, String> {
+        eval_with_prelude(source, Prelude::Script)
+    }
+
+    fn eval_with_prelude(source: &str, prelude: Prelude) -> Result<RuntimeValue<'static>, String> {
         let mut parser = Parser::new();
         parser
             .set_language(&LANGUAGE.into())
@@ -1150,7 +1194,7 @@ mod tests {
         let tree = parser.parse(source, None).expect("Failed to parse");
         let tree = Box::leak(Box::new(tree));
         let root = tree.root_node();
-        let mut context = Context::new();
+        let mut context = Context::with_prelude(prelude);
         eval(&root, source, &mut context)?;
 
         let main_val = context
@@ -1786,5 +1830,38 @@ mod tests {
             "get : () -> Option<Bool>\nget = || None\nmain : () -> Option<Int>\nmain = || {\n  let r = if get()? then 1 else 2\n  Some(r)\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    // -- Module namespace resolution --
+
+    #[test]
+    fn test_module_in_scope_resolves() {
+        let result = eval_with_prelude(
+            "main : () -> Int\nmain = || String.length(\"hello\")",
+            Prelude::Core,
+        );
+        assert_eq!(result, Ok(RuntimeValue::Int(5)));
+    }
+
+    #[test]
+    fn test_module_not_in_scope_error() {
+        let result = eval_with_prelude(
+            "main : () -> Int\nmain = || String.length(\"hello\")",
+            Prelude::Minimal,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Module `String` is not available"), "got: {}", err);
+    }
+
+    #[test]
+    fn test_effect_module_not_in_pure_prelude() {
+        let result = eval_with_prelude(
+            "main! : () -> {Console} ()\nmain! = || Console.println!(\"hi\")",
+            Prelude::Pure,
+        );
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(err.contains("Module `Console` is not available"), "got: {}", err);
     }
 }
