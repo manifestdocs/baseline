@@ -1,0 +1,34 @@
+// List module functions
+
+main! : () -> {Console} Unit
+main! = || {
+  let nums = [5, 3, 1, 4, 2]
+
+  Console.println!("length: ${List.length(nums)}")
+  Console.println!("head: ${List.head(nums)}")
+  Console.println!("reverse: ${List.reverse(nums)}")
+  Console.println!("sort: ${List.sort(nums)}")
+
+  // Higher-order functions
+  let doubled = List.map(nums, |x| x * 2)
+  Console.println!("map *2: ${doubled}")
+
+  let big = List.filter(nums, |x| x > 3)
+  Console.println!("filter >3: ${big}")
+
+  let sum = List.fold(nums, 0, |acc, x| acc + x)
+  Console.println!("fold sum: ${sum}")
+
+  let found = List.find(nums, |x| x == 4)
+  Console.println!("find 4: ${found}")
+
+  let not_found = List.find(nums, |x| x == 9)
+  Console.println!("find 9: ${not_found}")
+
+  // Concat and tail
+  let ab = List.concat([1, 2], [3, 4])
+  Console.println!("concat: ${ab}")
+
+  let rest = List.tail([1, 2, 3])
+  Console.println!("tail: ${rest}")
+}

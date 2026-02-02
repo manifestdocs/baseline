@@ -72,6 +72,23 @@ impl SymbolTable {
         // Register Option as module for Option.map, Option.unwrap, etc.
         table.insert("Option".to_string(), Type::Module("Option".to_string()));
 
+        // Built-in Result type: Result = | Ok(T) | Err(E)
+        let result_type = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::Unknown]),
+                ("Err".to_string(), vec![Type::Unknown]),
+            ],
+        );
+        table.insert_type("Result".to_string(), result_type.clone());
+        table.insert("Ok".to_string(), Type::Function(vec![Type::Unknown], Box::new(result_type.clone())));
+        table.insert("Err".to_string(), Type::Function(vec![Type::Unknown], Box::new(result_type.clone())));
+        table.insert("Result".to_string(), Type::Module("Result".to_string()));
+
+        // Register String and List as modules for their module functions
+        table.insert("String".to_string(), Type::Module("String".to_string()));
+        table.insert("List".to_string(), Type::Module("List".to_string()));
+
         table
     }
 

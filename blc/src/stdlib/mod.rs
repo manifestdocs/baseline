@@ -1,4 +1,7 @@
+pub mod list;
 pub mod option;
+pub mod result;
+pub mod string;
 
 use std::collections::HashMap;
 use crate::interpreter::RuntimeValue;
@@ -17,6 +20,9 @@ impl NativeRegistry {
             fns: HashMap::new(),
         };
         option::register(&mut registry);
+        result::register(&mut registry);
+        string::register(&mut registry);
+        list::register(&mut registry);
         registry
     }
 

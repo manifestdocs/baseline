@@ -71,6 +71,9 @@ impl<'a> Context<'a> {
         // Pre-register Option constructors
         ctx.set("None".to_string(), RuntimeValue::Enum("None".to_string(), Vec::new()));
         ctx.set("Some".to_string(), RuntimeValue::Enum("Some".to_string(), Vec::new()));
+        // Pre-register Result constructors
+        ctx.set("Ok".to_string(), RuntimeValue::Enum("Ok".to_string(), Vec::new()));
+        ctx.set("Err".to_string(), RuntimeValue::Enum("Err".to_string(), Vec::new()));
         ctx
     }
 
@@ -146,6 +149,132 @@ fn apply_function<'a>(
             result
         }
         _ => Err(format!("Not a function: {}", func)),
+    }
+}
+
+/// Dispatch higher-order functions that need closure invocation (eval access).
+/// Returns Ok(Some(value)) if handled, Ok(None) if not a HOF.
+fn dispatch_hof<'a>(
+    qualified: &str,
+    node: &Node<'a>,
+    source: &str,
+    context: &mut Context<'a>,
+) -> Result<Option<RuntimeValue<'a>>, String> {
+    // Collect all call arguments
+    let total_children = node.named_child_count();
+    let mut arg_vals = Vec::new();
+    for i in 1..total_children {
+        let arg_node = node.named_child(i).unwrap();
+        arg_vals.push(eval(&arg_node, source, context)?);
+    }
+
+    match qualified {
+        // Option.map(opt, fn) -> Option
+        "Option.map" => {
+            if arg_vals.len() != 2 {
+                return Err(format!("Option.map expects 2 arguments, got {}", arg_vals.len()));
+            }
+            let opt_val = &arg_vals[0];
+            let map_fn = &arg_vals[1];
+            match opt_val {
+                RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
+                    let result = apply_function(map_fn, &[payload[0].clone()], source, context)?;
+                    Ok(Some(RuntimeValue::Enum("Some".to_string(), vec![result])))
+                }
+                RuntimeValue::Enum(name, payload) if name == "None" && payload.is_empty() => {
+                    Ok(Some(RuntimeValue::Enum("None".to_string(), Vec::new())))
+                }
+                other => Err(format!("Option.map expects Option as first argument, got {}", other)),
+            }
+        }
+        // Result.map(res, fn) -> Result
+        "Result.map" => {
+            if arg_vals.len() != 2 {
+                return Err(format!("Result.map expects 2 arguments, got {}", arg_vals.len()));
+            }
+            let res_val = &arg_vals[0];
+            let map_fn = &arg_vals[1];
+            match res_val {
+                RuntimeValue::Enum(name, payload) if name == "Ok" && payload.len() == 1 => {
+                    let result = apply_function(map_fn, &[payload[0].clone()], source, context)?;
+                    Ok(Some(RuntimeValue::Enum("Ok".to_string(), vec![result])))
+                }
+                RuntimeValue::Enum(name, payload) if name == "Err" && payload.len() == 1 => {
+                    Ok(Some(arg_vals[0].clone()))
+                }
+                other => Err(format!("Result.map expects Result as first argument, got {}", other)),
+            }
+        }
+        // List.map(list, fn) -> List
+        "List.map" => {
+            if arg_vals.len() != 2 {
+                return Err(format!("List.map expects 2 arguments, got {}", arg_vals.len()));
+            }
+            let items = match &arg_vals[0] {
+                RuntimeValue::List(items) => items.clone(),
+                other => return Err(format!("List.map expects List as first argument, got {}", other)),
+            };
+            let map_fn = &arg_vals[1];
+            let mut results = Vec::with_capacity(items.len());
+            for item in items {
+                results.push(apply_function(map_fn, &[item], source, context)?);
+            }
+            Ok(Some(RuntimeValue::List(results)))
+        }
+        // List.filter(list, fn) -> List
+        "List.filter" => {
+            if arg_vals.len() != 2 {
+                return Err(format!("List.filter expects 2 arguments, got {}", arg_vals.len()));
+            }
+            let items = match &arg_vals[0] {
+                RuntimeValue::List(items) => items.clone(),
+                other => return Err(format!("List.filter expects List as first argument, got {}", other)),
+            };
+            let pred_fn = &arg_vals[1];
+            let mut results = Vec::new();
+            for item in items {
+                let keep = apply_function(pred_fn, &[item.clone()], source, context)?;
+                if let RuntimeValue::Bool(true) = keep {
+                    results.push(item);
+                }
+            }
+            Ok(Some(RuntimeValue::List(results)))
+        }
+        // List.fold(list, init, fn) -> T
+        "List.fold" => {
+            if arg_vals.len() != 3 {
+                return Err(format!("List.fold expects 3 arguments, got {}", arg_vals.len()));
+            }
+            let items = match &arg_vals[0] {
+                RuntimeValue::List(items) => items.clone(),
+                other => return Err(format!("List.fold expects List as first argument, got {}", other)),
+            };
+            let mut acc = arg_vals[1].clone();
+            let fold_fn = &arg_vals[2];
+            for item in items {
+                acc = apply_function(fold_fn, &[acc, item], source, context)?;
+            }
+            Ok(Some(acc))
+        }
+        // List.find(list, fn) -> Option
+        "List.find" => {
+            if arg_vals.len() != 2 {
+                return Err(format!("List.find expects 2 arguments, got {}", arg_vals.len()));
+            }
+            let items = match &arg_vals[0] {
+                RuntimeValue::List(items) => items.clone(),
+                other => return Err(format!("List.find expects List as first argument, got {}", other)),
+            };
+            let pred_fn = &arg_vals[1];
+            for item in items {
+                let found = apply_function(pred_fn, &[item.clone()], source, context)?;
+                if let RuntimeValue::Bool(true) = found {
+                    return Ok(Some(RuntimeValue::Enum("Some".to_string(), vec![item])));
+                }
+            }
+            Ok(Some(RuntimeValue::Enum("None".to_string(), Vec::new())))
+        }
+        _ => Ok(None),
     }
 }
 
@@ -236,31 +365,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      return Ok(parse_builtin_result(&result_str));
                  }
 
-                 // Native dispatch: Module.method(args) operating on RuntimeValues
-                 if qualified == "Option.map" {
-                     // Special case: Option.map(opt, fn) needs closure invocation
-                     let total_children = node.named_child_count();
-                     let mut arg_vals = Vec::new();
-                     for i in 1..total_children {
-                         let arg_node = node.named_child(i).unwrap();
-                         arg_vals.push(eval(&arg_node, source, context)?);
-                     }
-                     if arg_vals.len() != 2 {
-                         return Err(format!("Option.map expects 2 arguments, got {}", arg_vals.len()));
-                     }
-                     let opt_val = arg_vals.remove(0);
-                     let map_fn = arg_vals.remove(0);
-                     return match &opt_val {
-                         RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
-                             let inner = payload[0].clone();
-                             let result = apply_function(&map_fn, &[inner], source, context)?;
-                             Ok(RuntimeValue::Enum("Some".to_string(), vec![result]))
-                         }
-                         RuntimeValue::Enum(name, payload) if name == "None" && payload.is_empty() => {
-                             Ok(RuntimeValue::Enum("None".to_string(), Vec::new()))
-                         }
-                         other => Err(format!("Option.map expects Option as first argument, got {}", other)),
-                     };
+                 // HOF dispatch: functions that take closures and need eval access
+                 if let Some(result) = dispatch_hof(&qualified, node, source, context)? {
+                     return Ok(result);
                  }
 
                  if let Some(native_fn) = context.natives.get(&qualified) {
@@ -1360,5 +1467,173 @@ mod tests {
         let source = "main : () -> Int\nmain = || {\n  let x = Some(42)\n  match x\n    Some(v) -> v\n    None -> 0\n}";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    // -- Result type --
+
+    #[test]
+    fn test_result_ok_constructor() {
+        let result = eval_source("main : () -> Result\nmain = || Ok(42)");
+        assert_eq!(result, Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(42)])));
+    }
+
+    #[test]
+    fn test_result_err_constructor() {
+        let result = eval_source("main : () -> Result\nmain = || Err(\"failed\")");
+        assert_eq!(result, Ok(RuntimeValue::Enum("Err".into(), vec![RuntimeValue::String("failed".into())])));
+    }
+
+    #[test]
+    fn test_result_unwrap_ok() {
+        let result = eval_source("main : () -> Int\nmain = || Result.unwrap(Ok(42))");
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    #[test]
+    fn test_result_unwrap_err_errors() {
+        let result = eval_source("main : () -> Int\nmain = || Result.unwrap(Err(\"e\"))");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_result_is_ok() {
+        let result = eval_source("main : () -> Bool\nmain = || Result.is_ok(Ok(1))");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_result_is_err() {
+        let result = eval_source("main : () -> Bool\nmain = || Result.is_err(Err(\"e\"))");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_result_map_ok() {
+        let result = eval_source("main : () -> Result\nmain = || Result.map(Ok(10), |x| x + 1)");
+        assert_eq!(result, Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(11)])));
+    }
+
+    #[test]
+    fn test_result_map_err() {
+        let result = eval_source("main : () -> Result\nmain = || Result.map(Err(\"e\"), |x| x + 1)");
+        assert_eq!(result, Ok(RuntimeValue::Enum("Err".into(), vec![RuntimeValue::String("e".into())])));
+    }
+
+    // -- String module --
+
+    #[test]
+    fn test_string_length() {
+        let result = eval_source("main : () -> Int\nmain = || String.length(\"hello\")");
+        assert_eq!(result, Ok(RuntimeValue::Int(5)));
+    }
+
+    #[test]
+    fn test_string_trim() {
+        let result = eval_source("main : () -> String\nmain = || String.trim(\" hi \")");
+        assert_eq!(result, Ok(RuntimeValue::String("hi".into())));
+    }
+
+    #[test]
+    fn test_string_contains() {
+        let result = eval_source("main : () -> Bool\nmain = || String.contains(\"hello\", \"ell\")");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_starts_with() {
+        let result = eval_source("main : () -> Bool\nmain = || String.starts_with(\"hello\", \"he\")");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_string_to_upper() {
+        let result = eval_source("main : () -> String\nmain = || String.to_upper(\"hi\")");
+        assert_eq!(result, Ok(RuntimeValue::String("HI".into())));
+    }
+
+    #[test]
+    fn test_string_split() {
+        let result = eval_source("main : () -> List\nmain = || String.split(\"a,b,c\", \",\")");
+        assert_eq!(result, Ok(RuntimeValue::List(vec![
+            RuntimeValue::String("a".into()),
+            RuntimeValue::String("b".into()),
+            RuntimeValue::String("c".into()),
+        ])));
+    }
+
+    #[test]
+    fn test_string_join() {
+        let result = eval_source("main : () -> String\nmain = || String.join([\"a\", \"b\"], \"-\")");
+        assert_eq!(result, Ok(RuntimeValue::String("a-b".into())));
+    }
+
+    #[test]
+    fn test_string_slice() {
+        let result = eval_source("main : () -> String\nmain = || String.slice(\"hello\", 1, 3)");
+        assert_eq!(result, Ok(RuntimeValue::String("el".into())));
+    }
+
+    // -- List module --
+
+    #[test]
+    fn test_list_length() {
+        let result = eval_source("main : () -> Int\nmain = || List.length([1, 2, 3])");
+        assert_eq!(result, Ok(RuntimeValue::Int(3)));
+    }
+
+    #[test]
+    fn test_list_head() {
+        let result = eval_source("main : () -> Option\nmain = || List.head([1, 2, 3])");
+        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(1)])));
+    }
+
+    #[test]
+    fn test_list_reverse() {
+        let result = eval_source("main : () -> List\nmain = || List.reverse([1, 2, 3])");
+        assert_eq!(result, Ok(RuntimeValue::List(vec![
+            RuntimeValue::Int(3), RuntimeValue::Int(2), RuntimeValue::Int(1),
+        ])));
+    }
+
+    #[test]
+    fn test_list_sort() {
+        let result = eval_source("main : () -> List\nmain = || List.sort([3, 1, 2])");
+        assert_eq!(result, Ok(RuntimeValue::List(vec![
+            RuntimeValue::Int(1), RuntimeValue::Int(2), RuntimeValue::Int(3),
+        ])));
+    }
+
+    #[test]
+    fn test_list_map() {
+        let result = eval_source("main : () -> List\nmain = || List.map([1, 2, 3], |x| x * 2)");
+        assert_eq!(result, Ok(RuntimeValue::List(vec![
+            RuntimeValue::Int(2), RuntimeValue::Int(4), RuntimeValue::Int(6),
+        ])));
+    }
+
+    #[test]
+    fn test_list_filter() {
+        let result = eval_source("main : () -> List\nmain = || List.filter([1, 2, 3, 4], |x| x > 2)");
+        assert_eq!(result, Ok(RuntimeValue::List(vec![
+            RuntimeValue::Int(3), RuntimeValue::Int(4),
+        ])));
+    }
+
+    #[test]
+    fn test_list_fold() {
+        let result = eval_source("main : () -> Int\nmain = || List.fold([1, 2, 3], 0, |acc, x| acc + x)");
+        assert_eq!(result, Ok(RuntimeValue::Int(6)));
+    }
+
+    #[test]
+    fn test_list_find_some() {
+        let result = eval_source("main : () -> Option\nmain = || List.find([1, 2, 3], |x| x == 2)");
+        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(2)])));
+    }
+
+    #[test]
+    fn test_list_find_none() {
+        let result = eval_source("main : () -> Option\nmain = || List.find([1, 2, 3], |x| x == 9)");
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
 }

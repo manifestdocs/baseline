@@ -1,0 +1,23 @@
+// String module functions
+
+main! : () -> {Console} Unit
+main! = || {
+  let greeting = "  Hello, World!  "
+
+  Console.println!("length: ${String.length(greeting)}")
+  Console.println!("trim: ${String.trim(greeting)}")
+  Console.println!("contains 'World': ${String.contains(greeting, "World")}")
+  Console.println!("starts_with '  He': ${String.starts_with(greeting, "  He")}")
+  Console.println!("to_upper: ${String.to_upper("hello")}")
+  Console.println!("to_lower: ${String.to_lower("HELLO")}")
+
+  let csv = "alice,bob,charlie"
+  let parts = String.split(csv, ",")
+  Console.println!("split: ${parts}")
+
+  let joined = String.join(parts, " | ")
+  Console.println!("join: ${joined}")
+
+  let sliced = String.slice("hello world", 0, 5)
+  Console.println!("slice 0..5: ${sliced}")
+}

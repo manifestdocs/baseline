@@ -1,0 +1,38 @@
+// Result type - built-in Ok/Err constructors and module functions
+
+safe_divide : (Int, Int) -> Result
+safe_divide = |a, b| {
+  if b == 0 then Err("division by zero")
+  else Ok(a / b)
+}
+
+main! : () -> {Console} Unit
+main! = || {
+  let ok_val = Ok(42)
+  let err_val = Err("something went wrong")
+
+  // Result.unwrap
+  let x = Result.unwrap(ok_val)
+  Console.println!("unwrap Ok(42): ${x}")
+
+  // Result.unwrap_or
+  let y = Result.unwrap_or(err_val, 0)
+  Console.println!("unwrap_or Err 0: ${y}")
+
+  // Result.is_ok / Result.is_err
+  Console.println!("is_ok Ok(42): ${Result.is_ok(ok_val)}")
+  Console.println!("is_err Err: ${Result.is_err(err_val)}")
+
+  // Result.map
+  let mapped = Result.map(ok_val, |v| v * 2)
+  Console.println!("map Ok(42) *2: ${mapped}")
+
+  let mapped_err = Result.map(err_val, |v| v * 2)
+  Console.println!("map Err: ${mapped_err}")
+
+  // Pattern matching
+  let result = safe_divide(10, 3)
+  match result
+    Ok(v) -> Console.println!("10 / 3 = ${v}")
+    Err(msg) -> Console.println!("Error: ${msg}")
+}
