@@ -1,9 +1,12 @@
 use std::collections::HashMap;
 use tree_sitter::Node;
 
+use crate::builtins::BuiltinRegistry;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeValue<'a> {
     Int(i64),
+    Float(f64),
     String(String),
     Bool(bool),
     Unit,
@@ -21,6 +24,7 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             RuntimeValue::Int(i) => write!(f, "{}", i),
+            RuntimeValue::Float(fl) => write!(f, "{}", fl),
             RuntimeValue::String(s) => write!(f, "{}", s), // TODO: quote strings?
             RuntimeValue::Bool(b) => write!(f, "{}", b),
             RuntimeValue::Unit => write!(f, "()"),
@@ -52,12 +56,14 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
 
 pub struct Context<'a> {
     scopes: Vec<HashMap<String, RuntimeValue<'a>>>,
+    builtins: BuiltinRegistry,
 }
 
 impl<'a> Context<'a> {
     pub fn new() -> Self {
         Self {
             scopes: vec![HashMap::new()],
+            builtins: BuiltinRegistry::new(),
         }
     }
 
@@ -161,8 +167,31 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         "call_expression" => {
              // func(arg1, arg2)
              let func_node = node.named_child(0).unwrap();
+
+             // Check for builtin dispatch: Module.method!(args)
+             if func_node.kind() == "field_expression" {
+                 let obj_node = func_node.named_child(0).unwrap();
+                 let method_node = func_node.named_child(1).unwrap();
+                 let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
+                 let method_name = method_node.utf8_text(source.as_bytes()).unwrap();
+                 let qualified = format!("{}.{}", obj_name, method_name);
+
+                 if let Some(builtin_fn) = context.builtins.get(&qualified) {
+                     let builtin_fn = *builtin_fn;
+                     let mut arg_strs = Vec::new();
+                     let total_children = node.named_child_count();
+                     for i in 1..total_children {
+                         let arg_node = node.named_child(i).unwrap();
+                         let val = eval(&arg_node, source, context)?;
+                         arg_strs.push(val.to_string());
+                     }
+                     let result_str = builtin_fn(&arg_strs)?;
+                     return Ok(parse_builtin_result(&result_str));
+                 }
+             }
+
              let func_val = eval(&func_node, source, context)?;
-             
+
              match func_val {
                  RuntimeValue::Function(param_names, body_node) => {
                      // Eval args
@@ -172,17 +201,17 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          let arg_node = node.named_child(i).unwrap();
                          arg_vals.push(eval(&arg_node, source, context)?);
                      }
-                     
+
                      if arg_vals.len() != param_names.len() {
                          return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()));
                      }
-                     
+
                      // New Scope
                      context.enter_scope();
                      for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
                          context.set(name.clone(), val);
                      }
-                     
+
                      let result = eval(&body_node, source, context);
                      context.exit_scope();
                      result
@@ -263,6 +292,11 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             let text = node.utf8_text(source.as_bytes()).unwrap();
             let val = text.parse::<i64>().map_err(|_| "Invalid integer".to_string())?;
             Ok(RuntimeValue::Int(val))
+        }
+        "float_literal" => {
+            let text = node.utf8_text(source.as_bytes()).unwrap();
+            let val = text.parse::<f64>().map_err(|_| "Invalid float".to_string())?;
+            Ok(RuntimeValue::Float(val))
         }
         "string_literal" => {
             // Range-based approach: extract raw text between named children
@@ -362,44 +396,70 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      let left = eval(&node.named_child(0).unwrap(), source, context)?;
                      let right = eval(&node.named_child(1).unwrap(), source, context)?;
                      match (left, right) {
-                         (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
-                             "+" => Ok(RuntimeValue::Int(l + r)),
-                             "-" => Ok(RuntimeValue::Int(l - r)),
-                             "*" => Ok(RuntimeValue::Int(l * r)),
-                             "/" => {
-                                 if r == 0 {
-                                     Err("Division by zero".to_string())
-                                 } else {
-                                     Ok(RuntimeValue::Int(l / r))
-                                 }
-                             }
-                             "%" => {
-                                 if r == 0 {
-                                     Err("Modulo by zero".to_string())
-                                 } else {
-                                     Ok(RuntimeValue::Int(l % r))
-                                 }
-                             }
-                             "==" => Ok(RuntimeValue::Bool(l == r)),
-                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                             "<" => Ok(RuntimeValue::Bool(l < r)),
-                             ">" => Ok(RuntimeValue::Bool(l > r)),
-                             "<=" => Ok(RuntimeValue::Bool(l <= r)),
-                             ">=" => Ok(RuntimeValue::Bool(l >= r)),
-                             _ => Err(format!("Unknown int operator {}", op))
-                         },
-                         (RuntimeValue::String(l), RuntimeValue::String(r)) => match op {
-                             "+" => Ok(RuntimeValue::String(format!("{}{}", l, r))),
-                             "==" => Ok(RuntimeValue::Bool(l == r)),
-                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                             _ => Err(format!("Unknown string operator {}", op))
-                         },
-                         (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
-                             "==" => Ok(RuntimeValue::Bool(l == r)),
-                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                             _ => Err(format!("Unknown bool operator {}", op))
-                         },
-                         (l, r) => Err(format!("Invalid operands for {}: {} and {}", op, l, r))
+                        (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
+                            "+" => Ok(RuntimeValue::Int(l + r)),
+                            "-" => Ok(RuntimeValue::Int(l - r)),
+                            "*" => Ok(RuntimeValue::Int(l * r)),
+                            "/" => {
+                                if r == 0 {
+                                    Err("Division by zero".to_string())
+                                } else {
+                                    Ok(RuntimeValue::Int(l / r))
+                                }
+                            }
+                            "%" => {
+                                if r == 0 {
+                                    Err("Modulo by zero".to_string())
+                                } else {
+                                    Ok(RuntimeValue::Int(l % r))
+                                }
+                            }
+                            "==" => Ok(RuntimeValue::Bool(l == r)),
+                            "!=" => Ok(RuntimeValue::Bool(l != r)),
+                            "<" => Ok(RuntimeValue::Bool(l < r)),
+                            ">" => Ok(RuntimeValue::Bool(l > r)),
+                            "<=" => Ok(RuntimeValue::Bool(l <= r)),
+                            ">=" => Ok(RuntimeValue::Bool(l >= r)),
+                            _ => Err(format!("Unknown int operator {}", op))
+                        },
+                        (RuntimeValue::Float(l), RuntimeValue::Float(r)) => match op {
+                            "+" => Ok(RuntimeValue::Float(l + r)),
+                            "-" => Ok(RuntimeValue::Float(l - r)),
+                            "*" => Ok(RuntimeValue::Float(l * r)),
+                            "/" => {
+                                if r == 0.0 {
+                                    Err("Division by zero".to_string())
+                                } else {
+                                    Ok(RuntimeValue::Float(l / r))
+                                }
+                            }
+                            "%" => {
+                                if r == 0.0 {
+                                    Err("Modulo by zero".to_string())
+                                } else {
+                                    Ok(RuntimeValue::Float(l % r))
+                                }
+                            }
+                            "==" => Ok(RuntimeValue::Bool(l == r)),
+                            "!=" => Ok(RuntimeValue::Bool(l != r)),
+                            "<" => Ok(RuntimeValue::Bool(l < r)),
+                            ">" => Ok(RuntimeValue::Bool(l > r)),
+                            "<=" => Ok(RuntimeValue::Bool(l <= r)),
+                            ">=" => Ok(RuntimeValue::Bool(l >= r)),
+                            _ => Err(format!("Unknown float operator {}", op))
+                        },
+                        (RuntimeValue::String(l), RuntimeValue::String(r)) => match op {
+                            "+" => Ok(RuntimeValue::String(format!("{}{}", l, r))),
+                            "==" => Ok(RuntimeValue::Bool(l == r)),
+                            "!=" => Ok(RuntimeValue::Bool(l != r)),
+                            _ => Err(format!("Unknown string operator {}", op))
+                        },
+                        (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
+                            "==" => Ok(RuntimeValue::Bool(l == r)),
+                            "!=" => Ok(RuntimeValue::Bool(l != r)),
+                            _ => Err(format!("Unknown bool operator {}", op))
+                        },
+                        (l, r) => Err(format!("Invalid operands for {}: {} and {}", op, l, r))
                      }
                  }
              }
@@ -410,6 +470,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              match (op, operand) {
                  ("!", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
                  ("-", RuntimeValue::Int(i)) => Ok(RuntimeValue::Int(-i)),
+                 ("-", RuntimeValue::Float(f)) => Ok(RuntimeValue::Float(-f)),
                  ("!", v) => Err(format!("Cannot apply ! to {}", v)),
                  ("-", v) => Err(format!("Cannot negate {}", v)),
                  _ => Err(format!("Unknown unary operator {}", op)),
@@ -478,7 +539,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         "struct_expression" => {
             let type_name_node = node.named_child(0).unwrap();
             let type_name = type_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-            
+
             let mut fields = HashMap::new();
             let count = node.named_child_count();
             for i in 1..count {
@@ -520,10 +581,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         "pipe_expression" => {
              let left_node = node.named_child(0).unwrap();
              let right_node = node.named_child(1).unwrap();
-             
+
              let left_val = eval(&left_node, source, context)?;
              let right_val = eval(&right_node, source, context)?;
-             
+
              match right_val {
                  RuntimeValue::Function(params, body_node) => {
                      if params.len() != 1 {
@@ -580,14 +641,14 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              // match expr { pat -> body, ... }
              let expr_node = node.named_child(0).unwrap();
              let val = eval(&expr_node, source, context)?;
-             
+
              let count = node.named_child_count();
              for i in 1..count {
                  let arm = node.named_child(i).unwrap();
                  // match_arm: pattern -> expression
                  let pat = arm.child(0).unwrap();
                  let body = arm.child(2).unwrap();
-                 
+
                  if let Some(bindings) = match_pattern(&pat, &val, source) {
                      context.enter_scope();
                      for (k, v) in bindings {
@@ -603,6 +664,22 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         _ => {
             // Ignore others or return Unit
             Ok(RuntimeValue::Unit)
+        }
+    }
+}
+
+/// Convert a builtin result string back to a RuntimeValue.
+fn parse_builtin_result<'a>(s: &str) -> RuntimeValue<'a> {
+    match s {
+        "()" => RuntimeValue::Unit,
+        "true" => RuntimeValue::Bool(true),
+        "false" => RuntimeValue::Bool(false),
+        _ => {
+            if let Ok(i) = s.parse::<i64>() {
+                RuntimeValue::Int(i)
+            } else {
+                RuntimeValue::String(s.to_string())
+            }
         }
     }
 }
@@ -1075,5 +1152,49 @@ mod tests {
         let source = "main : () -> Int\nmain = || {\n  let x = 10\n  let y = 20\n  x + y\n}";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(30)));
+    }
+
+    // -- Float expressions --
+
+    #[test]
+    fn test_float_literal() {
+        let result = eval_source("main : () -> Float\nmain = || 3.14");
+        assert_eq!(result, Ok(RuntimeValue::Float(3.14)));
+    }
+
+    #[test]
+    fn test_float_addition() {
+        let result = eval_source("main : () -> Float\nmain = || 1.5 + 2.5");
+        assert_eq!(result, Ok(RuntimeValue::Float(4.0)));
+    }
+
+    #[test]
+    fn test_float_division() {
+        let result = eval_source("main : () -> Float\nmain = || 10.0 / 3.0");
+        match result {
+            Ok(RuntimeValue::Float(f)) => {
+                let expected = 10.0_f64 / 3.0_f64;
+                assert!((f - expected).abs() < f64::EPSILON, "Expected approximately {}, got {}", expected, f);
+            }
+            other => panic!("Expected Ok(Float(...)), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_float_comparison() {
+        let result = eval_source("main : () -> Bool\nmain = || 3.14 > 2.0");
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_float_negate() {
+        let result = eval_source("main : () -> Float\nmain = || -3.14");
+        assert_eq!(result, Ok(RuntimeValue::Float(-3.14)));
+    }
+
+    #[test]
+    fn test_float_division_by_zero() {
+        let result = eval_source("main : () -> Float\nmain = || 1.0 / 0.0");
+        assert!(result.is_err(), "Expected error for division by zero, got {:?}", result);
     }
 }
