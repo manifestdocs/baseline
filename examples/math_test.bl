@@ -1,0 +1,25 @@
+// Math module demonstration
+// Pure functions — no effect annotation needed
+
+@prelude(core)
+
+main! : () -> {Console} ()
+main! = {
+  // Math.abs
+  let a = Math.abs(-5)
+  Console.println!("abs(-5) = ${a}")
+
+  // Math.min / Math.max
+  let lo = Math.min(3, 7)
+  let hi = Math.max(3, 7)
+  Console.println!("min(3, 7) = ${lo}")
+  Console.println!("max(3, 7) = ${hi}")
+
+  // Math.clamp
+  let clamped = Math.clamp(15, 0, 10)
+  Console.println!("clamp(15, 0, 10) = ${clamped}")
+
+  // Math.pow
+  let power = Math.pow(2, 8)
+  Console.println!("pow(2, 8) = ${power}")
+}

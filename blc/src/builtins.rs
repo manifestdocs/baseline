@@ -50,6 +50,13 @@ impl BuiltinRegistry {
         registry.register("Fs.exists!", fs_exists);
         registry.register("Fs.delete!", fs_delete);
 
+        // Math (pure — no ! suffix)
+        registry.register("Math.abs", math_abs);
+        registry.register("Math.min", math_min);
+        registry.register("Math.max", math_max);
+        registry.register("Math.clamp", math_clamp);
+        registry.register("Math.pow", math_pow);
+
         registry
     }
 
@@ -263,6 +270,61 @@ fn fs_delete(args: &[String]) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
+// Math builtins (pure functions — no effect annotation needed)
+// ---------------------------------------------------------------------------
+
+/// Parse a string as a number, trying i64 first then f64.
+/// Returns the result formatted back as a string (integer format if whole number).
+fn parse_number(name: &str, s: &str) -> Result<f64, String> {
+    s.parse::<f64>()
+        .map_err(|_| format!("{name} expected a number, got \"{s}\""))
+}
+
+/// Format a float result: use integer format if the value is a whole number.
+fn format_number(n: f64) -> String {
+    if n.fract() == 0.0 && n.abs() < i64::MAX as f64 {
+        (n as i64).to_string()
+    } else {
+        n.to_string()
+    }
+}
+
+fn math_abs(args: &[String]) -> Result<String, String> {
+    expect_args("Math.abs", args, 1)?;
+    let n = parse_number("Math.abs", &args[0])?;
+    Ok(format_number(n.abs()))
+}
+
+fn math_min(args: &[String]) -> Result<String, String> {
+    expect_args("Math.min", args, 2)?;
+    let a = parse_number("Math.min", &args[0])?;
+    let b = parse_number("Math.min", &args[1])?;
+    Ok(format_number(a.min(b)))
+}
+
+fn math_max(args: &[String]) -> Result<String, String> {
+    expect_args("Math.max", args, 2)?;
+    let a = parse_number("Math.max", &args[0])?;
+    let b = parse_number("Math.max", &args[1])?;
+    Ok(format_number(a.max(b)))
+}
+
+fn math_clamp(args: &[String]) -> Result<String, String> {
+    expect_args("Math.clamp", args, 3)?;
+    let val = parse_number("Math.clamp", &args[0])?;
+    let lo = parse_number("Math.clamp", &args[1])?;
+    let hi = parse_number("Math.clamp", &args[2])?;
+    Ok(format_number(val.clamp(lo, hi)))
+}
+
+fn math_pow(args: &[String]) -> Result<String, String> {
+    expect_args("Math.pow", args, 2)?;
+    let base = parse_number("Math.pow", &args[0])?;
+    let exp = parse_number("Math.pow", &args[1])?;
+    Ok(format_number(base.powf(exp)))
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -292,6 +354,11 @@ mod tests {
             "Fs.write!",
             "Fs.exists!",
             "Fs.delete!",
+            "Math.abs",
+            "Math.min",
+            "Math.max",
+            "Math.clamp",
+            "Math.pow",
         ];
         for name in &expected {
             assert!(reg.get(name).is_some(), "missing builtin: {name}");
@@ -375,5 +442,87 @@ mod tests {
     fn fs_read_missing_file_returns_error() {
         let result = fs_read(&["/tmp/no_such_file_baseline_99.txt".to_string()]);
         assert!(result.is_err());
+    }
+
+    // Math builtins
+
+    #[test]
+    fn math_abs_negative() {
+        assert_eq!(math_abs(&["-5".into()]).unwrap(), "5");
+    }
+
+    #[test]
+    fn math_abs_positive() {
+        assert_eq!(math_abs(&["5".into()]).unwrap(), "5");
+    }
+
+    #[test]
+    fn math_abs_zero() {
+        assert_eq!(math_abs(&["0".into()]).unwrap(), "0");
+    }
+
+    #[test]
+    fn math_abs_float() {
+        assert_eq!(math_abs(&["-3.5".into()]).unwrap(), "3.5");
+    }
+
+    #[test]
+    fn math_min_returns_smaller() {
+        assert_eq!(math_min(&["3".into(), "7".into()]).unwrap(), "3");
+    }
+
+    #[test]
+    fn math_min_equal_values() {
+        assert_eq!(math_min(&["5".into(), "5".into()]).unwrap(), "5");
+    }
+
+    #[test]
+    fn math_max_returns_larger() {
+        assert_eq!(math_max(&["3".into(), "7".into()]).unwrap(), "7");
+    }
+
+    #[test]
+    fn math_max_equal_values() {
+        assert_eq!(math_max(&["5".into(), "5".into()]).unwrap(), "5");
+    }
+
+    #[test]
+    fn math_clamp_above_range() {
+        assert_eq!(math_clamp(&["15".into(), "0".into(), "10".into()]).unwrap(), "10");
+    }
+
+    #[test]
+    fn math_clamp_below_range() {
+        assert_eq!(math_clamp(&["-5".into(), "0".into(), "10".into()]).unwrap(), "0");
+    }
+
+    #[test]
+    fn math_clamp_within_range() {
+        assert_eq!(math_clamp(&["5".into(), "0".into(), "10".into()]).unwrap(), "5");
+    }
+
+    #[test]
+    fn math_pow_integer() {
+        assert_eq!(math_pow(&["2".into(), "8".into()]).unwrap(), "256");
+    }
+
+    #[test]
+    fn math_pow_zero_exponent() {
+        assert_eq!(math_pow(&["5".into(), "0".into()]).unwrap(), "1");
+    }
+
+    #[test]
+    fn math_arg_count_errors() {
+        assert!(math_abs(&[]).is_err());
+        assert!(math_min(&["1".into()]).is_err());
+        assert!(math_max(&["1".into()]).is_err());
+        assert!(math_clamp(&["1".into(), "2".into()]).is_err());
+        assert!(math_pow(&["1".into()]).is_err());
+    }
+
+    #[test]
+    fn math_non_numeric_errors() {
+        assert!(math_abs(&["hello".into()]).is_err());
+        assert!(math_min(&["1".into(), "hello".into()]).is_err());
     }
 }
