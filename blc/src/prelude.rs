@@ -7,6 +7,10 @@ use tree_sitter::Node;
 pub enum Prelude {
     /// No `@prelude` directive — no stdlib modules in scope.
     None,
+    /// `@prelude(minimal)` — Only Option/Result core types.
+    Minimal,
+    /// `@prelude(pure)` — Option, Result, String, List, Math — no effects.
+    Pure,
     /// `@prelude(core)` — Core types + String, List, Math.
     Core,
     /// `@prelude(script)` — Core + Console, Log, Time, Random, Env, Fs.
@@ -19,15 +23,18 @@ impl Prelude {
     pub fn native_modules(&self) -> &[&str] {
         match self {
             Prelude::None => &[],
-            Prelude::Core | Prelude::Script => &["Option", "Result", "String", "List"],
+            Prelude::Minimal => &["Option", "Result"],
+            Prelude::Pure | Prelude::Core | Prelude::Script => {
+                &["Option", "Result", "String", "List"]
+            }
         }
     }
 
     /// Builtin modules (BuiltinRegistry): effect functions + Math.
     pub fn builtin_modules(&self) -> &[&str] {
         match self {
-            Prelude::None => &[],
-            Prelude::Core => &["Math"],
+            Prelude::None | Prelude::Minimal => &[],
+            Prelude::Pure | Prelude::Core => &["Math"],
             Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs"],
         }
     }
@@ -36,7 +43,10 @@ impl Prelude {
     pub fn type_modules(&self) -> &[&str] {
         match self {
             Prelude::None => &[],
-            Prelude::Core => &["Option", "Result", "String", "List", "Math"],
+            Prelude::Minimal => &["Option", "Result"],
+            Prelude::Pure | Prelude::Core => {
+                &["Option", "Result", "String", "List", "Math"]
+            }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Math",
                 "Console", "Log", "Time", "Random", "Env", "Fs",
@@ -57,6 +67,8 @@ pub fn extract_prelude<'a>(root: &Node<'a>, source: &str) -> Result<Prelude, Str
             if let Some(id_node) = child.named_child(0) {
                 let name = id_node.utf8_text(source.as_bytes()).unwrap_or("");
                 return match name {
+                    "minimal" => Ok(Prelude::Minimal),
+                    "pure" => Ok(Prelude::Pure),
                     "core" => Ok(Prelude::Core),
                     "script" => Ok(Prelude::Script),
                     other => Err(format!("Unknown prelude variant: `{}`", other)),
@@ -86,6 +98,16 @@ mod tests {
     }
 
     #[test]
+    fn minimal_prelude() {
+        assert_eq!(parse("@prelude(minimal)\nmain : () -> Int\nmain = || 1"), Prelude::Minimal);
+    }
+
+    #[test]
+    fn pure_prelude() {
+        assert_eq!(parse("@prelude(pure)\nmain : () -> Int\nmain = || 1"), Prelude::Pure);
+    }
+
+    #[test]
     fn core_prelude() {
         assert_eq!(parse("@prelude(core)\nmain : () -> Int\nmain = || 1"), Prelude::Core);
     }
@@ -93,6 +115,22 @@ mod tests {
     #[test]
     fn script_prelude() {
         assert_eq!(parse("@prelude(script)\nmain : () -> Int\nmain = || 1"), Prelude::Script);
+    }
+
+    #[test]
+    fn minimal_has_only_option_result() {
+        let p = Prelude::Minimal;
+        assert_eq!(p.native_modules(), &["Option", "Result"]);
+        assert!(p.builtin_modules().is_empty());
+        assert_eq!(p.type_modules(), &["Option", "Result"]);
+    }
+
+    #[test]
+    fn pure_has_no_effects() {
+        let p = Prelude::Pure;
+        assert_eq!(p.native_modules(), &["Option", "Result", "String", "List"]);
+        assert_eq!(p.builtin_modules(), &["Math"]);
+        assert_eq!(p.type_modules(), &["Option", "Result", "String", "List", "Math"]);
     }
 
     #[test]
