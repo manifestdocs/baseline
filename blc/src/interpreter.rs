@@ -132,6 +132,16 @@ fn unwrap_early_return<'a>(
     }
 }
 
+/// Propagate EarlyReturn from a subexpression: if the value is EarlyReturn,
+/// return it immediately without evaluating further operands.
+macro_rules! propagate {
+    ($val:expr) => {
+        if matches!($val, RuntimeValue::EarlyReturn(_)) {
+            return Ok($val);
+        }
+    };
+}
+
 /// Apply a Function or Closure value to a list of arguments.
 /// Extracted for reuse by Option.map and future HOFs like List.map.
 fn apply_function<'a>(
@@ -379,6 +389,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      for i in 1..total_children {
                          let arg_node = node.named_child(i).unwrap();
                          let val = eval(&arg_node, source, context)?;
+                         propagate!(val);
                          arg_strs.push(val.to_string());
                      }
                      let result_str = builtin_fn(&arg_strs)?;
@@ -396,29 +407,33 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      let mut arg_vals = Vec::new();
                      for i in 1..total_children {
                          let arg_node = node.named_child(i).unwrap();
-                         arg_vals.push(eval(&arg_node, source, context)?);
+                         let val = eval(&arg_node, source, context)?;
+                         propagate!(val);
+                         arg_vals.push(val);
                      }
                      return native_fn(&arg_vals);
                  }
              }
 
              let func_val = eval(&func_node, source, context)?;
+             propagate!(func_val);
+
+             // Eval args (shared for all call forms)
+             let mut arg_vals = Vec::new();
+             let total_children = node.named_child_count();
+             for i in 1..total_children {
+                 let arg_node = node.named_child(i).unwrap();
+                 let val = eval(&arg_node, source, context)?;
+                 propagate!(val);
+                 arg_vals.push(val);
+             }
 
              match func_val {
                  RuntimeValue::Function(param_names, body_node) => {
-                     // Eval args
-                     let mut arg_vals = Vec::new();
-                     let total_children = node.named_child_count();
-                     for i in 1..total_children {
-                         let arg_node = node.named_child(i).unwrap();
-                         arg_vals.push(eval(&arg_node, source, context)?);
-                     }
-
                      if arg_vals.len() != param_names.len() {
                          return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()));
                      }
 
-                     // New Scope
                      context.enter_scope();
                      for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
                          context.set(name.clone(), val);
@@ -429,19 +444,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      unwrap_early_return(result)
                  }
                  RuntimeValue::Closure(param_names, body_node, captured_env) => {
-                     // Eval args
-                     let mut arg_vals = Vec::new();
-                     let total_children = node.named_child_count();
-                     for i in 1..total_children {
-                         let arg_node = node.named_child(i).unwrap();
-                         arg_vals.push(eval(&arg_node, source, context)?);
-                     }
-
                      if arg_vals.len() != param_names.len() {
                          return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()));
                      }
 
-                     // New scope with captured environment
                      context.enter_scope();
                      for (k, v) in &captured_env {
                          context.set(k.clone(), v.clone());
@@ -455,13 +461,6 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      unwrap_early_return(result)
                 }
                 RuntimeValue::Enum(ctor_name, _) => {
-                     // Constructor call: Some(42) -> Enum("Some", [Int(42)])
-                     let mut arg_vals = Vec::new();
-                     let total_children = node.named_child_count();
-                     for i in 1..total_children {
-                         let arg_node = node.named_child(i).unwrap();
-                         arg_vals.push(eval(&arg_node, source, context)?);
-                     }
                      Ok(RuntimeValue::Enum(ctor_name, arg_vals))
                  }
                  _ => Err(format!("Not a function: {}", func_node.utf8_text(source.as_bytes()).unwrap()))
@@ -549,6 +548,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                         "interpolation" => {
                             let expr = child.named_child(0).unwrap();
                             let val = eval(&expr, source, context)?;
+                            propagate!(val);
                             result.push_str(&val.to_string());
                         }
                         "escape_sequence" => {
@@ -586,10 +586,12 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              match op {
                  "&&" => {
                      let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                     propagate!(left);
                      match left {
                          RuntimeValue::Bool(false) => Ok(RuntimeValue::Bool(false)),
                          RuntimeValue::Bool(true) => {
                              let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                             propagate!(right);
                              match right {
                                  RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
                                  _ => Err("Right operand of && must be Bool".to_string()),
@@ -600,10 +602,12 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  }
                  "||" => {
                      let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                     propagate!(left);
                      match left {
                          RuntimeValue::Bool(true) => Ok(RuntimeValue::Bool(true)),
                          RuntimeValue::Bool(false) => {
                              let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                             propagate!(right);
                              match right {
                                  RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
                                  _ => Err("Right operand of || must be Bool".to_string()),
@@ -614,7 +618,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  }
                  _ => {
                      let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                     propagate!(left);
                      let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                     propagate!(right);
                      match (left, right) {
                         (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
                             "+" => Ok(RuntimeValue::Int(l + r)),
@@ -687,6 +693,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         "unary_expression" => {
              let op = node.child(0).unwrap().utf8_text(source.as_bytes()).unwrap();
              let operand = eval(&node.named_child(0).unwrap(), source, context)?;
+             propagate!(operand);
              match (op, operand) {
                  ("!", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
                  ("-", RuntimeValue::Int(i)) => Ok(RuntimeValue::Int(-i)),
@@ -713,7 +720,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         }
         "range_expression" => {
              let start = eval(&node.named_child(0).unwrap(), source, context)?;
+             propagate!(start);
              let end = eval(&node.named_child(1).unwrap(), source, context)?;
+             propagate!(end);
              match (start, end) {
                  (RuntimeValue::Int(s), RuntimeValue::Int(e)) => {
                      let vals: Vec<RuntimeValue<'a>> = (s..e)
@@ -726,6 +735,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         }
         "if_expression" => {
             let cond = eval(&node.named_child(0).unwrap(), source, context)?;
+            propagate!(cond);
             if let RuntimeValue::Bool(b) = cond {
                 if b {
                      eval(&node.named_child(1).unwrap(), source, context)
@@ -755,7 +765,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              }
              let mut vals = Vec::new();
              for i in 0..count {
-                 vals.push(eval(&node.named_child(i).unwrap(), source, context)?);
+                 let val = eval(&node.named_child(i).unwrap(), source, context)?;
+                 propagate!(val);
+                 vals.push(val);
              }
              Ok(RuntimeValue::Tuple(vals))
         }
@@ -767,7 +779,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  if child.kind() == "[" || child.kind() == "]" || child.kind() == "," {
                      continue;
                  }
-                 vals.push(eval(&child, source, context)?);
+                 let val = eval(&child, source, context)?;
+                 propagate!(val);
+                 vals.push(val);
              }
              Ok(RuntimeValue::List(vals))
         }
@@ -783,6 +797,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
                  let val_node = field_init.child(2).unwrap();
                  let val = eval(&val_node, source, context)?;
+                 propagate!(val);
                  fields.insert(fname, val);
             }
             Ok(RuntimeValue::Struct(type_name, fields))
@@ -796,6 +811,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
                  let val_node = field_init.child(2).unwrap();
                  let val = eval(&val_node, source, context)?;
+                 propagate!(val);
                  fields.insert(fname, val);
             }
             Ok(RuntimeValue::Record(fields))
@@ -806,6 +822,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              let field_name = field_node.utf8_text(source.as_bytes()).unwrap();
 
              let obj_val = eval(&obj_node, source, context)?;
+             propagate!(obj_val);
              match obj_val {
                  RuntimeValue::Struct(_, fields) | RuntimeValue::Record(fields) => {
                       fields.get(field_name).cloned().ok_or_else(|| format!("Field not found: {}", field_name))
@@ -818,7 +835,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              let right_node = node.named_child(1).unwrap();
 
              let left_val = eval(&left_node, source, context)?;
+             propagate!(left_val);
              let right_val = eval(&right_node, source, context)?;
+             propagate!(right_val);
 
              match right_val {
                  RuntimeValue::Function(params, body_node) => {
@@ -854,6 +873,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             let body_node = node.named_child(2).unwrap();
 
             let collection = eval(&collection_node, source, context)?;
+            propagate!(collection);
             match collection {
                 RuntimeValue::List(items) => {
                     let mut last_val = RuntimeValue::Unit;
@@ -865,6 +885,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                             }
                             last_val = eval(&body_node, source, context)?;
                             context.exit_scope();
+                            if matches!(last_val, RuntimeValue::EarlyReturn(_)) {
+                                break;
+                            }
                         }
                     }
                     Ok(last_val)
@@ -876,6 +899,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              // match expr { pat -> body, ... }
              let expr_node = node.named_child(0).unwrap();
              let val = eval(&expr_node, source, context)?;
+             propagate!(val);
 
              let count = node.named_child_count();
              for i in 1..count {
@@ -1726,5 +1750,41 @@ mod tests {
         let result = eval_source("main : () -> Int\nmain = || 42?");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("? operator requires Option or Result"));
+    }
+
+    // -- Early return propagation through nested expressions --
+
+    #[test]
+    fn test_try_propagates_through_binary_op() {
+        let result = eval_source(
+            "get : () -> Option<Int>\nget = || None\nmain : () -> Option<Int>\nmain = || {\n  let r = get()? + 1\n  Some(r)\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    #[test]
+    fn test_try_first_none_skips_subsequent() {
+        // first() returns None, so second() should never be reached
+        let result = eval_source(
+            "first : () -> Option<Int>\nfirst = || None\nsecond : () -> Option<Int>\nsecond = || Some(99)\nmain : () -> Option<Int>\nmain = || {\n  let a = first()?\n  let b = second()?\n  Some(a + b)\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    #[test]
+    fn test_try_propagates_through_function_arg() {
+        // ? inside a function argument should propagate
+        let result = eval_source(
+            "get : () -> Option<Int>\nget = || None\nadd : Int -> Int\nadd = |x| x + 1\nmain : () -> Option<Int>\nmain = || {\n  let r = add(get()?)\n  Some(r)\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    #[test]
+    fn test_try_propagates_through_if_condition() {
+        let result = eval_source(
+            "get : () -> Option<Bool>\nget = || None\nmain : () -> Option<Int>\nmain = || {\n  let r = if get()? then 1 else 2\n  Some(r)\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
 }
