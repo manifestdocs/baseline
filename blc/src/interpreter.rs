@@ -20,6 +20,8 @@ pub enum RuntimeValue<'a> {
     Record(HashMap<String, RuntimeValue<'a>>),
     List(Vec<RuntimeValue<'a>>),
     Enum(String, Vec<RuntimeValue<'a>>), // VariantName, PayloadValues
+    /// Sentinel for `?` operator early-return propagation.
+    EarlyReturn(Box<RuntimeValue<'a>>),
 }
 
 impl<'a> std::fmt::Display for RuntimeValue<'a> {
@@ -52,6 +54,7 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
                     write!(f, "{}({})", name, s)
                 }
             }
+            RuntimeValue::EarlyReturn(inner) => write!(f, "<early_return: {}>", inner),
         }
     }
 }
@@ -118,6 +121,17 @@ impl<'a> Context<'a> {
     }
 }
 
+/// If the result contains an EarlyReturn sentinel, unwrap it to the inner value.
+/// Called at function call boundaries so `?` propagation stops at the enclosing function.
+fn unwrap_early_return<'a>(
+    result: Result<RuntimeValue<'a>, String>,
+) -> Result<RuntimeValue<'a>, String> {
+    match result {
+        Ok(RuntimeValue::EarlyReturn(inner)) => Ok(*inner),
+        other => other,
+    }
+}
+
 /// Apply a Function or Closure value to a list of arguments.
 /// Extracted for reuse by Option.map and future HOFs like List.map.
 fn apply_function<'a>(
@@ -137,7 +151,7 @@ fn apply_function<'a>(
             }
             let result = eval(body_node, source, context);
             context.exit_scope();
-            result
+            unwrap_early_return(result)
         }
         RuntimeValue::Closure(param_names, body_node, captured_env) => {
             if args.len() != param_names.len() {
@@ -152,7 +166,7 @@ fn apply_function<'a>(
             }
             let result = eval(body_node, source, context);
             context.exit_scope();
-            result
+            unwrap_early_return(result)
         }
         _ => Err(format!("Not a function: {}", func)),
     }
@@ -412,7 +426,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
 
                      let result = eval(&body_node, source, context);
                      context.exit_scope();
-                     result
+                     unwrap_early_return(result)
                  }
                  RuntimeValue::Closure(param_names, body_node, captured_env) => {
                      // Eval args
@@ -438,7 +452,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
 
                      let result = eval(&body_node, source, context);
                      context.exit_scope();
-                     result
+                     unwrap_early_return(result)
                 }
                 RuntimeValue::Enum(ctor_name, _) => {
                      // Constructor call: Some(42) -> Enum("Some", [Int(42)])
@@ -460,6 +474,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             for i in 0..count {
                 let child = node.named_child(i).unwrap();
                 last_val = eval(&child, source, context)?;
+                if matches!(last_val, RuntimeValue::EarlyReturn(_)) {
+                    break;
+                }
             }
             context.exit_scope();
             Ok(last_val)
@@ -468,6 +485,11 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             let pattern = node.named_child(0).unwrap();
             let expr = node.named_child(1).unwrap();
             let val = eval(&expr, source, context)?;
+
+            // Propagate EarlyReturn without binding
+            if matches!(val, RuntimeValue::EarlyReturn(_)) {
+                return Ok(val);
+            }
 
             bind_pattern(&pattern, &val, source, context)?;
             Ok(RuntimeValue::Unit)
@@ -673,6 +695,21 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  ("-", v) => Err(format!("Cannot negate {}", v)),
                  _ => Err(format!("Unknown unary operator {}", op)),
              }
+        }
+        "try_expression" => {
+            // expr? — unwrap Some/Ok or propagate None/Err as EarlyReturn
+            let operand = eval(&node.named_child(0).unwrap(), source, context)?;
+            match &operand {
+                RuntimeValue::Enum(name, payload) => match name.as_str() {
+                    "Some" if payload.len() == 1 => Ok(payload[0].clone()),
+                    "None" if payload.is_empty() => Ok(RuntimeValue::EarlyReturn(Box::new(operand))),
+                    "Ok" if payload.len() == 1 => Ok(payload[0].clone()),
+                    "Err" => Ok(RuntimeValue::EarlyReturn(Box::new(operand))),
+                    _ => Err(format!("? operator requires Option or Result, got {}(..)", name)),
+                },
+                RuntimeValue::EarlyReturn(_) => Ok(operand), // propagate
+                _ => Err(format!("? operator requires Option or Result, got {}", operand)),
+            }
         }
         "range_expression" => {
              let start = eval(&node.named_child(0).unwrap(), source, context)?;
@@ -1099,7 +1136,7 @@ mod tests {
             .ok_or_else(|| "No 'main' or 'main!' binding found".to_string())?;
 
         // main is a Function or Closure — evaluate its body to get the actual value
-        match main_val {
+        let result = match main_val {
             RuntimeValue::Function(_, body_node) => {
                 context.enter_scope();
                 let result = eval(&body_node, source, &mut context);
@@ -1116,7 +1153,8 @@ mod tests {
                 result
             }
             other => Ok(other),
-        }
+        };
+        unwrap_early_return(result)
     }
 
     // -- Comparison operators --
@@ -1641,5 +1679,52 @@ mod tests {
     fn test_list_find_none() {
         let result = eval_source("main : () -> Option\nmain = || List.find([1, 2, 3], |x| x == 9)");
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    // -- Try (?) operator --
+
+    #[test]
+    fn test_try_some_unwraps() {
+        let result = eval_source(
+            "get : () -> Option<Int>\nget = || Some(42)\nmain : () -> Int\nmain = || get()?",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    #[test]
+    fn test_try_none_propagates() {
+        let result = eval_source(
+            "get : () -> Option<Int>\nget = || None\nmain : () -> Option<Int>\nmain = || {\n  let x = get()?\n  Some(x + 1)\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    #[test]
+    fn test_try_ok_unwraps() {
+        let result = eval_source(
+            "get : () -> Result<Int, String>\nget = || Ok(10)\nmain : () -> Int\nmain = || get()?",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Int(10)));
+    }
+
+    #[test]
+    fn test_try_err_propagates() {
+        let result = eval_source(
+            "get : () -> Result<Int, String>\nget = || Err(\"fail\")\nmain : () -> Result<Int, String>\nmain = || {\n  let x = get()?\n  Ok(x)\n}",
+        );
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum(
+                "Err".into(),
+                vec![RuntimeValue::String("fail".into())]
+            ))
+        );
+    }
+
+    #[test]
+    fn test_try_on_plain_value_errors() {
+        let result = eval_source("main : () -> Int\nmain = || 42?");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("? operator requires Option or Result"));
     }
 }

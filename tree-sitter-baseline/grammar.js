@@ -158,6 +158,7 @@ module.exports = grammar({
       $.for_expression,
       $.binary_expression,
       $.unary_expression,
+      $.try_expression,
       $.call_expression,
       $.field_expression,
       $.range_expression,
@@ -217,6 +218,9 @@ module.exports = grammar({
     ),
 
     unary_expression: $ => prec(PREC.UNARY, seq(choice('!', '-'), $._expression)),
+
+    // expr? — unwrap Option/Result or propagate error
+    try_expression: $ => prec.left(PREC.CALL, seq($._expression, '?')),
 
     // Structures
     tuple_expression: $ => seq('(', commaSep($._expression), ')'),

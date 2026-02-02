@@ -74,54 +74,32 @@ fn main() {
                  }
              };
              let mut context = interpreter::Context::with_prelude(active_prelude);
-             
+
              // Evaluate top-level definitions (types/functions)
              if let Err(e) = interpreter::eval(&root, &source, &mut context) {
                  eprintln!("Runtime Error: {}", e);
                  std::process::exit(1);
              }
-             
+
              // 3. Find and run 'main' or 'main!'
              let main_val = context.get("main!").cloned()
                  .or_else(|| context.get("main").cloned());
 
              if let Some(main_val) = main_val {
-                 match main_val {
-                     interpreter::RuntimeValue::Function(_, main_body) => {
-                          context.enter_scope();
-                          match interpreter::eval(&main_body, &source, &mut context) {
-                              Ok(val) => {
-                                  if !matches!(val, interpreter::RuntimeValue::Unit) {
-                                      println!("{}", val);
-                                  }
-                              }
-                              Err(e) => {
-                                  eprintln!("Runtime Error in main: {}", e);
-                                  std::process::exit(1);
-                              }
-                          }
-                          context.exit_scope();
+                 let result = run_main(&main_val, &source, &mut context);
+                 match result {
+                     Ok(val) => {
+                         // Unwrap EarlyReturn at the top level
+                         let val = match val {
+                             interpreter::RuntimeValue::EarlyReturn(inner) => *inner,
+                             other => other,
+                         };
+                         if !matches!(val, interpreter::RuntimeValue::Unit) {
+                             println!("{}", val);
+                         }
                      }
-                     interpreter::RuntimeValue::Closure(_, main_body, captured_env) => {
-                          context.enter_scope();
-                          for (k, v) in &captured_env {
-                              context.set(k.clone(), v.clone());
-                          }
-                          match interpreter::eval(&main_body, &source, &mut context) {
-                              Ok(val) => {
-                                  if !matches!(val, interpreter::RuntimeValue::Unit) {
-                                      println!("{}", val);
-                                  }
-                              }
-                              Err(e) => {
-                                  eprintln!("Runtime Error in main: {}", e);
-                                  std::process::exit(1);
-                              }
-                          }
-                          context.exit_scope();
-                     }
-                     _ => {
-                         eprintln!("'main' is not a function");
+                     Err(e) => {
+                         eprintln!("Runtime Error in main: {}", e);
                          std::process::exit(1);
                      }
                  }
@@ -134,6 +112,32 @@ fn main() {
             eprintln!("LSP server not yet implemented");
             std::process::exit(1);
         }
+    }
+}
+
+/// Evaluate the main function body.
+fn run_main<'a>(
+    main_val: &interpreter::RuntimeValue<'a>,
+    source: &str,
+    context: &mut interpreter::Context<'a>,
+) -> Result<interpreter::RuntimeValue<'a>, String> {
+    match main_val {
+        interpreter::RuntimeValue::Function(_, main_body) => {
+            context.enter_scope();
+            let result = interpreter::eval(main_body, source, context);
+            context.exit_scope();
+            result
+        }
+        interpreter::RuntimeValue::Closure(_, main_body, captured_env) => {
+            context.enter_scope();
+            for (k, v) in captured_env {
+                context.set(k.clone(), v.clone());
+            }
+            let result = interpreter::eval(main_body, source, context);
+            context.exit_scope();
+            result
+        }
+        _ => Err("'main' is not a function".to_string()),
     }
 }
 

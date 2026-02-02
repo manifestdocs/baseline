@@ -169,6 +169,12 @@ fn check_node(
         "prelude_decl" => {
             Type::Unit
         }
+        "try_expression" => {
+            // expr? — unwraps Option<T> to T or Result<T,E> to T
+            // For now return Unknown since we lack full generic inference
+            let _inner = check_node(&node.named_child(0).unwrap(), source, file, symbols, diagnostics);
+            Type::Unknown
+        }
         "effect_def" => {
             // effect_def: seq(..., 'effect', $.type_identifier, ...)
             // Manual search since field access creates panic
