@@ -52,10 +52,27 @@ pub struct SymbolTable {
 
 impl SymbolTable {
     fn new() -> Self {
-        Self {
+        let mut table = Self {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
-        }
+        };
+
+        // Built-in Option type: Option = | Some(T) | None
+        let option_type = Type::Enum(
+            "Option".to_string(),
+            vec![
+                ("Some".to_string(), vec![Type::Unknown]),
+                ("None".to_string(), vec![]),
+            ],
+        );
+        table.insert_type("Option".to_string(), option_type.clone());
+        // Register constructors
+        table.insert("None".to_string(), option_type.clone());
+        table.insert("Some".to_string(), Type::Function(vec![Type::Unknown], Box::new(option_type.clone())));
+        // Register Option as module for Option.map, Option.unwrap, etc.
+        table.insert("Option".to_string(), Type::Module("Option".to_string()));
+
+        table
     }
 
     fn enter_scope(&mut self) {
@@ -324,7 +341,7 @@ fn check_node(
                     let arg_expr = node.named_child(i + 1).unwrap();
                     let arg_type = check_node(&arg_expr, source, file, symbols, diagnostics);
                     
-                    if arg_type != arg_types[i] && arg_type != Type::Unknown {
+                    if arg_type != arg_types[i] && arg_type != Type::Unknown && arg_types[i] != Type::Unknown {
                          diagnostics.push(Diagnostic {
                             code: "TYP_008".to_string(),
                             severity: "error".to_string(),

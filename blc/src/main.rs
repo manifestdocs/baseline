@@ -78,24 +78,44 @@ fn main() {
                  .or_else(|| context.get("main").cloned());
 
              if let Some(main_val) = main_val {
-                 if let interpreter::RuntimeValue::Function(_, main_body) = main_val {
-                      // Execute the body of main in a new scope (no arguments)
-                      context.enter_scope();
-                      match interpreter::eval(&main_body, &source, &mut context) {
-                          Ok(val) => {
-                              if !matches!(val, interpreter::RuntimeValue::Unit) {
-                                  println!("{}", val);
+                 match main_val {
+                     interpreter::RuntimeValue::Function(_, main_body) => {
+                          context.enter_scope();
+                          match interpreter::eval(&main_body, &source, &mut context) {
+                              Ok(val) => {
+                                  if !matches!(val, interpreter::RuntimeValue::Unit) {
+                                      println!("{}", val);
+                                  }
+                              }
+                              Err(e) => {
+                                  eprintln!("Runtime Error in main: {}", e);
+                                  std::process::exit(1);
                               }
                           }
-                          Err(e) => {
-                              eprintln!("Runtime Error in main: {}", e);
-                              std::process::exit(1);
+                          context.exit_scope();
+                     }
+                     interpreter::RuntimeValue::Closure(_, main_body, captured_env) => {
+                          context.enter_scope();
+                          for (k, v) in &captured_env {
+                              context.set(k.clone(), v.clone());
                           }
-                      }
-                      context.exit_scope();
-                 } else {
-                     eprintln!("'main' is not a function");
-                     std::process::exit(1);
+                          match interpreter::eval(&main_body, &source, &mut context) {
+                              Ok(val) => {
+                                  if !matches!(val, interpreter::RuntimeValue::Unit) {
+                                      println!("{}", val);
+                                  }
+                              }
+                              Err(e) => {
+                                  eprintln!("Runtime Error in main: {}", e);
+                                  std::process::exit(1);
+                              }
+                          }
+                          context.exit_scope();
+                     }
+                     _ => {
+                         eprintln!("'main' is not a function");
+                         std::process::exit(1);
+                     }
                  }
              } else {
                  eprintln!("No 'main' or 'main!' function found");

@@ -1,0 +1,49 @@
+// Option type - built-in Some/None constructors and module functions
+
+// No type declaration needed - Option is built-in
+
+// Constructors
+wrap : Int -> Option
+wrap = |x| Some(x)
+
+nothing : () -> Option
+nothing = || None
+
+// Match on Option
+unwrap_or_default : (Option, Int) -> Int
+unwrap_or_default = |opt, default| {
+  match opt
+    Some(v) -> v
+    None -> default
+}
+
+// Using Option module functions
+main! : () -> {Console} Unit
+main! = || {
+  let some_val = Some(42)
+  let none_val = None
+
+  // Option.unwrap
+  let x = Option.unwrap(some_val)
+  Console.println!("unwrap Some(42): ${x}")
+
+  // Option.unwrap_or
+  let y = Option.unwrap_or(none_val, 99)
+  Console.println!("unwrap_or None 99: ${y}")
+
+  // Option.is_some / Option.is_none
+  let s = Option.is_some(some_val)
+  let n = Option.is_none(none_val)
+  Console.println!("is_some Some(42): ${s}")
+  Console.println!("is_none None: ${n}")
+
+  // Option.map
+  let mapped = Option.map(some_val, |v| v * 2)
+  let mapped_none = Option.map(none_val, |v| v * 2)
+  Console.println!("map Some(42) *2: ${mapped}")
+  Console.println!("map None *2: ${mapped_none}")
+
+  // Pattern matching
+  let result = unwrap_or_default(Some(10), 0)
+  Console.println!("match Some(10): ${result}")
+}

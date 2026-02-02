@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use tree_sitter::Node;
 
 use crate::builtins::BuiltinRegistry;
+use crate::stdlib::NativeRegistry;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeValue<'a> {
@@ -57,14 +58,20 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
 pub struct Context<'a> {
     scopes: Vec<HashMap<String, RuntimeValue<'a>>>,
     builtins: BuiltinRegistry,
+    natives: NativeRegistry,
 }
 
 impl<'a> Context<'a> {
     pub fn new() -> Self {
-        Self {
+        let mut ctx = Self {
             scopes: vec![HashMap::new()],
             builtins: BuiltinRegistry::new(),
-        }
+            natives: NativeRegistry::new(),
+        };
+        // Pre-register Option constructors
+        ctx.set("None".to_string(), RuntimeValue::Enum("None".to_string(), Vec::new()));
+        ctx.set("Some".to_string(), RuntimeValue::Enum("Some".to_string(), Vec::new()));
+        ctx
     }
 
     pub fn enter_scope(&mut self) {
@@ -99,6 +106,46 @@ impl<'a> Context<'a> {
             env.extend(scope.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
         env
+    }
+}
+
+/// Apply a Function or Closure value to a list of arguments.
+/// Extracted for reuse by Option.map and future HOFs like List.map.
+fn apply_function<'a>(
+    func: &RuntimeValue<'a>,
+    args: &[RuntimeValue<'a>],
+    source: &str,
+    context: &mut Context<'a>,
+) -> Result<RuntimeValue<'a>, String> {
+    match func {
+        RuntimeValue::Function(param_names, body_node) => {
+            if args.len() != param_names.len() {
+                return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len()));
+            }
+            context.enter_scope();
+            for (name, val) in param_names.iter().zip(args.iter()) {
+                context.set(name.clone(), val.clone());
+            }
+            let result = eval(body_node, source, context);
+            context.exit_scope();
+            result
+        }
+        RuntimeValue::Closure(param_names, body_node, captured_env) => {
+            if args.len() != param_names.len() {
+                return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len()));
+            }
+            context.enter_scope();
+            for (k, v) in captured_env {
+                context.set(k.clone(), v.clone());
+            }
+            for (name, val) in param_names.iter().zip(args.iter()) {
+                context.set(name.clone(), val.clone());
+            }
+            let result = eval(body_node, source, context);
+            context.exit_scope();
+            result
+        }
+        _ => Err(format!("Not a function: {}", func)),
     }
 }
 
@@ -187,6 +234,44 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      }
                      let result_str = builtin_fn(&arg_strs)?;
                      return Ok(parse_builtin_result(&result_str));
+                 }
+
+                 // Native dispatch: Module.method(args) operating on RuntimeValues
+                 if qualified == "Option.map" {
+                     // Special case: Option.map(opt, fn) needs closure invocation
+                     let total_children = node.named_child_count();
+                     let mut arg_vals = Vec::new();
+                     for i in 1..total_children {
+                         let arg_node = node.named_child(i).unwrap();
+                         arg_vals.push(eval(&arg_node, source, context)?);
+                     }
+                     if arg_vals.len() != 2 {
+                         return Err(format!("Option.map expects 2 arguments, got {}", arg_vals.len()));
+                     }
+                     let opt_val = arg_vals.remove(0);
+                     let map_fn = arg_vals.remove(0);
+                     return match &opt_val {
+                         RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
+                             let inner = payload[0].clone();
+                             let result = apply_function(&map_fn, &[inner], source, context)?;
+                             Ok(RuntimeValue::Enum("Some".to_string(), vec![result]))
+                         }
+                         RuntimeValue::Enum(name, payload) if name == "None" && payload.is_empty() => {
+                             Ok(RuntimeValue::Enum("None".to_string(), Vec::new()))
+                         }
+                         other => Err(format!("Option.map expects Option as first argument, got {}", other)),
+                     };
+                 }
+
+                 if let Some(native_fn) = context.natives.get(&qualified) {
+                     let native_fn = *native_fn;
+                     let total_children = node.named_child_count();
+                     let mut arg_vals = Vec::new();
+                     for i in 1..total_children {
+                         let arg_node = node.named_child(i).unwrap();
+                         arg_vals.push(eval(&arg_node, source, context)?);
+                     }
+                     return native_fn(&arg_vals);
                  }
              }
 
@@ -677,6 +762,8 @@ fn parse_builtin_result<'a>(s: &str) -> RuntimeValue<'a> {
         _ => {
             if let Ok(i) = s.parse::<i64>() {
                 RuntimeValue::Int(i)
+            } else if let Ok(f) = s.parse::<f64>() {
+                RuntimeValue::Float(f)
             } else {
                 RuntimeValue::String(s.to_string())
             }
@@ -1196,5 +1283,82 @@ mod tests {
     fn test_float_division_by_zero() {
         let result = eval_source("main : () -> Float\nmain = || 1.0 / 0.0");
         assert!(result.is_err(), "Expected error for division by zero, got {:?}", result);
+    }
+
+    // -- Option type --
+
+    #[test]
+    fn test_option_some_constructor() {
+        let result = eval_source("main : () -> Option\nmain = || Some(42)");
+        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(42)])));
+    }
+
+    #[test]
+    fn test_option_none_constructor() {
+        let result = eval_source("main : () -> Option\nmain = || None");
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    #[test]
+    fn test_option_unwrap_some() {
+        let source = "main : () -> Int\nmain = || Option.unwrap(Some(42))";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    #[test]
+    fn test_option_unwrap_none_errors() {
+        let source = "main : () -> Int\nmain = || Option.unwrap(None)";
+        let result = eval_source(source);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_option_unwrap_or_some() {
+        let source = "main : () -> Int\nmain = || Option.unwrap_or(Some(42), 0)";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    #[test]
+    fn test_option_unwrap_or_none() {
+        let source = "main : () -> Int\nmain = || Option.unwrap_or(None, 99)";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Int(99)));
+    }
+
+    #[test]
+    fn test_option_is_some() {
+        let source = "main : () -> Bool\nmain = || Option.is_some(Some(1))";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_option_is_none() {
+        let source = "main : () -> Bool\nmain = || Option.is_none(None)";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Bool(true)));
+    }
+
+    #[test]
+    fn test_option_map_some() {
+        let source = "main : () -> Option\nmain = || Option.map(Some(10), |x| x + 1)";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(11)])));
+    }
+
+    #[test]
+    fn test_option_map_none() {
+        let source = "main : () -> Option\nmain = || Option.map(None, |x| x + 1)";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
+    }
+
+    #[test]
+    fn test_option_match() {
+        let source = "main : () -> Int\nmain = || {\n  let x = Some(42)\n  match x\n    Some(v) -> v\n    None -> 0\n}";
+        let result = eval_source(source);
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
 }
