@@ -313,6 +313,63 @@ fn type_check_tuple_in_match() {
 }
 
 // ============================================================
+// Float Type Checking Tests
+// ============================================================
+
+#[test]
+fn type_check_float_annotation_mismatch() {
+    // let x: Int = 3.14 should report type mismatch
+    check_has_error(
+        "foo : () -> ()\n\
+         foo = {\n\
+           let x : Int = 3.14\n\
+         }",
+        "TYP_021"
+    );
+}
+
+#[test]
+fn type_check_float_annotation_ok() {
+    // let x: Float = 3.14 should pass
+    check_ok(
+        "foo : () -> ()\n\
+         foo = {\n\
+           let x : Float = 3.14\n\
+         }"
+    );
+}
+
+#[test]
+fn type_check_mixed_int_float_arithmetic() {
+    // 1 + 3.14 should promote to Float
+    check_ok(
+        "foo : () -> Float\n\
+         foo = 1 + 3.14"
+    );
+}
+
+#[test]
+fn type_check_float_arithmetic_pure() {
+    // Float + Float = Float
+    check_ok(
+        "foo : () -> Float\n\
+         foo = 1.5 + 2.5"
+    );
+}
+
+#[test]
+fn type_check_let_annotation_string() {
+    // let s: String = 42 should error
+    check_has_error(
+        "foo : () -> ()\n\
+         foo = {\n\
+           let s : String = 42\n\
+         }",
+        "TYP_021"
+    );
+}
+
+// ============================================================
 // Sum Type Tests
 // ============================================================
 

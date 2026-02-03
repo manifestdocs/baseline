@@ -458,11 +458,40 @@ fn check_node(
             Type::Unit 
         }
         "let_binding" => {
+            // Grammar: let pattern [: type_annotation] = expression
+            // named_child(0) = pattern, last named_child = expression
+            // type_annotation accessed via field name "type"
+            let named_count = node.named_child_count();
             if let Some(pattern) = node.named_child(0) {
-                 if let Some(expr) = node.named_child(1) {
-                     let expr_type = check_node(&expr, source, file, symbols, diagnostics);
-                     bind_pattern(&pattern, expr_type, source, symbols);
-                 }
+                let expr_node = node.named_child(named_count - 1).unwrap();
+                let expr_type = check_node(&expr_node, source, file, symbols, diagnostics);
+
+                // Check type annotation if present
+                if let Some(ann_node) = node.child_by_field_name("type") {
+                    // type_annotation is `: Type`, the type_expr is its named child
+                    if let Some(type_node) = ann_node.named_child(0) {
+                        let declared_type = parse_type(&type_node, source, &symbols);
+                        if expr_type != declared_type && expr_type != Type::Unknown && declared_type != Type::Unknown {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_021".to_string(),
+                                severity: "error".to_string(),
+                                location: Location {
+                                    file: file.to_string(),
+                                    line: expr_node.start_position().row + 1,
+                                    col: expr_node.start_position().column + 1,
+                                },
+                                message: format!("Binding type mismatch: declared {}, found {}", declared_type, expr_type),
+                                context: "Expression type must match declared type annotation.".to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+                        bind_pattern(&pattern, declared_type, source, symbols);
+                    } else {
+                        bind_pattern(&pattern, expr_type, source, symbols);
+                    }
+                } else {
+                    bind_pattern(&pattern, expr_type, source, symbols);
+                }
             }
             Type::Unit
         }
@@ -725,6 +754,10 @@ fn check_node(
                     if left_type == Type::Int && right_type == Type::Int {
                         Type::Int
                     } else if left_type == Type::Float && right_type == Type::Float {
+                        Type::Float
+                    } else if (left_type == Type::Int && right_type == Type::Float)
+                           || (left_type == Type::Float && right_type == Type::Int) {
+                        // Int/Float promotion: mixed arithmetic produces Float
                         Type::Float
                     } else {
                         if left_type != Type::Unknown && right_type != Type::Unknown {
