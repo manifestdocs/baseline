@@ -127,6 +127,7 @@ module.exports = grammar({
     _type_expr: $ => choice(
       $.type_identifier,
       $.generic_type,
+      $.option_type,
       $.tuple_type,
       $.record_type,
       $.function_type
@@ -139,6 +140,7 @@ module.exports = grammar({
     ),
 
     generic_type: $ => seq($.type_identifier, '<', commaSep1($._type_expr), '>'),
+    option_type: $ => prec.left(10, seq($._type_expr, '?')),
     tuple_type: $ => seq('(', commaSep($._type_expr), ')'),
     record_type: $ => seq('{', commaSep($.record_field_def), '}'),
     record_field_def: $ => seq($.identifier, ':', $._type_expr),

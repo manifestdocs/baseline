@@ -734,6 +734,10 @@
           "named": true
         },
         {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "record_type",
           "named": true
         },
@@ -762,6 +766,10 @@
         },
         {
           "type": "generic_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -1671,6 +1679,41 @@
     }
   },
   {
+    "type": "option_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "function_type",
+          "named": true
+        },
+        {
+          "type": "generic_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
+          "named": true
+        },
+        {
+          "type": "record_type",
+          "named": true
+        },
+        {
+          "type": "tuple_type",
+          "named": true
+        },
+        {
+          "type": "type_identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "parenthesized_expression",
     "named": true,
     "fields": {},
@@ -2098,6 +2141,10 @@
         },
         {
           "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -2560,6 +2607,10 @@
           "named": true
         },
         {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "record_type",
           "named": true
         },
@@ -2591,6 +2642,10 @@
           "named": true
         },
         {
+          "type": "option_type",
+          "named": true
+        },
+        {
           "type": "record_type",
           "named": true
         },
@@ -2619,6 +2674,10 @@
           },
           {
             "type": "generic_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
             "named": true
           },
           {
@@ -2698,6 +2757,10 @@
         },
         {
           "type": "generic_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {
@@ -2835,6 +2898,10 @@
         },
         {
           "type": "generic_type",
+          "named": true
+        },
+        {
+          "type": "option_type",
           "named": true
         },
         {

@@ -44,7 +44,32 @@ impl std::fmt::Display for Type {
                 let elems_str = elems.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "({})", elems_str)
             }
-            Type::Enum(name, _) => write!(f, "{}", name),
+            Type::Enum(name, variants) => {
+                // Show type parameters for Option<T> and Result<T, E>
+                match name.as_str() {
+                    "Option" => {
+                        if let Some((_, payload)) = variants.first() {
+                            if let Some(inner) = payload.first() {
+                                if *inner != Type::Unknown {
+                                    return write!(f, "Option<{}>", inner);
+                                }
+                            }
+                        }
+                        write!(f, "Option")
+                    }
+                    "Result" => {
+                        let ok_t = variants.first().and_then(|(_, p)| p.first());
+                        let err_t = variants.get(1).and_then(|(_, p)| p.first());
+                        if let (Some(ok), Some(err)) = (ok_t, err_t) {
+                            if *ok != Type::Unknown || *err != Type::Unknown {
+                                return write!(f, "Result<{}, {}>", ok, err);
+                            }
+                        }
+                        write!(f, "Result")
+                    }
+                    _ => write!(f, "{}", name),
+                }
+            }
             Type::Module(name) => write!(f, "Module({})", name),
             Type::Unknown => write!(f, "<unknown>"),
         }
@@ -234,6 +259,18 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
     sigs
 }
 
+/// Check if two types are compatible, treating Unknown as a wildcard
+/// and same-named Enums as compatible (v0.1: full generic unification deferred).
+fn types_compatible(a: &Type, b: &Type) -> bool {
+    if a == b { return true; }
+    if *a == Type::Unknown || *b == Type::Unknown { return true; }
+    match (a, b) {
+        (Type::Enum(na, _), Type::Enum(nb, _)) => na == nb,
+        (Type::List(ia), Type::List(ib)) => types_compatible(ia, ib),
+        _ => false,
+    }
+}
+
 pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -419,7 +456,7 @@ fn check_node(
                          let lambda_body = body_node.named_child(child_count - 1).unwrap();
                          let body_type = check_node(&lambda_body, source, file, symbols, diagnostics);
                          
-                         if body_type != **ret_type && body_type != Type::Unknown && **ret_type != Type::Unit {
+                         if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
                               diagnostics.push(Diagnostic {
                                  code: "TYP_006".to_string(),
                                  severity: "error".to_string(),
@@ -436,7 +473,7 @@ fn check_node(
                      }
                 } else {
                      let body_type = check_node(&body_node, source, file, symbols, diagnostics);
-                     if body_type != **ret_type && body_type != Type::Unknown && **ret_type != Type::Unit {
+                     if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
                           diagnostics.push(Diagnostic {
                                  code: "TYP_006".to_string(),
                                  severity: "error".to_string(),
@@ -471,7 +508,7 @@ fn check_node(
                     // type_annotation is `: Type`, the type_expr is its named child
                     if let Some(type_node) = ann_node.named_child(0) {
                         let declared_type = parse_type(&type_node, source, &symbols);
-                        if expr_type != declared_type && expr_type != Type::Unknown && declared_type != Type::Unknown {
+                        if !types_compatible(&expr_type, &declared_type) {
                             diagnostics.push(Diagnostic {
                                 code: "TYP_021".to_string(),
                                 severity: "error".to_string(),
@@ -534,7 +571,7 @@ fn check_node(
                         check_node(&arg_expr, source, file, symbols, diagnostics)
                     };
 
-                    if arg_type != arg_types[i] && arg_type != Type::Unknown && arg_types[i] != Type::Unknown {
+                    if !types_compatible(&arg_type, &arg_types[i]) {
                          diagnostics.push(Diagnostic {
                             code: "TYP_008".to_string(),
                             severity: "error".to_string(),
@@ -585,7 +622,7 @@ fn check_node(
                      let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
                      
                      if let Some(expected_type) = fields.get(&fname) {
-                         if ftype != *expected_type && ftype != Type::Unknown {
+                         if !types_compatible(&ftype, expected_type) {
                               diagnostics.push(Diagnostic {
                                 code: "TYP_010".to_string(),
                                 severity: "error".to_string(),
@@ -817,7 +854,7 @@ fn check_node(
              if let Some(else_branch) = node.named_child(2) {
                  let else_type = check_node(&else_branch, source, file, symbols, diagnostics);
                  
-                 if then_type != else_type && then_type != Type::Unknown && else_type != Type::Unknown {
+                 if !types_compatible(&then_type, &else_type) {
                       diagnostics.push(Diagnostic {
                         code: "TYP_004".to_string(),
                         severity: "error".to_string(),
@@ -871,7 +908,7 @@ fn check_node(
                 if first {
                     element_type = ty;
                     first = false;
-                } else if ty != element_type && ty != Type::Unknown && element_type != Type::Unknown {
+                } else if !types_compatible(&ty, &element_type) {
                      diagnostics.push(Diagnostic {
                         code: "TYP_016".to_string(),
                         severity: "error".to_string(),
@@ -935,7 +972,7 @@ fn check_node(
                   if first {
                       ret_type = body_type;
                       first = false;
-                  } else if body_type != ret_type && body_type != Type::Unknown && ret_type != Type::Unknown {
+                  } else if !types_compatible(&body_type, &ret_type) {
                        diagnostics.push(Diagnostic {
                             code: "TYP_017".to_string(),
                             severity: "error".to_string(),
@@ -973,7 +1010,7 @@ fn check_node(
                             context: "Pipe operator expects a unary function.".to_string(),
                             suggestions: vec![],
                         });
-                 } else if args[0] != left_type && left_type != Type::Unknown && args[0] != Type::Unknown {
+                 } else if !types_compatible(&left_type, &args[0]) {
                        diagnostics.push(Diagnostic {
                             code: "TYP_019".to_string(),
                             severity: "error".to_string(),
@@ -1114,22 +1151,55 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
         }
 
         "generic_type" => {
-            // List<T>
-            let name_node = node.child(0).unwrap();
+            // Name<T, ...> — named_child(0) is name, named_child(1..) are type args
+            let name_node = node.named_child(0).unwrap();
             let name = name_node.utf8_text(source.as_bytes()).unwrap();
-            
-            if name == "List" {
-                 // Format: identifier < type >
-                 // Child 0: id, 1: <, 2: type, 3: >
-                 // Actually commaSep1 might mean children are interspersed with comma
-                 // Simple generic_type: name < type >
-                 
-                 let arg_node = node.child(2).unwrap();
-                 let inner_type = parse_type(&arg_node, source, symbols);
-                 Type::List(Box::new(inner_type))
-            } else {
-                Type::Unknown 
+
+            match name {
+                "List" => {
+                    let arg = node.named_child(1).unwrap();
+                    let inner = parse_type(&arg, source, symbols);
+                    Type::List(Box::new(inner))
+                }
+                "Option" => {
+                    let arg = node.named_child(1).unwrap();
+                    let inner = parse_type(&arg, source, symbols);
+                    Type::Enum(
+                        "Option".to_string(),
+                        vec![
+                            ("Some".to_string(), vec![inner]),
+                            ("None".to_string(), vec![]),
+                        ],
+                    )
+                }
+                "Result" => {
+                    let ok_node = node.named_child(1).unwrap();
+                    let ok_type = parse_type(&ok_node, source, symbols);
+                    let err_type = node.named_child(2)
+                        .map(|n| parse_type(&n, source, symbols))
+                        .unwrap_or(Type::Unknown);
+                    Type::Enum(
+                        "Result".to_string(),
+                        vec![
+                            ("Ok".to_string(), vec![ok_type]),
+                            ("Err".to_string(), vec![err_type]),
+                        ],
+                    )
+                }
+                _ => Type::Unknown,
             }
+        }
+        "option_type" => {
+            // T? desugars to Option<T>
+            let inner_node = node.named_child(0).unwrap();
+            let inner = parse_type(&inner_node, source, symbols);
+            Type::Enum(
+                "Option".to_string(),
+                vec![
+                    ("Some".to_string(), vec![inner]),
+                    ("None".to_string(), vec![]),
+                ],
+            )
         }
         _ => Type::Unknown
     }

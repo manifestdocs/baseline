@@ -666,6 +666,107 @@ fn parse_trailing_commas() {
 // Integration: Full Programs
 // ============================================================
 
+// ============================================================
+// Option & Result Type Awareness
+// ============================================================
+
+#[test]
+fn type_check_option_int_annotation() {
+    // Option<Int> in a function return type — Some(1) should be compatible
+    let source = r#"
+@prelude(core)
+wrap : (Int) -> Option<Int>
+wrap = |x| Some(x)
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn type_check_option_type_mismatch() {
+    // Returning a Result where Option<Int> is expected should error
+    let source = r#"
+@prelude(core)
+wrap : (Int) -> Option<Int>
+wrap = |x| Ok(x)
+"#;
+    check_has_error(source, "TYP_006");
+}
+
+#[test]
+fn type_check_result_annotation() {
+    // Result<Int, String> in a function return type — Ok(1) should be compatible
+    let source = r#"
+@prelude(core)
+safe_div : (Int, Int) -> Result<Int, String>
+safe_div = |a, b| Ok(a)
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn type_check_option_sugar_question_mark() {
+    // Int? desugars to Option<Int>
+    let source = r#"
+@prelude(core)
+find : (Int) -> Int?
+find = |x| Some(x)
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn type_check_option_sugar_mismatch() {
+    // Returning plain Int where Int? (Option<Int>) is expected should error
+    let source = r#"
+@prelude(core)
+find : (Int) -> Int?
+find = |x| x
+"#;
+    check_has_error(source, "TYP_006");
+}
+
+#[test]
+fn type_check_let_option_annotation() {
+    // let x : Option<Int> = Some(1) — should pass
+    let source = r#"
+@prelude(core)
+main : () -> Int
+main = || {
+    let x : Option<Int> = Some(1);
+    1
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn type_check_let_result_annotation() {
+    // let x : Result<Int, String> = Ok(1) — should pass
+    let source = r#"
+@prelude(core)
+main : () -> Int
+main = || {
+    let x : Result<Int, String> = Ok(1);
+    1
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn type_check_option_result_cross_mismatch() {
+    // let x : Option<Int> = Ok(1) — should error, Result != Option
+    let source = r#"
+@prelude(core)
+main : () -> Int
+main = || {
+    let x : Option<Int> = Ok(1);
+    1
+}
+"#;
+    check_has_error(source, "TYP_021");
+}
+
 #[test]
 fn integration_hello_world() {
     let source = std::fs::read_to_string("../examples/hello.bl").expect("Can't read hello.bl");
