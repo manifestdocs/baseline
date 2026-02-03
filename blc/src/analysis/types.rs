@@ -14,6 +14,7 @@ pub enum Type {
     List(Box<Type>),
     Struct(String, HashMap<String, Type>), // Name, Fields
     Record(HashMap<String, Type>),         // Anonymous record
+    Tuple(Vec<Type>),                      // (T, U, ...)
     Enum(String, Vec<(String, Vec<Type>)>), // Name, [(VariantName, PayloadTypes)]
     Module(String),                        // Module/Effect namespace
     Unknown,
@@ -38,6 +39,10 @@ impl std::fmt::Display for Type {
                 sorted_fields.sort_by_key(|(k, _)| *k);
                 let fields_str = sorted_fields.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join(", ");
                 write!(f, "{{ {} }}", fields_str)
+            }
+            Type::Tuple(elems) => {
+                let elems_str = elems.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+                write!(f, "({})", elems_str)
             }
             Type::Enum(name, _) => write!(f, "{}", name),
             Type::Module(name) => write!(f, "Module({})", name),
@@ -790,6 +795,22 @@ fn check_node(
              }
 
         }
+        "tuple_expression" => {
+            let count = node.named_child_count();
+            if count == 0 {
+                Type::Unit
+            } else {
+                let elems: Vec<Type> = (0..count)
+                    .map(|i| check_node(&node.named_child(i).unwrap(), source, file, symbols, diagnostics))
+                    .collect();
+                if elems.len() == 1 {
+                    // (expr) is parenthesized, not a 1-tuple
+                    elems.into_iter().next().unwrap()
+                } else {
+                    Type::Tuple(elems)
+                }
+            }
+        }
         "list_expression" => {
             // [1, 2, 3]
             let mut element_type = Type::Unknown;
@@ -1019,10 +1040,17 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
              Type::Function(args, Box::new(ret))
         }
         "tuple_type" => {
-             if node.named_child_count() == 0 {
+             let count = node.named_child_count();
+             if count == 0 {
                  Type::Unit
+             } else if count == 1 {
+                 // (T) is just parenthesized, not a 1-tuple
+                 parse_type(&node.named_child(0).unwrap(), source, symbols)
              } else {
-                 Type::Unknown
+                 let elems: Vec<Type> = (0..count)
+                     .map(|i| parse_type(&node.named_child(i).unwrap(), source, symbols))
+                     .collect();
+                 Type::Tuple(elems)
              }
         }
         "record_type" => {
@@ -1064,9 +1092,31 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
 }
 
 fn bind_pattern(node: &Node, ty: Type, source: &str, symbols: &mut SymbolTable) {
-    if node.kind() == "identifier" {
-         let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
-         symbols.insert(name, ty);
+    match node.kind() {
+        "identifier" => {
+            let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
+            symbols.insert(name, ty);
+        }
+        "tuple_pattern" => {
+            let count = node.named_child_count();
+            if let Type::Tuple(ref elem_types) = ty {
+                for i in 0..count {
+                    let sub_pat = node.named_child(i).unwrap();
+                    let elem_ty = if i < elem_types.len() {
+                        elem_types[i].clone()
+                    } else {
+                        Type::Unknown
+                    };
+                    bind_pattern(&sub_pat, elem_ty, source, symbols);
+                }
+            } else {
+                for i in 0..count {
+                    let sub_pat = node.named_child(i).unwrap();
+                    bind_pattern(&sub_pat, Type::Unknown, source, symbols);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1107,6 +1157,26 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
              if let Some(child) = node.named_child(0) {
                  check_pattern(&child, expected_type, source, symbols, diagnostics);
              }
+        },
+        "tuple_pattern" => {
+            let count = node.named_child_count();
+            if let Type::Tuple(elem_types) = expected_type {
+                for i in 0..count {
+                    let sub_pat = node.named_child(i).unwrap();
+                    let elem_ty = if i < elem_types.len() {
+                        elem_types[i].clone()
+                    } else {
+                        Type::Unknown
+                    };
+                    check_pattern(&sub_pat, &elem_ty, source, symbols, diagnostics);
+                }
+            } else {
+                // Expected type is not a tuple — bind sub-patterns as Unknown
+                for i in 0..count {
+                    let sub_pat = node.named_child(i).unwrap();
+                    check_pattern(&sub_pat, &Type::Unknown, source, symbols, diagnostics);
+                }
+            }
         },
         "integer_literal" => {
              // Basic check

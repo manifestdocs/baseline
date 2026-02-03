@@ -265,6 +265,54 @@ fn type_check_string_length_wrong_arg() {
 }
 
 // ============================================================
+// Tuple Type Checking Tests
+// ============================================================
+
+#[test]
+fn type_check_tuple_return_type() {
+    // Function returning (Int, String) with correct body
+    check_ok(
+        "pair : () -> (Int, String)\n\
+         pair = (1, \"hello\")"
+    );
+}
+
+#[test]
+fn type_check_tuple_return_mismatch() {
+    // Function returning (Int, String) but body has (Int, Int)
+    check_has_error(
+        "pair : () -> (Int, String)\n\
+         pair = (1, 2)",
+        "TYP_006"
+    );
+}
+
+#[test]
+fn type_check_tuple_destructuring() {
+    // Tuple destructuring binds correct types
+    check_ok(
+        "sum : () -> Int\n\
+         sum = {\n\
+           let (x, y) = (10, 20)\n\
+           x + y\n\
+         }"
+    );
+}
+
+#[test]
+fn type_check_tuple_in_match() {
+    // Match on a tuple expression with pattern binding
+    check_ok(
+        "first : () -> Int\n\
+         first = {\n\
+           let t = (10, \"hello\")\n\
+           match t\n\
+             (a, _) -> a\n\
+         }"
+    );
+}
+
+// ============================================================
 // Sum Type Tests
 // ============================================================
 
