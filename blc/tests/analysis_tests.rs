@@ -370,6 +370,44 @@ fn type_check_let_annotation_string() {
 }
 
 // ============================================================
+// Lambda Argument Inference Tests
+// ============================================================
+
+#[test]
+fn type_check_lambda_inferred_from_higher_order() {
+    // apply expects ((Int) -> Int, Int) -> Int; lambda arg x inferred as Int
+    check_ok(
+        "apply : ((Int) -> Int, Int) -> Int\n\
+         apply = |f, x| f(x)\n\
+         main : () -> Int\n\
+         main = apply(|x| x + 1, 5)"
+    );
+}
+
+#[test]
+fn type_check_lambda_inferred_body_mismatch() {
+    // apply expects (Int) -> String callback, but lambda body returns Int (x + 1)
+    check_has_error(
+        "apply : ((Int) -> String, Int) -> String\n\
+         apply = |f, x| f(x)\n\
+         main : () -> String\n\
+         main = apply(|x| x + 1, 5)",
+        "TYP_008"
+    );
+}
+
+#[test]
+fn type_check_lambda_standalone_unknown_args() {
+    // Standalone lambda without context — args remain Unknown, no error
+    check_ok(
+        "foo : () -> ()\n\
+         foo = {\n\
+           let f = |x| x\n\
+         }"
+    );
+}
+
+// ============================================================
 // Sum Type Tests
 // ============================================================
 

@@ -521,8 +521,19 @@ fn check_node(
                 
                 for i in 0..std::cmp::min(params_provided, arg_types.len()) {
                     let arg_expr = node.named_child(i + 1).unwrap();
-                    let arg_type = check_node(&arg_expr, source, file, symbols, diagnostics);
-                    
+
+                    // Lambda argument inference: if expected type is Function and arg is
+                    // a lambda, check the lambda body with expected param types injected.
+                    let arg_type = if arg_expr.kind() == "lambda" {
+                        if let Type::Function(ref expected_params, ref expected_ret) = arg_types[i] {
+                            check_lambda_with_expected(&arg_expr, expected_params, expected_ret, source, file, symbols, diagnostics)
+                        } else {
+                            check_node(&arg_expr, source, file, symbols, diagnostics)
+                        }
+                    } else {
+                        check_node(&arg_expr, source, file, symbols, diagnostics)
+                    };
+
                     if arg_type != arg_types[i] && arg_type != Type::Unknown && arg_types[i] != Type::Unknown {
                          diagnostics.push(Diagnostic {
                             code: "TYP_008".to_string(),
@@ -1122,6 +1133,49 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
         }
         _ => Type::Unknown
     }
+}
+
+/// Check a lambda with expected parameter types inferred from the call site.
+/// Returns the lambda's type with concrete param types instead of Unknown.
+fn check_lambda_with_expected(
+    node: &Node,
+    expected_params: &[Type],
+    _expected_ret: &Type,
+    source: &str,
+    file: &str,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Type {
+    let count = node.named_child_count();
+    let arg_count = if count > 0 { count - 1 } else { 0 };
+
+    symbols.enter_scope();
+
+    let mut param_types = Vec::new();
+    for i in 0..arg_count {
+        let arg = node.named_child(i).unwrap();
+        if arg.kind() == "identifier" {
+            let name = arg.utf8_text(source.as_bytes()).unwrap().to_string();
+            let ty = if i < expected_params.len() {
+                expected_params[i].clone()
+            } else {
+                Type::Unknown
+            };
+            symbols.insert(name, ty.clone());
+            param_types.push(ty);
+        }
+    }
+
+    let body_type = if count > 0 {
+        let body = node.named_child(count - 1).unwrap();
+        check_node(&body, source, file, symbols, diagnostics)
+    } else {
+        Type::Unit
+    };
+
+    symbols.exit_scope();
+
+    Type::Function(param_types, Box::new(body_type))
 }
 
 fn bind_pattern(node: &Node, ty: Type, source: &str, symbols: &mut SymbolTable) {
