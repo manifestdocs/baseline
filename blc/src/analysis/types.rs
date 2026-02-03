@@ -48,7 +48,8 @@ impl std::fmt::Display for Type {
 
 pub struct SymbolTable {
     scopes: Vec<HashMap<String, Type>>,
-    types: HashMap<String, Type>, // Registry for named types (structs)
+    types: HashMap<String, Type>,           // Registry for named types (structs)
+    module_methods: HashMap<String, Type>,  // "Module.method" -> Function type
 }
 
 impl SymbolTable {
@@ -56,6 +57,7 @@ impl SymbolTable {
         let mut table = Self {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
+            module_methods: builtin_type_signatures(&prelude),
         };
 
         // Option/Result types and constructors are language primitives — always registered.
@@ -119,6 +121,112 @@ impl SymbolTable {
     fn lookup_type(&self, name: &str) -> Option<&Type> {
         self.types.get(name)
     }
+
+    fn lookup_module_method(&self, qualified_name: &str) -> Option<&Type> {
+        self.module_methods.get(qualified_name)
+    }
+}
+
+/// Build a map of "Module.method" -> Function type for all builtins and native
+/// stdlib functions gated by the given prelude.
+fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
+    let mut sigs = HashMap::new();
+
+    let builtin_modules = prelude.builtin_modules();
+    let native_modules = prelude.native_modules();
+
+    // -- Console builtins (effect: Console) --
+    if builtin_modules.contains(&"Console") {
+        sigs.insert("Console.println!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert("Console.print!".into(),   Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert("Console.error!".into(),   Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert("Console.read_line!".into(), Type::Function(vec![], Box::new(Type::String)));
+    }
+
+    // -- Log builtins (effect: Log) --
+    if builtin_modules.contains(&"Log") {
+        sigs.insert("Log.info!".into(),  Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert("Log.warn!".into(),  Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert("Log.error!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert("Log.debug!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
+    }
+
+    // -- Time builtins (effect: Time) --
+    if builtin_modules.contains(&"Time") {
+        sigs.insert("Time.now!".into(),   Type::Function(vec![], Box::new(Type::Int)));
+        sigs.insert("Time.sleep!".into(), Type::Function(vec![Type::Int], Box::new(Type::Unit)));
+    }
+
+    // -- Random builtins (effect: Random) --
+    if builtin_modules.contains(&"Random") {
+        sigs.insert("Random.int!".into(),  Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)));
+        sigs.insert("Random.bool!".into(), Type::Function(vec![], Box::new(Type::Bool)));
+    }
+
+    // -- Env builtins (effect: Env) --
+    if builtin_modules.contains(&"Env") {
+        sigs.insert("Env.get!".into(), Type::Function(vec![Type::String], Box::new(Type::String)));
+        sigs.insert("Env.set!".into(), Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)));
+    }
+
+    // -- Fs builtins (effect: Fs) --
+    if builtin_modules.contains(&"Fs") {
+        sigs.insert("Fs.read!".into(),   Type::Function(vec![Type::String], Box::new(Type::String)));
+        sigs.insert("Fs.write!".into(),  Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)));
+        sigs.insert("Fs.exists!".into(), Type::Function(vec![Type::String], Box::new(Type::Bool)));
+        sigs.insert("Fs.delete!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
+    }
+
+    // -- Math builtins (pure, no effect) --
+    // Math functions accept both Int and Float at runtime; use Unknown args to avoid false positives.
+    if builtin_modules.contains(&"Math") {
+        sigs.insert("Math.abs".into(),   Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Math.min".into(),   Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Math.max".into(),   Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Math.clamp".into(), Type::Function(vec![Type::Unknown, Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Math.pow".into(),   Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+    }
+
+    // -- String native methods --
+    if native_modules.contains(&"String") {
+        sigs.insert("String.length".into(),      Type::Function(vec![Type::String], Box::new(Type::Int)));
+        sigs.insert("String.trim".into(),         Type::Function(vec![Type::String], Box::new(Type::String)));
+        sigs.insert("String.contains".into(),     Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)));
+        sigs.insert("String.starts_with".into(),  Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)));
+        sigs.insert("String.to_upper".into(),     Type::Function(vec![Type::String], Box::new(Type::String)));
+        sigs.insert("String.to_lower".into(),     Type::Function(vec![Type::String], Box::new(Type::String)));
+        sigs.insert("String.split".into(),        Type::Function(vec![Type::String, Type::String], Box::new(Type::List(Box::new(Type::String)))));
+        sigs.insert("String.join".into(),         Type::Function(vec![Type::List(Box::new(Type::String)), Type::String], Box::new(Type::String)));
+        sigs.insert("String.slice".into(),        Type::Function(vec![Type::String, Type::Int, Type::Int], Box::new(Type::String)));
+    }
+
+    // -- Option native methods (generic — use Unknown for type params) --
+    if native_modules.contains(&"Option") {
+        sigs.insert("Option.unwrap".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Option.unwrap_or".into(), Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Option.is_some".into(),   Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
+        sigs.insert("Option.is_none".into(),   Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
+    }
+
+    // -- Result native methods (generic — use Unknown for type params) --
+    if native_modules.contains(&"Result") {
+        sigs.insert("Result.unwrap".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Result.unwrap_or".into(), Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Result.is_ok".into(),     Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
+        sigs.insert("Result.is_err".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
+    }
+
+    // -- List native methods (generic — use Unknown for element type) --
+    if native_modules.contains(&"List") {
+        sigs.insert("List.length".into(),  Type::Function(vec![Type::Unknown], Box::new(Type::Int)));
+        sigs.insert("List.head".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("List.tail".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("List.reverse".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("List.sort".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("List.concat".into(),  Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+    }
+
+    sigs
 }
 
 pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
@@ -524,11 +632,14 @@ fn check_node(
                         Type::Unknown
                     }
                 }
-                Type::Module(_) => {
-                    // Allow field access on modules (for effects)
-                    // We return Unknown (or a generic Function) to pass type checking
-                    // The actual Effect checking happens in effects.rs
-                    Type::Unknown 
+                Type::Module(ref module_name) => {
+                    let qualified = format!("{}.{}", module_name, field_name);
+                    if let Some(ty) = symbols.lookup_module_method(&qualified) {
+                        ty.clone()
+                    } else {
+                        // Unknown method — allow for forward compat / effect-only checking
+                        Type::Unknown
+                    }
                 }
                 Type::Unknown => Type::Unknown,
                 _ => {

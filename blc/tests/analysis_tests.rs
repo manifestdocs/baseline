@@ -164,6 +164,107 @@ fn type_check_list_ok() {
 }
 
 // ============================================================
+// Builtin Type Signature Tests
+// ============================================================
+
+#[test]
+fn type_check_println_wrong_arg_type() {
+    // Console.println! expects String, passing Int should error
+    check_has_error(
+        "@prelude(script)\n\
+         main! : () -> {Console} ()\n\
+         main! = Console.println!(42)",
+        "TYP_008"
+    );
+}
+
+#[test]
+fn type_check_println_correct_arg() {
+    // Console.println! with String should be fine
+    assert_eq!(
+        count_errors(
+            "@prelude(script)\n\
+             main! : () -> {Console} ()\n\
+             main! = Console.println!(\"hello\")",
+            "TYP"
+        ),
+        0
+    );
+}
+
+#[test]
+fn type_check_println_wrong_arg_count() {
+    // Console.println! expects 1 arg, passing 2 should error
+    check_has_error(
+        "@prelude(script)\n\
+         main! : () -> {Console} ()\n\
+         main! = Console.println!(\"a\", \"b\")",
+        "TYP_007"
+    );
+}
+
+#[test]
+fn type_check_read_line_returns_string() {
+    // Console.read_line! returns String, assigning to Int-expecting context should error
+    check_has_error(
+        "@prelude(script)\n\
+         main! : () -> {Console} Int\n\
+         main! = Console.read_line!()",
+        "TYP_006"
+    );
+}
+
+#[test]
+fn type_check_time_sleep_expects_int() {
+    // Time.sleep! expects Int, passing String should error
+    check_has_error(
+        "@prelude(script)\n\
+         main! : () -> {Time} ()\n\
+         main! = Time.sleep!(\"100\")",
+        "TYP_008"
+    );
+}
+
+#[test]
+fn type_check_fs_exists_returns_bool() {
+    // Fs.exists! returns Bool
+    assert_eq!(
+        count_errors(
+            "@prelude(script)\n\
+             main! : () -> {Fs} Bool\n\
+             main! = Fs.exists!(\"file.txt\")",
+            "TYP"
+        ),
+        0
+    );
+}
+
+#[test]
+fn type_check_string_length_correct() {
+    // String.length takes String, returns Int
+    assert_eq!(
+        count_errors(
+            "@prelude(core)\n\
+             len : String -> Int\n\
+             len = |s| String.length(s)",
+            "TYP"
+        ),
+        0
+    );
+}
+
+#[test]
+fn type_check_string_length_wrong_arg() {
+    // String.length expects String, passing Int should error
+    check_has_error(
+        "@prelude(core)\n\
+         len : () -> Int\n\
+         len = String.length(42)",
+        "TYP_008"
+    );
+}
+
+// ============================================================
 // Sum Type Tests
 // ============================================================
 
