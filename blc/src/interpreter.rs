@@ -59,6 +59,61 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// RuntimeError — carries source location and call stack
+// ---------------------------------------------------------------------------
+
+#[derive(Debug)]
+pub struct RuntimeError {
+    pub message: String,
+    pub file: String,
+    pub location: Option<(usize, usize)>, // (line, col), 1-indexed
+    pub stack: Vec<StackFrame>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StackFrame {
+    pub name: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+impl std::fmt::Display for RuntimeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some((line, col)) = self.location {
+            write!(f, "{}:{}:{}: {}", self.file, line, col, self.message)?;
+        } else {
+            write!(f, "{}: {}", self.file, self.message)?;
+        }
+        for frame in &self.stack {
+            write!(f, "\n  at {} ({}:{}:{})", frame.name, self.file, frame.line, frame.col)?;
+        }
+        Ok(())
+    }
+}
+
+impl From<String> for RuntimeError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            file: "<unknown>".to_string(),
+            location: None,
+            stack: Vec::new(),
+        }
+    }
+}
+
+/// Create a RuntimeError with position from a tree-sitter node and the current call stack.
+fn err_at(msg: impl Into<String>, node: &Node, ctx: &Context) -> RuntimeError {
+    let pos = node.start_position();
+    RuntimeError {
+        message: msg.into(),
+        file: ctx.file.clone(),
+        location: Some((pos.row + 1, pos.column + 1)),
+        stack: ctx.call_stack.clone(),
+    }
+}
+
 /// All known module names in the language (for error messages).
 const ALL_MODULES: &[&str] = &[
     "Option", "Result", "String", "List", "Math",
@@ -70,6 +125,8 @@ pub struct Context<'a> {
     builtins: BuiltinRegistry,
     natives: NativeRegistry,
     prelude: Prelude,
+    pub file: String,
+    call_stack: Vec<StackFrame>,
 }
 
 impl<'a> Context<'a> {
@@ -80,11 +137,18 @@ impl<'a> Context<'a> {
 
     /// Create a context gated by the given prelude.
     pub fn with_prelude(prelude: Prelude) -> Self {
+        Self::with_prelude_and_file(prelude, "<unknown>".to_string())
+    }
+
+    /// Create a context with a specific prelude and source file path.
+    pub fn with_prelude_and_file(prelude: Prelude, file: String) -> Self {
         let mut ctx = Self {
             scopes: vec![HashMap::new()],
             builtins: BuiltinRegistry::with_prelude(prelude),
             natives: NativeRegistry::with_prelude(prelude),
             prelude,
+            file,
+            call_stack: Vec::new(),
         };
         // Option/Result constructors are language primitives — always available.
         ctx.set("None".to_string(), RuntimeValue::Enum("None".to_string(), Vec::new()));
@@ -144,13 +208,26 @@ impl<'a> Context<'a> {
         }
         env
     }
+
+    fn push_frame(&mut self, name: String, node: &Node) {
+        let pos = node.start_position();
+        self.call_stack.push(StackFrame {
+            name,
+            line: pos.row + 1,
+            col: pos.column + 1,
+        });
+    }
+
+    fn pop_frame(&mut self) {
+        self.call_stack.pop();
+    }
 }
 
 /// If the result contains an EarlyReturn sentinel, unwrap it to the inner value.
 /// Called at function call boundaries so `?` propagation stops at the enclosing function.
 fn unwrap_early_return<'a>(
-    result: Result<RuntimeValue<'a>, String>,
-) -> Result<RuntimeValue<'a>, String> {
+    result: Result<RuntimeValue<'a>, RuntimeError>,
+) -> Result<RuntimeValue<'a>, RuntimeError> {
     match result {
         Ok(RuntimeValue::EarlyReturn(inner)) => Ok(*inner),
         other => other,
@@ -174,11 +251,19 @@ fn apply_function<'a>(
     args: &[RuntimeValue<'a>],
     source: &str,
     context: &mut Context<'a>,
-) -> Result<RuntimeValue<'a>, String> {
+    call_node: Option<&Node>,
+) -> Result<RuntimeValue<'a>, RuntimeError> {
     match func {
         RuntimeValue::Function(param_names, body_node) => {
             if args.len() != param_names.len() {
-                return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len()));
+                let msg = format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len());
+                return match call_node {
+                    Some(n) => Err(err_at(msg, n, context)),
+                    None => Err(RuntimeError::from(msg)),
+                };
+            }
+            if let Some(n) = call_node {
+                context.push_frame("<closure>".to_string(), n);
             }
             context.enter_scope();
             for (name, val) in param_names.iter().zip(args.iter()) {
@@ -186,11 +271,21 @@ fn apply_function<'a>(
             }
             let result = eval(body_node, source, context);
             context.exit_scope();
+            if call_node.is_some() {
+                context.pop_frame();
+            }
             unwrap_early_return(result)
         }
         RuntimeValue::Closure(param_names, body_node, captured_env) => {
             if args.len() != param_names.len() {
-                return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len()));
+                let msg = format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len());
+                return match call_node {
+                    Some(n) => Err(err_at(msg, n, context)),
+                    None => Err(RuntimeError::from(msg)),
+                };
+            }
+            if let Some(n) = call_node {
+                context.push_frame("<closure>".to_string(), n);
             }
             context.enter_scope();
             for (k, v) in captured_env {
@@ -201,9 +296,18 @@ fn apply_function<'a>(
             }
             let result = eval(body_node, source, context);
             context.exit_scope();
+            if call_node.is_some() {
+                context.pop_frame();
+            }
             unwrap_early_return(result)
         }
-        _ => Err(format!("Not a function: {}", func)),
+        _ => {
+            let msg = format!("Not a function: {}", func);
+            match call_node {
+                Some(n) => Err(err_at(msg, n, context)),
+                None => Err(RuntimeError::from(msg)),
+            }
+        }
     }
 }
 
@@ -214,7 +318,7 @@ fn dispatch_hof<'a>(
     node: &Node<'a>,
     source: &str,
     context: &mut Context<'a>,
-) -> Result<Option<RuntimeValue<'a>>, String> {
+) -> Result<Option<RuntimeValue<'a>>, RuntimeError> {
     // Collect all call arguments
     let total_children = node.named_child_count();
     let mut arg_vals = Vec::new();
@@ -227,68 +331,68 @@ fn dispatch_hof<'a>(
         // Option.map(opt, fn) -> Option
         "Option.map" => {
             if arg_vals.len() != 2 {
-                return Err(format!("Option.map expects 2 arguments, got {}", arg_vals.len()));
+                return Err(err_at(format!("Option.map expects 2 arguments, got {}", arg_vals.len()), node, context));
             }
             let opt_val = &arg_vals[0];
             let map_fn = &arg_vals[1];
             match opt_val {
                 RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
-                    let result = apply_function(map_fn, &[payload[0].clone()], source, context)?;
+                    let result = apply_function(map_fn, &[payload[0].clone()], source, context, Some(node))?;
                     Ok(Some(RuntimeValue::Enum("Some".to_string(), vec![result])))
                 }
                 RuntimeValue::Enum(name, payload) if name == "None" && payload.is_empty() => {
                     Ok(Some(RuntimeValue::Enum("None".to_string(), Vec::new())))
                 }
-                other => Err(format!("Option.map expects Option as first argument, got {}", other)),
+                other => Err(err_at(format!("Option.map expects Option as first argument, got {}", other), node, context)),
             }
         }
         // Result.map(res, fn) -> Result
         "Result.map" => {
             if arg_vals.len() != 2 {
-                return Err(format!("Result.map expects 2 arguments, got {}", arg_vals.len()));
+                return Err(err_at(format!("Result.map expects 2 arguments, got {}", arg_vals.len()), node, context));
             }
             let res_val = &arg_vals[0];
             let map_fn = &arg_vals[1];
             match res_val {
                 RuntimeValue::Enum(name, payload) if name == "Ok" && payload.len() == 1 => {
-                    let result = apply_function(map_fn, &[payload[0].clone()], source, context)?;
+                    let result = apply_function(map_fn, &[payload[0].clone()], source, context, Some(node))?;
                     Ok(Some(RuntimeValue::Enum("Ok".to_string(), vec![result])))
                 }
-                RuntimeValue::Enum(name, payload) if name == "Err" && payload.len() == 1 => {
+                RuntimeValue::Enum(name, _payload) if name == "Err" => {
                     Ok(Some(arg_vals[0].clone()))
                 }
-                other => Err(format!("Result.map expects Result as first argument, got {}", other)),
+                other => Err(err_at(format!("Result.map expects Result as first argument, got {}", other), node, context)),
             }
         }
         // List.map(list, fn) -> List
         "List.map" => {
             if arg_vals.len() != 2 {
-                return Err(format!("List.map expects 2 arguments, got {}", arg_vals.len()));
+                return Err(err_at(format!("List.map expects 2 arguments, got {}", arg_vals.len()), node, context));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(format!("List.map expects List as first argument, got {}", other)),
+                other => return Err(err_at(format!("List.map expects List as first argument, got {}", other), node, context)),
             };
             let map_fn = &arg_vals[1];
             let mut results = Vec::with_capacity(items.len());
             for item in items {
-                results.push(apply_function(map_fn, &[item], source, context)?);
+                results.push(apply_function(map_fn, &[item], source, context, Some(node))?);
             }
             Ok(Some(RuntimeValue::List(results)))
         }
         // List.filter(list, fn) -> List
         "List.filter" => {
             if arg_vals.len() != 2 {
-                return Err(format!("List.filter expects 2 arguments, got {}", arg_vals.len()));
+                return Err(err_at(format!("List.filter expects 2 arguments, got {}", arg_vals.len()), node, context));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(format!("List.filter expects List as first argument, got {}", other)),
+                other => return Err(err_at(format!("List.filter expects List as first argument, got {}", other), node, context)),
             };
             let pred_fn = &arg_vals[1];
             let mut results = Vec::new();
             for item in items {
-                let keep = apply_function(pred_fn, &[item.clone()], source, context)?;
+                let keep = apply_function(pred_fn, &[item.clone()], source, context, Some(node))?;
                 if let RuntimeValue::Bool(true) = keep {
                     results.push(item);
                 }
@@ -298,31 +402,31 @@ fn dispatch_hof<'a>(
         // List.fold(list, init, fn) -> T
         "List.fold" => {
             if arg_vals.len() != 3 {
-                return Err(format!("List.fold expects 3 arguments, got {}", arg_vals.len()));
+                return Err(err_at(format!("List.fold expects 3 arguments, got {}", arg_vals.len()), node, context));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(format!("List.fold expects List as first argument, got {}", other)),
+                other => return Err(err_at(format!("List.fold expects List as first argument, got {}", other), node, context)),
             };
             let mut acc = arg_vals[1].clone();
             let fold_fn = &arg_vals[2];
             for item in items {
-                acc = apply_function(fold_fn, &[acc, item], source, context)?;
+                acc = apply_function(fold_fn, &[acc, item], source, context, Some(node))?;
             }
             Ok(Some(acc))
         }
         // List.find(list, fn) -> Option
         "List.find" => {
             if arg_vals.len() != 2 {
-                return Err(format!("List.find expects 2 arguments, got {}", arg_vals.len()));
+                return Err(err_at(format!("List.find expects 2 arguments, got {}", arg_vals.len()), node, context));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(format!("List.find expects List as first argument, got {}", other)),
+                other => return Err(err_at(format!("List.find expects List as first argument, got {}", other), node, context)),
             };
             let pred_fn = &arg_vals[1];
             for item in items {
-                let found = apply_function(pred_fn, &[item.clone()], source, context)?;
+                let found = apply_function(pred_fn, &[item.clone()], source, context, Some(node))?;
                 if let RuntimeValue::Bool(true) = found {
                     return Ok(Some(RuntimeValue::Enum("Some".to_string(), vec![item])));
                 }
@@ -333,7 +437,7 @@ fn dispatch_hof<'a>(
     }
 }
 
-pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Result<RuntimeValue<'a>, String> {
+pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Result<RuntimeValue<'a>, RuntimeError> {
     match node.kind() {
         "source_file" | "module_decl" => {
             let mut last_val = RuntimeValue::Unit;
@@ -417,7 +521,8 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          propagate!(val);
                          arg_strs.push(val.to_string());
                      }
-                     let result_str = builtin_fn(&arg_strs)?;
+                     let result_str = builtin_fn(&arg_strs)
+                         .map_err(|msg| err_at(msg, node, context))?;
                      return Ok(parse_builtin_result(&result_str));
                  }
 
@@ -436,13 +541,14 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          propagate!(val);
                          arg_vals.push(val);
                      }
-                     return native_fn(&arg_vals);
+                     return native_fn(&arg_vals)
+                         .map_err(|msg| err_at(msg, node, context));
                  }
 
                  // No builtin/native matched — check if it's a known module not in scope
                  if obj_node.kind() == "type_identifier" {
-                     if let Some(err) = context.check_module_scope(obj_name) {
-                         return Err(err);
+                     if let Some(err_msg) = context.check_module_scope(obj_name) {
+                         return Err(err_at(err_msg, node, context));
                      }
                  }
              }
@@ -460,12 +566,19 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  arg_vals.push(val);
              }
 
+             // Resolve the function name for stack frame tracking
+             let func_name = func_node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
+
              match func_val {
                  RuntimeValue::Function(param_names, body_node) => {
                      if arg_vals.len() != param_names.len() {
-                         return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()));
+                         return Err(err_at(
+                             format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()),
+                             node, context,
+                         ));
                      }
 
+                     context.push_frame(func_name.to_string(), node);
                      context.enter_scope();
                      for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
                          context.set(name.clone(), val);
@@ -473,13 +586,18 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
 
                      let result = eval(&body_node, source, context);
                      context.exit_scope();
+                     context.pop_frame();
                      unwrap_early_return(result)
                  }
                  RuntimeValue::Closure(param_names, body_node, captured_env) => {
                      if arg_vals.len() != param_names.len() {
-                         return Err(format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()));
+                         return Err(err_at(
+                             format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()),
+                             node, context,
+                         ));
                      }
 
+                     context.push_frame(func_name.to_string(), node);
                      context.enter_scope();
                      for (k, v) in &captured_env {
                          context.set(k.clone(), v.clone());
@@ -490,12 +608,16 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
 
                      let result = eval(&body_node, source, context);
                      context.exit_scope();
+                     context.pop_frame();
                      unwrap_early_return(result)
                 }
                 RuntimeValue::Enum(ctor_name, _) => {
                      Ok(RuntimeValue::Enum(ctor_name, arg_vals))
                  }
-                 _ => Err(format!("Not a function: {}", func_node.utf8_text(source.as_bytes()).unwrap()))
+                 _ => Err(err_at(
+                     format!("Not a function: {}", func_name),
+                     node, context,
+                 ))
              }
         }
         "block" | "block_expression" => {
@@ -522,12 +644,13 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                 return Ok(val);
             }
 
-            bind_pattern(&pattern, &val, source, context)?;
+            bind_pattern(&pattern, &val, source, context)
+                .map_err(|msg| err_at(msg, node, context))?;
             Ok(RuntimeValue::Unit)
         }
         "identifier" | "lower_identifier" | "effect_identifier" => {
             let name = node.utf8_text(source.as_bytes()).unwrap();
-            context.get(name).cloned().ok_or_else(|| format!("Undefined variable: {}", name))
+            context.get(name).cloned().ok_or_else(|| err_at(format!("Undefined variable: {}", name), node, context))
         }
         "type_identifier" => {
             // Nullary constructor or type reference in expression context
@@ -541,12 +664,14 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
         }
         "integer_literal" => {
             let text = node.utf8_text(source.as_bytes()).unwrap();
-            let val = text.parse::<i64>().map_err(|_| "Invalid integer".to_string())?;
+            let val = text.parse::<i64>()
+                .map_err(|_| err_at("Invalid integer", node, context))?;
             Ok(RuntimeValue::Int(val))
         }
         "float_literal" => {
             let text = node.utf8_text(source.as_bytes()).unwrap();
-            let val = text.parse::<f64>().map_err(|_| "Invalid float".to_string())?;
+            let val = text.parse::<f64>()
+                .map_err(|_| err_at("Invalid float", node, context))?;
             Ok(RuntimeValue::Float(val))
         }
         "string_literal" => {
@@ -626,10 +751,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                              propagate!(right);
                              match right {
                                  RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
-                                 _ => Err("Right operand of && must be Bool".to_string()),
+                                 _ => Err(err_at("Right operand of && must be Bool", node, context)),
                              }
                          }
-                         _ => Err("Left operand of && must be Bool".to_string()),
+                         _ => Err(err_at("Left operand of && must be Bool", node, context)),
                      }
                  }
                  "||" => {
@@ -642,10 +767,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                              propagate!(right);
                              match right {
                                  RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
-                                 _ => Err("Right operand of || must be Bool".to_string()),
+                                 _ => Err(err_at("Right operand of || must be Bool", node, context)),
                              }
                          }
-                         _ => Err("Left operand of || must be Bool".to_string()),
+                         _ => Err(err_at("Left operand of || must be Bool", node, context)),
                      }
                  }
                  _ => {
@@ -660,14 +785,14 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                             "*" => Ok(RuntimeValue::Int(l * r)),
                             "/" => {
                                 if r == 0 {
-                                    Err("Division by zero".to_string())
+                                    Err(err_at("Division by zero", node, context))
                                 } else {
                                     Ok(RuntimeValue::Int(l / r))
                                 }
                             }
                             "%" => {
                                 if r == 0 {
-                                    Err("Modulo by zero".to_string())
+                                    Err(err_at("Modulo by zero", node, context))
                                 } else {
                                     Ok(RuntimeValue::Int(l % r))
                                 }
@@ -678,7 +803,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                             ">" => Ok(RuntimeValue::Bool(l > r)),
                             "<=" => Ok(RuntimeValue::Bool(l <= r)),
                             ">=" => Ok(RuntimeValue::Bool(l >= r)),
-                            _ => Err(format!("Unknown int operator {}", op))
+                            _ => Err(err_at(format!("Unknown int operator {}", op), node, context))
                         },
                         (RuntimeValue::Float(l), RuntimeValue::Float(r)) => match op {
                             "+" => Ok(RuntimeValue::Float(l + r)),
@@ -686,14 +811,14 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                             "*" => Ok(RuntimeValue::Float(l * r)),
                             "/" => {
                                 if r == 0.0 {
-                                    Err("Division by zero".to_string())
+                                    Err(err_at("Division by zero", node, context))
                                 } else {
                                     Ok(RuntimeValue::Float(l / r))
                                 }
                             }
                             "%" => {
                                 if r == 0.0 {
-                                    Err("Modulo by zero".to_string())
+                                    Err(err_at("Modulo by zero", node, context))
                                 } else {
                                     Ok(RuntimeValue::Float(l % r))
                                 }
@@ -704,20 +829,20 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                             ">" => Ok(RuntimeValue::Bool(l > r)),
                             "<=" => Ok(RuntimeValue::Bool(l <= r)),
                             ">=" => Ok(RuntimeValue::Bool(l >= r)),
-                            _ => Err(format!("Unknown float operator {}", op))
+                            _ => Err(err_at(format!("Unknown float operator {}", op), node, context))
                         },
                         (RuntimeValue::String(l), RuntimeValue::String(r)) => match op {
                             "+" => Ok(RuntimeValue::String(format!("{}{}", l, r))),
                             "==" => Ok(RuntimeValue::Bool(l == r)),
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                            _ => Err(format!("Unknown string operator {}", op))
+                            _ => Err(err_at(format!("Unknown string operator {}", op), node, context))
                         },
                         (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
                             "==" => Ok(RuntimeValue::Bool(l == r)),
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                            _ => Err(format!("Unknown bool operator {}", op))
+                            _ => Err(err_at(format!("Unknown bool operator {}", op), node, context))
                         },
-                        (l, r) => Err(format!("Invalid operands for {}: {} and {}", op, l, r))
+                        (l, r) => Err(err_at(format!("Invalid operands for {}: {} and {}", op, l, r), node, context))
                      }
                  }
              }
@@ -730,9 +855,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  ("!", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
                  ("-", RuntimeValue::Int(i)) => Ok(RuntimeValue::Int(-i)),
                  ("-", RuntimeValue::Float(f)) => Ok(RuntimeValue::Float(-f)),
-                 ("!", v) => Err(format!("Cannot apply ! to {}", v)),
-                 ("-", v) => Err(format!("Cannot negate {}", v)),
-                 _ => Err(format!("Unknown unary operator {}", op)),
+                 ("!", v) => Err(err_at(format!("Cannot apply ! to {}", v), node, context)),
+                 ("-", v) => Err(err_at(format!("Cannot negate {}", v), node, context)),
+                 _ => Err(err_at(format!("Unknown unary operator {}", op), node, context)),
              }
         }
         "try_expression" => {
@@ -744,10 +869,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                     "None" if payload.is_empty() => Ok(RuntimeValue::EarlyReturn(Box::new(operand))),
                     "Ok" if payload.len() == 1 => Ok(payload[0].clone()),
                     "Err" => Ok(RuntimeValue::EarlyReturn(Box::new(operand))),
-                    _ => Err(format!("? operator requires Option or Result, got {}(..)", name)),
+                    _ => Err(err_at(format!("? operator requires Option or Result, got {}(..)", name), node, context)),
                 },
                 RuntimeValue::EarlyReturn(_) => Ok(operand), // propagate
-                _ => Err(format!("? operator requires Option or Result, got {}", operand)),
+                _ => Err(err_at(format!("? operator requires Option or Result, got {}", operand), node, context)),
             }
         }
         "range_expression" => {
@@ -762,7 +887,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          .collect();
                      Ok(RuntimeValue::List(vals))
                  }
-                 (s, e) => Err(format!("Range requires Int operands, got {} and {}", s, e)),
+                 (s, e) => Err(err_at(format!("Range requires Int operands, got {} and {}", s, e), node, context)),
              }
         }
         "if_expression" => {
@@ -777,7 +902,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      Ok(RuntimeValue::Unit)
                 }
             } else {
-                Err("Condition must be boolean".to_string())
+                Err(err_at("Condition must be boolean", node, context))
             }
         }
         "parenthesized_expression" => {
@@ -856,8 +981,8 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              // Check for module-not-in-scope before evaluating
              if obj_node.kind() == "type_identifier" {
                  let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
-                 if let Some(err) = context.check_module_scope(obj_name) {
-                     return Err(err);
+                 if let Some(err_msg) = context.check_module_scope(obj_name) {
+                     return Err(err_at(err_msg, node, context));
                  }
              }
 
@@ -865,9 +990,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              propagate!(obj_val);
              match obj_val {
                  RuntimeValue::Struct(_, fields) | RuntimeValue::Record(fields) => {
-                      fields.get(field_name).cloned().ok_or_else(|| format!("Field not found: {}", field_name))
+                      fields.get(field_name).cloned().ok_or_else(|| err_at(format!("Field not found: {}", field_name), node, context))
                  }
-                 _ => Err(format!("Cannot access field {} on non-struct", field_name))
+                 _ => Err(err_at(format!("Cannot access field {} on non-struct", field_name), node, context))
              }
         }
         "pipe_expression" => {
@@ -882,7 +1007,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              match right_val {
                  RuntimeValue::Function(params, body_node) => {
                      if params.len() != 1 {
-                         return Err(format!("Pipe expects a function with 1 argument, found {}", params.len()));
+                         return Err(err_at(format!("Pipe expects a function with 1 argument, found {}", params.len()), node, context));
                      }
                      context.enter_scope();
                      context.set(params[0].clone(), left_val);
@@ -892,7 +1017,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                  }
                  RuntimeValue::Closure(params, body_node, captured_env) => {
                      if params.len() != 1 {
-                         return Err(format!("Pipe expects a function with 1 argument, found {}", params.len()));
+                         return Err(err_at(format!("Pipe expects a function with 1 argument, found {}", params.len()), node, context));
                      }
                      context.enter_scope();
                      for (k, v) in &captured_env {
@@ -903,7 +1028,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      context.exit_scope();
                      result
                  }
-                 _ => Err("Pipe target must be a function".to_string()),
+                 _ => Err(err_at("Pipe target must be a function", node, context)),
              }
         }
         "for_expression" => {
@@ -932,7 +1057,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                     }
                     Ok(last_val)
                 }
-                _ => Err("for..in requires a List".to_string()),
+                _ => Err(err_at("for..in requires a List", node, context)),
             }
         }
         "match_expression" => {
@@ -958,7 +1083,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      return result;
                  }
              }
-             Err("No match found".to_string())
+             Err(err_at("No match found", node, context))
         }
         _ => {
             // Ignore others or return Unit
@@ -1124,6 +1249,7 @@ fn match_pattern<'a>(
 }
 
 /// Bind a pattern to a value in the current scope.
+/// Returns a String error (converted to RuntimeError by callers with node context).
 fn bind_pattern<'a>(
     pattern: &Node<'a>,
     value: &RuntimeValue<'a>,
@@ -1195,7 +1321,7 @@ mod tests {
         let tree = Box::leak(Box::new(tree));
         let root = tree.root_node();
         let mut context = Context::with_prelude(prelude);
-        eval(&root, source, &mut context)?;
+        eval(&root, source, &mut context).map_err(|e| e.message.clone())?;
 
         let main_val = context
             .get("main!")
@@ -1222,7 +1348,7 @@ mod tests {
             }
             other => Ok(other),
         };
-        unwrap_early_return(result)
+        unwrap_early_return(result).map_err(|e| e.message)
     }
 
     // -- Comparison operators --

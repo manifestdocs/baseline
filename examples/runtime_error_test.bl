@@ -1,0 +1,8 @@
+divide : (Int, Int) -> Int
+divide = |a, b| a / b
+
+call_divide : () -> Int
+call_divide = || divide(10, 0)
+
+main : () -> Int
+main = || call_divide()

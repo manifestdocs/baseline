@@ -73,11 +73,12 @@ fn main() {
                      std::process::exit(1);
                  }
              };
-             let mut context = interpreter::Context::with_prelude(active_prelude);
+             let file_path = file.display().to_string();
+             let mut context = interpreter::Context::with_prelude_and_file(active_prelude, file_path);
 
              // Evaluate top-level definitions (types/functions)
              if let Err(e) = interpreter::eval(&root, &source, &mut context) {
-                 eprintln!("Runtime Error: {}", e);
+                 eprintln!("Runtime Error: {e}");
                  std::process::exit(1);
              }
 
@@ -99,7 +100,7 @@ fn main() {
                          }
                      }
                      Err(e) => {
-                         eprintln!("Runtime Error in main: {}", e);
+                         eprintln!("Runtime Error: {e}");
                          std::process::exit(1);
                      }
                  }
@@ -120,7 +121,7 @@ fn run_main<'a>(
     main_val: &interpreter::RuntimeValue<'a>,
     source: &str,
     context: &mut interpreter::Context<'a>,
-) -> Result<interpreter::RuntimeValue<'a>, String> {
+) -> Result<interpreter::RuntimeValue<'a>, interpreter::RuntimeError> {
     match main_val {
         interpreter::RuntimeValue::Function(_, main_body) => {
             context.enter_scope();
@@ -137,7 +138,7 @@ fn run_main<'a>(
             context.exit_scope();
             result
         }
-        _ => Err("'main' is not a function".to_string()),
+        _ => Err(interpreter::RuntimeError::from("'main' is not a function".to_string())),
     }
 }
 

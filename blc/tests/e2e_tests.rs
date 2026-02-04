@@ -65,6 +65,22 @@ fn assert_check_ok(file: &str) {
     );
 }
 
+fn assert_run_fails(file: &str, expected_fragments: &[&str]) {
+    let out = blc_run(file);
+    assert_eq!(
+        out.exit_code, 1,
+        "{file}: expected exit 1, got {}.\nstderr: {}",
+        out.exit_code, out.stderr,
+    );
+    for frag in expected_fragments {
+        assert!(
+            out.stderr.contains(frag),
+            "{file}: expected '{frag}' in stderr.\nstderr: {}",
+            out.stderr,
+        );
+    }
+}
+
 fn assert_check_has_errors(file: &str, expected_codes: &[&str]) {
     let out = blc_check(file);
     assert_eq!(
@@ -231,5 +247,22 @@ fn check_type_test() {
     assert_check_has_errors(
         "type_test.bl",
         &["TYP_001", "TYP_002", "TYP_003", "TYP_004", "TYP_005"],
+    );
+}
+
+// ===========================================================================
+// Runtime error tests — verify error format includes location and stack trace
+// ===========================================================================
+
+#[test]
+fn run_runtime_error_has_location_and_stack() {
+    assert_run_fails(
+        "runtime_error_test.bl",
+        &[
+            "Division by zero",
+            "runtime_error_test.bl:",
+            "at divide",
+            "at call_divide",
+        ],
     );
 }
