@@ -207,6 +207,15 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         sigs.insert("Fs.delete!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
     }
 
+    // -- Http builtins (effect: Http) --
+    if builtin_modules.contains(&"Http") {
+        sigs.insert("Http.get!".into(),     Type::Function(vec![Type::String], Box::new(Type::String)));
+        sigs.insert("Http.post!".into(),    Type::Function(vec![Type::String, Type::String], Box::new(Type::String)));
+        sigs.insert("Http.put!".into(),     Type::Function(vec![Type::String, Type::String], Box::new(Type::String)));
+        sigs.insert("Http.delete!".into(),  Type::Function(vec![Type::String], Box::new(Type::String)));
+        sigs.insert("Http.request!".into(), Type::Function(vec![Type::String, Type::String, Type::String], Box::new(Type::String)));
+    }
+
     // -- Math builtins (pure, no effect) --
     // Math functions accept both Int and Float at runtime; use Unknown args to avoid false positives.
     if builtin_modules.contains(&"Math") {

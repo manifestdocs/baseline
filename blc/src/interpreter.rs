@@ -117,7 +117,7 @@ fn err_at(msg: impl Into<String>, node: &Node, ctx: &Context) -> RuntimeError {
 /// All known module names in the language (for error messages).
 const ALL_MODULES: &[&str] = &[
     "Option", "Result", "String", "List", "Math",
-    "Console", "Log", "Time", "Random", "Env", "Fs",
+    "Console", "Log", "Time", "Random", "Env", "Fs", "Http",
 ];
 
 pub struct Context<'a> {

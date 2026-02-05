@@ -1,0 +1,27 @@
+// HTTP Client example — demonstrates the Http effect module
+@prelude(script)
+
+// Simple GET request
+fetch! : String -> {Http} String
+fetch! = |url| Http.get!(url)
+
+// POST with body
+post_data! : (String, String) -> {Http} String
+post_data! = |url, body| Http.post!(url, body)
+
+// Flexible request via method + url + body
+send_request! : (String, String, String) -> {Http} String
+send_request! = |method, url, body| Http.request!(method, url, body)
+
+// Combined effects: fetch and log
+fetch_and_log! : String -> {Http, Console} ()
+fetch_and_log! = |url| {
+  let body = Http.get!(url)
+  Console.println!(body)
+}
+
+main! : () -> {Http, Console} ()
+main! = || {
+  let response = Http.get!("https://httpbin.org/get")
+  Console.println!(response)
+}

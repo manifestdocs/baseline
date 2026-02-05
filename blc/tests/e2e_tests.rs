@@ -204,6 +204,12 @@ fn check_sum_type_test() {
     assert_check_ok("sum_type_test.bl");
 }
 
+// Http example should pass checking (effects properly declared)
+#[test]
+fn check_http_test() {
+    assert_check_ok("http_test.bl");
+}
+
 // Also verify that all runnable examples pass checking
 #[test]
 fn check_hello() {

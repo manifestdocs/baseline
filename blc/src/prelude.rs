@@ -35,7 +35,7 @@ impl Prelude {
         match self {
             Prelude::None | Prelude::Minimal => &[],
             Prelude::Pure | Prelude::Core => &["Math"],
-            Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs"],
+            Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Http"],
         }
     }
 
@@ -49,7 +49,7 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Math",
-                "Console", "Log", "Time", "Random", "Env", "Fs",
+                "Console", "Log", "Time", "Random", "Env", "Fs", "Http",
             ],
         }
     }
