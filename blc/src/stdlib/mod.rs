@@ -1,3 +1,4 @@
+pub mod json;
 pub mod list;
 pub mod option;
 pub mod result;
@@ -38,6 +39,9 @@ impl NativeRegistry {
         }
         if modules.contains(&"List") {
             list::register(&mut registry);
+        }
+        if modules.contains(&"Json") {
+            json::register(&mut registry);
         }
         registry
     }

@@ -226,6 +226,13 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         sigs.insert("Math.pow".into(),   Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
     }
 
+    // -- Json native methods (pure) --
+    if native_modules.contains(&"Json") {
+        sigs.insert("Json.parse".into(),            Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Json.to_string".into(),        Type::Function(vec![Type::Unknown], Box::new(Type::String)));
+        sigs.insert("Json.to_string_pretty".into(), Type::Function(vec![Type::Unknown], Box::new(Type::String)));
+    }
+
     // -- String native methods --
     if native_modules.contains(&"String") {
         sigs.insert("String.length".into(),      Type::Function(vec![Type::String], Box::new(Type::Int)));

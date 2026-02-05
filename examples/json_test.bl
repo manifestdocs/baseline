@@ -1,0 +1,34 @@
+// JSON module example — parse and serialize JSON data
+@prelude(script)
+
+main! : () -> {Console} ()
+main! = || {
+  // Parse a JSON object
+  let data = Json.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}")
+  Console.println!("name: ${data.name}")
+  Console.println!("age: ${data.age}")
+  Console.println!("active: ${data.active}")
+
+  // Parse a JSON array
+  let nums = Json.parse("[1, 2, 3]")
+  Console.println!("nums: ${nums}")
+
+  // Parse JSON null
+  let nothing = Json.parse("null")
+  Console.println!("null: ${nothing}")
+
+  // Serialize to compact JSON
+  let compact = Json.to_string(data)
+  Console.println!("compact: ${compact}")
+
+  // Serialize to pretty JSON
+  let pretty = Json.to_string_pretty(nums)
+  Console.println!("pretty:")
+  Console.println!(pretty)
+
+  // Roundtrip: parse -> serialize
+  let json_str = "{\"x\":1,\"y\":2}"
+  let obj = Json.parse(json_str)
+  let back = Json.to_string(obj)
+  Console.println!("roundtrip: ${back}")
+}

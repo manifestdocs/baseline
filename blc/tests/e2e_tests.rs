@@ -210,6 +210,28 @@ fn check_http_test() {
     assert_check_ok("http_test.bl");
 }
 
+// Json example should pass checking (pure functions, no effects)
+#[test]
+fn check_json_test() {
+    assert_check_ok("json_test.bl");
+}
+
+#[test]
+fn run_json_test() {
+    assert_run_ok(
+        "json_test.bl",
+        "name: Alice\n\
+         age: 30\n\
+         active: true\n\
+         nums: [1, 2, 3]\n\
+         null: Null\n\
+         compact: {\"active\":true,\"age\":30,\"name\":\"Alice\"}\n\
+         pretty:\n\
+         [\n  1,\n  2,\n  3\n]\n\
+         roundtrip: {\"x\":1,\"y\":2}\n",
+    );
+}
+
 // Also verify that all runnable examples pass checking
 #[test]
 fn check_hello() {

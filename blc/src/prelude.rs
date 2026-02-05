@@ -25,7 +25,7 @@ impl Prelude {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure | Prelude::Core | Prelude::Script => {
-                &["Option", "Result", "String", "List"]
+                &["Option", "Result", "String", "List", "Json"]
             }
         }
     }
@@ -45,10 +45,10 @@ impl Prelude {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure | Prelude::Core => {
-                &["Option", "Result", "String", "List", "Math"]
+                &["Option", "Result", "String", "List", "Json", "Math"]
             }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Math",
+                "Option", "Result", "String", "List", "Json", "Math",
                 "Console", "Log", "Time", "Random", "Env", "Fs", "Http",
             ],
         }
@@ -128,9 +128,9 @@ mod tests {
     #[test]
     fn pure_has_no_effects() {
         let p = Prelude::Pure;
-        assert_eq!(p.native_modules(), &["Option", "Result", "String", "List"]);
+        assert_eq!(p.native_modules(), &["Option", "Result", "String", "List", "Json"]);
         assert_eq!(p.builtin_modules(), &["Math"]);
-        assert_eq!(p.type_modules(), &["Option", "Result", "String", "List", "Math"]);
+        assert_eq!(p.type_modules(), &["Option", "Result", "String", "List", "Json", "Math"]);
     }
 
     #[test]
