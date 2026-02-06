@@ -439,6 +439,64 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     });
 
+    // -- Constructors: produce concrete generic types via inference --
+
+    // Some : (A) -> Option<A>
+    schemas.insert("Some".into(), GenericSchema {
+        type_params: 1,
+        build: |ctx| {
+            let a = ctx.fresh_var();
+            Type::Function(
+                vec![a.clone()],
+                Box::new(Type::Enum(
+                    "Option".to_string(),
+                    vec![
+                        ("Some".to_string(), vec![a]),
+                        ("None".to_string(), vec![]),
+                    ],
+                )),
+            )
+        },
+    });
+
+    // Ok : (A) -> Result<A, E>
+    schemas.insert("Ok".into(), GenericSchema {
+        type_params: 2,
+        build: |ctx| {
+            let a = ctx.fresh_var();
+            let e = ctx.fresh_var();
+            Type::Function(
+                vec![a.clone()],
+                Box::new(Type::Enum(
+                    "Result".to_string(),
+                    vec![
+                        ("Ok".to_string(), vec![a]),
+                        ("Err".to_string(), vec![e]),
+                    ],
+                )),
+            )
+        },
+    });
+
+    // Err : (E) -> Result<A, E>
+    schemas.insert("Err".into(), GenericSchema {
+        type_params: 2,
+        build: |ctx| {
+            let a = ctx.fresh_var();
+            let e = ctx.fresh_var();
+            Type::Function(
+                vec![e.clone()],
+                Box::new(Type::Enum(
+                    "Result".to_string(),
+                    vec![
+                        ("Ok".to_string(), vec![a]),
+                        ("Err".to_string(), vec![e]),
+                    ],
+                )),
+            )
+        },
+    });
+
     schemas
 }
 

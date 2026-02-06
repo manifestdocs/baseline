@@ -1500,3 +1500,128 @@ main = {
 }
 "#);
 }
+
+// ============================================================
+// Generic Type Enforcement Tests
+// ============================================================
+
+#[test]
+fn generic_some_produces_concrete_option() {
+    // Some(42) should produce Option<Int>, not Option<Unknown>
+    check_no_errors(r#"
+@prelude(core)
+main : () -> Int
+main = Option.unwrap(Some(42))
+"#);
+}
+
+#[test]
+fn generic_ok_produces_concrete_result() {
+    // Ok("hello") should produce Result<String, E>, not Result<Unknown, Unknown>
+    check_no_errors(r#"
+@prelude(core)
+main : () -> String
+main = Result.unwrap(Ok("hello"))
+"#);
+}
+
+#[test]
+fn generic_some_match_extracts_concrete_type() {
+    // match on Some(42) should bind x as Int
+    check_no_errors(
+        "@prelude(core)\n\
+         main : () -> Int\n\
+         main = {\n\
+           match Some(42)\n\
+             Some(x) -> x + 1\n\
+             None -> 0\n\
+         }"
+    );
+}
+
+#[test]
+fn generic_ok_match_extracts_concrete_type() {
+    // match on Ok(42) should bind x as Int
+    check_no_errors(
+        "@prelude(core)\n\
+         main : () -> Int\n\
+         main = {\n\
+           match Ok(42)\n\
+             Ok(x) -> x + 1\n\
+             Err(_) -> 0\n\
+         }"
+    );
+}
+
+#[test]
+fn generic_option_type_mismatch_in_match() {
+    // Option<Int> matched — using x (Int) where String expected should error
+    check_has_error(
+        "@prelude(core)\n\
+         main : () -> Int\n\
+         main = {\n\
+           let opt : Option<Int> = Some(42)\n\
+           match opt\n\
+             Some(x) -> String.length(x)\n\
+             None -> 0\n\
+         }",
+        "TYP_008"
+    );
+}
+
+#[test]
+fn generic_enum_payload_compatibility_checked() {
+    // types_compatible should reject Option<Int> vs Option<String>
+    check_has_error(
+        "@prelude(core)\n\
+         identity : (Option<String>) -> Option<String>\n\
+         identity = |x| x\n\
+         \n\
+         main : () -> Option<String>\n\
+         main = identity(Some(42))",
+        "TYP_008"
+    );
+}
+
+#[test]
+fn generic_list_map_result_type_enforced() {
+    // List.map([1,2,3], |x| x > 0) returns List<Bool>, not assignable to List<Int>
+    check_has_error(
+        "@prelude(core)\n\
+         sum : (List<Int>) -> Int\n\
+         sum = |xs| List.fold(xs, 0, |acc, x| acc + x)\n\
+         \n\
+         main : () -> Int\n\
+         main = {\n\
+           let bools = List.map([1, 2, 3], |x| x > 0)\n\
+           sum(bools)\n\
+         }",
+        "TYP_008"
+    );
+}
+
+#[test]
+fn generic_try_expression_preserves_concrete_type() {
+    // Some(42)? should produce Int, usable in arithmetic
+    check_ok(
+        "@prelude(core)\n\
+         main : () -> Option<Int>\n\
+         main = {\n\
+           let val = Some(42)?\n\
+           Some(val + 1)\n\
+         }"
+    );
+}
+
+#[test]
+fn generic_err_produces_concrete_result() {
+    check_no_errors(
+        "@prelude(core)\n\
+         main : () -> String\n\
+         main = {\n\
+           match Err(\"oops\")\n\
+             Ok(_) -> \"ok\"\n\
+             Err(msg) -> msg\n\
+         }"
+    );
+}

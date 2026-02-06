@@ -386,14 +386,23 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
     sigs
 }
 
-/// Check if two types are compatible, treating Unknown as a wildcard
-/// and same-named Enums as compatible (v0.1: full generic unification deferred).
+/// Check if two types are compatible, treating Unknown as a wildcard.
+/// Same-named Enums check payload types recursively for generic enforcement.
 fn types_compatible(a: &Type, b: &Type) -> bool {
     if a == b { return true; }
     if *a == Type::Unknown || *b == Type::Unknown { return true; }
     match (a, b) {
         (Type::Var(_), _) | (_, Type::Var(_)) => true,
-        (Type::Enum(na, _), Type::Enum(nb, _)) => na == nb,
+        (Type::Enum(na, va), Type::Enum(nb, vb)) => {
+            if na != nb { return false; }
+            // Same-named enums: check payload types are compatible
+            for ((_, pa), (_, pb)) in va.iter().zip(vb.iter()) {
+                for (ta, tb) in pa.iter().zip(pb.iter()) {
+                    if !types_compatible(ta, tb) { return false; }
+                }
+            }
+            true
+        }
         (Type::List(ia), Type::List(ib)) => types_compatible(ia, ib),
         _ => false,
     }
@@ -888,9 +897,17 @@ fn check_node(
                 }
             }
 
-            // Try generic schema inference for module method calls (e.g. List.map)
-            let qualified_name = extract_qualified_name(&func_node, source);
-            if let Some(ref qname) = qualified_name {
+            // Try generic schema inference for module methods (List.map) and constructors (Some, Ok)
+            let schema_name = extract_qualified_name(&func_node, source)
+                .or_else(|| {
+                    let k = func_node.kind();
+                    if k == "identifier" || k == "type_identifier" {
+                        func_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+                    } else {
+                        None
+                    }
+                });
+            if let Some(ref qname) = schema_name {
                 if let Some(schema) = symbols.lookup_generic_schema(qname) {
                     let mut ctx = InferCtx::new();
                     let instantiated = (schema.build)(&mut ctx);
@@ -1750,22 +1767,34 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
             let ctor_name_node = node.child(0).unwrap();
             let ctor_name = ctor_name_node.utf8_text(source.as_bytes()).unwrap();
 
-            // Look up constructor to get payload types
-            if let Some(Type::Function(param_types, _)) = symbols.lookup(ctor_name).cloned() {
-                // Bind each sub-pattern to its payload type
-                let mut pattern_idx = 0;
-                let child_count = node.child_count();
-                for ci in 0..child_count {
-                    let child = node.child(ci).unwrap();
-                    if child.kind() != "type_identifier" && child.kind() != "(" && child.kind() != ")" && child.kind() != "," {
-                        if pattern_idx < param_types.len() {
-                            check_pattern(&child, &param_types[pattern_idx], source, symbols, diagnostics);
-                            pattern_idx += 1;
-                        }
+            // Extract payload types from the expected enum type if available,
+            // otherwise fall back to the constructor's signature in the symbol table.
+            let payload_types: Vec<Type> = if let Type::Enum(_, variants) = expected_type {
+                variants.iter()
+                    .find(|(name, _)| name == ctor_name)
+                    .map(|(_, payloads)| payloads.clone())
+                    .unwrap_or_default()
+            } else {
+                symbols.lookup(ctor_name)
+                    .and_then(|ty| match ty {
+                        Type::Function(params, _) => Some(params.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default()
+            };
+
+            // Bind each sub-pattern to its payload type
+            let mut pattern_idx = 0;
+            let child_count = node.child_count();
+            for ci in 0..child_count {
+                let child = node.child(ci).unwrap();
+                if child.kind() != "type_identifier" && child.kind() != "(" && child.kind() != ")" && child.kind() != "," {
+                    if pattern_idx < payload_types.len() {
+                        check_pattern(&child, &payload_types[pattern_idx], source, symbols, diagnostics);
+                        pattern_idx += 1;
                     }
                 }
             }
-            // If constructor not found, sub-patterns get Unknown type
         },
         "literal" => {
              if let Some(child) = node.named_child(0) {
