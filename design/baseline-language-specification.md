@@ -4,6 +4,8 @@
 
 > A fast, verifiable, LLM-native programming language.
 
+> For aspirational features planned for v0.2 and beyond (memory model, compilation targets, advanced testing, concurrency, etc.), see [baseline-language-vision.md](baseline-language-vision.md).
+
 ---
 
 ## Table of Contents
@@ -27,34 +29,17 @@
     - 9.1 Testing Philosophy
     - 9.2 Inline Tests (Unit Tests)
     - 9.3 BDD Specifications
-    - 9.4 Table-Driven Tests
-    - 9.5 Async and Effectful Tests
-    - 9.6 Property-Based Testing
-    - 9.7 Doc Tests
-    - 9.8 Snapshot Testing
-    - 9.9 Test Organization
-    - 9.10 Assertions and Matchers
-    - 9.11 Test Execution
-    - 9.12 Coverage and Mutation Testing
-    - 9.13 Test Output for LLMs
-    - 9.14 Best Practices
-10. [Memory Model](#10-memory-model)
-    - 10.1-10.5 Regions, Persistent Data, Arenas
-    - 10.6 FBIP: Functional-But-In-Place
-11. [Compilation](#11-compilation)
-12. [Tracing and Debugging](#12-tracing-and-debugging)
-13. [Language Server Protocol and Compiler API](#13-language-server-protocol-and-compiler-api)
-    - 13.1-13.6 Standard LSP, Query API, Sessions
-    - 13.7 SARIF Diagnostics
-    - 13.8 Constrained Decoding API
-14. [Standard Library](#14-standard-library)
-15. [Grammar](#15-grammar)
+    - 9.4 Async and Effectful Tests
+    - 9.5 Test Organization
+    - 9.6 Assertions and Matchers
+    - 9.7 Test Output for LLMs
+    - 9.8 Best Practices
+10. [Language Server Protocol and Compiler API](#10-language-server-protocol-and-compiler-api)
+    - 10.1-10.6 Standard LSP, Query API, Sessions
+11. [Standard Library](#11-standard-library)
+12. [Grammar](#12-grammar)
 - [Appendix A: Compiler Errors](#appendix-a-compiler-errors)
 - [Appendix B: Trace Format](#appendix-b-trace-format)
-- [Appendix C: WebAssembly Interface](#appendix-c-webassembly-interface)
-- [Appendix D: Concurrency Model](#appendix-d-concurrency-model)
-- [Appendix E: Future Considerations](#appendix-e-future-considerations)
-- [Appendix F: LLM Training Bootstrap](#appendix-f-llm-training-bootstrap)
 
 ---
 
@@ -73,7 +58,7 @@ Baseline is designed around three core principles:
 ### 1.2 Goals
 
 - **Fast compilation**: Development builds in <200ms
-- **Fast execution**: Within 10% of C performance
+- **Fast execution**: Compiled to native with zero-cost effects and refinements
 - **Small binaries**: Typical services <5MB
 - **Verified correctness**: Specifications checked at compile time
 - **Portable deployment**: Primary target is WebAssembly
@@ -252,14 +237,19 @@ match get_user(id)
 
 ```baseline
 // THE way
-let name = user?.name ?? "Anonymous"
+match user
+  Some(u) -> u.name
+  None    -> "Anonymous"
+
+// Or with combinators
+user |> Option.map(|u| u.name) |> Option.unwrap_or("Anonymous")
 
 // Type system enforces it
 find_user : Id -> User?  // Returns Option<User>
 
 // NOT supported:
 // null      // Keyword doesn't exist
-// undefined // Keyword doesn't exist  
+// undefined // Keyword doesn't exist
 // nil       // Keyword doesn't exist
 ```
 
@@ -267,9 +257,9 @@ find_user : Id -> User?  // Returns Option<User>
 
 ```baseline
 // THE way
-let doubled = numbers.map(|x| x * 2)
-let evens = numbers.filter(|x| x % 2 == 0)
-let sum = numbers.fold(0, |acc, x| acc + x)
+let doubled = List.map(numbers, |x| x * 2)
+let evens = List.filter(numbers, |x| x % 2 == 0)
+let sum = List.fold(numbers, 0, |acc, x| acc + x)
 
 // For loops are ONLY for effects
 for item in items do
@@ -279,7 +269,7 @@ for item in items do
 // NOT allowed - compiler error:
 let results = []
 for x in items do
-  results.push(transform(x))  // Error: use .map() instead
+  List.push(results, transform(x))  // Error: use List.map() instead
 ```
 
 **Chained Operations**: Pipes, not nesting
@@ -288,7 +278,7 @@ for x in items do
 // THE way
 let result = input
   |> parse
-  |> validate  
+  |> validate
   |> transform
 
 // Discouraged - lint warning:
@@ -341,8 +331,10 @@ Some patterns genuinely have multiple valid forms based on context:
 **Pattern Matching Depth**
 
 ```baseline
-// Simple: inline operator
-let name = user?.name ?? "Anonymous"
+// Simple: inline match
+let name = match user
+  Some(u) -> u.name
+  None    -> "Anonymous"
 
 // Complex: explicit match
 let result = match response
@@ -357,142 +349,37 @@ let result = match response
 **Function Body Style**
 
 ```baseline
-// Single expression: no braces
-square = |x| x * x
+// Expression body (short functions)
+double : Int -> Int
+double = |x| x * 2
 
-// Multiple statements: braces required
+// Block body (multi-step)
+process : Input -> Output
 process = |input| {
-  let validated = validate(input)
-  let transformed = transform(validated)
-  save(transformed)
+  let parsed = parse(input)
+  let validated = validate(parsed)
+  transform(validated)
 }
 ```
-
-**Type Annotation Placement**
-
-```baseline
-// Separate line (preferred for public APIs)
-calculate_tax : (Income, TaxBracket) -> Money
-calculate_tax = |income, bracket| ...
-
-// Inline (acceptable for locals)
-let count: Int = items.len
-```
-
-#### 1.6.3 The Canonical Formatter
-
-`baseline fmt` enforces the one true style. **It has no configuration options.**
-
-```bash
-$ baseline fmt src/
-Formatted 12 files
-```
-
-There is no configuration file for formatting:
-
-```toml
-# baseline.toml
-
-# This section does not exist:
-# [format]
-# indent_size = 4          # No
-# max_line_width = 120     # No  
-# brace_style = "k&r"      # No
-# trailing_commas = true   # No (always true, not configurable)
-```
-
-Formatting rules are defined by the language specification, not user preference.
-
-**Canonical formatting includes:**
-- 2-space indentation
-- 100-character line width
-- Trailing commas in multi-line constructs
-- Consistent spacing around operators
-- Sorted imports (stdlib, then external, then local)
-
-#### 1.6.4 The Linter
-
-`baseline lint` warns on non-idiomatic patterns that are syntactically valid but discouraged:
-
-```bash
-$ baseline lint src/
-
-src/api.bl:12:5 warning[W001]: use .map() instead of accumulator loop
-   |
-12 |   for x in items do
-   |   ^^^ consider: items.map(|x| transform(x))
-
-src/api.bl:45:1 warning[W002]: prefer explicit imports
-   |
-45 | import Http.*
-   | ^^^^^^^^^^^^^ list specific imports: import Http.{get!, post!}
-
-src/api.bl:67:5 warning[W003]: use pipe for transformation chain
-   |  
-67 |   let r = c(b(a(input)))
-   |           ^^^^^^^^^^^^^^ consider: input |> a |> b |> c
-
-Warnings: 3
-```
-
-Lint warnings can be suppressed with justification:
-
-```baseline
-@allow(W001, "performance critical hot loop")
-for i in 0..len do
-  buffer.write_byte(data.get_unchecked(i))
-```
-
-#### 1.6.5 Consistency Guarantees
-
-| Aspect | Guarantee |
-|--------|-----------|
-| String formatting | Always `"${expr}"` |
-| Error propagation | Always `?` |
-| Null safety | Always `Option<T>` |
-| Iteration | Always combinators (map/filter/fold) |
-| Chaining | Always `\|>` pipes |
-| Formatting | Always `baseline fmt` canonical output |
-| Imports | Always explicit (wildcard warns) |
-
-**The result**: Any Baseline codebase looks like any other Baseline codebase. LLMs trained on Baseline code see consistent patterns. Humans reading Baseline code have no style surprises.
 
 ### 1.7 Core Design Principles
 
-Beyond syntax and tooling, Baseline embodies two fundamental design principles that shape how programs are structured.
-
 #### 1.7.1 Composition Over Inheritance
 
-Baseline has no classes, no inheritance hierarchy, no `extends`, no `super`, no `instanceof`. These concepts do not exist in the language.
+Baseline has no classes, no inheritance, no `extends`. Instead, it uses:
 
-**Why**: Inheritance creates rigid hierarchies, hidden dependencies, and the fragile base class problem. For LLM code generation, inheritance hierarchies are particularly problematic—small changes cascade unpredictably.
-
-**Instead of inheritance, Baseline provides:**
-
-**Composition via Records**
+**Records for Data**
 
 ```baseline
 // NOT this (doesn't exist):
-// class Dog extends Animal { }
+// class User extends Entity { ... }
 
-// THIS: explicit composition
-type Animal = {
-  name: String,
-  age: Int,
-}
-
-type Dog = {
-  animal: Animal,     // Composition
-  breed: String,
-  trained: Bool,
-}
-
-// Access composed data explicitly
-let dog = Dog { animal: { name: "Rex", age: 3 }, breed: "Labrador", trained: true }
-dog.animal.name  // "Rex"
+// THIS: composition via records
+type Entity = { id: Id, created_at: Timestamp }
+type User = { entity: Entity, name: String, email: Email }
 ```
 
-**Polymorphism via Row Types**
+**Structural Typing for Polymorphism**
 
 ```baseline
 // NOT this (doesn't exist):
@@ -561,9 +448,9 @@ This principle, articulated by Alexis King, states: **use types to make illegal 
 // BAD: Validation doesn't prevent future misuse
 process_email_bad : String -> {Http} Result
 process_email_bad = |email|
-  if !email.contains("@") then
+  if not String.contains(email, "@") then
     return Err(InvalidEmail)
-  
+
   // email is still just a String
   // nothing prevents passing an invalid string here
   // the validation might not happen in all code paths
@@ -577,7 +464,7 @@ send_newsletter!(user_input)  // Oops, forgot to validate!
 
 ```baseline
 // GOOD: The type IS the validation
-type Email = String where self.matches(r".+@.+\..+")
+type Email = String where String.matches(self, r".+@.+\..+")
 
 process_email : Email -> {Http} Result
 process_email = |email|
@@ -589,12 +476,12 @@ process_email = |email|
 handle_signup! : Request -> {Http} Response
 handle_signup! = |req|
   let raw_email = req.body.email  // String
-  
+
   match Email.parse(raw_email)
-    Ok(email) -> 
+    Ok(email) ->
       process_email(email)  // Type-safe, guaranteed valid
       Ok(Response.success())
-    Err(_) -> 
+    Err(_) ->
       Ok(Response.bad_request("Invalid email"))
 ```
 
@@ -623,10 +510,10 @@ get_user(order_id)  // Compile error: expected UserId, got OrderId
 
 
 // Parse, don't validate: Collections
-type NonEmpty<T> = List<T> where self.len > 0
+type NonEmpty<T> = List<T> where List.len(self) > 0
 
 head : NonEmpty<T> -> T
-head = |list| list.get(0)!  // Safe! List is guaranteed non-empty
+head = |list| Option.unwrap(List.get(list, 0))  // Safe! List is guaranteed non-empty
 
 // Can't call head on empty list - type prevents it
 head([])        // Compile error: [] is not NonEmpty
@@ -645,7 +532,7 @@ send_newsletter! = |user| ...
 verify! : (UnverifiedUser, Token) -> {Db} VerifiedUser?
 verify! = |user, token|
   if token == user.token then
-    Some({ email: Email.parse(user.email)!, verified_at: Time.now!() })
+    Some({ email: Result.unwrap(Email.parse(user.email)), verified_at: Time.now!() })
   else
     None
 ```
@@ -663,7 +550,7 @@ handle_request! = |raw|
   let request = Request.parse(raw)?        // Validates structure
   let user_id = UserId.parse(request.user_id)?  // Validates ID
   let email = Email.parse(request.email)?  // Validates email
-  
+
   // Internal processing uses parsed types
   // No validation needed - types guarantee correctness
   process!(user_id, email)
@@ -703,7 +590,7 @@ type Connection =
 
 // Can only construct valid states:
 // Disconnected - no socket, no error
-// Connected(socket) - has socket, no error  
+// Connected(socket) - has socket, no error
 // Error({...}) - has error info, no socket
 
 
@@ -731,7 +618,7 @@ Baseline source files are UTF-8 encoded. The file extension is `.bl`.
 ```baseline
 // Single line comment
 
-/* 
+/*
    Multi-line comment
    Can be nested /* like this */
 */
@@ -766,7 +653,7 @@ Reserved words:
 ```
 let match if then else where with
 type alias effect module import export
-true false
+true false not
 ```
 
 ### 2.4 Literals
@@ -865,7 +752,7 @@ true, false     // Bool
 |----------|-------------|------------|
 | `&&` | Logical AND | 3 |
 | `\|\|` | Logical OR | 2 |
-| `!` (unary) | Logical NOT | 9 |
+| `not` | Logical NOT | 9 |
 
 #### Pipeline and Composition
 
@@ -881,8 +768,6 @@ true, false     // Bool
 | Operator | Description |
 |----------|-------------|
 | `?` | Propagate error (postfix) |
-| `!` | Unwrap or panic (postfix) |
-| `??` | Unwrap with default (infix) |
 
 ### 2.6 Delimiters and Punctuation
 
@@ -947,14 +832,15 @@ let result = match x
 let result = match x Some(v) -> v None -> default
 
 // Also valid (explicit block)
-let result = match x { Some(v) -> v; None -> default }
+let result = match x {
+  Some(v) -> v
+  None -> default
+}
 ```
 
-This prevents copy-paste errors and makes automated refactoring reliable.
+#### Statement Terminators
 
-#### Semicolon Inference
-
-Semicolons are **optional** between statements when separated by newlines:
+Baseline uses newlines as statement separators, but semicolons are available:
 
 ```baseline
 // Without semicolons (preferred)
@@ -1023,8 +909,8 @@ List<Int>                   // Homogeneous list
 
 // Usage
 let nums = [1, 2, 3]
-nums.len                    // 3
-nums.get(0)                 // Some(1)
+List.len(nums)              // 3
+List.get(nums, 0)           // Some(1)
 [0, ..nums]                 // Prepend: [0, 1, 2, 3]
 [..nums, 4]                 // Append: [1, 2, 3, 4]
 ```
@@ -1054,8 +940,7 @@ greet({ name: "Carol", role: "Admin" }) // Also works
 ```baseline
 Int -> String                   // Function taking Int, returning String
 (Int, Int) -> Int               // Function taking two Ints
-{Http} Int -> String            // Effectful function
-Int -> Int -> Int               // Curried function (right-associative)
+Int -> {Http} String            // Effectful function
 ```
 
 ### 3.3 Algebraic Data Types
@@ -1112,8 +997,8 @@ Refinement types add constraints to base types:
 
 ```baseline
 type Port = Int where 1 <= self <= 65535
-type Email = String where self.matches(r".+@.+\..+")
-type NonEmpty<T> = List<T> where self.len > 0
+type Email = String where String.matches(self, r".+@.+\..+")
+type NonEmpty<T> = List<T> where List.len(self) > 0
 type Positive = Int where self > 0
 type Percentage = Float where 0.0 <= self <= 100.0
 ```
@@ -1140,16 +1025,16 @@ Refinement operators:
 ```baseline
 where self > 0                  // Comparison
 where self != ""                // Inequality
-where self.len > 0              // Method call
-where self.matches(regex)       // Pattern matching
-where self.contains(x)          // Collection membership
+where List.len(self) > 0        // Function call on self
+where String.matches(self, regex) // Pattern matching
+where String.contains(self, x)  // Collection membership
 where self >= other             // Reference other fields (in records)
 where predicate(self)           // Custom predicate function
 ```
 
 #### Regex Subset for Refinements
 
-When using `matches()` in refinement types, Baseline uses a **deterministic regex subset** to ensure consistent behavior between compile-time checking and runtime validation:
+When using `String.matches()` in refinement types, Baseline uses a **deterministic regex subset** to ensure consistent behavior between compile-time checking and runtime validation:
 
 ```baseline
 // Supported regex features
@@ -1187,10 +1072,10 @@ type ValidEmail = String where is_valid_email(self)
 // The predicate has full language power
 is_valid_email : String -> Bool
 is_valid_email = |s|
-  let parts = s.split("@")
-  parts.len == 2 
-    && parts.get(0).map(|p| p.len > 0) == Some(true)
-    && parts.get(1).map(|p| p.contains(".")) == Some(true)
+  let parts = String.split(s, "@")
+  List.len(parts) == 2
+    && List.get(parts, 0) |> Option.map(|p| String.len(p) > 0) == Some(true)
+    && List.get(parts, 1) |> Option.map(|p| String.contains(p, ".")) == Some(true)
 ```
 
 This ensures:
@@ -1204,14 +1089,12 @@ These are so common they have special syntax:
 
 ```baseline
 T?          // Sugar for Option<T>
-T!E         // Sugar for Result<T, E>
-T!          // Sugar for Result<T, Error> (default error type)
 
 // Usage
 find : Id -> User?
 find = |id| ...
 
-parse : String -> Int!ParseError
+parse : String -> Result<Int, ParseError>
 parse = |s| ...
 ```
 
@@ -1235,8 +1118,8 @@ export greet : String -> String
 greet = |name| "Hello, ${name}"
 
 // Annotation optional (local)
-let nums = [1, 2, 3]              // Inferred as List<Int>
-let doubled = nums.map(|x| x * 2) // Inferred
+let nums = [1, 2, 3]                        // Inferred as List<Int>
+let doubled = List.map(nums, |x| x * 2)     // Inferred
 ```
 
 ---
@@ -1268,7 +1151,7 @@ For critical boundaries, explicit pre- and post-conditions can be added:
 
 ```baseline
 // "Parse, Don't Validate"
-// Instead of validating 'email' inside the function, 
+// Instead of validating 'email' inside the function,
 // require a valid Email type as input.
 send_email! : Email -> {Http} Result
 ```
@@ -1287,7 +1170,7 @@ let [first, ..rest] = get_list()
 let x: Int = 42
 
 // Let is an expression
-let result = 
+let result =
   let x = 10
   let y = 20
   x + y           // result = 30
@@ -1395,10 +1278,6 @@ f(x, y, z)
 // Named arguments (order-independent)
 create_user(name: "Alice", age: 30)
 create_user(age: 30, name: "Alice")  // Same
-
-// Partial application with named arguments
-let create_adult = create_user(age: _)
-create_adult(name: "Bob")  // Fills in name, uses placeholder age
 ```
 
 ### 4.7 Field Access
@@ -1406,11 +1285,7 @@ create_adult(name: "Bob")  // Fills in name, uses placeholder age
 ```baseline
 user.name               // Record field
 tuple.0                 // Tuple index
-list.len                // Property
-option.unwrap()         // Method call
-
-// Chained
-response.body.data.users.first
+response.body.data.users.first  // Chained field access
 ```
 
 ### 4.8 Error Handling Expressions
@@ -1419,11 +1294,12 @@ response.body.data.users.first
 // Propagate error (return early if Err/None)
 let value = fallible_operation()?
 
-// Unwrap or panic
-let value = maybe_none!
+// Unwrap (panics if None/Err — use in tests or when logically guaranteed)
+let value = Option.unwrap(maybe_none)
+let value = Result.unwrap(fallible_result)
 
 // Unwrap with default
-let value = maybe_none ?? default_value
+let value = Option.unwrap_or(maybe_none, default_value)
 
 // Try-catch style
 try
@@ -1460,8 +1336,8 @@ quicksort : List<Int> -> List<Int>
 quicksort = |list| match list
   [] -> []
   [pivot, ..rest] ->
-    let smaller = rest.filter(|x| x < pivot)
-    let larger = rest.filter(|x| x >= pivot)
+    let smaller = List.filter(rest, |x| x < pivot)
+    let larger = List.filter(rest, |x| x >= pivot)
     quicksort(smaller) ++ [pivot] ++ quicksort(larger)
 ```
 
@@ -1474,7 +1350,7 @@ quicksort = |list| match list
 |(x, y)| x + y              // Destructuring
 
 // With type annotations
-|x: Int| -> String { x.to_string() }
+|x: Int| -> String { Int.to_string(x) }
 
 // Multi-line
 |request| {
@@ -1493,11 +1369,11 @@ Functions that perform side effects are marked with `!`:
 fetch_user! : Id -> {Http, Log} User?
 fetch_user! = |id|
   Log.debug!("Fetching user ${id}")
-  Http.get!("/users/${id}")?.decode()
+  Http.get!("/users/${id}")? |> Response.decode
 
 // Calling effectful functions
 main! : {Console, Http} ()
-main! = 
+main! =
   let user = fetch_user!(42)?
   Console.print!("Got user: ${user.name}")
 ```
@@ -1521,33 +1397,12 @@ map = |list, f| match list
   [x, ..xs] -> [f(x), ..map(xs, f)]
 
 // With constraints
-compare : T -> T -> Ordering where T: Ord
-compare = |a, b| a.compare(b)
+compare : (T, T) -> Ordering where T: Ord
+compare = |a, b| Ord.compare(a, b)
 
 // Multiple type parameters
 zip : (List<A>, List<B>) -> List<(A, B)>
 zip = |as, bs| ...
-```
-
-### 5.5 Currying and Partial Application
-
-All functions are curried by default:
-
-```baseline
-add : Int -> Int -> Int
-add = |a| |b| a + b
-
-// These are equivalent
-add(1)(2)
-add(1, 2)
-
-// Partial application
-let add_one = add(1)
-add_one(5)  // 6
-
-// Explicit partial application with placeholders
-let divide_by_two = divide(_, 2)
-divide_by_two(10)  // 5
 ```
 
 ---
@@ -1565,8 +1420,8 @@ effect Console {
 }
 
 effect Http {
-  get! : String -> Response!HttpError
-  post! : (String, Body) -> Response!HttpError
+  get! : String -> Result<Response, HttpError>
+  post! : (String, Body) -> Result<Response, HttpError>
 }
 
 effect Time {
@@ -1591,7 +1446,7 @@ log_message! : String -> {Console} ()
 log_message! = |msg| Console.print!("[LOG] ${msg}")
 
 // Multiple effects
-fetch_with_logging! : String -> {Http, Console} Response!
+fetch_with_logging! : String -> {Http, Console} Result<Response, Error>
 fetch_with_logging! = |url|
   Console.print!("Fetching ${url}")
   let response = Http.get!(url)?
@@ -1613,11 +1468,11 @@ Effects are provided at the edges of the program:
 
 ```baseline
 main! : () -> ()
-main! = 
+main! =
   let http = Http.default()
   let console = Console.stdout()
   let time = Time.system()
-  
+
   run_app!() with { http, console, time }
 
 // Custom handlers for testing
@@ -1626,12 +1481,12 @@ test "fetch user" =
     ("/users/1", Ok({ id: 1, name: "Alice" }))
   ])
   let mock_console = Console.buffer()
-  
-  let result = fetch_with_logging!("/users/1") 
+
+  let result = fetch_with_logging!("/users/1")
     with { http: mock_http, console: mock_console }
-  
+
   expect result == Ok({ id: 1, name: "Alice" })
-  expect mock_console.output.contains("Fetching")
+  expect String.contains(mock_console.output, "Fetching")
 ```
 
 ### 6.4 Effect Inference
@@ -1689,18 +1544,18 @@ module MyScript
 import Baseline.Effects.*
 
 main! : () -> ()
-main! = 
+main! =
   let console = Console.stdout()
   let fs = Fs.system()
   let http = Http.default()
   let time = Time.system()
   let random = Random.system()
   let env = Env.system()
-  
+
   run!() with { console, fs, http, time, random, env }
 
 run! : () -> {Console, Fs, Http, Time, Random, Env} ()
-run! = 
+run! =
   Console.print!("Hello!")
   // ... actual logic
 ```
@@ -1730,11 +1585,11 @@ main! =
 module MyApi
 
 // Db, Http, Log, etc. are all available without setup
-main! = 
+main! =
   let app = Router.new()
     |> Router.get("/health", || Ok({ status: "ok" }))
     |> Router.get("/users", || Db.query!("SELECT * FROM users"))
-  
+
   Server.listen!(8080, app)
 ```
 
@@ -1746,7 +1601,7 @@ Projects can define their own preludes:
 // In baseline.toml
 [prelude.mycompany]
 effects = ["Console", "Log", "Http", "Db", "Metrics"]
-handlers = { 
+handlers = {
   Log = "MyCompany.Logging.structured",
   Metrics = "MyCompany.Observability.datadog"
 }
@@ -1757,7 +1612,7 @@ handlers = {
 module MyService
 
 // Uses company-standard logging and metrics automatically
-main! = 
+main! =
   Log.info!("Starting service")
   Metrics.increment!("service.starts")
   ...
@@ -1767,7 +1622,7 @@ This dramatically reduces boilerplate for LLM-generated code while maintaining e
 
 ---
 
-### 6.6 Row Polymorphism
+### 6.8 Row Polymorphism
 
 Baseline's effect system is built on **row polymorphism**. This enables:
 
@@ -1780,7 +1635,7 @@ Baseline's effect system is built on **row polymorphism**. This enables:
 map : (List<a, e>, a -> {e} b) -> {e} List<b, e>
 ```
 
-### 6.7 Direct Style
+### 6.9 Direct Style
 
 Baseline compiles algebraic effects to **Direct Style** code (using standard control flow or delimited continuations), avoiding the "colored function" problem of async/await.
 
@@ -1832,7 +1687,7 @@ greet = |name| "Hello, ${name}"
 
 // Private (not exported)
 helper : String -> String
-helper = |s| s.trim()
+helper = |s| String.trim(s)
 
 // Export types
 export type User = { name: String, age: Int }
@@ -1910,12 +1765,12 @@ Specification attributes:
 ```baseline
 @spec User
 @invariant self.age >= 0
-@invariant self.email.contains("@")
+@invariant String.contains(self.email, "@")
 
 type User = {
-  name: String where self.len > 0,
+  name: String where String.len(self) > 0,
   age: Int where self >= 0,
-  email: String where self.matches(r".+@.+"),
+  email: String where String.matches(self, r".+@.+"),
 }
 ```
 
@@ -1953,14 +1808,14 @@ type Endpoints = {
 // Implementation
 implement Endpoints = {
   list_users = || Db.query!("SELECT * FROM users"),
-  
-  get_user = |id| 
+
+  get_user = |id|
     Db.query_one!("SELECT * FROM users WHERE id = ?", id)
     |> Option.ok_or(NotFound),
-  
+
   create_user = |body|
     body |> validate? |> Db.insert!("users"),
-    
+
   delete_user = |id|
     Db.delete!("users", id) |> Bool.then(() | NotFound),
 }
@@ -1975,7 +1830,7 @@ $ baseline check
 
 Checking specifications...
   ✓ divide: precondition verified
-  ✓ divide: postcondition verified  
+  ✓ divide: postcondition verified
   ✓ User: invariants verified
   ✓ UserApi: all routes type-check
 
@@ -1989,16 +1844,16 @@ $ baseline check
 
 Checking specifications...
   ✗ divide: postcondition may fail
-    
+
     Counter-example found:
       numerator = 7
       denominator = 3
       result = 2
-      
+
     Postcondition violated:
       result * denominator <= numerator  // 6 <= 7 ✓
       result * denominator > numerator - denominator  // 6 > 4 ✓
-      
+
     Note: Verification inconclusive, may be false positive.
     Add @assume or refine specification.
 ```
@@ -2049,10 +1904,10 @@ $ baseline check --level=full
 
 Checking specifications...
   ? process_data: verification timeout after 10s
-    
+
     The solver could not prove or disprove:
       @ensures result.len <= input.len * 2
-    
+
     Options:
       1. Increase timeout: baseline check --timeout=60s
       2. Add intermediate lemma to help the solver
@@ -2082,7 +1937,7 @@ Assumptions are:
 
 ---
 
-### 8.4 The Neurosymbolic Feedback Loop
+### 8.6 The Neurosymbolic Feedback Loop
 
 Baseline is architected to close the loop between LLM generation and formal verification.
 
@@ -2097,7 +1952,7 @@ This turns the compiler into a **verifier** for the probabilistic output of the 
 
 ## 9. Testing
 
-Baseline provides a comprehensive testing framework inspired by RSpec and Vitest, with first-class support for BDD-style specifications, property-based testing, and inline unit tests.
+Baseline provides a comprehensive testing framework inspired by RSpec and Vitest, with first-class support for BDD-style specifications and inline unit tests.
 
 ### 9.1 Testing Philosophy
 
@@ -2292,45 +2147,7 @@ describe "WeatherService" {
 }
 ```
 
-### 9.4 Table-Driven Tests
-
-For testing many input/output combinations:
-
-```baseline
-describe "Port.parse" {
-  it "validates port numbers" {
-    given port
-    when Port.parse
-    expect result
-  } examples {
-    | port   | result              |
-    | 80     | Ok(80)              |
-    | 443    | Ok(443)             |
-    | 8080   | Ok(8080)            |
-    | 0      | Err(OutOfRange)     |
-    | -1     | Err(OutOfRange)     |
-    | 65535  | Ok(65535)           |
-    | 65536  | Err(OutOfRange)     |
-  }
-}
-
-describe "String.trim" {
-  it "removes whitespace" {
-    given input
-    when String.trim
-    expect output
-  } examples {
-    | input          | output    |
-    | "  hello  "    | "hello"   |
-    | "hello"        | "hello"   |
-    | "  "           | ""        |
-    | ""             | ""        |
-    | "\t\nhello\n"  | "hello"   |
-  }
-}
-```
-
-### 9.5 Async and Effectful Tests
+### 9.4 Async and Effectful Tests
 
 ```baseline
 describe "async operations" {
@@ -2341,7 +2158,7 @@ describe "async operations" {
       "https://api.example.com/users",
       "https://api.example.com/posts",
     ]
-    when |urls| parallel!(urls.map(Http.get!))
+    when |urls| parallel!(List.map(urls, Http.get!))
     expect [Ok(_), Ok(_)]
   }
 
@@ -2352,147 +2169,13 @@ describe "async operations" {
     }
 
     given "https://slow.example.com"
-    when |url| Http.get!(url).timeout(1.second)
+    when |url| Http.get!(url) |> Result.timeout(1.second)
     expect Err(Timeout)
   }
 }
 ```
 
-### 9.6 Property-Based Testing
-
-Properties define invariants that must hold for all inputs:
-
-```baseline
-describe "List.sort" {
-  property "preserves length" {
-    forall xs: List<Int>
-    expect sort(xs).len == xs.len
-  }
-
-  property "is idempotent" {
-    forall xs: List<Int>
-    expect sort(sort(xs)) == sort(xs)
-  }
-
-  property "produces ordered output" {
-    forall xs: List<Int>
-    expect sort(xs).windows(2).all(|[a, b]| a <= b)
-  }
-
-  property "is a permutation of input" {
-    forall xs: List<Int>
-    expect sort(xs).to_multiset == xs.to_multiset
-  }
-}
-```
-
-#### Conditional Properties
-
-```baseline
-describe "List.head" {
-  property "returns first element for non-empty lists" {
-    forall xs: List<Int>
-    where xs.len > 0
-    expect xs.first == Some(xs.get(0)!)
-  }
-}
-```
-
-#### Custom Generators
-
-```baseline
-describe "User validation" {
-  let valid_email = Gen.string_matching(r"[a-z]+@[a-z]+\.[a-z]{2,}")
-  let valid_name = Gen.string(1, 100)
-
-  property "valid users are accepted" {
-    forall name: valid_name, email: valid_email
-    expect validate_user({ name, email }).is_ok
-  }
-}
-```
-
-#### Auto-Generated Properties from Refinement Types
-
-```baseline
-// This type definition:
-type Port = Int where 1 <= self <= 65535
-
-// Automatically generates:
-property "Port satisfies refinement" {
-  forall p: Port
-  expect 1 <= p && p <= 65535
-}
-```
-
-#### Standard Property Library
-
-```baseline
-import Baseline.Test.Properties.*
-
-describe "reverse" {
-  property "is an involution" = involution(reverse)
-  property "preserves length" = preserves_len(reverse)
-}
-
-describe "sort" {
-  property "is idempotent" = idempotent(sort)
-  property "preserves elements" = permutation(sort)
-  property "produces ordered output" = ordered(sort)
-}
-```
-
-### 9.7 Doc Tests
-
-Documentation examples are executable:
-
-```baseline
-/// Reverses a list.
-///
-/// ```
-/// reverse([1, 2, 3]) == [3, 2, 1]
-/// reverse([]) == []
-/// ```
-///
-/// Works with any element type:
-///
-/// ```
-/// reverse(["a", "b"]) == ["b", "a"]
-/// ```
-reverse : List<T> -> List<T>
-reverse = |list| ...
-```
-
-### 9.8 Snapshot Testing
-
-For complex outputs that are tedious to write manually:
-
-```baseline
-describe "Template rendering" {
-  it "renders user profile" {
-    given User { name: "Alice", bio: "Developer", posts: 42 }
-    when render_profile
-    expect snapshot("user_profile")
-  }
-}
-
-describe "JSON serialization" {
-  it "serializes complex objects" {
-    given complex_object
-    when Json.encode_pretty
-    expect snapshot("complex_json")
-  }
-}
-```
-
-```bash
-$ baseline test --update-snapshots
-Updated 2 snapshots:
-  - user_profile
-  - complex_json
-```
-
-### 9.9 Test Organization
+### 9.5 Test Organization
 
 #### File Structure
 
@@ -2531,7 +2214,7 @@ describe "Feature" {
 }
 ```
 
-### 9.10 Assertions and Matchers
+### 9.6 Assertions and Matchers
 
 ```baseline
 describe "Matchers" {
@@ -2570,99 +2253,7 @@ describe "Matchers" {
 }
 ```
 
-### 9.11 Test Execution
-
-```bash
-$ baseline test
-
-Running tests...
-
-  src/math.bl
-    ✓ add: adds positive numbers (0.1ms)
-    ✓ add: handles negatives (0.1ms)
-    ✓ add: zero identity (0.1ms)
-
-  test/user_spec.bl
-    UserService
-      create_user
-        with valid data
-          ✓ creates the user (1.2ms)
-          ✓ assigns a unique id (0.8ms)
-        with invalid email
-          ✓ returns validation error (0.5ms)
-        with duplicate email
-          ✓ returns conflict error (1.1ms)
-
-  Properties
-    ✓ List.sort: preserves length (100 cases)
-    ✓ List.sort: is idempotent (100 cases)
-    ✓ List.sort: produces ordered output (100 cases)
-
-Tests: 10 passed, 0 failed
-Properties: 3 passed (300 cases)
-Time: 142ms
-```
-
-#### Filtering Tests
-
-```bash
-$ baseline test --filter "UserService"
-$ baseline test --filter "create_user"
-$ baseline test user_spec.bl
-$ baseline test --tag integration
-$ baseline test --tag "not slow"
-```
-
-#### Watch Mode
-
-```bash
-$ baseline test --watch
-
-Watching for changes...
-[12:34:56] Running tests affected by src/user.bl...
-  ✓ 4 tests passed (23ms)
-
-[12:35:12] Running tests affected by src/api.bl...
-  ✗ 1 test failed
-
-  UserService > delete_post > when user does not own the post
-    Expected: Err(Unauthorized)
-    Got: Err(NotFound)
-```
-
-### 9.12 Coverage and Mutation Testing
-
-```bash
-$ baseline test --coverage
-
-Coverage: 87% (Lines: 412/474)
-
-  src/user.bl        94%  ████████████████░░
-  src/api.bl         82%  ████████████████░░░░
-  src/db.bl          71%  ██████████████░░░░░░░
-
-Uncovered:
-  src/api.bl:47-52 (error handler branch)
-  src/db.bl:89 (connection retry logic)
-
-$ baseline test --mutate
-
-Mutation testing...
-Generated 156 mutants
-  Killed: 149 (95.5%)
-  Survived: 7
-
-Surviving mutants:
-  src/math.bl:12
-    - Changed `+` to `-`
-    - No test catches this!
-
-  src/api.bl:34
-    - Changed `>=` to `>`
-    - Edge case not tested
-```
-
-### 9.13 Test Output for LLMs
+### 9.7 Test Output for LLMs
 
 JSON output for LLM integration:
 
@@ -2701,7 +2292,7 @@ $ baseline test --format json
 }
 ```
 
-### 9.14 Best Practices
+### 9.8 Best Practices
 
 #### Spec-First Development (Recommended for LLMs)
 
@@ -2738,11 +2329,11 @@ describe "PasswordService" {
 // 2. Then implement to satisfy the spec
 validate_password : String -> Result<(), PasswordError>
 validate_password = |password|
-  if password.len < 8 then
-    Err(TooShort { min: 8, actual: password.len })
-  else if !password.any(Char.is_uppercase) then
+  if String.len(password) < 8 then
+    Err(TooShort { min: 8, actual: String.len(password) })
+  else if not String.any(password, Char.is_uppercase) then
     Err(MissingUppercase)
-  else if !password.any(Char.is_digit) then
+  else if not String.any(password, Char.is_digit) then
     Err(MissingNumber)
   else
     Ok(())
@@ -2791,486 +2382,13 @@ it "creates user with provided data" {
 
 ---
 
-## 10. Memory Model
+## 10. Language Server Protocol and Compiler API
 
-### 10.1 Perceus Reference Counting
-
-Baseline utilizes **Perceus**, a precise, deterministic reference counting system that enables functional programming with C-like performance.
-
-**Key Characteristics:**
-- **No Garbage Collection**: Memory is freed immediately when the last reference is dropped.
-- **Deterministic Latency**: No stop-the-world pauses, making Baseline suitable for real-time systems.
-- **Reuse Analysis**: The compiler detects when a unique reference is dropped and immediately reuses its memory for a new allocation of the same size.
-
-### 10.2 FBIP (Functional But In Place)
-
-Perceus enables **FBIP**, where purely functional algorithms compile to efficient in-place mutations.
-
-```baseline
-// Source: Pure functional map
-map : (List<T>, T -> U) -> List<U>
-map = |list, f| match list
-  Cons(head, tail) -> Cons(f(head), map(tail, f))
-  Nil -> Nil
-
-// Compiled (Conceptual):
-// If 'list' is unique (ref_count == 1), 'Cons' cell is reused!
-// No new allocation occurs.
-```
-
-### 10.3 Region-Based Local Memory
-
-For short-lived scopes (like HTTP requests), Baseline employs **Region Inference**.
-
-- **Arena Allocation**: Data that does not escape the request handler is allocated in a linear arena.
-- **O(1) Deallocation**: The entire region is freed at once when the handler returns.
-- **Thread Safety**: Regions are thread-local by default, eliminating synchronization overhead for request-local data.
-
-### 10.4 Ownership and Borrowing
-
-While Perceus handles deallocation, Baseline enforces ownership rules to ensure safety:
-
-- **Values are owned**: Passing a value translates to a move or a copy (if ref count > 1).
-- **Borrowing is implicit**: The compiler optimizes moves to borrows where possible.
-- **No explicit lifetimes**: Unlike Rust, lifetimes are inferred from lexical scopes and function boundaries.
-3. Regions can be nested
-4. **The compiler tracks region lifetimes statically—no annotations required**
-
-### 10.5 Why Regions Are Simpler Than Borrow Checking
-
-| Aspect | Rust Borrow Checker | Baseline Regions |
-|--------|---------------------|----------------|
-| Syntax overhead | Lifetime parameters everywhere | None |
-| Learning curve | Steep (weeks to months) | Gentle (hours) |
-| Error messages | Often cryptic | Straightforward |
-| Refactoring | May require signature changes | Localized changes |
-| LLM generation | Difficult (lifetime inference) | Easy (scoped thinking) |
-
-Baseline achieves memory safety through a simpler model:
-
-1. **Immutability by default**: Most values can't be mutated after creation
-2. **Copy-on-write**: Large structures use efficient persistent data structures
-3. **Region scoping**: Temporary allocations are freed in bulk
-4. **Reference counting**: Long-lived shared data uses atomic RC (optimized away when possible)
-
-```baseline
-// This "just works" without lifetime annotations
-process_all : List<User> -> List<r>
-process_all = |users|
-  users
-  |> List.map(transform)      // Intermediate list allocated
-  |> List.filter(is_valid)    // Another intermediate
-  |> List.map(format)         // Final result
-  // Intermediates freed when function returns
-```
-
-### 10.6 Persistent Data Structures
-
-For data that outlives a region, use persistent data structures:
-
-```baseline
-type AppState = Persistent {
-  users: Map<Id, User>,
-  cache: LRU<String, Response>,
-}
-
-// Copy-on-write semantics
-update_state! : (Id, User) -> {State<AppState>} ()
-update_state! = |id, user|
-  State.modify!(|s| { ..s, users: s.users.insert(id, user) })
-```
-
-### 10.4 Memory Guarantees
-
-| Guarantee | How |
-|-----------|-----|
-| No memory leaks | Regions freed automatically |
-| No use-after-free | Compiler tracks lifetimes |
-| No data races | Immutability + effects |
-| Predictable latency | No GC pauses |
-| Bounded memory | Regions have size limits |
-
-### 10.5 Arenas
-
-For high-performance scenarios, explicit arenas:
-
-```baseline
-@arena(size: 1.mb, overflow: fail)
-process_batch! : List<Item> -> List<Result>
-process_batch! = |items|
-  items.map(|item| process(item))
-// Arena freed, all intermediate allocations gone
-```
-
-### 10.6 FBIP: Functional-But-In-Place
-
-Baseline implements **Perceus-style reference counting with FBIP optimization**, enabling purely functional code to execute with in-place mutation semantics when data is uniquely owned.
-
-#### 10.6.1 The Core Insight
-
-When a function pattern-matches on a data structure and then constructs a new structure of the same size, the compiler can **reuse the memory** if the original has a reference count of 1 (uniquely owned).
-
-```baseline
-// This purely functional code...
-map_tree : (a -> b) -> Tree<a> -> Tree<b>
-map_tree = |f, tree| match tree
-  | Leaf(x) -> Leaf(f(x))
-  | Node(l, r) -> Node(map_tree(f, l), map_tree(f, r))
-
-// ...compiles to in-place mutation when tree is uniquely owned
-// No allocation, no copying—just overwriting memory
-```
-
-#### 10.6.2 Reuse Credits
-
-The compiler tracks "reuse credits" statically:
-
-| Operation | Credit Change |
-|-----------|---------------|
-| Pattern match on constructor | +1 credit (same size) |
-| Construct new value | -1 credit |
-| Function marked `@fip` | Must end at 0 credits |
-
-```baseline
-// Earns 1 credit (Leaf match), spends 1 credit (Leaf construct)
-| Leaf(x) -> Leaf(f(x))  // Net: 0, can reuse memory
-
-// Earns 1 credit (Node match), spends 1 credit (Node construct)
-| Node(l, r) -> Node(...)  // Net: 0, can reuse memory
-```
-
-#### 10.6.3 FBIP Annotations
-
-```baseline
-// @fip: Fully in-place (compile error if allocation required)
-@fip
-reverse : List<a> -> List<a>
-reverse = |list| reverse_acc(list, [])
-
-@fip
-reverse_acc : (List<a>, List<a>) -> List<a>
-reverse_acc = |list, acc| match list
-  | [] -> acc
-  | [x, ..xs] -> reverse_acc(xs, [x, ..acc])
-
-// @fbip: Functional-but-in-place (compiler optimizes, no guarantee)
-@fbip
-transform : Tree<a> -> Tree<b>
-transform = |tree| ...  // Compiler will optimize if possible
-```
-
-#### 10.6.4 Drop Specialization and Dup/Drop Fusion
-
-The compiler performs aggressive optimization on reference counting operations:
-
-**Drop Specialization**: Inline and specialize `drop` operations for each type, enabling further optimization.
-
-**Dup/Drop Fusion**: When a value is duplicated (`dup`) and then one copy is immediately dropped, eliminate both operations.
-
-```baseline
-// Before optimization
-let x = some_value
-let y = x       // dup(x)
-process(y)
-// x goes out of scope: drop(x)
-
-// After dup/drop fusion
-let x = some_value
-process(x)      // No dup, no drop—direct use
-```
-
-#### 10.6.5 Thread Safety
-
-| Scenario | RC Type | Cost |
-|----------|---------|------|
-| Thread-local data | Non-atomic RC | Cheap integer ops |
-| Data escaping to effect handler | Atomic RC | Moderate |
-| Explicitly shared (`Shared<T>`) | Atomic RC | Moderate |
-
-The compiler infers which data is thread-local and uses cheap non-atomic reference counting by default. Atomic RC is only used when data provably escapes to another thread or handler.
-
-#### 10.6.6 Performance Characteristics
-
-| Algorithm | Traditional FP | FBIP-Optimized | C++ Mutable |
-|-----------|----------------|----------------|-------------|
-| Tree map | O(n) allocs | 0 allocs | 0 allocs |
-| List reverse | O(n) allocs | 0 allocs | 0 allocs |
-| Red-black insert | O(log n) allocs | 0-1 allocs | 0 allocs |
-
-Research benchmarks show FBIP achieves **within 10% of C++** for tree-heavy algorithms while maintaining purely functional semantics and memory safety.
-
----
-
-## 11. Compilation
-
-### 11.1 Compilation Pipeline
-
-```
-Source (.bl files)
-        ↓
-    Parsing (Tree-sitter)
-        ↓
-    Type Checking (Bidirectional)
-        ↓
-    Effect Inference
-        ↓
-    Specification Verification (SMT)
-        ↓
-    Baseline IR (verified intermediate representation)
-        ↓
-    Optimization
-        ↓
-    ┌───────────────────────────────────┐
-    ↓               ↓                   ↓
-Cranelift       WebAssembly           LLVM
-(dev builds)    (production)       (max perf)
-    ↓               ↓                   ↓
-Native binary   .wasm file        Native binary
-```
-
-### 11.2 Build Modes
-
-```bash
-# Development: fast compilation, debug info
-baseline build
-# Output: target/debug/myapp
-# Compile time: ~100-200ms
-
-# Release: optimized, smaller binary
-baseline build --release
-# Output: target/release/myapp
-# Compile time: ~1-3s
-
-# WebAssembly: portable binary
-baseline build --wasm
-# Output: target/wasm/myapp.wasm
-# Compile time: ~500ms
-
-# Cross-compilation
-baseline build --target=linux-arm64
-baseline build --target=macos-x64
-baseline build --target=windows-x64
-```
-
-### 11.3 Incremental Compilation
-
-Baseline supports fine-grained incremental compilation:
-
-```bash
-$ baseline build
-Compiling src/main.bl... done (145ms)
-
-# Edit src/api/users.bl
-
-$ baseline build
-Recompiling src/api/users.bl... done (23ms)
-Linking... done (12ms)
-```
-
-### 11.4 Binary Output
-
-| Target | Typical Size | Startup | Notes |
-|--------|--------------|---------|-------|
-| Native (Cranelift) | 5-10 MB | <5ms | Fast builds |
-| Native (LLVM) | 3-7 MB | <5ms | Best performance |
-| WebAssembly | 1-3 MB | <10ms | Portable |
-| WebAssembly + WASI | 1-3 MB | <10ms | Server-side |
-
-### 11.5 Embedding
-
-Baseline can be embedded in other languages:
-
-```c
-// C/C++ embedding
-#include "baseline.h"
-
-baseline_runtime_t* rt = baseline_init();
-baseline_module_t* mod = baseline_load(rt, "myapp.wasm");
-baseline_value_t result = baseline_call(mod, "greet", "World");
-printf("%s\n", baseline_to_string(result));  // "Hello, World"
-baseline_free(rt);
-```
-
-```python
-# Python embedding
-import baseline
-
-mod = baseline.load("myapp.wasm")
-result = mod.greet("World")
-print(result)  # "Hello, World"
-```
-
----
-
-## 12. Tracing and Debugging
-
-### 12.1 Execution Tracing
-
-Baseline programs can emit structured traces:
-
-```bash
-$ baseline build --trace
-$ ./myapp
-# Output: result
-# Trace: myapp.trace
-```
-
-Trace format (binary, but shown as JSON for clarity):
-
-```json
-{
-  "events": [
-    {
-      "timestamp_ns": 142000,
-      "location": { "file": "api.bl", "line": 47, "col": 12 },
-      "event": {
-        "type": "function_call",
-        "name": "get_user",
-        "args": { "id": 42 }
-      }
-    },
-    {
-      "timestamp_ns": 891000,
-      "location": { "file": "api.bl", "line": 48, "col": 5 },
-      "event": {
-        "type": "effect_executed",
-        "effect": "Db.query",
-        "input": ["SELECT * FROM users WHERE id = ?", [42]],
-        "output": { "Ok": [{ "id": 42, "name": "Alice" }] },
-        "duration_ns": 749000
-      }
-    }
-  ]
-}
-```
-
-### 12.2 Trace Analysis
-
-```bash
-$ baseline trace analyze myapp.trace
-
-Summary:
-  Duration: 1.24s
-  Events: 1,247
-  Effects: 89 (Http: 12, Db: 45, Log: 32)
-  Allocations: 2.3 MB
-  
-Anomalies:
-  ⚠ Db.query at api.bl:48 took 2.3s (expected <100ms)
-    Hypothesis: missing index on users.email
-    
-  ⚠ Unexpected None at api.bl:52
-    get_user returned None for id=42
-    Prior call showed user 42 exists
-    Hypothesis: race condition or cache inconsistency
-
-Hot paths:
-  1. handle_request -> get_user -> Db.query (45% of time)
-  2. handle_request -> render -> Json.encode (23% of time)
-```
-
-### 12.3 Time-Travel Debugging
-
-Replay execution deterministically:
-
-```bash
-$ baseline trace replay myapp.trace --until "api.bl:52"
-
-State at api.bl:52:
-  locals:
-    id: 42
-    user: None
-    request: { method: "GET", path: "/users/42" }
-  
-  call_stack:
-    main!
-    handle_request!
-    get_user!
-  
-  effects_executed:
-    Db.query("SELECT * FROM users WHERE id = ?", [42]) -> []
-
-$ baseline trace replay myapp.trace --query "why is user None?"
-
-Analysis:
-  The Db.query returned an empty result set.
-  
-  Possible causes:
-  1. User with id=42 does not exist
-  2. Query executed against wrong database
-  3. Prior delete not visible (isolation level)
-  
-  Suggestion: Check database state at query time with --capture-db
-```
-
-### 12.4 Hypothesis Testing
-
-Test fixes against captured traces:
-
-```bash
-$ baseline trace replay myapp.trace --patch fix.bl --dry-run
-
-Original outcome: Error("unwrap on None at api.bl:52")
-Patched outcome: Ok(NotFound)
-
-Spec compliance: ✓
-Side effects changed: none
-
-Verdict: Fix resolves the issue without changing success behavior
-```
-
-### 12.5 Structured Error Output
-
-All errors are machine-parseable:
-
-```json
-{
-  "error": {
-    "type": "type_mismatch",
-    "location": { "file": "api.bl", "line": 47, "col": 12 },
-    "expected": "User",
-    "actual": "Option<User>",
-    "context": {
-      "function": "handle_request",
-      "expression": "get_user(id)"
-    },
-    "suggestions": [
-      {
-        "action": "unwrap_with_match",
-        "code": "match get_user(id)\n  Some(u) -> u\n  None -> return NotFound",
-        "confidence": 0.9
-      },
-      {
-        "action": "propagate_option",
-        "code": "get_user(id)?",
-        "signature_change": "returns User?",
-        "confidence": 0.7
-      }
-    ]
-  }
-}
-```
-
-### 12.6 Debugging Commands
-
-```bash
-baseline trace <file>             # Analyze trace file
-baseline trace replay <file>      # Replay execution
-baseline trace diff <a> <b>       # Compare two traces
-baseline trace bisect <files...>  # Find regression
-baseline trace query <file> "..." # Ask questions
-baseline trace export <file>      # Export to JSON/Chrome trace
-```
-
----
-
-## 13. Language Server Protocol and Compiler API
-
-### 13.1 Overview
+### 10.1 Overview
 
 Baseline exposes its compiler internals via a queryable API, enabling IDEs, LLMs, and automated tools to interact with the language semantically. This goes beyond traditional LSP to support AI-assisted development.
 
-### 13.2 Standard LSP Features
+### 10.2 Standard LSP Features
 
 Baseline implements the full Language Server Protocol:
 
@@ -3283,7 +2401,7 @@ Baseline implements the full Language Server Protocol:
 - **Code Actions**: Quick fixes and refactorings
 - **Formatting**: baseline fmt integration
 
-### 13.3 Extended Query API
+### 10.3 Extended Query API
 
 Beyond standard LSP, Baseline provides semantic queries:
 
@@ -3331,7 +2449,7 @@ Beyond standard LSP, Baseline provides semantic queries:
     },
     {
       "name": "List.filter_map",
-      "module": "Baseline.Collections", 
+      "module": "Baseline.Collections",
       "signature": "List<A> -> (A -> B?) -> List<B>",
       "doc": "Maps and filters in one pass..."
     }
@@ -3385,7 +2503,7 @@ Beyond standard LSP, Baseline provides semantic queries:
 }
 ```
 
-### 13.4 Programmatic Compilation API
+### 10.4 Programmatic Compilation API
 
 For build tools and LLM integrations:
 
@@ -3430,7 +2548,7 @@ For build tools and LLM integrations:
 }
 ```
 
-### 13.5 Interactive Refinement Session
+### 10.5 Interactive Refinement Session
 
 For LLM integration, a stateful session API:
 
@@ -3472,7 +2590,7 @@ For LLM integration, a stateful session API:
 { "method": "baseline/session/end", "params": { "sessionId": "abc123" } }
 ```
 
-### 13.6 Bulk Operations for LLM Agents
+### 10.6 Bulk Operations for LLM Agents
 
 For agents processing multiple files:
 
@@ -3498,268 +2616,11 @@ For agents processing multiple files:
 }
 ```
 
-### 13.7 SARIF Diagnostics
-
-For LLM repair loops and CI/CD integration, Baseline supports **SARIF (Static Analysis Results Interchange Format)** output—the industry standard for machine-parseable diagnostics.
-
-#### 13.7.1 Why SARIF
-
-| Format | Human Readable | Machine Parseable | Context-Rich | Standard |
-|--------|----------------|-------------------|--------------|----------|
-| Plain text | ✓ | ✗ | ✗ | ✗ |
-| JSON (custom) | ✗ | ✓ | ✓ | ✗ |
-| SARIF | ✗ | ✓ | ✓ | ✓ |
-
-SARIF is supported by GitHub, VS Code, and major CI systems. Using SARIF means Baseline diagnostics integrate automatically with existing toolchains.
-
-#### 13.7.2 CLI Usage
-
-```bash
-# Human-readable output (default)
-baseline check src/
-
-# SARIF output for tools
-baseline check src/ --format=sarif > results.sarif
-
-# JSON output (Baseline's native format)
-baseline check src/ --format=json
-```
-
-#### 13.7.3 SARIF Structure
-
-```json
-{
-  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-  "version": "2.1.0",
-  "runs": [{
-    "tool": {
-      "driver": {
-        "name": "baseline",
-        "version": "0.1.0",
-        "rules": [{
-          "id": "REF_001",
-          "name": "RefinementViolation",
-          "shortDescription": { "text": "Value does not satisfy type refinement" },
-          "helpUri": "https://baseline-lang.dev/errors/REF_001"
-        }]
-      }
-    },
-    "results": [{
-      "ruleId": "REF_001",
-      "level": "error",
-      "message": {
-        "text": "Cannot prove `port >= 1`: value could be 0"
-      },
-      "locations": [{
-        "physicalLocation": {
-          "artifactLocation": { "uri": "src/server.bl" },
-          "region": {
-            "startLine": 42,
-            "startColumn": 15,
-            "endColumn": 19,
-            "byteOffset": 1847,
-            "byteLength": 4
-          }
-        }
-      }],
-      "relatedLocations": [{
-        "physicalLocation": {
-          "artifactLocation": { "uri": "src/types.bl" },
-          "region": { "startLine": 5 }
-        },
-        "message": { "text": "Port type defined here with refinement: 1 <= self <= 65535" }
-      }],
-      "codeFlows": [{
-        "message": { "text": "Execution path leading to violation" },
-        "threadFlows": [{
-          "locations": [
-            { "location": { "message": { "text": "port assigned from user input" } } },
-            { "location": { "message": { "text": "no validation before use" } } }
-          ]
-        }]
-      }],
-      "fixes": [{
-        "description": { "text": "Add guard clause" },
-        "artifactChanges": [{
-          "artifactLocation": { "uri": "src/server.bl" },
-          "replacements": [{
-            "deletedRegion": { "startLine": 42, "startColumn": 1, "endColumn": 1 },
-            "insertedContent": { "text": "if port < 1 then return Err(InvalidPort)\n" }
-          }]
-        }]
-      }]
-    }]
-  }]
-}
-```
-
-#### 13.7.4 Fix Confidence Levels
-
-Following Rust's model, suggestions include confidence levels:
-
-| Level | Meaning | LLM Action |
-|-------|---------|------------|
-| `MachineApplicable` | Safe to auto-apply | Apply directly |
-| `HasPlaceholders` | Requires user input | Fill placeholders, then apply |
-| `MaybeIncorrect` | Might not match intent | Present to user for confirmation |
-| `Unspecified` | Unknown confidence | Treat as suggestion only |
-
-```json
-{
-  "fixes": [{
-    "description": { "text": "Parse string to Int" },
-    "properties": {
-      "confidence": "MachineApplicable"
-    },
-    "artifactChanges": [...]
-  }]
-}
-```
-
-#### 13.7.5 SMT Counter-Examples in codeFlows
-
-For refinement type failures, the SMT solver's counter-example is included:
-
-```json
-{
-  "codeFlows": [{
-    "message": { "text": "Counter-example from SMT solver" },
-    "properties": {
-      "counterExample": {
-        "port": 0,
-        "reason": "Division by zero when port=0 reaches line 47"
-      }
-    }
-  }]
-}
-```
-
-### 13.8 Constrained Decoding API
-
-For advanced LLM integration, Baseline exposes type-checker state to enable **type-constrained token generation**—guiding LLM sampling toward well-typed code.
-
-#### 13.8.1 Motivation
-
-Research shows that type-constrained decoding reduces compilation errors by **more than 50%**. LLMs treat programs as plain text and cannot reliably infer type constraints. By exposing the type-checker's knowledge, we guide generation toward valid programs.
-
-#### 13.8.2 Valid Next Tokens
-
-```json
-// Request: What tokens are valid at this position?
-{
-  "method": "baseline/validNextTokens",
-  "params": {
-    "source": "let x: Int = ",
-    "cursorOffset": 13
-  }
-}
-
-// Response
-{
-  "validTokens": {
-    "literals": ["<integer>", "<hex_integer>", "<binary_integer>"],
-    "identifiers": ["y", "config.port", "DEFAULT_VALUE"],
-    "expressions": ["(", "-", "if"],
-    "excluded": ["\"<string>\"", "true", "false", "[]"]
-  },
-  "expectedType": "Int",
-  "refinements": []
-}
-```
-
-#### 13.8.3 Type Holes
-
-```json
-// Request: What type is expected at the placeholder?
-{
-  "method": "baseline/typeHole",
-  "params": {
-    "source": "let result = users.map(|u| _)",
-    "holeOffset": 28
-  }
-}
-
-// Response
-{
-  "expectedType": "B",
-  "constraints": [
-    "B is the return type of the map function",
-    "u has type User"
-  ],
-  "availableFields": ["u.name: String", "u.email: Email", "u.age: Int"],
-  "suggestedCompletions": [
-    { "code": "u.name", "type": "String" },
-    { "code": "u.email", "type": "Email" },
-    { "code": "format_user(u)", "type": "String" }
-  ]
-}
-```
-
-#### 13.8.4 Completion Constraints
-
-```json
-// Request: What refinements must hold at this position?
-{
-  "method": "baseline/completionConstraints",
-  "params": {
-    "source": "let port: Port = _",
-    "holeOffset": 17
-  }
-}
-
-// Response
-{
-  "expectedType": "Port",
-  "baseType": "Int",
-  "refinements": ["1 <= value <= 65535"],
-  "validExamples": [1, 80, 443, 8080, 65535],
-  "invalidExamples": [0, -1, 65536, 100000]
-}
-```
-
-#### 13.8.5 Streaming Integration
-
-For real-time generation with streaming LLMs:
-
-```json
-// Request: Incremental check during generation
-{
-  "method": "baseline/streamCheck",
-  "params": {
-    "sessionId": "gen_abc123",
-    "partialSource": "let x = users.fil",
-    "newTokens": "ter"
-  }
-}
-
-// Response
-{
-  "valid": true,
-  "partialType": "(User -> Bool) -> List<User>",
-  "nextExpected": ["("],
-  "confidence": 0.95
-}
-```
-
-#### 13.8.6 Performance Requirements
-
-| Operation | Target Latency | Notes |
-|-----------|----------------|-------|
-| `validNextTokens` | <10ms | Per-token during generation |
-| `typeHole` | <20ms | Single query |
-| `completionConstraints` | <15ms | Single query |
-| `streamCheck` | <5ms | Must not block generation |
-
-Implementation requires:
-- Incremental parsing (tree-sitter based)
-- Resumable type inference from partial AST
-- Cached constraint solving
-
 ---
 
-## 14. Standard Library
+## 11. Standard Library
 
-### 14.1 Core Types
+### 11.1 Core Types
 
 ```baseline
 module Baseline.Core
@@ -3767,7 +2628,7 @@ module Baseline.Core
 // Primitive operations
 export (+), (-), (*), (/), (%), (**)
 export (==), (!=), (<), (>), (<=), (>=)
-export (&&), (||), (!)
+export (&&), (||), not
 
 // Option
 export type Option<T> = Some(T) | None
@@ -3786,7 +2647,7 @@ export Result.unwrap : Result<T, E> -> T  // panics if Err
 export Result.unwrap_or : (Result<T, E>, T) -> T
 ```
 
-### 14.2 Collections
+### 11.2 Collections
 
 ```baseline
 module Baseline.Collections
@@ -3832,7 +2693,7 @@ export Set.union : (Set<T>, Set<T>) -> Set<T>
 export Set.intersection : (Set<T>, Set<T>) -> Set<T>
 ```
 
-### 14.3 Text
+### 11.3 Text
 
 ```baseline
 module Baseline.Text
@@ -3854,27 +2715,27 @@ export String.matches : (String, Regex) -> Bool
 export String.find_all : (String, Regex) -> List<Match>
 
 export type Regex
-export Regex.new : String -> Regex!RegexError
+export Regex.new : String -> Result<Regex, RegexError>
 export Regex.is_match : (Regex, String) -> Bool
 export Regex.captures : (Regex, String) -> List<String>?
 ```
 
-### 14.4 IO
+### 11.4 IO
 
 ```baseline
 module Baseline.IO
 
 export effect Fs {
-  read! : Path -> Bytes!IoError
-  read_text! : Path -> String!IoError
-  write! : (Path, Bytes) -> ()!IoError
-  write_text! : (Path, String) -> ()!IoError
-  append! : (Path, Bytes) -> ()!IoError
-  delete! : Path -> ()!IoError
+  read! : Path -> Result<Bytes, IoError>
+  read_text! : Path -> Result<String, IoError>
+  write! : (Path, Bytes) -> Result<(), IoError>
+  write_text! : (Path, String) -> Result<(), IoError>
+  append! : (Path, Bytes) -> Result<(), IoError>
+  delete! : Path -> Result<(), IoError>
   exists! : Path -> Bool
-  list_dir! : Path -> List<Path>!IoError
-  create_dir! : Path -> ()!IoError
-  metadata! : Path -> Metadata!IoError
+  list_dir! : Path -> Result<List<Path>, IoError>
+  create_dir! : Path -> Result<(), IoError>
+  metadata! : Path -> Result<Metadata, IoError>
 }
 
 export type Path
@@ -3893,140 +2754,11 @@ export type Metadata = {
 }
 ```
 
-### 14.5 Networking
-
-```baseline
-module Baseline.Net
-
-export effect Http {
-  get! : String -> Response!HttpError
-  post! : (String, Body) -> Response!HttpError
-  put! : (String, Body) -> Response!HttpError
-  delete! : String -> Response!HttpError
-  request! : Request -> Response!HttpError
-}
-
-export type Request = {
-  method: Method,
-  url: String,
-  headers: Map<String, String>,
-  body: Body?,
-  timeout: Duration?,
-}
-
-export type Response = {
-  status: Int,
-  headers: Map<String, String>,
-  body: Bytes,
-}
-
-export Response.text : Response -> String!DecodeError
-export Response.json : Response -> Json!DecodeError
-export Response.decode : Response -> T!DecodeError where T: Decode
-
-export type Method = GET | POST | PUT | DELETE | PATCH | HEAD | OPTIONS
-
-export type HttpError =
-  | ConnectionFailed(String)
-  | Timeout
-  | InvalidUrl(String)
-  | TlsError(String)
-```
-
-### 14.6 JSON
-
-```baseline
-module Baseline.Json
-
-export type Json =
-  | Null
-  | Bool(Bool)
-  | Number(Float)
-  | String(String)
-  | Array(List<Json>)
-  | Object(Map<String, Json>)
-
-export Json.parse : String -> Json!ParseError
-export Json.to_string : Json -> String
-export Json.to_string_pretty : Json -> String
-
-// Encoding/decoding via traits
-export trait Encode {
-  encode : Self -> Json
-}
-
-export trait Decode {
-  decode : Json -> Self!DecodeError
-}
-
-// Derive implementations automatically
-@derive(Encode, Decode)
-type User = { name: String, age: Int }
-```
-
-### 14.7 Time
-
-```baseline
-module Baseline.Time
-
-export effect Time {
-  now! : () -> Timestamp
-  sleep! : Duration -> ()
-}
-
-export type Timestamp
-export Timestamp.from_unix : Int -> Timestamp
-export Timestamp.to_unix : Timestamp -> Int
-export Timestamp.format : (Timestamp, String) -> String
-export Timestamp.parse : (String, String) -> Timestamp!ParseError
-
-export type Duration
-export Duration.from_secs : Int -> Duration
-export Duration.from_millis : Int -> Duration
-export Duration.from_nanos : Int -> Duration
-export Duration.to_secs : Duration -> Int
-export Duration.to_millis : Duration -> Int
-
-export Int.seconds : Int -> Duration
-export Int.milliseconds : Int -> Duration
-export Int.minutes : Int -> Duration
-export Int.hours : Int -> Duration
-```
-
-### 14.8 Concurrency
-
-```baseline
-module Baseline.Concurrent
-
-// Lightweight fibers
-export spawn! : (() -> {e} T) -> {e, Async} Fiber<T>
-export Fiber.await! : Fiber<T> -> {Async} T
-export Fiber.cancel! : Fiber<T> -> {Async} ()
-
-// Parallel operations
-export parallel! : List<() -> {e} T> -> {e, Async} List<T>
-export race! : List<() -> {e} T> -> {e, Async} T
-
-// Channels
-export type Channel<T>
-export Channel.new : Int -> Channel<T>  // buffered
-export Channel.send! : (Channel<T>, T) -> {Async} ()
-export Channel.recv! : Channel<T> -> {Async} T?
-export Channel.close! : Channel<T> -> ()
-
-// Example
-process_all! : List<Url> -> {Http, Async} List<Response>
-process_all! = |urls|
-  urls
-  |> List.map(|url| || Http.get!(url))
-  |> parallel!
-```
-
 ---
 
-## 15. Grammar
+## 12. Grammar
 
-### 15.1 Notation
+### 12.1 Notation
 
 This grammar uses the following notation:
 
@@ -4038,7 +2770,7 @@ This grammar uses the following notation:
 - `A+` — One or more
 - `(A B)` — Grouping
 
-### 15.2 Lexical Grammar
+### 12.2 Lexical Grammar
 
 ```ebnf
 (* Whitespace and comments *)
@@ -4079,13 +2811,13 @@ bool_lit = 'true' | 'false'
 (* Operators *)
 operator = '+' | '-' | '*' | '/' | '%' | '**'
          | '==' | '!=' | '<' | '>' | '<=' | '>='
-         | '&&' | '||' | '!'
+         | '&&' | '||' | 'not'
          | '|>' | '<|' | '>>' | '<<'
-         | '?' | '!' | '??'
+         | '?'
          | '++' | '..'
 ```
 
-### 15.3 Syntactic Grammar
+### 12.3 Syntactic Grammar
 
 ```ebnf
 (* Module *)
@@ -4128,8 +2860,7 @@ refinement = 'where' expression
 
 (* Type expressions *)
 type_expr = type_primary ('->' type_expr)?
-          | type_primary '?' 
-          | type_primary '!' type_expr?
+          | type_primary '?'
 
 type_primary = upper_ident type_args?
              | lower_ident
@@ -4151,7 +2882,7 @@ function_decl = 'export'? lower_ident '!'? ':' type_expr
                 lower_ident '!'? '=' expression where_clause?
 
 (* Specification declarations *)
-spec_decl = '@spec' lower_ident spec_attr* 
+spec_decl = '@spec' lower_ident spec_attr*
 
 spec_attr = '@given' param_list
           | '@returns' type_expr
@@ -4201,7 +2932,7 @@ mul_expr = pow_expr (('*' | '/' | '%') pow_expr)*
 
 pow_expr = unary_expr ('**' pow_expr)?
 
-unary_expr = ('!' | '-')? postfix_expr
+unary_expr = ('not' | '-')? postfix_expr
 
 postfix_expr = primary_expr postfix_op*
 
@@ -4209,8 +2940,6 @@ postfix_op = '(' arg_list ')'
            | '.' lower_ident
            | '.' int_lit
            | '?'
-           | '!'
-           | '??' expression
 
 primary_expr = lower_ident
              | upper_ident
@@ -4336,332 +3065,6 @@ EventType {
   Error = 0x08
 }
 ```
-
----
-
-## Appendix C: WebAssembly Interface
-
-Baseline modules export a standard interface:
-
-```wat
-(module
-  ;; Memory
-  (memory (export "memory") 1)
-  
-  ;; Allocation
-  (func (export "alloc") (param i32) (result i32))
-  (func (export "dealloc") (param i32 i32))
-  
-  ;; Entry point
-  (func (export "_start"))
-  
-  ;; Effect handlers (imported)
-  (import "baseline" "effect_http_get" (func $http_get (param i32 i32) (result i32)))
-  (import "baseline" "effect_console_print" (func $console_print (param i32 i32)))
-  ;; ... etc
-)
-```
-
----
-
-## Appendix D: Concurrency Model
-
-Baseline provides structured concurrency with lightweight fibers, channels, and a work-stealing scheduler.
-
-### D.1 Fibers
-
-Fibers are lightweight cooperative threads (initial stack: 2KB, growable):
-
-```baseline
-// Spawn a fiber
-let fiber = spawn!(|| expensive_computation())
-
-// Wait for result  
-let result = fiber.await!()
-
-// Cancel a fiber
-fiber.cancel!()
-```
-
-### D.2 Structured Concurrency
-
-Fibers are scoped—parent tasks wait for children:
-
-```baseline
-process! : List<Item> -> {Async} List<r>
-process! = |items|
-  scope! |s|
-    for item in items do
-      s.spawn!(|| process_item!(item))
-    // Implicit: wait for all spawned fibers
-    // If any fiber panics, others are cancelled
-```
-
-This prevents:
-- Fire-and-forget tasks that leak
-- Orphaned tasks nobody awaits
-- Resource cleanup nightmares
-
-### D.3 Channels
-
-Bounded channels with backpressure:
-
-```baseline
-let (tx, rx) = Channel.bounded<Int>(100)
-
-// Producer
-spawn! ||
-  for i in 1..1000 do
-    tx.send!(i)   // Blocks if buffer full
-  tx.close!()
-
-// Consumer
-spawn! ||
-  while let Some(n) = rx.recv!() do
-    process!(n)
-```
-
-### D.4 Select
-
-Wait on multiple channels:
-
-```baseline
-select!
-  recv!(rx1) as msg -> handle_a!(msg)
-  recv!(rx2) as msg -> handle_b!(msg)
-  send!(tx, value)  -> continue
-  after 5.seconds   -> timeout!()
-```
-
-### D.5 Parallel Combinators
-
-```baseline
-// Run multiple tasks, collect all results
-let results = parallel!([
-  || fetch_users!(),
-  || fetch_posts!(),
-  || fetch_comments!(),
-])
-
-// Race: return first to complete, cancel others
-let fastest = race!([
-  || fetch_from_primary!(),
-  || fetch_from_replica!(),
-])
-```
-
-### D.6 Async as an Effect
-
-Async is an effect, not function coloring:
-
-```baseline
-// Declare async capability
-fetch_all! : List<Url> -> {Http, Async} List<Response>
-fetch_all! = |urls|
-  urls
-  |> List.map(|url| spawn!(|| Http.get!(url)))
-  |> List.map(Fiber.await!)
-
-// Provide at the edge
-main! =
-  let runtime = Async.runtime({ threads: num_cpus() })
-  fetch_all!(urls) with { runtime, ... }
-```
-
-### D.7 Runtime Configuration
-
-```baseline
-Async.runtime({
-  threads: 4,                    // Worker threads (default: num_cpus)
-  stack_size: 2.kb,              // Initial fiber stack
-  max_stack: 1.mb,               // Maximum stack growth
-  scheduler: WorkStealing,       // Or: SingleThreaded, Custom
-})
-```
-
-### D.8 WebAssembly Considerations
-
-| Environment | Concurrency Model |
-|-------------|-------------------|
-| Native | Full thread pool, work-stealing |
-| WASI Threads | Thread pool (where supported) |
-| Browser Wasm | Single-threaded event loop |
-| Edge (Workers) | Single-threaded, async I/O |
-
-Code is identical—the runtime adapts:
-
-```baseline
-@runtime(wasm_threads: auto)  // Use threads if available
-module MyService
-```
-
----
-
-## Appendix E: Future Considerations
-
-Features under consideration for future versions:
-
-1. **Dependent types** — Full dependent typing for more expressive specifications
-2. **Linear types** — For resource management without runtime overhead
-3. **Macros** — Hygienic macros for metaprogramming
-4. **Traits/Typeclasses** — Ad-hoc polymorphism beyond structural typing
-5. **Distributed effects** — First-class support for distributed systems
-6. **Hot code reloading** — Update running systems without restart
-7. **Formal verification** — Integration with proof assistants
-
----
-
-## Appendix F: LLM Training Bootstrap
-
-Strategy and tooling for bootstrapping LLM training data for Baseline code generation.
-
-### F.1 The Cold Start Problem
-
-New languages face a fundamental challenge: LLMs perform poorly on languages with little training data, but training data requires code written in the language. Research shows low-resource languages have **significantly worse** LLM performance than high-resource languages like Python or JavaScript.
-
-### F.2 Bootstrap Pipeline
-
-The recommended pipeline for Baseline training data:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase 1: Seed Corpus (100-1000 examples)                       │
-│  Hand-written, verified Baseline code covering core patterns      │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase 2: Translation (5K-10K examples)                         │
-│  TransCoder-style translation from TypeScript/Rust              │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase 3: OSS-Instruct Expansion (10K-20K examples)             │
-│  Generate instruction prompts from existing Baseline snippets     │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase 4: Self-Instruct Amplification (20K-75K examples)        │
-│  Use existing examples to generate synthetic pairs              │
-└─────────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────────┐
-│  Phase 5: Execution-Based Filtering                             │
-│  Run through compiler + test suite, keep only verified          │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### F.3 Tooling
-
-```bash
-# Translate TypeScript to Baseline (best-effort)
-baseline synth translate src/api.ts
-# Output: src/api.bl (may need manual review)
-
-# Generate instruction prompt for existing code
-baseline synth instruct src/validated.bl
-# Output: "Write a function that validates email addresses
-#          and returns a typed Email value..."
-
-# Verify corpus and filter to passing examples
-baseline synth verify ./corpus/
-# Output: Verified: 847/1000 (84.7%)
-#         Failed type check: 98
-#         Failed refinement: 55
-
-# Analyze corpus coverage
-baseline synth stats ./corpus/
-# Output:
-#   Syntax coverage:
-#     Pattern matching: 89%
-#     Pipe operators: 76%
-#     Effect declarations: 45%
-#
-#   Type coverage:
-#     Refinement types: 34%
-#     Row polymorphism: 28%
-#     Result/Option: 92%
-#
-#   Effect coverage:
-#     Http: 67%
-#     Db: 45%
-#     Console: 89%
-```
-
-### F.4 Seed Corpus Requirements
-
-The initial 100-1000 examples should cover:
-
-| Category | Examples | Priority |
-|----------|----------|----------|
-| Basic functions | 50+ | Required |
-| Pattern matching | 30+ | Required |
-| Refinement types | 30+ | Required |
-| Effect usage | 30+ | Required |
-| Error handling (Result/?) | 30+ | Required |
-| Pipe operators | 20+ | Required |
-| Records and row types | 20+ | Required |
-| Specifications (@spec) | 20+ | High |
-| Inline tests | 20+ | High |
-| Module structure | 10+ | Medium |
-
-### F.5 Quality Gates
-
-| Phase | Minimum Requirement |
-|-------|---------------------|
-| Seed corpus | 100% pass `--verify=full` |
-| Translation | 80%+ pass type check |
-| OSS-Instruct | 90%+ pass type check |
-| Self-Instruct | 85%+ pass type check |
-| Final corpus | 95%+ pass `--verify=types` |
-
-### F.6 Translation Strategy
-
-Baseline's syntax is designed to be translatable from well-supported languages:
-
-| Source | Target Pattern | Confidence |
-|--------|----------------|------------|
-| TypeScript interfaces | Baseline records | High |
-| TypeScript functions | Baseline functions | High |
-| Rust Result/Option | Baseline Result/Option | Very High |
-| Rust pattern matching | Baseline pattern matching | Very High |
-| Python type hints | Baseline types | Medium |
-| Go error handling | Baseline Result + ? | Medium |
-
-```typescript
-// TypeScript source
-interface User {
-  name: string;
-  email: string;
-  age: number;
-}
-
-function greet(user: User): string {
-  return `Hello, ${user.name}`;
-}
-```
-
-```baseline
-// Baseline translation
-type User = {
-  name: String,
-  email: String,
-  age: Int,
-}
-
-greet : User -> String
-greet = |user| "Hello, ${user.name}"
-```
-
-### F.7 Research Basis
-
-This strategy is based on:
-
-- **Self-Instruct** (Code Alpaca): 20 seeds → 20K+ examples
-- **OSS-Instruct** (Magicoder): Code snippets → instruction pairs, 75K examples
-- **TransCoder** (NeurIPS 2020): Unsupervised translation, 74.8% accuracy C++→Java
-- Empirical finding: **100 real examples + synthetic expansion yields 3-26% improvement**
-
-Beyond 1000 real examples, synthetic augmentation provides diminishing returns—focus on quality over quantity for the seed corpus.
 
 ---
 
