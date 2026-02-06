@@ -115,6 +115,143 @@ pub fn extract_middleware<'a>(router: &RuntimeValue<'a>) -> Result<Vec<RuntimeVa
     }
 }
 
+// ---------------------------------------------------------------------------
+// Radix tree — segment-based trie for O(log n) route matching
+// ---------------------------------------------------------------------------
+
+/// A segment-based radix tree for fast URL routing.
+///
+/// Each level corresponds to one path segment. Exact segments are tried first,
+/// then `:name` parameter segments (wildcard). Handlers are stored at leaf
+/// nodes, keyed by HTTP method. First-registered-wins for duplicate routes.
+pub struct RadixTree<'a> {
+    root: RadixNode<'a>,
+}
+
+struct RadixNode<'a> {
+    /// Children keyed by exact path segment.
+    children: HashMap<String, RadixNode<'a>>,
+    /// Parameter child: (param_name, child_node). At most one per node.
+    param: Option<(String, Box<RadixNode<'a>>)>,
+    /// Handlers at this path, keyed by HTTP method.
+    handlers: HashMap<String, RuntimeValue<'a>>,
+}
+
+impl<'a> RadixNode<'a> {
+    fn new() -> Self {
+        RadixNode {
+            children: HashMap::new(),
+            param: None,
+            handlers: HashMap::new(),
+        }
+    }
+}
+
+impl<'a> RadixTree<'a> {
+    pub fn new() -> Self {
+        RadixTree {
+            root: RadixNode::new(),
+        }
+    }
+
+    /// Insert a route into the tree. First-registered-wins: duplicate
+    /// method+path combinations are silently ignored.
+    pub fn insert(&mut self, method: &str, path: &str, handler: RuntimeValue<'a>) {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut node = &mut self.root;
+
+        for seg in &segments {
+            if let Some(name) = seg.strip_prefix(':') {
+                if node.param.is_none() {
+                    node.param = Some((name.to_string(), Box::new(RadixNode::new())));
+                }
+                node = node.param.as_mut().unwrap().1.as_mut();
+            } else {
+                node = node
+                    .children
+                    .entry(seg.to_string())
+                    .or_insert_with(RadixNode::new);
+            }
+        }
+
+        // First registered wins
+        node.handlers
+            .entry(method.to_string())
+            .or_insert(handler);
+    }
+
+    /// Find a handler matching the given method and path.
+    /// Returns the handler and any captured path parameters.
+    /// Exact segments take priority over parameter segments.
+    pub fn find(
+        &self,
+        method: &str,
+        path: &str,
+    ) -> Option<(RuntimeValue<'a>, Vec<(String, String)>)> {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut params = Vec::new();
+        find_in_node(&self.root, &segments, method, &mut params)
+    }
+}
+
+fn find_in_node<'a>(
+    node: &RadixNode<'a>,
+    segments: &[&str],
+    method: &str,
+    params: &mut Vec<(String, String)>,
+) -> Option<(RuntimeValue<'a>, Vec<(String, String)>)> {
+    if segments.is_empty() {
+        return node
+            .handlers
+            .get(method)
+            .map(|h| (h.clone(), params.clone()));
+    }
+
+    let seg = segments[0];
+    let rest = &segments[1..];
+
+    // Try exact match first (more specific)
+    if let Some(child) = node.children.get(seg) {
+        if let result @ Some(_) = find_in_node(child, rest, method, params) {
+            return result;
+        }
+    }
+
+    // Try parameter match
+    if let Some((name, child)) = &node.param {
+        params.push((name.clone(), seg.to_string()));
+        if let result @ Some(_) = find_in_node(child, rest, method, params) {
+            return result;
+        }
+        params.pop(); // backtrack
+    }
+
+    None
+}
+
+/// Compile a flat route list into a radix tree for fast lookup.
+pub fn compile_routes<'a>(routes: &[RuntimeValue<'a>]) -> RadixTree<'a> {
+    let mut tree = RadixTree::new();
+    for route in routes {
+        if let RuntimeValue::Record(fields) = route {
+            let method = match fields.get("method") {
+                Some(RuntimeValue::String(m)) => m.as_str(),
+                _ => continue,
+            };
+            let path = match fields.get("path") {
+                Some(RuntimeValue::String(p)) => p.as_str(),
+                _ => continue,
+            };
+            let handler = match fields.get("handler") {
+                Some(h) => h.clone(),
+                None => continue,
+            };
+            tree.insert(method, path, handler);
+        }
+    }
+    tree
+}
+
 /// Match a request path against a route pattern with `:name` parameter segments.
 ///
 /// Returns `Some(params)` if the pattern matches, where params is a list of
@@ -298,5 +435,158 @@ mod tests {
         assert_eq!(mw.len(), 2);
         assert_eq!(mw[0], RuntimeValue::String("mw1".to_string()));
         assert_eq!(mw[1], RuntimeValue::String("mw2".to_string()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Radix tree tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn radix_tree_exact_match() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/hello", RuntimeValue::String("h".to_string()));
+        let result = tree.find("GET", "/hello");
+        assert_eq!(result, Some((RuntimeValue::String("h".to_string()), vec![])));
+    }
+
+    #[test]
+    fn radix_tree_no_match_wrong_path() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/hello", RuntimeValue::String("h".to_string()));
+        assert_eq!(tree.find("GET", "/world"), None);
+    }
+
+    #[test]
+    fn radix_tree_no_match_wrong_method() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/hello", RuntimeValue::String("h".to_string()));
+        assert_eq!(tree.find("POST", "/hello"), None);
+    }
+
+    #[test]
+    fn radix_tree_single_param() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/users/:id", RuntimeValue::String("u".to_string()));
+        let result = tree.find("GET", "/users/42");
+        assert_eq!(
+            result,
+            Some((
+                RuntimeValue::String("u".to_string()),
+                vec![("id".to_string(), "42".to_string())]
+            ))
+        );
+    }
+
+    #[test]
+    fn radix_tree_multiple_params() {
+        let mut tree = RadixTree::new();
+        tree.insert(
+            "GET",
+            "/users/:id/posts/:post_id",
+            RuntimeValue::String("p".to_string()),
+        );
+        let result = tree.find("GET", "/users/7/posts/99");
+        assert_eq!(
+            result,
+            Some((
+                RuntimeValue::String("p".to_string()),
+                vec![
+                    ("id".to_string(), "7".to_string()),
+                    ("post_id".to_string(), "99".to_string()),
+                ]
+            ))
+        );
+    }
+
+    #[test]
+    fn radix_tree_exact_beats_param() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/users/:id", RuntimeValue::String("param".to_string()));
+        tree.insert("GET", "/users/me", RuntimeValue::String("exact".to_string()));
+        // Exact match should win over param
+        let result = tree.find("GET", "/users/me");
+        assert_eq!(
+            result,
+            Some((RuntimeValue::String("exact".to_string()), vec![]))
+        );
+        // Other values still match param
+        let result = tree.find("GET", "/users/42");
+        assert_eq!(
+            result,
+            Some((
+                RuntimeValue::String("param".to_string()),
+                vec![("id".to_string(), "42".to_string())]
+            ))
+        );
+    }
+
+    #[test]
+    fn radix_tree_different_methods_same_path() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/api", RuntimeValue::String("get".to_string()));
+        tree.insert("POST", "/api", RuntimeValue::String("post".to_string()));
+        assert_eq!(
+            tree.find("GET", "/api"),
+            Some((RuntimeValue::String("get".to_string()), vec![]))
+        );
+        assert_eq!(
+            tree.find("POST", "/api"),
+            Some((RuntimeValue::String("post".to_string()), vec![]))
+        );
+    }
+
+    #[test]
+    fn radix_tree_first_registered_wins() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/hello", RuntimeValue::String("first".to_string()));
+        tree.insert("GET", "/hello", RuntimeValue::String("second".to_string()));
+        let result = tree.find("GET", "/hello");
+        assert_eq!(
+            result,
+            Some((RuntimeValue::String("first".to_string()), vec![]))
+        );
+    }
+
+    #[test]
+    fn radix_tree_root_path() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/", RuntimeValue::String("root".to_string()));
+        let result = tree.find("GET", "/");
+        assert_eq!(
+            result,
+            Some((RuntimeValue::String("root".to_string()), vec![]))
+        );
+    }
+
+    #[test]
+    fn radix_tree_different_lengths_no_match() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/a/b", RuntimeValue::String("ab".to_string()));
+        assert_eq!(tree.find("GET", "/a"), None);
+        assert_eq!(tree.find("GET", "/a/b/c"), None);
+    }
+
+    #[test]
+    fn radix_tree_compile_routes() {
+        let mut route_fields = HashMap::new();
+        route_fields.insert("method".to_string(), RuntimeValue::String("GET".to_string()));
+        route_fields.insert("path".to_string(), RuntimeValue::String("/hello".to_string()));
+        route_fields.insert("handler".to_string(), RuntimeValue::String("h".to_string()));
+
+        let routes = vec![RuntimeValue::Record(route_fields)];
+        let tree = compile_routes(&routes);
+        assert_eq!(
+            tree.find("GET", "/hello"),
+            Some((RuntimeValue::String("h".to_string()), vec![]))
+        );
+    }
+
+    #[test]
+    fn radix_tree_trailing_slash_normalized() {
+        let mut tree = RadixTree::new();
+        tree.insert("GET", "/hello/", RuntimeValue::String("h".to_string()));
+        // Both with and without trailing slash should match
+        assert!(tree.find("GET", "/hello").is_some());
+        assert!(tree.find("GET", "/hello/").is_some());
     }
 }

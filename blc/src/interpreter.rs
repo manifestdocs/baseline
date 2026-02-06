@@ -507,7 +507,7 @@ fn server_listen<'a>(
     source: &str,
     context: &mut Context<'a>,
 ) -> Result<(), RuntimeError> {
-    // Extract routes and middleware from the router
+    // Extract routes and middleware from the router, compile radix tree
     let routes = match router_val {
         RuntimeValue::Record(fields) => match fields.get("routes") {
             Some(RuntimeValue::List(routes)) => routes.clone(),
@@ -517,6 +517,7 @@ fn server_listen<'a>(
     };
     let middleware = router::extract_middleware(router_val)
         .map_err(|msg| err_at(msg, node, context))?;
+    let route_tree = router::compile_routes(&routes);
 
     let addr = format!("0.0.0.0:{}", port);
     let server = tiny_http::Server::http(&addr)
@@ -554,8 +555,8 @@ fn server_listen<'a>(
         req_fields.insert("query".to_string(), query_record);
         let req_record = RuntimeValue::Record(req_fields);
 
-        // Find matching handler, then invoke through middleware chain
-        let (status, resp_headers, body) = match find_matching_handler(&routes, &req_method, &req_path) {
+        // Find matching handler via radix tree, then invoke through middleware chain
+        let (status, resp_headers, body) = match route_tree.find(&req_method, &req_path) {
             Some((handler, params)) => {
                 let enriched = inject_params(&req_record, &params);
                 let result = if middleware.is_empty() {
@@ -637,53 +638,6 @@ fn extract_response(value: RuntimeValue) -> (u16, Vec<(String, String)>, String)
         // Anything else → 200 with stringified body
         other => (200, Vec::new(), other.to_string()),
     }
-}
-
-/// Find the best matching route handler for a request. Returns None for no match.
-///
-/// Uses pattern matching to support `:name` path parameters.
-/// Most-specific route wins (fewest parameter segments); route order breaks ties.
-fn find_matching_handler<'a>(
-    routes: &[RuntimeValue<'a>],
-    req_method: &str,
-    req_path: &str,
-) -> Option<(RuntimeValue<'a>, Vec<(String, String)>)> {
-    let mut best: Option<(RuntimeValue<'a>, Vec<(String, String)>)> = None;
-    let mut best_param_count = usize::MAX;
-
-    for route in routes {
-        if let RuntimeValue::Record(route_fields) = route {
-            let route_method = match route_fields.get("method") {
-                Some(RuntimeValue::String(m)) => m.as_str(),
-                _ => continue,
-            };
-            let route_path = match route_fields.get("path") {
-                Some(RuntimeValue::String(p)) => p.as_str(),
-                _ => continue,
-            };
-            let handler = match route_fields.get("handler") {
-                Some(h) => h,
-                None => continue,
-            };
-
-            if route_method != req_method {
-                continue;
-            }
-
-            if let Some(params) = router::match_path(route_path, req_path) {
-                let pc = params.len();
-                if pc < best_param_count {
-                    best = Some((handler.clone(), params));
-                    best_param_count = pc;
-                    if pc == 0 {
-                        break; // exact match, can't get more specific
-                    }
-                }
-            }
-        }
-    }
-
-    best
 }
 
 /// Inject path parameters into a request record as a `params` field.
