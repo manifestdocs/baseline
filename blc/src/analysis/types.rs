@@ -309,6 +309,27 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
     }
 }
 
+/// Pre-scan top-level function signatures so forward references resolve.
+fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        match child.kind() {
+            "function_def" => {
+                if let (Some(name_node), Some(sig_node)) = (
+                    child.child_by_field_name("name"),
+                    child.child_by_field_name("signature"),
+                ) {
+                    let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                    let ty = parse_type(&sig_node, source, symbols);
+                    symbols.insert(name, ty);
+                }
+            }
+            "module_decl" => collect_signatures(&child, source, symbols),
+            _ => {}
+        }
+    }
+}
+
 pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
@@ -333,6 +354,7 @@ pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
     };
 
     let mut symbols = SymbolTable::with_prelude(prelude);
+    collect_signatures(root, source, &mut symbols);
     check_node(root, source, file, &mut symbols, &mut diagnostics);
     diagnostics
 }
@@ -856,7 +878,19 @@ fn check_node(
         }
         "integer_literal" => Type::Int,
         "float_literal" => Type::Float,
-        "string_literal" => Type::String,
+        "string_literal" => {
+            // Recurse into interpolation children to type-check embedded expressions
+            let named_count = node.named_child_count();
+            for i in 0..named_count {
+                let child = node.named_child(i).unwrap();
+                if child.kind() == "interpolation" {
+                    if let Some(expr) = child.named_child(0) {
+                        check_node(&expr, source, file, symbols, diagnostics);
+                    }
+                }
+            }
+            Type::String
+        }
         "boolean_literal" => Type::Bool,
         "binary_expression" => {
             let left_type = check_node(&node.named_child(0).unwrap(), source, file, symbols, diagnostics);
@@ -1122,6 +1156,126 @@ fn check_node(
                  // Assume it might be a module not yet defined or external
                  Type::Module(name)
              }
+        }
+        "for_expression" => {
+            // for <pattern> in <collection> do <body>
+            let pat_node = node.named_child(0).unwrap();
+            let collection_node = node.named_child(1).unwrap();
+            let body_node = node.named_child(2).unwrap();
+
+            let collection_type = check_node(&collection_node, source, file, symbols, diagnostics);
+
+            let element_type = match &collection_type {
+                Type::List(inner) => *inner.clone(),
+                Type::Unknown => Type::Unknown,
+                _ => {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_023".to_string(),
+                        severity: "error".to_string(),
+                        location: Location {
+                            file: file.to_string(),
+                            line: collection_node.start_position().row + 1,
+                            col: collection_node.start_position().column + 1,
+                        },
+                        message: format!("For loop requires a List, found {}", collection_type),
+                        context: "The collection in a for..in must be a List.".to_string(),
+                        suggestions: vec![],
+                    });
+                    Type::Unknown
+                }
+            };
+
+            symbols.enter_scope();
+            bind_pattern(&pat_node, element_type, source, symbols);
+            check_node(&body_node, source, file, symbols, diagnostics);
+            symbols.exit_scope();
+
+            Type::Unit
+        }
+        "range_expression" => {
+            // start..end — both must be Int, produces List<Int>
+            let start_node = node.named_child(0).unwrap();
+            let end_node = node.named_child(1).unwrap();
+
+            let start_type = check_node(&start_node, source, file, symbols, diagnostics);
+            let end_type = check_node(&end_node, source, file, symbols, diagnostics);
+
+            if start_type != Type::Int && start_type != Type::Unknown {
+                diagnostics.push(Diagnostic {
+                    code: "TYP_024".to_string(),
+                    severity: "error".to_string(),
+                    location: Location {
+                        file: file.to_string(),
+                        line: start_node.start_position().row + 1,
+                        col: start_node.start_position().column + 1,
+                    },
+                    message: format!("Range operand must be Int, found {}", start_type),
+                    context: "Range expressions require Int operands.".to_string(),
+                    suggestions: vec![],
+                });
+            }
+            if end_type != Type::Int && end_type != Type::Unknown {
+                diagnostics.push(Diagnostic {
+                    code: "TYP_024".to_string(),
+                    severity: "error".to_string(),
+                    location: Location {
+                        file: file.to_string(),
+                        line: end_node.start_position().row + 1,
+                        col: end_node.start_position().column + 1,
+                    },
+                    message: format!("Range operand must be Int, found {}", end_type),
+                    context: "Range expressions require Int operands.".to_string(),
+                    suggestions: vec![],
+                });
+            }
+
+            Type::List(Box::new(Type::Int))
+        }
+        "unary_expression" => {
+            // !expr or -expr
+            let op = node.child(0).unwrap().utf8_text(source.as_bytes()).unwrap();
+            let operand_node = node.named_child(0).unwrap();
+            let operand_type = check_node(&operand_node, source, file, symbols, diagnostics);
+
+            match op {
+                "!" => {
+                    if operand_type != Type::Bool && operand_type != Type::Unknown {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_025".to_string(),
+                            severity: "error".to_string(),
+                            location: Location {
+                                file: file.to_string(),
+                                line: operand_node.start_position().row + 1,
+                                col: operand_node.start_position().column + 1,
+                            },
+                            message: format!("Logical NOT requires Bool, found {}", operand_type),
+                            context: "The ! operator can only be applied to Bool values.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
+                    Type::Bool
+                }
+                "-" => {
+                    if operand_type != Type::Int && operand_type != Type::Float && operand_type != Type::Unknown {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_025".to_string(),
+                            severity: "error".to_string(),
+                            location: Location {
+                                file: file.to_string(),
+                                line: operand_node.start_position().row + 1,
+                                col: operand_node.start_position().column + 1,
+                            },
+                            message: format!("Negation requires Int or Float, found {}", operand_type),
+                            context: "The - operator can only be applied to numeric values.".to_string(),
+                            suggestions: vec![],
+                        });
+                        Type::Unknown
+                    } else {
+                        operand_type
+                    }
+                }
+                _ => Type::Unknown,
+            }
         }
         _ => {
             Type::Unit // simplified

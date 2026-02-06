@@ -968,3 +968,184 @@ label = |s| {
 "#;
     check_has_error(source, "TYP_022");
 }
+
+// ============================================================
+// Forward Function Reference Tests
+// ============================================================
+
+#[test]
+fn forward_call() {
+    check_ok(r#"
+main : () -> Int
+main = || helper(1)
+
+helper : Int -> Int
+helper = |x| x + 1
+"#);
+}
+
+#[test]
+fn forward_mutual_recursion() {
+    check_ok(r#"
+is_even : Int -> Bool
+is_even = |n| {
+  match n
+    0 -> true
+    _ -> is_odd(n - 1)
+}
+
+is_odd : Int -> Bool
+is_odd = |n| {
+  match n
+    0 -> false
+    _ -> is_even(n - 1)
+}
+"#);
+}
+
+#[test]
+fn forward_call_type_check() {
+    check_ok(r#"
+run : () -> String
+run = || format(42)
+
+format : Int -> String
+format = |n| "hello"
+"#);
+}
+
+#[test]
+fn truly_undefined_still_errors() {
+    check_has_error(r#"
+main : () -> Int
+main = || nonexistent(1)
+"#, "TYP_002");
+}
+
+#[test]
+fn forward_arg_type_mismatch() {
+    check_has_error(r#"
+main : () -> Int
+main = || helper("wrong")
+
+helper : Int -> Int
+helper = |x| x + 1
+"#, "TYP_008");
+}
+
+#[test]
+fn local_let_stays_sequential() {
+    check_has_error(r#"
+main : () -> Int
+main = || {
+  let result = future_val
+  let future_val = 42
+  result
+}
+"#, "TYP_002");
+}
+
+// ============================================================
+// For Expression Type Checking (TYP_023)
+// ============================================================
+
+#[test]
+fn for_over_list_ok() {
+    check_ok(r#"
+foo : () -> ()
+foo = for x in [1, 2, 3] do x + 1
+"#);
+}
+
+#[test]
+fn for_over_non_list_errors() {
+    check_has_error(r#"
+foo : () -> ()
+foo = for x in 42 do x
+"#, "TYP_023");
+}
+
+// ============================================================
+// Range Expression Type Checking (TYP_024)
+// ============================================================
+
+#[test]
+fn range_int_ok() {
+    check_ok(r#"
+foo : () -> ()
+foo = {
+  let r = 1..10
+}
+"#);
+}
+
+#[test]
+fn range_non_int_errors() {
+    check_has_error(r#"
+foo : () -> ()
+foo = {
+  let r = "a".."z"
+}
+"#, "TYP_024");
+}
+
+// ============================================================
+// Unary Expression Type Checking (TYP_025)
+// ============================================================
+
+#[test]
+fn unary_not_bool_ok() {
+    check_ok(r#"
+foo : () -> Bool
+foo = !true
+"#);
+}
+
+#[test]
+fn unary_negate_int_ok() {
+    check_ok(r#"
+foo : () -> Int
+foo = -5
+"#);
+}
+
+#[test]
+fn unary_not_int_errors() {
+    check_has_error(r#"
+foo : () -> Bool
+foo = !42
+"#, "TYP_025");
+}
+
+#[test]
+fn unary_negate_string_errors() {
+    check_has_error(r#"
+foo : () -> ()
+foo = {
+  let n = -"hello"
+}
+"#, "TYP_025");
+}
+
+// ============================================================
+// String Interpolation Type Checking
+// ============================================================
+
+#[test]
+fn string_interpolation_checks_expr() {
+    check_has_error(r#"
+foo : () -> String
+foo = "hello ${undefined_var}"
+"#, "TYP_002");
+}
+
+#[test]
+fn string_interpolation_ok() {
+    check_ok(r#"
+foo : () -> String
+foo = {
+  let x = 1
+  "val: ${x}"
+}
+"#);
+}
