@@ -1,12 +1,20 @@
 @prelude(server)
 
-// -- Handler functions returning Response records --
+// -- Handler functions using Response builders --
 
 hello_handler : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-hello_handler = |req| Ok({ status: 200, headers: [("Content-Type", "text/plain")], body: "Hello, World!" })
+hello_handler = |req| {
+  let resp = Response.ok("Hello, World!")
+    |> Response.with_header("Content-Type", "text/plain")
+  Ok(resp)
+}
 
 echo_handler : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-echo_handler = |req| Ok({ status: 200, headers: [("Content-Type", "text/plain")], body: req.body })
+echo_handler = |req| {
+  let resp = Response.ok(req.body)
+    |> Response.with_header("Content-Type", "text/plain")
+  Ok(resp)
+}
 
 // -- Build router with direct calls --
 

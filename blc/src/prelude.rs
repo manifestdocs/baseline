@@ -30,10 +30,10 @@ impl Prelude {
                 &["Option", "Result", "String", "List", "Json"]
             }
             Prelude::Script => {
-                &["Option", "Result", "String", "List", "Json", "Http"]
+                &["Option", "Result", "String", "List", "Json", "Http", "Response"]
             }
             Prelude::Server => {
-                &["Option", "Result", "String", "List", "Json", "Http", "Router"]
+                &["Option", "Result", "String", "List", "Json", "Http", "Response", "Router"]
             }
         }
     }
@@ -60,11 +60,11 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Json", "Math",
-                "Console", "Log", "Time", "Random", "Env", "Fs", "Http",
+                "Console", "Log", "Time", "Random", "Env", "Fs", "Http", "Response",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Json", "Math",
-                "Console", "Log", "Time", "Env", "Http",
+                "Console", "Log", "Time", "Env", "Http", "Response",
                 "Router", "Server", "Db", "Metrics",
             ],
         }

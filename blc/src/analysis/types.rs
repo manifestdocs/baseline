@@ -344,6 +344,19 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         sigs.insert("List.concat".into(),  Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
     }
 
+    // -- Response builder (pure) --
+    if native_modules.contains(&"Response") {
+        sigs.insert("Response.ok".into(),          Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Response.json".into(),        Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Response.created".into(),     Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Response.no_content".into(),  Type::Function(vec![], Box::new(Type::Unknown)));
+        sigs.insert("Response.bad_request".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Response.not_found".into(),   Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Response.error".into(),       Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Response.status".into(),      Type::Function(vec![Type::Int, Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Response.with_header".into(), Type::Function(vec![Type::Unknown, Type::String, Type::String], Box::new(Type::Unknown)));
+    }
+
     // -- Router native methods (pure) --
     if native_modules.contains(&"Router") {
         sigs.insert("Router.new".into(),    Type::Function(vec![], Box::new(Type::Unknown)));
