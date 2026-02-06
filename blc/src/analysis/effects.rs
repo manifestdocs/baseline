@@ -308,7 +308,12 @@ fn check_effectful_call(
 fn infer_required_effect(call_name: &str) -> String {
     // Handle qualified names like Http.get!
     if let Some(dot_pos) = call_name.find('.') {
-        return call_name[..dot_pos].to_string();
+        let module = &call_name[..dot_pos];
+        // Server.listen! requires the Http effect (starting a server is an Http capability)
+        return match module {
+            "Server" => "Http".to_string(),
+            _ => module.to_string(),
+        };
     }
 
     // Handle simple names

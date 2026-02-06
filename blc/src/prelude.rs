@@ -15,6 +15,8 @@ pub enum Prelude {
     Core,
     /// `@prelude(script)` — Core + Console, Log, Time, Random, Env, Fs.
     Script,
+    /// `@prelude(server)` — Script + Router, Server, Db, Metrics.
+    Server,
 }
 
 /// Stdlib module names gated by prelude.
@@ -27,6 +29,9 @@ impl Prelude {
             Prelude::Pure | Prelude::Core | Prelude::Script => {
                 &["Option", "Result", "String", "List", "Json"]
             }
+            Prelude::Server => {
+                &["Option", "Result", "String", "List", "Json", "Router"]
+            }
         }
     }
 
@@ -36,6 +41,9 @@ impl Prelude {
             Prelude::None | Prelude::Minimal => &[],
             Prelude::Pure | Prelude::Core => &["Math"],
             Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Http"],
+            Prelude::Server => {
+                &["Math", "Console", "Log", "Time", "Env", "Http", "Server", "Db", "Metrics"]
+            }
         }
     }
 
@@ -50,6 +58,11 @@ impl Prelude {
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Json", "Math",
                 "Console", "Log", "Time", "Random", "Env", "Fs", "Http",
+            ],
+            Prelude::Server => &[
+                "Option", "Result", "String", "List", "Json", "Math",
+                "Console", "Log", "Time", "Env", "Http",
+                "Router", "Server", "Db", "Metrics",
             ],
         }
     }
@@ -71,6 +84,7 @@ pub fn extract_prelude<'a>(root: &Node<'a>, source: &str) -> Result<Prelude, Str
                     "pure" => Ok(Prelude::Pure),
                     "core" => Ok(Prelude::Core),
                     "script" => Ok(Prelude::Script),
+                    "server" => Ok(Prelude::Server),
                     other => Err(format!("Unknown prelude variant: `{}`", other)),
                 };
             }
@@ -115,6 +129,23 @@ mod tests {
     #[test]
     fn script_prelude() {
         assert_eq!(parse("@prelude(script)\nmain : () -> Int\nmain = || 1"), Prelude::Script);
+    }
+
+    #[test]
+    fn server_prelude() {
+        assert_eq!(parse("@prelude(server)\nmain : () -> Int\nmain = || 1"), Prelude::Server);
+    }
+
+    #[test]
+    fn server_has_router_and_server_modules() {
+        let p = Prelude::Server;
+        assert!(p.native_modules().contains(&"Router"));
+        assert!(p.builtin_modules().contains(&"Server"));
+        assert!(p.builtin_modules().contains(&"Http"));
+        assert!(p.builtin_modules().contains(&"Db"));
+        assert!(p.builtin_modules().contains(&"Metrics"));
+        assert!(p.type_modules().contains(&"Router"));
+        assert!(p.type_modules().contains(&"Server"));
     }
 
     #[test]

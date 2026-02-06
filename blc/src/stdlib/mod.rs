@@ -2,6 +2,7 @@ pub mod json;
 pub mod list;
 pub mod option;
 pub mod result;
+pub mod router;
 pub mod string;
 
 use std::collections::HashMap;
@@ -42,6 +43,9 @@ impl NativeRegistry {
         }
         if modules.contains(&"Json") {
             json::register(&mut registry);
+        }
+        if modules.contains(&"Router") {
+            router::register(&mut registry);
         }
         registry
     }

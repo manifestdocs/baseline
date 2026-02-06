@@ -1,0 +1,41 @@
+@prelude(server)
+
+// -- Handler functions --
+
+hello_handler : { method: String, path: String, body: String } -> {Http} Result<String, String>
+hello_handler = |req| Ok("Hello, World!")
+
+echo_handler : { method: String, path: String, body: String } -> {Http} Result<String, String>
+echo_handler = |req| Ok(req.body)
+
+// -- Build router with direct calls --
+
+build_direct : () -> { routes: List<Unknown> }
+build_direct = || {
+  let app = Router.new()
+  let app = Router.get(app, "/hello", hello_handler)
+  let app = Router.post(app, "/echo", echo_handler)
+  app
+}
+
+// -- Build router with pipe composition --
+
+build_piped : () -> { routes: List<Unknown> }
+build_piped = || {
+  Router.new()
+    |> Router.get("/hello", hello_handler)
+    |> Router.post("/echo", echo_handler)
+}
+
+// -- Test: verify route counts match --
+
+main! : () -> {Console} ()
+main! = || {
+  let direct = build_direct()
+  let piped = build_piped()
+  let direct_count = List.length(Router.routes(direct))
+  let piped_count = List.length(Router.routes(piped))
+  Console.println!("direct routes: ${direct_count}")
+  Console.println!("piped routes: ${piped_count}")
+  Console.println!("match: ${direct_count == piped_count}")
+}

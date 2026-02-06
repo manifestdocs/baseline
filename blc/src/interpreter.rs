@@ -4,6 +4,7 @@ use tree_sitter::Node;
 use crate::builtins::BuiltinRegistry;
 use crate::prelude::Prelude;
 use crate::stdlib::NativeRegistry;
+use crate::stdlib::router;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeValue<'a> {
@@ -22,6 +23,9 @@ pub enum RuntimeValue<'a> {
     Enum(String, Vec<RuntimeValue<'a>>), // VariantName, PayloadValues
     /// Sentinel for `?` operator early-return propagation.
     EarlyReturn(Box<RuntimeValue<'a>>),
+    /// Native closure: qualified name + captured args for partial application.
+    /// Used by Router.get/post/etc. for pipe-based composition.
+    NativeClosure(String, Vec<RuntimeValue<'a>>),
 }
 
 impl<'a> std::fmt::Display for RuntimeValue<'a> {
@@ -55,6 +59,7 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
                 }
             }
             RuntimeValue::EarlyReturn(inner) => write!(f, "<early_return: {}>", inner),
+            RuntimeValue::NativeClosure(name, _) => write!(f, "<native_closure: {}>", name),
         }
     }
 }
@@ -118,6 +123,7 @@ fn err_at(msg: impl Into<String>, node: &Node, ctx: &Context) -> RuntimeError {
 const ALL_MODULES: &[&str] = &[
     "Option", "Result", "String", "List", "Json", "Math",
     "Console", "Log", "Time", "Random", "Env", "Fs", "Http",
+    "Router", "Server", "Db", "Metrics",
 ];
 
 pub struct Context<'a> {
@@ -433,7 +439,182 @@ fn dispatch_hof<'a>(
             }
             Ok(Some(RuntimeValue::Enum("None".to_string(), Vec::new())))
         }
+        // Router.get/post/put/delete — 3 args: direct, 2 args: partial for pipes
+        "Router.get" | "Router.post" | "Router.put" | "Router.delete" => {
+            let method = qualified.strip_prefix("Router.").unwrap().to_uppercase();
+            match arg_vals.len() {
+                3 => {
+                    let result = router::add_route(&method, &arg_vals[0], &arg_vals[1], &arg_vals[2])
+                        .map_err(|msg| err_at(msg, node, context))?;
+                    Ok(Some(result))
+                }
+                2 => {
+                    // Partial application: return NativeClosure for pipe composition
+                    Ok(Some(RuntimeValue::NativeClosure(qualified.to_string(), arg_vals)))
+                }
+                n => Err(err_at(
+                    format!("{} expects 2 or 3 arguments, got {}", qualified, n),
+                    node, context,
+                )),
+            }
+        }
+        // Server.listen!(port, router) — start HTTP server
+        "Server.listen!" => {
+            if arg_vals.len() != 2 {
+                return Err(err_at(
+                    format!("Server.listen! expects 2 arguments (port, router), got {}", arg_vals.len()),
+                    node, context,
+                ));
+            }
+            let port = match &arg_vals[0] {
+                RuntimeValue::Int(p) => *p as u16,
+                other => return Err(err_at(
+                    format!("Server.listen! port must be Int, got {}", other),
+                    node, context,
+                )),
+            };
+            let router_val = arg_vals[1].clone();
+            server_listen(port, &router_val, node, source, context)?;
+            Ok(Some(RuntimeValue::Unit))
+        }
         _ => Ok(None),
+    }
+}
+
+/// Start an HTTP server on the given port using the router's route table.
+fn server_listen<'a>(
+    port: u16,
+    router_val: &RuntimeValue<'a>,
+    node: &Node<'a>,
+    source: &str,
+    context: &mut Context<'a>,
+) -> Result<(), RuntimeError> {
+    // Extract routes from the router
+    let routes = match router_val {
+        RuntimeValue::Record(fields) => match fields.get("routes") {
+            Some(RuntimeValue::List(routes)) => routes.clone(),
+            _ => return Err(err_at("Server.listen! expects a Router", node, context)),
+        },
+        _ => return Err(err_at("Server.listen! second argument must be a Router", node, context)),
+    };
+
+    let addr = format!("0.0.0.0:{}", port);
+    let server = tiny_http::Server::http(&addr)
+        .map_err(|e| err_at(format!("Failed to start server on {}: {}", addr, e), node, context))?;
+
+    eprintln!("[server] Listening on http://0.0.0.0:{}", port);
+
+    for mut request in server.incoming_requests() {
+        let req_method = request.method().to_string();
+        let req_path = request.url().to_string();
+        let mut req_body = String::new();
+        if let Err(e) = request.as_reader().read_to_string(&mut req_body) {
+            eprintln!("[server] Failed to read request body: {}", e);
+            let response = tiny_http::Response::from_string("Internal Server Error")
+                .with_status_code(tiny_http::StatusCode(500));
+            let _ = request.respond(response);
+            continue;
+        }
+
+        // Build request record
+        let mut req_fields = std::collections::HashMap::new();
+        req_fields.insert("method".to_string(), RuntimeValue::String(req_method.clone()));
+        req_fields.insert("path".to_string(), RuntimeValue::String(req_path.clone()));
+        req_fields.insert("body".to_string(), RuntimeValue::String(req_body));
+        let req_record = RuntimeValue::Record(req_fields);
+
+        // Find matching route and build response
+        let (status, body) = match find_and_invoke_handler(&routes, &req_method, &req_path, &req_record, node, source, context) {
+            Some(Ok(RuntimeValue::Enum(ref name, ref payload)))
+                if name == "Ok" && payload.len() == 1 =>
+            {
+                (200, payload[0].to_string())
+            }
+            Some(Ok(RuntimeValue::Enum(ref name, ref payload)))
+                if name == "Err" && payload.len() == 1 =>
+            {
+                (500, payload[0].to_string())
+            }
+            Some(Ok(other)) => (200, other.to_string()),
+            Some(Err(e)) => {
+                eprintln!("[server] Handler error: {}", e);
+                (500, "Internal Server Error".to_string())
+            }
+            None => (404, "Not Found".to_string()),
+        };
+
+        let response = tiny_http::Response::from_string(&body)
+            .with_status_code(tiny_http::StatusCode(status));
+        let _ = request.respond(response);
+    }
+
+    Ok(())
+}
+
+/// Find a matching route and invoke its handler. Returns None for no match.
+fn find_and_invoke_handler<'a>(
+    routes: &[RuntimeValue<'a>],
+    req_method: &str,
+    req_path: &str,
+    req_record: &RuntimeValue<'a>,
+    node: &Node<'a>,
+    source: &str,
+    context: &mut Context<'a>,
+) -> Option<Result<RuntimeValue<'a>, RuntimeError>> {
+    for route in routes {
+        if let RuntimeValue::Record(route_fields) = route {
+            let route_method = match route_fields.get("method") {
+                Some(RuntimeValue::String(m)) => m.as_str(),
+                _ => continue,
+            };
+            let route_path = match route_fields.get("path") {
+                Some(RuntimeValue::String(p)) => p.as_str(),
+                _ => continue,
+            };
+            let handler = match route_fields.get("handler") {
+                Some(h) => h,
+                None => continue,
+            };
+
+            if route_method == req_method && route_path == req_path {
+                return Some(apply_function(
+                    handler,
+                    &[req_record.clone()],
+                    source,
+                    context,
+                    Some(node),
+                ));
+            }
+        }
+    }
+    None
+}
+
+/// Apply a NativeClosure by prepending the piped value to its captured args.
+fn apply_native_closure<'a>(
+    name: &str,
+    piped_val: &RuntimeValue<'a>,
+    captured_args: &[RuntimeValue<'a>],
+    node: &Node<'a>,
+    _source: &str,
+    _context: &mut Context<'a>,
+) -> Result<RuntimeValue<'a>, RuntimeError> {
+    match name {
+        "Router.get" | "Router.post" | "Router.put" | "Router.delete" => {
+            let method = name.strip_prefix("Router.").unwrap().to_uppercase();
+            if captured_args.len() != 2 {
+                return Err(err_at(
+                    format!("{} NativeClosure expects 2 captured args, got {}", name, captured_args.len()),
+                    node, _context,
+                ));
+            }
+            router::add_route(&method, piped_val, &captured_args[0], &captured_args[1])
+                .map_err(|msg| err_at(msg, node, _context))
+        }
+        _ => Err(err_at(
+            format!("Unknown NativeClosure: {}", name),
+            node, _context,
+        )),
     }
 }
 
@@ -613,6 +794,15 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                 }
                 RuntimeValue::Enum(ctor_name, _) => {
                      Ok(RuntimeValue::Enum(ctor_name, arg_vals))
+                 }
+                 RuntimeValue::NativeClosure(name, captured_args) => {
+                     if arg_vals.len() != 1 {
+                         return Err(err_at(
+                             format!("NativeClosure {} expects 1 argument, got {}", name, arg_vals.len()),
+                             node, context,
+                         ));
+                     }
+                     apply_native_closure(&name, &arg_vals[0], &captured_args, node, source, context)
                  }
                  _ => Err(err_at(
                      format!("Not a function: {}", func_name),
@@ -1027,6 +1217,9 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                      let result = eval(&body_node, source, context);
                      context.exit_scope();
                      result
+                 }
+                 RuntimeValue::NativeClosure(name, captured_args) => {
+                     apply_native_closure(&name, &left_val, &captured_args, node, source, context)
                  }
                  _ => Err(err_at("Pipe target must be a function", node, context)),
              }

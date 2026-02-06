@@ -272,6 +272,21 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         sigs.insert("List.concat".into(),  Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
     }
 
+    // -- Router native methods (pure) --
+    if native_modules.contains(&"Router") {
+        sigs.insert("Router.new".into(),    Type::Function(vec![], Box::new(Type::Unknown)));
+        sigs.insert("Router.get".into(),    Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Router.post".into(),   Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Router.put".into(),    Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Router.delete".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Router.routes".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+    }
+
+    // -- Server builtins (effect: Http) --
+    if builtin_modules.contains(&"Server") {
+        sigs.insert("Server.listen!".into(), Type::Function(vec![Type::Int, Type::Unknown], Box::new(Type::Unit)));
+    }
+
     sigs
 }
 
@@ -558,6 +573,15 @@ fn check_node(
                 let params_provided = if total_children > 1 { total_children - 1 } else { 0 };
 
                 if params_provided != arg_types.len() {
+                    // Allow partial application in pipe contexts
+                    let in_pipe = node.parent()
+                        .map(|p| p.kind() == "pipe_expression")
+                        .unwrap_or(false);
+                    if params_provided < arg_types.len() && in_pipe {
+                        // Partial application: return function for remaining params
+                        let remaining = arg_types[params_provided..].to_vec();
+                        return Type::Function(remaining, ret_type);
+                    }
                     diagnostics.push(Diagnostic {
                         code: "TYP_007".to_string(),
                         severity: "error".to_string(),
@@ -724,6 +748,25 @@ fn check_node(
                                 col: field_node.start_position().column + 1,
                             },
                             message: format!("Struct `{}` has no field `{}`", name, field_name),
+                            context: "Field access error.".to_string(),
+                            suggestions: vec![],
+                        });
+                        Type::Unknown
+                    }
+                }
+                Type::Record(ref fields) => {
+                    if let Some(ty) = fields.get(field_name) {
+                        ty.clone()
+                    } else {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_014".to_string(),
+                            severity: "error".to_string(),
+                            location: Location {
+                                file: file.to_string(),
+                                line: field_node.start_position().row + 1,
+                                col: field_node.start_position().column + 1,
+                            },
+                            message: format!("Record has no field `{}`", field_name),
                             context: "Field access error.".to_string(),
                             suggestions: vec![],
                         });

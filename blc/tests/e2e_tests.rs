@@ -279,6 +279,25 @@ fn check_type_test() {
 }
 
 // ===========================================================================
+// Server framework tests
+// ===========================================================================
+
+#[test]
+fn check_server_test() {
+    assert_check_ok("server_test.bl");
+}
+
+#[test]
+fn run_server_test() {
+    assert_run_ok(
+        "server_test.bl",
+        "direct routes: 2\n\
+         piped routes: 2\n\
+         match: true\n",
+    );
+}
+
+// ===========================================================================
 // Runtime error tests — verify error format includes location and stack trace
 // ===========================================================================
 
