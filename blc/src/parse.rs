@@ -9,7 +9,7 @@ use std::path::Path;
 use tree_sitter::Parser;
 use tree_sitter_baseline::LANGUAGE;
 
-use crate::diagnostics::{CheckResult, Diagnostic, Location, Suggestion};
+use crate::diagnostics::{CheckResult, Diagnostic, Location, Severity, Suggestion};
 
 /// Parse a Baseline source file and return check results.
 pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
@@ -45,10 +45,11 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
         diagnostics.extend(refinement_diagnostics);
     }
 
-    let status = if diagnostics.is_empty() {
-        "success".to_string()
-    } else {
+    let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
+    let status = if has_errors {
         "failure".to_string()
+    } else {
+        "success".to_string()
     };
 
     Ok(CheckResult { status, diagnostics })
@@ -80,10 +81,11 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
         diagnostics.extend(refinement_diagnostics);
     }
 
-    let status = if diagnostics.is_empty() {
-        "success".to_string()
-    } else {
+    let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
+    let status = if has_errors {
         "failure".to_string()
+    } else {
+        "success".to_string()
     };
 
     CheckResult { status, diagnostics }
@@ -98,15 +100,18 @@ fn collect_errors(
 ) {
     if node.is_error() {
         let start = node.start_position();
+        let end = node.end_position();
         let text = node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
 
         diagnostics.push(Diagnostic {
             code: "SYN_001".to_string(),
-            severity: "error".to_string(),
+            severity: Severity::Error,
             location: Location {
                 file: file.to_string(),
                 line: start.row + 1,
                 col: start.column + 1,
+                end_line: Some(end.row + 1),
+                end_col: Some(end.column + 1),
             },
             message: format!("Syntax error: unexpected `{}`", text.chars().take(20).collect::<String>()),
             context: "The parser encountered unexpected tokens.".to_string(),
@@ -114,14 +119,17 @@ fn collect_errors(
         });
     } else if node.is_missing() {
         let start = node.start_position();
+        let end = node.end_position();
 
         diagnostics.push(Diagnostic {
             code: "SYN_002".to_string(),
-            severity: "error".to_string(),
+            severity: Severity::Error,
             location: Location {
                 file: file.to_string(),
                 line: start.row + 1,
                 col: start.column + 1,
+                end_line: Some(end.row + 1),
+                end_col: Some(end.column + 1),
             },
             message: format!("Missing expected: {}", node.kind()),
             context: "A required syntax element is missing.".to_string(),

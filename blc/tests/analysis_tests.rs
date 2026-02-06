@@ -1,3 +1,4 @@
+use blc::diagnostics::Severity;
 use blc::parse::parse_source;
 
 /// Helper: check source has no diagnostics
@@ -1097,7 +1098,7 @@ foo = {
 fn unary_not_bool_ok() {
     check_ok(r#"
 foo : () -> Bool
-foo = !true
+foo = not true
 "#);
 }
 
@@ -1113,7 +1114,7 @@ foo = -5
 fn unary_not_int_errors() {
     check_has_error(r#"
 foo : () -> Bool
-foo = !42
+foo = not 42
 "#, "TYP_025");
 }
 
@@ -1148,4 +1149,115 @@ foo = {
   "val: ${x}"
 }
 "#);
+}
+
+// ============================================================
+// Warning Behavior Tests
+// ============================================================
+
+#[test]
+fn warning_does_not_cause_failure() {
+    // f(g(x)) produces STY_001 warning but no errors — status should be success
+    let source = r#"
+g : Int -> Int
+g = |x| x + 1
+
+f : Int -> Int
+f = |x| x * 2
+
+main : () -> Int
+main = f(g(1))
+"#;
+    let result = parse_source(source, "<test>");
+    assert_eq!(result.status, "success", "Warnings should not cause failure");
+    assert!(
+        result.diagnostics.iter().any(|d| d.code == "STY_001"),
+        "Expected STY_001 warning"
+    );
+}
+
+#[test]
+fn nested_call_pipe_suggestion() {
+    // f(g(x)) should emit STY_001 warning
+    let source = r#"
+g : Int -> Int
+g = |x| x + 1
+
+f : Int -> Int
+f = |x| x * 2
+
+main : () -> Int
+main = f(g(1))
+"#;
+    let result = parse_source(source, "<test>");
+    let sty_warnings: Vec<_> = result.diagnostics.iter()
+        .filter(|d| d.code == "STY_001")
+        .collect();
+    assert!(!sty_warnings.is_empty(), "Expected STY_001 for nested call");
+    assert_eq!(sty_warnings[0].severity, Severity::Warning);
+}
+
+#[test]
+fn pipe_style_no_warning() {
+    // x |> g |> f should NOT emit STY_001
+    let source = r#"
+g : Int -> Int
+g = |x| x + 1
+
+f : Int -> Int
+f = |x| x * 2
+
+main : () -> Int
+main = 1 |> g |> f
+"#;
+    let result = parse_source(source, "<test>");
+    assert!(
+        !result.diagnostics.iter().any(|d| d.code == "STY_001"),
+        "Pipe style should not trigger STY_001"
+    );
+}
+
+#[test]
+fn error_and_warning_both_reported() {
+    // Source with both a type error and a nested call warning
+    let source = r#"
+g : Int -> Int
+g = |x| x + 1
+
+f : Int -> String
+f = |x| x * 2
+
+main : () -> String
+main = f(g(1))
+"#;
+    let result = parse_source(source, "<test>");
+    assert_eq!(result.status, "failure", "Errors should cause failure");
+    assert!(
+        result.diagnostics.iter().any(|d| d.severity == Severity::Error),
+        "Should have at least one error"
+    );
+    assert!(
+        result.diagnostics.iter().any(|d| d.severity == Severity::Warning),
+        "Should have at least one warning"
+    );
+}
+
+#[test]
+fn multi_arg_call_no_warning() {
+    // f(x, g(y)) should NOT emit STY_001 (only single-arg calls trigger it)
+    let source = r#"
+g : Int -> Int
+g = |x| x + 1
+
+f : (Int, Int) -> Int
+f = |a, b| a + b
+
+main : () -> Int
+main = f(1, g(2))
+"#;
+    let result = parse_source(source, "<test>");
+    assert!(
+        !result.diagnostics.iter().any(|d| d.code == "STY_001"),
+        "Multi-arg calls should not trigger STY_001"
+    );
 }

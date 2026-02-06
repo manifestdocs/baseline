@@ -1,5 +1,5 @@
 use tree_sitter::{Node, Tree};
-use crate::diagnostics::{Diagnostic, Location};
+use crate::diagnostics::{Diagnostic, Location, Severity};
 use std::collections::HashMap;
 
 /// Represents a numeric interval (inclusive).
@@ -265,14 +265,18 @@ fn check_let_binding(
     if let (Some(t_name), Some(int_val)) = (type_name, resolved_value) {
         if let Some(interval) = refined_types.get(&t_name) {
              if !interval.contains(int_val) {
-                 let start = value_node.unwrap().start_position();
+                 let vn = value_node.unwrap();
+                 let start = vn.start_position();
+                 let end = vn.end_position();
                  diagnostics.push(Diagnostic {
                      code: "REF_001".to_string(),
-                     severity: "error".to_string(),
+                     severity: Severity::Error,
                      location: Location {
                          file: file.to_string(),
                          line: start.row + 1,
                          col: start.column + 1,
+                         end_line: Some(end.row + 1),
+                         end_col: Some(end.column + 1),
                      },
                      message: format!(
                          "Refinement Violation: Value {} is out of bounds for type {}", 

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
-use crate::diagnostics::{Diagnostic, Location, Suggestion, Patch};
+use crate::diagnostics::{Diagnostic, Location, Severity, Suggestion, Patch};
 use crate::prelude::{self, Prelude};
 
 /// Classification of what a single match arm pattern covers.
@@ -80,6 +80,19 @@ impl std::fmt::Display for Type {
             Type::Module(name) => write!(f, "Module({})", name),
             Type::Unknown => write!(f, "<unknown>"),
         }
+    }
+}
+
+/// Build a Location from a tree-sitter Node.
+fn loc(file: &str, node: &Node) -> Location {
+    let start = node.start_position();
+    let end = node.end_position();
+    Location {
+        file: file.to_string(),
+        line: start.row + 1,
+        col: start.column + 1,
+        end_line: Some(end.row + 1),
+        end_col: Some(end.column + 1),
     }
 }
 
@@ -339,11 +352,13 @@ pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
         Err(msg) => {
             diagnostics.push(Diagnostic {
                 code: "PRE_001".to_string(),
-                severity: "error".to_string(),
+                severity: Severity::Error,
                 location: Location {
                     file: file.to_string(),
                     line: 1,
                     col: 1,
+                    end_line: None,
+                    end_col: None,
                 },
                 message: msg,
                 context: "Valid prelude variants are: core, script.".to_string(),
@@ -492,12 +507,8 @@ fn check_node(
                      if arg_count != arg_types.len() {
                           diagnostics.push(Diagnostic {
                              code: "TYP_005".to_string(),
-                             severity: "error".to_string(),
-                             location: Location {
-                                 file: file.to_string(),
-                                 line: body_node.start_position().row + 1,
-                                 col: body_node.start_position().column + 1,
-                             },
+                             severity: Severity::Error,
+                             location: loc(file, &body_node),
                              message: format!("Function `{}` expects {} arguments, lambda has {}", name, arg_types.len(), arg_count),
                              context: "Function implementation must match signature.".to_string(),
                              suggestions: vec![],
@@ -519,12 +530,8 @@ fn check_node(
                          if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
                               diagnostics.push(Diagnostic {
                                  code: "TYP_006".to_string(),
-                                 severity: "error".to_string(),
-                                 location: Location {
-                                     file: file.to_string(),
-                                     line: lambda_body.start_position().row + 1,
-                                     col: lambda_body.start_position().column + 1,
-                                 },
+                                 severity: Severity::Error,
+                                 location: loc(file, &lambda_body),
                                  message: format!("Function `{}` declares return type {}, body returns {}", name, ret_type, body_type),
                                  context: "Function body return type must match signature.".to_string(),
                                  suggestions: vec![],
@@ -536,12 +543,8 @@ fn check_node(
                      if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
                           diagnostics.push(Diagnostic {
                                  code: "TYP_006".to_string(),
-                                 severity: "error".to_string(),
-                                 location: Location {
-                                     file: file.to_string(),
-                                     line: body_node.start_position().row + 1,
-                                     col: body_node.start_position().column + 1,
-                                 },
+                                 severity: Severity::Error,
+                                 location: loc(file, &body_node),
                                  message: format!("Function `{}` declares return type {}, body returns {}", name, ret_type, body_type),
                                  context: "Function body return type must match signature.".to_string(),
                                  suggestions: vec![],
@@ -571,12 +574,8 @@ fn check_node(
                         if !types_compatible(&expr_type, &declared_type) {
                             diagnostics.push(Diagnostic {
                                 code: "TYP_021".to_string(),
-                                severity: "error".to_string(),
-                                location: Location {
-                                    file: file.to_string(),
-                                    line: expr_node.start_position().row + 1,
-                                    col: expr_node.start_position().column + 1,
-                                },
+                                severity: Severity::Error,
+                                location: loc(file, &expr_node),
                                 message: format!("Binding type mismatch: declared {}, found {}", declared_type, expr_type),
                                 context: "Expression type must match declared type annotation.".to_string(),
                                 suggestions: vec![],
@@ -595,12 +594,29 @@ fn check_node(
         "call_expression" => {
             let func_node = node.named_child(0).unwrap();
             let func_type = check_node(&func_node, source, file, symbols, diagnostics);
-            
-            if let Type::Function(arg_types, ret_type) = func_type {
-                let total_children = node.named_child_count();
-                // 0 is func, 1..N are args
-                let params_provided = if total_children > 1 { total_children - 1 } else { 0 };
 
+            // STY_001: suggest pipe for nested single-arg calls like f(g(x))
+            let total_children = node.named_child_count();
+            let params_provided = if total_children > 1 { total_children - 1 } else { 0 };
+            if params_provided == 1 {
+                let single_arg = node.named_child(1).unwrap();
+                if single_arg.kind() == "call_expression" {
+                    diagnostics.push(Diagnostic {
+                        code: "STY_001".to_string(),
+                        severity: Severity::Warning,
+                        location: loc(file, &node),
+                        message: "Nested call could use pipe syntax".to_string(),
+                        context: "Consider rewriting f(g(x)) as x |> g |> f for readability.".to_string(),
+                        suggestions: vec![Suggestion {
+                            strategy: "rewrite".to_string(),
+                            description: "Use pipe operator |> instead of nested calls".to_string(),
+                            patch: None,
+                        }],
+                    });
+                }
+            }
+
+            if let Type::Function(arg_types, ret_type) = func_type {
                 if params_provided != arg_types.len() {
                     // Allow partial application in pipe contexts
                     let in_pipe = node.parent()
@@ -613,12 +629,8 @@ fn check_node(
                     }
                     diagnostics.push(Diagnostic {
                         code: "TYP_007".to_string(),
-                        severity: "error".to_string(),
-                        location: Location {
-                             file: file.to_string(),
-                             line: node.start_position().row + 1,
-                             col: node.start_position().column + 1,
-                        },
+                        severity: Severity::Error,
+                        location: loc(file, &node),
                         message: format!("Function call expects {} arguments, found {}", arg_types.len(), params_provided),
                         context: "Argument count mismatch.".to_string(),
                         suggestions: vec![],
@@ -643,12 +655,8 @@ fn check_node(
                     if !types_compatible(&arg_type, &arg_types[i]) {
                          diagnostics.push(Diagnostic {
                             code: "TYP_008".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                 file: file.to_string(),
-                                 line: arg_expr.start_position().row + 1,
-                                 col: arg_expr.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &arg_expr),
                             message: format!("Argument {} mismatch: expected {}, found {}", i+1, arg_types[i], arg_type),
                             context: "Argument type must match function signature.".to_string(),
                             suggestions: vec![],
@@ -661,12 +669,8 @@ fn check_node(
             } else {
                  diagnostics.push(Diagnostic {
                     code: "TYP_009".to_string(),
-                    severity: "error".to_string(),
-                    location: Location {
-                         file: file.to_string(),
-                         line: func_node.start_position().row + 1,
-                         col: func_node.start_position().column + 1,
-                    },
+                    severity: Severity::Error,
+                    location: loc(file, &func_node),
                     message: format!("Called expression is not a function, it is {}", func_type),
                     context: "Only functions can be called.".to_string(),
                     suggestions: vec![],
@@ -694,12 +698,8 @@ fn check_node(
                          if !types_compatible(&ftype, expected_type) {
                               diagnostics.push(Diagnostic {
                                 code: "TYP_010".to_string(),
-                                severity: "error".to_string(),
-                                location: Location {
-                                    file: file.to_string(),
-                                    line: fexpr_node.start_position().row + 1,
-                                    col: fexpr_node.start_position().column + 1,
-                                },
+                                severity: Severity::Error,
+                                location: loc(file, &fexpr_node),
                                 message: format!("Field `{}` expects {}, found {}", fname, expected_type, ftype),
                                 context: "Struct field type mismatch.".to_string(),
                                 suggestions: vec![],
@@ -709,12 +709,8 @@ fn check_node(
                      } else {
                           diagnostics.push(Diagnostic {
                             code: "TYP_011".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: fname_node.start_position().row + 1,
-                                col: fname_node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &fname_node),
                             message: format!("Struct `{}` has no field `{}`", name, fname),
                             context: "Field not defined in struct.".to_string(),
                             suggestions: vec![],
@@ -726,12 +722,8 @@ fn check_node(
                      if !initialized_fields.contains(required_field) {
                           diagnostics.push(Diagnostic {
                             code: "TYP_012".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: node.start_position().row + 1,
-                                col: node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &node),
                             message: format!("Missing field `{}`", required_field),
                             context: "All struct fields must be initialized.".to_string(),
                             suggestions: vec![],
@@ -743,12 +735,8 @@ fn check_node(
             } else {
                  diagnostics.push(Diagnostic {
                     code: "TYP_013".to_string(),
-                    severity: "error".to_string(),
-                    location: Location {
-                        file: file.to_string(),
-                        line: type_name_node.start_position().row + 1,
-                        col: type_name_node.start_position().column + 1,
-                    },
+                    severity: Severity::Error,
+                    location: loc(file, &type_name_node),
                     message: format!("Unknown type `{}`", type_name),
                     context: "Type must be defined before use.".to_string(),
                     suggestions: vec![],
@@ -770,12 +758,8 @@ fn check_node(
                     } else {
                         diagnostics.push(Diagnostic {
                             code: "TYP_014".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: field_node.start_position().row + 1,
-                                col: field_node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &field_node),
                             message: format!("Struct `{}` has no field `{}`", name, field_name),
                             context: "Field access error.".to_string(),
                             suggestions: vec![],
@@ -789,12 +773,8 @@ fn check_node(
                     } else {
                         diagnostics.push(Diagnostic {
                             code: "TYP_014".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: field_node.start_position().row + 1,
-                                col: field_node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &field_node),
                             message: format!("Record has no field `{}`", field_name),
                             context: "Field access error.".to_string(),
                             suggestions: vec![],
@@ -815,12 +795,8 @@ fn check_node(
                 _ => {
                     diagnostics.push(Diagnostic {
                         code: "TYP_015".to_string(),
-                        severity: "error".to_string(),
-                        location: Location {
-                            file: file.to_string(),
-                            line: obj_node.start_position().row + 1,
-                            col: obj_node.start_position().column + 1,
-                        },
+                        severity: Severity::Error,
+                        location: loc(file, &obj_node),
                         message: format!("Type {} excludes field access", obj_type),
                         context: "Only Structs, Records, and Modules support field access.".to_string(),
                         suggestions: vec![],
@@ -851,12 +827,8 @@ fn check_node(
             } else {
                  diagnostics.push(Diagnostic {
                     code: "TYP_002".to_string(),
-                    severity: "error".to_string(),
-                    location: Location {
-                        file: file.to_string(),
-                        line: node.start_position().row + 1,
-                        col: node.start_position().column + 1,
-                    },
+                    severity: Severity::Error,
+                    location: loc(file, &node),
                     message: format!("Undefined variable `{}`", name),
                     context: "Variable must be defined before use.".to_string(),
                     suggestions: vec![],
@@ -911,12 +883,8 @@ fn check_node(
                         if left_type != Type::Unknown && right_type != Type::Unknown {
                             diagnostics.push(Diagnostic {
                                 code: "TYP_001".to_string(),
-                                severity: "error".to_string(),
-                                location: Location {
-                                    file: file.to_string(),
-                                    line: node.start_position().row + 1,
-                                    col: node.start_position().column + 1,
-                                },
+                                severity: Severity::Error,
+                                location: loc(file, &node),
                                 message: format!("Binary operator `{}` requires matching Int or Float operands, found {} and {}", op_str, left_type, right_type),
                                 context: "Arithmetic operations require matching numeric types.".to_string(),
                                 suggestions: vec![],
@@ -936,12 +904,8 @@ fn check_node(
              if cond_type != Type::Bool && cond_type != Type::Unknown {
                    diagnostics.push(Diagnostic {
                     code: "TYP_003".to_string(),
-                    severity: "error".to_string(),
-                    location: Location {
-                        file: file.to_string(),
-                        line: cond.start_position().row + 1,
-                        col: cond.start_position().column + 1,
-                    },
+                    severity: Severity::Error,
+                    location: loc(file, &cond),
                     message: format!("If condition must be Boolean, found {}", cond_type),
                     context: "Control flow conditions must evaluate to true or false.".to_string(),
                     suggestions: vec![],
@@ -957,12 +921,8 @@ fn check_node(
                  if !types_compatible(&then_type, &else_type) {
                       diagnostics.push(Diagnostic {
                         code: "TYP_004".to_string(),
-                        severity: "error".to_string(),
-                        location: Location {
-                            file: file.to_string(),
-                            line: else_branch.start_position().row + 1,
-                            col: else_branch.start_position().column + 1,
-                        },
+                        severity: Severity::Error,
+                        location: loc(file, &else_branch),
                         message: format!("If branches match mismatch: then is {}, else is {}", then_type, else_type),
                         context: "Both branches of an if expression must return the same type.".to_string(),
                         suggestions: vec![],
@@ -1011,12 +971,8 @@ fn check_node(
                 } else if !types_compatible(&ty, &element_type) {
                      diagnostics.push(Diagnostic {
                         code: "TYP_016".to_string(),
-                        severity: "error".to_string(),
-                        location: Location {
-                            file: file.to_string(),
-                            line: child.start_position().row + 1,
-                            col: child.start_position().column + 1,
-                        },
+                        severity: Severity::Error,
+                        location: loc(file, &child),
                         message: format!("List element type mismatch: expected {}, found {}", element_type, ty),
                         context: "All elements in a list must have the same type.".to_string(),
                         suggestions: vec![],
@@ -1075,12 +1031,8 @@ fn check_node(
                   } else if !types_compatible(&body_type, &ret_type) {
                        diagnostics.push(Diagnostic {
                             code: "TYP_017".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: body.start_position().row + 1,
-                                col: body.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &body),
                             message: format!("Match arm mismatch: expected {}, found {}", ret_type, body_type),
                             context: "All match arms must return same type.".to_string(),
                             suggestions: vec![],
@@ -1101,12 +1053,8 @@ fn check_node(
                  if args.len() != 1 {
                        diagnostics.push(Diagnostic {
                             code: "TYP_018".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: right_node.start_position().row + 1,
-                                col: right_node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &right_node),
                             message: format!("Pipe function expects 1 argument, found {}", args.len()),
                             context: "Pipe operator expects a unary function.".to_string(),
                             suggestions: vec![],
@@ -1114,12 +1062,8 @@ fn check_node(
                  } else if !types_compatible(&left_type, &args[0]) {
                        diagnostics.push(Diagnostic {
                             code: "TYP_019".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: left_node.start_position().row + 1,
-                                col: left_node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &left_node),
                             message: format!("Pipe argument mismatch: expected {}, found {}", args[0], left_type),
                             context: "Argument type must match function signature.".to_string(),
                             suggestions: vec![],
@@ -1131,12 +1075,8 @@ fn check_node(
             } else {
                  diagnostics.push(Diagnostic {
                     code: "TYP_020".to_string(),
-                    severity: "error".to_string(),
-                    location: Location {
-                        file: file.to_string(),
-                        line: right_node.start_position().row + 1,
-                        col: right_node.start_position().column + 1,
-                    },
+                    severity: Severity::Error,
+                    location: loc(file, &right_node),
                     message: format!("Pipe target is not a function, it is {}", right_type),
                     context: "Left side must be piped into a function.".to_string(),
                     suggestions: vec![],
@@ -1171,12 +1111,8 @@ fn check_node(
                 _ => {
                     diagnostics.push(Diagnostic {
                         code: "TYP_023".to_string(),
-                        severity: "error".to_string(),
-                        location: Location {
-                            file: file.to_string(),
-                            line: collection_node.start_position().row + 1,
-                            col: collection_node.start_position().column + 1,
-                        },
+                        severity: Severity::Error,
+                        location: loc(file, &collection_node),
                         message: format!("For loop requires a List, found {}", collection_type),
                         context: "The collection in a for..in must be a List.".to_string(),
                         suggestions: vec![],
@@ -1203,12 +1139,8 @@ fn check_node(
             if start_type != Type::Int && start_type != Type::Unknown {
                 diagnostics.push(Diagnostic {
                     code: "TYP_024".to_string(),
-                    severity: "error".to_string(),
-                    location: Location {
-                        file: file.to_string(),
-                        line: start_node.start_position().row + 1,
-                        col: start_node.start_position().column + 1,
-                    },
+                    severity: Severity::Error,
+                    location: loc(file, &start_node),
                     message: format!("Range operand must be Int, found {}", start_type),
                     context: "Range expressions require Int operands.".to_string(),
                     suggestions: vec![],
@@ -1217,12 +1149,8 @@ fn check_node(
             if end_type != Type::Int && end_type != Type::Unknown {
                 diagnostics.push(Diagnostic {
                     code: "TYP_024".to_string(),
-                    severity: "error".to_string(),
-                    location: Location {
-                        file: file.to_string(),
-                        line: end_node.start_position().row + 1,
-                        col: end_node.start_position().column + 1,
-                    },
+                    severity: Severity::Error,
+                    location: loc(file, &end_node),
                     message: format!("Range operand must be Int, found {}", end_type),
                     context: "Range expressions require Int operands.".to_string(),
                     suggestions: vec![],
@@ -1238,18 +1166,14 @@ fn check_node(
             let operand_type = check_node(&operand_node, source, file, symbols, diagnostics);
 
             match op {
-                "!" => {
+                "not" => {
                     if operand_type != Type::Bool && operand_type != Type::Unknown {
                         diagnostics.push(Diagnostic {
                             code: "TYP_025".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: operand_node.start_position().row + 1,
-                                col: operand_node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &operand_node),
                             message: format!("Logical NOT requires Bool, found {}", operand_type),
-                            context: "The ! operator can only be applied to Bool values.".to_string(),
+                            context: "The not operator can only be applied to Bool values.".to_string(),
                             suggestions: vec![],
                         });
                     }
@@ -1259,12 +1183,8 @@ fn check_node(
                     if operand_type != Type::Int && operand_type != Type::Float && operand_type != Type::Unknown {
                         diagnostics.push(Diagnostic {
                             code: "TYP_025".to_string(),
-                            severity: "error".to_string(),
-                            location: Location {
-                                file: file.to_string(),
-                                line: operand_node.start_position().row + 1,
-                                col: operand_node.start_position().column + 1,
-                            },
+                            severity: Severity::Error,
+                            location: loc(file, &operand_node),
                             message: format!("Negation requires Int or Float, found {}", operand_type),
                             context: "The - operator can only be applied to numeric values.".to_string(),
                             suggestions: vec![],
@@ -1659,12 +1579,8 @@ fn check_match_exhaustiveness(
 
     diagnostics.push(Diagnostic {
         code: "TYP_022".to_string(),
-        severity: "error".to_string(),
-        location: Location {
-            file: file.to_string(),
-            line: node.start_position().row + 1,
-            col: node.start_position().column + 1,
-        },
+        severity: Severity::Error,
+        location: loc(file, &node),
         message: format!(
             "Non-exhaustive match on '{}': missing variant(s) {}",
             type_name, missing_str

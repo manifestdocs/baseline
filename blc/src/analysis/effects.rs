@@ -12,7 +12,7 @@
 
 use tree_sitter::{Node, Tree};
 
-use crate::diagnostics::{Diagnostic, Location, Patch, Suggestion};
+use crate::diagnostics::{Diagnostic, Location, Patch, Severity, Suggestion};
 
 /// Check effects in a parsed syntax tree.
 ///
@@ -260,17 +260,20 @@ fn check_effectful_call(
 
     if !has_effect {
         let start = node.start_position();
+        let end = node.end_position();
 
         // Build the suggestion patch
         let (patch, _original_text) = build_effect_patch(func_node, source, &required_effect);
 
         diagnostics.push(Diagnostic {
             code: "CAP_001".to_string(),
-            severity: "error".to_string(),
+            severity: Severity::Error,
             location: Location {
                 file: file.to_string(),
                 line: start.row + 1,
                 col: start.column + 1,
+                end_line: Some(end.row + 1),
+                end_col: Some(end.column + 1),
             },
             message: format!("Unauthorized Side Effect: '{}'", call_name),
             context: format!(

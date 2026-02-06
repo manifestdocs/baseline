@@ -149,11 +149,13 @@ fn check_file(path: &PathBuf) -> CheckResult {
             status: "failure".to_string(),
             diagnostics: vec![diagnostics::Diagnostic {
                 code: "IO_001".to_string(),
-                severity: "error".to_string(),
+                severity: diagnostics::Severity::Error,
                 location: diagnostics::Location {
                     file: path.display().to_string(),
                     line: 0,
                     col: 0,
+                    end_line: None,
+                    end_col: None,
                 },
                 message: format!("Failed to read file: {}", e),
                 context: "Could not open or read the specified file.".to_string(),
@@ -170,9 +172,15 @@ fn print_human_readable(result: &CheckResult) {
     }
 
     for diag in &result.diagnostics {
+        let prefix = match diag.severity {
+            diagnostics::Severity::Error => "error",
+            diagnostics::Severity::Warning => "warning",
+            diagnostics::Severity::Info => "info",
+        };
         eprintln!(
-            "{}:{}:{}: {} [{}]",
-            diag.location.file, diag.location.line, diag.location.col, diag.message, diag.code
+            "{}:{}:{}: {}: {} [{}]",
+            diag.location.file, diag.location.line, diag.location.col,
+            prefix, diag.message, diag.code
         );
         if !diag.context.is_empty() {
             eprintln!("  {}", diag.context);
@@ -181,5 +189,17 @@ fn print_human_readable(result: &CheckResult) {
             eprintln!("  → {}: {}", suggestion.strategy, suggestion.description);
         }
     }
-    eprintln!("\n{} error(s) found", result.diagnostics.len());
+
+    let error_count = result.diagnostics.iter()
+        .filter(|d| d.severity == diagnostics::Severity::Error)
+        .count();
+    let warning_count = result.diagnostics.iter()
+        .filter(|d| d.severity == diagnostics::Severity::Warning)
+        .count();
+
+    match (error_count, warning_count) {
+        (0, w) => eprintln!("\n{} warning(s)", w),
+        (e, 0) => eprintln!("\n{} error(s)", e),
+        (e, w) => eprintln!("\n{} error(s), {} warning(s)", e, w),
+    }
 }

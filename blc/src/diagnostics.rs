@@ -5,6 +5,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Diagnostic severity level.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Severity {
+    Error,
+    Warning,
+    Info,
+}
+
 /// The result of checking a Baseline source file.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CheckResult {
@@ -16,7 +25,7 @@ pub struct CheckResult {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Diagnostic {
     pub code: String,
-    pub severity: String,
+    pub severity: Severity,
     pub location: Location,
     pub message: String,
     pub context: String,
@@ -29,6 +38,10 @@ pub struct Location {
     pub file: String,
     pub line: usize,
     pub col: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_line: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_col: Option<usize>,
 }
 
 /// A suggested fix for a diagnostic.
