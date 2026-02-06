@@ -291,8 +291,8 @@ fn check_server_test() {
 fn run_server_test() {
     assert_run_ok(
         "server_test.bl",
-        "direct routes: 2\n\
-         piped routes: 2\n\
+        "direct routes: 3\n\
+         piped routes: 3\n\
          match: true\n",
     );
 }

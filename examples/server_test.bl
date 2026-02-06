@@ -2,18 +2,26 @@
 
 // -- Handler functions using Response builders --
 
-hello_handler : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+hello_handler : { method: String, url: String, headers: List<(String, String)>, body: String, params: {} } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
 hello_handler = |req| {
   let resp = Response.ok("Hello, World!")
     |> Response.with_header("Content-Type", "text/plain")
   Ok(resp)
 }
 
-echo_handler : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+echo_handler : { method: String, url: String, headers: List<(String, String)>, body: String, params: {} } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
 echo_handler = |req| {
   let resp = Response.ok(req.body)
     |> Response.with_header("Content-Type", "text/plain")
   Ok(resp)
+}
+
+// -- Handler with path parameters --
+
+user_handler : { method: String, url: String, headers: List<(String, String)>, body: String, params: { id: String } } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+user_handler = |req| {
+  let id = req.params.id
+  Ok(Response.ok("User: ${id}"))
 }
 
 // -- Build router with direct calls --
@@ -23,6 +31,7 @@ build_direct = || {
   let app = Router.new()
   let app = Router.get(app, "/hello", hello_handler)
   let app = Router.post(app, "/echo", echo_handler)
+  let app = Router.get(app, "/users/:id", user_handler)
   app
 }
 
@@ -33,6 +42,7 @@ build_piped = || {
   Router.new()
     |> Router.get("/hello", hello_handler)
     |> Router.post("/echo", echo_handler)
+    |> Router.get("/users/:id", user_handler)
 }
 
 // -- Test: verify route counts match --

@@ -606,6 +606,9 @@ fn extract_response(value: RuntimeValue) -> (u16, Vec<(String, String)>, String)
 }
 
 /// Find a matching route and invoke its handler. Returns None for no match.
+///
+/// Uses pattern matching to support `:name` path parameters.
+/// Most-specific route wins (fewest parameter segments); route order breaks ties.
 fn find_and_invoke_handler<'a>(
     routes: &[RuntimeValue<'a>],
     req_method: &str,
@@ -615,6 +618,9 @@ fn find_and_invoke_handler<'a>(
     source: &str,
     context: &mut Context<'a>,
 ) -> Option<Result<RuntimeValue<'a>, RuntimeError>> {
+    let mut best: Option<(&RuntimeValue<'a>, Vec<(String, String)>)> = None;
+    let mut best_param_count = usize::MAX;
+
     for route in routes {
         if let RuntimeValue::Record(route_fields) = route {
             let route_method = match route_fields.get("method") {
@@ -630,18 +636,46 @@ fn find_and_invoke_handler<'a>(
                 None => continue,
             };
 
-            if route_method == req_method && route_path == req_path {
-                return Some(apply_function(
-                    handler,
-                    &[req_record.clone()],
-                    source,
-                    context,
-                    Some(node),
-                ));
+            if route_method != req_method {
+                continue;
+            }
+
+            if let Some(params) = router::match_path(route_path, req_path) {
+                let pc = params.len();
+                if pc < best_param_count {
+                    best = Some((handler, params));
+                    best_param_count = pc;
+                    if pc == 0 {
+                        break; // exact match, can't get more specific
+                    }
+                }
             }
         }
     }
+
+    if let Some((handler, params)) = best {
+        let enriched = inject_params(req_record, &params);
+        return Some(apply_function(handler, &[enriched], source, context, Some(node)));
+    }
+
     None
+}
+
+/// Inject path parameters into a request record as a `params` field.
+fn inject_params<'a>(
+    req: &RuntimeValue<'a>,
+    params: &[(String, String)],
+) -> RuntimeValue<'a> {
+    let mut fields = match req {
+        RuntimeValue::Record(f) => f.clone(),
+        _ => return req.clone(),
+    };
+    let mut param_fields = std::collections::HashMap::new();
+    for (key, value) in params {
+        param_fields.insert(key.clone(), RuntimeValue::String(value.clone()));
+    }
+    fields.insert("params".to_string(), RuntimeValue::Record(param_fields));
+    RuntimeValue::Record(fields)
 }
 
 /// Apply a NativeClosure by prepending the piped value to its captured args.
@@ -681,6 +715,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                 last_val = eval(&child, source, context)?;
             }
             Ok(last_val)
+        }
+        // Import declarations and where blocks are processed before eval; skip them.
+        "import_decl" | "where_block" | "inline_test" | "prelude_decl" => {
+            Ok(RuntimeValue::Unit)
         }
         "function_def" => {
             let name_node = node.child_by_field_name("name").unwrap();

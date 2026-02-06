@@ -83,6 +83,30 @@ fn extract_routes<'a>(router: &RuntimeValue<'a>) -> Result<Vec<RuntimeValue<'a>>
     }
 }
 
+/// Match a request path against a route pattern with `:name` parameter segments.
+///
+/// Returns `Some(params)` if the pattern matches, where params is a list of
+/// `(name, value)` pairs for each `:name` segment. Returns `None` on mismatch.
+pub fn match_path(pattern: &str, path: &str) -> Option<Vec<(String, String)>> {
+    let pat_segs: Vec<&str> = pattern.split('/').filter(|s| !s.is_empty()).collect();
+    let path_segs: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+
+    if pat_segs.len() != path_segs.len() {
+        return None;
+    }
+
+    let mut params = Vec::new();
+    for (pat, actual) in pat_segs.iter().zip(path_segs.iter()) {
+        if let Some(name) = pat.strip_prefix(':') {
+            params.push((name.to_string(), actual.to_string()));
+        } else if pat != actual {
+            return None;
+        }
+    }
+
+    Some(params)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -120,6 +144,53 @@ mod tests {
         } else {
             panic!("Expected List of routes");
         }
+    }
+
+    #[test]
+    fn match_path_exact() {
+        let result = match_path("/hello", "/hello");
+        assert_eq!(result, Some(vec![]));
+    }
+
+    #[test]
+    fn match_path_no_match() {
+        assert_eq!(match_path("/hello", "/world"), None);
+    }
+
+    #[test]
+    fn match_path_different_lengths() {
+        assert_eq!(match_path("/a/b", "/a"), None);
+        assert_eq!(match_path("/a", "/a/b"), None);
+    }
+
+    #[test]
+    fn match_path_single_param() {
+        let result = match_path("/users/:id", "/users/123");
+        assert_eq!(result, Some(vec![("id".to_string(), "123".to_string())]));
+    }
+
+    #[test]
+    fn match_path_multiple_params() {
+        let result = match_path("/users/:id/posts/:post_id", "/users/42/posts/99");
+        assert_eq!(
+            result,
+            Some(vec![
+                ("id".to_string(), "42".to_string()),
+                ("post_id".to_string(), "99".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn match_path_mixed_segments() {
+        let result = match_path("/api/users/:id/profile", "/api/users/7/profile");
+        assert_eq!(result, Some(vec![("id".to_string(), "7".to_string())]));
+    }
+
+    #[test]
+    fn match_path_param_segment_mismatch() {
+        // Fixed prefix doesn't match
+        assert_eq!(match_path("/api/users/:id", "/api/posts/1"), None);
     }
 
     #[test]
