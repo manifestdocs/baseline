@@ -801,3 +801,170 @@ fn integration_refinement_test() {
     let ref_errors = result.diagnostics.iter().filter(|d| d.code.starts_with("REF")).count();
     assert!(ref_errors > 0, "Expected refinement errors for out-of-range values");
 }
+
+// ============================================================
+// Exhaustive Match Checking (TYP_022)
+// ============================================================
+
+#[test]
+fn exhaustive_enum_all_variants() {
+    let source = r#"
+type Color = | Red | Green | Blue
+describe : Color -> String
+describe = |c| {
+  match c
+    Red -> "red"
+    Green -> "green"
+    Blue -> "blue"
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn exhaustive_enum_missing_variant() {
+    let source = r#"
+type Color = | Red | Green | Blue
+describe : Color -> String
+describe = |c| {
+  match c
+    Red -> "red"
+    Green -> "green"
+}
+"#;
+    check_has_error(source, "TYP_022");
+}
+
+#[test]
+fn exhaustive_enum_wildcard() {
+    let source = r#"
+type Color = | Red | Green | Blue
+describe : Color -> String
+describe = |c| {
+  match c
+    Red -> "red"
+    _ -> "other"
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn exhaustive_enum_variable_binding() {
+    let source = r#"
+type Color = | Red | Green | Blue
+describe : Color -> String
+describe = |c| {
+  match c
+    Red -> "red"
+    other -> "other"
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn exhaustive_option_complete() {
+    let source = r#"
+type Option = | Some(Int) | None
+unwrap_or : (Option, Int) -> Int
+unwrap_or = |opt, default| {
+  match opt
+    Some(v) -> v
+    None -> default
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn exhaustive_option_missing_none() {
+    let source = r#"
+type Option = | Some(Int) | None
+unwrap : Option -> Int
+unwrap = |opt| {
+  match opt
+    Some(v) -> v
+}
+"#;
+    check_has_error(source, "TYP_022");
+}
+
+#[test]
+fn exhaustive_result_complete() {
+    let source = r#"
+type Result = | Ok(Int) | Err(String)
+get_val : Result -> Int
+get_val = |r| {
+  match r
+    Ok(v) -> v
+    Err(e) -> 0
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn exhaustive_bool_both() {
+    let source = r#"
+to_str : Bool -> String
+to_str = |b| {
+  match b
+    true -> "yes"
+    false -> "no"
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn exhaustive_bool_missing_false() {
+    let source = r#"
+to_str : Bool -> String
+to_str = |b| {
+  match b
+    true -> "yes"
+}
+"#;
+    check_has_error(source, "TYP_022");
+}
+
+#[test]
+fn exhaustive_int_with_wildcard() {
+    let source = r#"
+describe : Int -> String
+describe = |n| {
+  match n
+    1 -> "one"
+    _ -> "other"
+}
+"#;
+    check_ok(source);
+}
+
+#[test]
+fn exhaustive_int_without_wildcard() {
+    let source = r#"
+describe : Int -> String
+describe = |n| {
+  match n
+    1 -> "one"
+    2 -> "two"
+}
+"#;
+    check_has_error(source, "TYP_022");
+}
+
+#[test]
+fn exhaustive_user_enum_missing() {
+    let source = r#"
+type Status = | Active | Pending | Closed
+label : Status -> String
+label = |s| {
+  match s
+    Active -> "active"
+    Pending -> "pending"
+}
+"#;
+    check_has_error(source, "TYP_022");
+}

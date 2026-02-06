@@ -1,7 +1,14 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
-use crate::diagnostics::{Diagnostic, Location};
+use crate::diagnostics::{Diagnostic, Location, Suggestion, Patch};
 use crate::prelude::{self, Prelude};
+
+/// Classification of what a single match arm pattern covers.
+enum PatternCoverage {
+    CatchAll,
+    Variant(String),
+    BoolLiteral(bool),
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Type {
@@ -1046,6 +1053,7 @@ fn check_node(
                         });
                   }
              }
+             check_match_exhaustiveness(node, &expr_type, source, file, diagnostics);
              ret_type
         }
         "pipe_expression" => {
@@ -1399,4 +1407,141 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
         },
         _ => {}
     }
+}
+
+/// Extract what a pattern covers at the top level.
+fn extract_pattern_coverage(node: &Node, source: &str) -> Option<PatternCoverage> {
+    match node.kind() {
+        "wildcard_pattern" => Some(PatternCoverage::CatchAll),
+        "identifier" => Some(PatternCoverage::CatchAll),
+        "type_identifier" => {
+            let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
+            Some(PatternCoverage::Variant(name))
+        }
+        "constructor_pattern" => {
+            let ctor = node.child(0).unwrap();
+            let name = ctor.utf8_text(source.as_bytes()).unwrap().to_string();
+            Some(PatternCoverage::Variant(name))
+        }
+        "literal" => {
+            if let Some(child) = node.named_child(0) {
+                extract_pattern_coverage(&child, source)
+            } else {
+                None
+            }
+        }
+        "boolean_literal" => {
+            let text = node.utf8_text(source.as_bytes()).unwrap();
+            Some(PatternCoverage::BoolLiteral(text == "true"))
+        }
+        _ => None,
+    }
+}
+
+/// Check whether a match expression covers all variants of the matched type.
+fn check_match_exhaustiveness(
+    node: &Node,
+    expr_type: &Type,
+    source: &str,
+    file: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let count = node.named_child_count();
+    let mut has_catch_all = false;
+    let mut covered_variants: HashSet<String> = HashSet::new();
+    let mut covered_true = false;
+    let mut covered_false = false;
+
+    for i in 1..count {
+        let arm = node.named_child(i).unwrap();
+        let pat = arm.child(0).unwrap();
+        if let Some(coverage) = extract_pattern_coverage(&pat, source) {
+            match coverage {
+                PatternCoverage::CatchAll => { has_catch_all = true; }
+                PatternCoverage::Variant(name) => { covered_variants.insert(name); }
+                PatternCoverage::BoolLiteral(val) => {
+                    if val { covered_true = true; } else { covered_false = true; }
+                }
+            }
+        }
+    }
+
+    if has_catch_all {
+        return;
+    }
+
+    let (missing_desc, type_name) = match expr_type {
+        Type::Enum(name, variants) => {
+            let all: HashSet<String> = variants.iter().map(|(v, _)| v.clone()).collect();
+            let missing: Vec<String> = all.difference(&covered_variants).cloned().collect();
+            if missing.is_empty() {
+                return;
+            }
+            (missing, name.clone())
+        }
+        Type::Bool => {
+            if covered_true && covered_false {
+                return;
+            }
+            let mut missing = Vec::new();
+            if !covered_true { missing.push("true".to_string()); }
+            if !covered_false { missing.push("false".to_string()); }
+            (missing, "Bool".to_string())
+        }
+        Type::Int | Type::String | Type::Float => {
+            (vec!["_".to_string()], match expr_type {
+                Type::Int => "Int".to_string(),
+                Type::String => "String".to_string(),
+                Type::Float => "Float".to_string(),
+                _ => unreachable!(),
+            })
+        }
+        _ => return,
+    };
+
+    let missing_str = missing_desc.join(", ");
+    let last_arm = node.named_child(count - 1).unwrap();
+    let insert_line = last_arm.end_position().row + 2; // 1-indexed, after last arm
+
+    diagnostics.push(Diagnostic {
+        code: "TYP_022".to_string(),
+        severity: "error".to_string(),
+        location: Location {
+            file: file.to_string(),
+            line: node.start_position().row + 1,
+            col: node.start_position().column + 1,
+        },
+        message: format!(
+            "Non-exhaustive match on '{}': missing variant(s) {}",
+            type_name, missing_str
+        ),
+        context: "All variants must be handled, or add a wildcard '_' arm.".to_string(),
+        suggestions: vec![
+            Suggestion {
+                strategy: "add_missing_arms".to_string(),
+                description: format!("Add arms for {}", missing_str),
+                patch: Some(Patch {
+                    start_line: insert_line,
+                    original_text: None,
+                    replacement_text: Some(
+                        missing_desc.iter()
+                            .map(|v| format!("    {} -> todo", v))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ),
+                    operation: Some("insert".to_string()),
+                }),
+            },
+            Suggestion {
+                strategy: "add_wildcard".to_string(),
+                description: "Add a wildcard '_' arm".to_string(),
+                patch: Some(Patch {
+                    start_line: insert_line,
+                    original_text: None,
+                    replacement_text: Some("    _ -> todo".to_string()),
+                    operation: Some("insert".to_string()),
+                }),
+            },
+        ],
+    });
 }
