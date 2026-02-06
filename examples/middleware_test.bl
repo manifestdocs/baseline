@@ -1,0 +1,70 @@
+@prelude(server)
+
+// -- Middleware that wraps response body --
+
+wrap_middleware : (Unknown, Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+wrap_middleware = |req, next| {
+  let res = next(req)?
+  Ok(Response.ok("[${res.body}]"))
+}
+
+// -- Middleware that adds a prefix --
+
+prefix_middleware : (Unknown, Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+prefix_middleware = |req, next| {
+  let res = next(req)?
+  Ok(Response.ok("prefix:${res.body}"))
+}
+
+// -- Simple handler --
+
+simple_handler : Unknown -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+simple_handler = |req| {
+  Ok(Response.ok("hello"))
+}
+
+// -- Build routers for testing --
+
+no_middleware_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
+no_middleware_router = || {
+  Router.new()
+    |> Router.get("/test", simple_handler)
+}
+
+single_middleware_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
+single_middleware_router = || {
+  Router.new()
+    |> Router.use(wrap_middleware)
+    |> Router.get("/test", simple_handler)
+}
+
+chained_middleware_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
+chained_middleware_router = || {
+  Router.new()
+    |> Router.use(wrap_middleware)
+    |> Router.use(prefix_middleware)
+    |> Router.get("/test", simple_handler)
+}
+
+// -- Direct Router.use call (non-piped) --
+
+direct_use_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
+direct_use_router = || {
+  let app = Router.new()
+  let app = Router.use(app, wrap_middleware)
+  let app = Router.get(app, "/test", simple_handler)
+  app
+}
+
+main! : () -> {Console} ()
+main! = || {
+  let r0 = no_middleware_router()
+  let r1 = single_middleware_router()
+  let r2 = chained_middleware_router()
+  let r3 = direct_use_router()
+
+  Console.println!("no-mw routes: ${List.length(Router.routes(r0))}")
+  Console.println!("single-mw routes: ${List.length(Router.routes(r1))}")
+  Console.println!("chained-mw routes: ${List.length(Router.routes(r2))}")
+  Console.println!("direct-use routes: ${List.length(Router.routes(r3))}")
+}

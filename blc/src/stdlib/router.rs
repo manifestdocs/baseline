@@ -39,6 +39,7 @@ fn router_routes<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Stri
 pub fn empty_router<'a>() -> RuntimeValue<'a> {
     let mut fields = HashMap::new();
     fields.insert("routes".to_string(), RuntimeValue::List(Vec::new()));
+    fields.insert("middleware".to_string(), RuntimeValue::List(Vec::new()));
     RuntimeValue::Record(fields)
 }
 
@@ -69,6 +70,25 @@ pub fn add_route<'a>(
 
     let mut new_router = HashMap::new();
     new_router.insert("routes".to_string(), RuntimeValue::List(routes));
+    new_router.insert(
+        "middleware".to_string(),
+        RuntimeValue::List(extract_middleware(router)?),
+    );
+    Ok(RuntimeValue::Record(new_router))
+}
+
+/// Add a middleware function to a router, returning a new router.
+pub fn add_middleware<'a>(
+    router: &RuntimeValue<'a>,
+    middleware_fn: &RuntimeValue<'a>,
+) -> Result<RuntimeValue<'a>, String> {
+    let routes = extract_routes(router)?;
+    let mut middleware = extract_middleware(router)?;
+    middleware.push(middleware_fn.clone());
+
+    let mut new_router = HashMap::new();
+    new_router.insert("routes".to_string(), RuntimeValue::List(routes));
+    new_router.insert("middleware".to_string(), RuntimeValue::List(middleware));
     Ok(RuntimeValue::Record(new_router))
 }
 
@@ -78,6 +98,18 @@ fn extract_routes<'a>(router: &RuntimeValue<'a>) -> Result<Vec<RuntimeValue<'a>>
         RuntimeValue::Record(fields) => match fields.get("routes") {
             Some(RuntimeValue::List(routes)) => Ok(routes.clone()),
             _ => Err("Expected a Router (Record with routes field)".to_string()),
+        },
+        _ => Err(format!("Expected a Router, got {}", router)),
+    }
+}
+
+/// Extract the middleware list from a router Record.
+/// Returns empty list if field is missing (backwards compatibility).
+pub fn extract_middleware<'a>(router: &RuntimeValue<'a>) -> Result<Vec<RuntimeValue<'a>>, String> {
+    match router {
+        RuntimeValue::Record(fields) => match fields.get("middleware") {
+            Some(RuntimeValue::List(mw)) => Ok(mw.clone()),
+            _ => Ok(Vec::new()),
         },
         _ => Err(format!("Expected a Router, got {}", router)),
     }
@@ -219,5 +251,52 @@ mod tests {
         } else {
             panic!("Expected List");
         }
+    }
+
+    #[test]
+    fn new_router_has_empty_middleware() {
+        let router = router_new(&[]).unwrap();
+        let mw = extract_middleware(&router).unwrap();
+        assert!(mw.is_empty());
+    }
+
+    #[test]
+    fn add_middleware_stores_function() {
+        let router = router_new(&[]).unwrap();
+        let mw_fn = RuntimeValue::String("placeholder_mw".to_string());
+        let router = add_middleware(&router, &mw_fn).unwrap();
+        let mw = extract_middleware(&router).unwrap();
+        assert_eq!(mw.len(), 1);
+        assert_eq!(mw[0], RuntimeValue::String("placeholder_mw".to_string()));
+    }
+
+    #[test]
+    fn add_route_preserves_middleware() {
+        let router = router_new(&[]).unwrap();
+        let mw_fn = RuntimeValue::String("mw".to_string());
+        let router = add_middleware(&router, &mw_fn).unwrap();
+        let handler = RuntimeValue::String("handler".to_string());
+        let router = add_route("GET", &router, &RuntimeValue::String("/a".to_string()), &handler).unwrap();
+
+        // Both middleware and routes preserved
+        let mw = extract_middleware(&router).unwrap();
+        assert_eq!(mw.len(), 1);
+        let routes = router_routes(&[router]).unwrap();
+        if let RuntimeValue::List(routes) = routes {
+            assert_eq!(routes.len(), 1);
+        } else {
+            panic!("Expected List");
+        }
+    }
+
+    #[test]
+    fn add_multiple_middleware() {
+        let router = router_new(&[]).unwrap();
+        let router = add_middleware(&router, &RuntimeValue::String("mw1".to_string())).unwrap();
+        let router = add_middleware(&router, &RuntimeValue::String("mw2".to_string())).unwrap();
+        let mw = extract_middleware(&router).unwrap();
+        assert_eq!(mw.len(), 2);
+        assert_eq!(mw[0], RuntimeValue::String("mw1".to_string()));
+        assert_eq!(mw[1], RuntimeValue::String("mw2".to_string()));
     }
 }

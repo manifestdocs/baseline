@@ -293,7 +293,28 @@ fn run_server_test() {
         "server_test.bl",
         "direct routes: 3\n\
          piped routes: 3\n\
-         match: true\n",
+         match: true\n\
+         middleware: 1\n",
+    );
+}
+
+// ===========================================================================
+// Middleware tests
+// ===========================================================================
+
+#[test]
+fn check_middleware_test() {
+    assert_check_ok("middleware_test.bl");
+}
+
+#[test]
+fn run_middleware_test() {
+    assert_run_ok(
+        "middleware_test.bl",
+        "no-mw routes: 1\n\
+         single-mw routes: 1\n\
+         chained-mw routes: 1\n\
+         direct-use routes: 1\n",
     );
 }
 

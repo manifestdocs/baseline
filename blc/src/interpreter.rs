@@ -458,6 +458,24 @@ fn dispatch_hof<'a>(
                 )),
             }
         }
+        // Router.use — 2 args: direct, 1 arg: partial for pipes
+        "Router.use" => {
+            match arg_vals.len() {
+                2 => {
+                    let result = router::add_middleware(&arg_vals[0], &arg_vals[1])
+                        .map_err(|msg| err_at(msg, node, context))?;
+                    Ok(Some(result))
+                }
+                1 => {
+                    // Partial application: return NativeClosure for pipe composition
+                    Ok(Some(RuntimeValue::NativeClosure("Router.use".to_string(), arg_vals)))
+                }
+                n => Err(err_at(
+                    format!("Router.use expects 1 or 2 arguments, got {}", n),
+                    node, context,
+                )),
+            }
+        }
         // Server.listen!(port, router) — start HTTP server
         "Server.listen!" => {
             if arg_vals.len() != 2 {
@@ -489,7 +507,7 @@ fn server_listen<'a>(
     source: &str,
     context: &mut Context<'a>,
 ) -> Result<(), RuntimeError> {
-    // Extract routes from the router
+    // Extract routes and middleware from the router
     let routes = match router_val {
         RuntimeValue::Record(fields) => match fields.get("routes") {
             Some(RuntimeValue::List(routes)) => routes.clone(),
@@ -497,6 +515,8 @@ fn server_listen<'a>(
         },
         _ => return Err(err_at("Server.listen! second argument must be a Router", node, context)),
     };
+    let middleware = router::extract_middleware(router_val)
+        .map_err(|msg| err_at(msg, node, context))?;
 
     let addr = format!("0.0.0.0:{}", port);
     let server = tiny_http::Server::http(&addr)
@@ -534,12 +554,22 @@ fn server_listen<'a>(
         req_fields.insert("query".to_string(), query_record);
         let req_record = RuntimeValue::Record(req_fields);
 
-        // Find matching route and build response
-        let (status, resp_headers, body) = match find_and_invoke_handler(&routes, &req_method, &req_path, &req_record, node, source, context) {
-            Some(Ok(handler_result)) => extract_response(handler_result),
-            Some(Err(e)) => {
-                eprintln!("[server] Handler error: {}", e);
-                (500, Vec::new(), "Internal Server Error".to_string())
+        // Find matching handler, then invoke through middleware chain
+        let (status, resp_headers, body) = match find_matching_handler(&routes, &req_method, &req_path) {
+            Some((handler, params)) => {
+                let enriched = inject_params(&req_record, &params);
+                let result = if middleware.is_empty() {
+                    apply_function(&handler, &[enriched], source, context, Some(node))
+                } else {
+                    apply_middleware_chain(&middleware, &handler, &enriched, node, source, context)
+                };
+                match result {
+                    Ok(val) => extract_response(val),
+                    Err(e) => {
+                        eprintln!("[server] Handler error: {}", e);
+                        (500, Vec::new(), "Internal Server Error".to_string())
+                    }
+                }
             }
             None => (404, Vec::new(), "Not Found".to_string()),
         };
@@ -609,20 +639,16 @@ fn extract_response(value: RuntimeValue) -> (u16, Vec<(String, String)>, String)
     }
 }
 
-/// Find a matching route and invoke its handler. Returns None for no match.
+/// Find the best matching route handler for a request. Returns None for no match.
 ///
 /// Uses pattern matching to support `:name` path parameters.
 /// Most-specific route wins (fewest parameter segments); route order breaks ties.
-fn find_and_invoke_handler<'a>(
+fn find_matching_handler<'a>(
     routes: &[RuntimeValue<'a>],
     req_method: &str,
     req_path: &str,
-    req_record: &RuntimeValue<'a>,
-    node: &Node<'a>,
-    source: &str,
-    context: &mut Context<'a>,
-) -> Option<Result<RuntimeValue<'a>, RuntimeError>> {
-    let mut best: Option<(&RuntimeValue<'a>, Vec<(String, String)>)> = None;
+) -> Option<(RuntimeValue<'a>, Vec<(String, String)>)> {
+    let mut best: Option<(RuntimeValue<'a>, Vec<(String, String)>)> = None;
     let mut best_param_count = usize::MAX;
 
     for route in routes {
@@ -647,7 +673,7 @@ fn find_and_invoke_handler<'a>(
             if let Some(params) = router::match_path(route_path, req_path) {
                 let pc = params.len();
                 if pc < best_param_count {
-                    best = Some((handler, params));
+                    best = Some((handler.clone(), params));
                     best_param_count = pc;
                     if pc == 0 {
                         break; // exact match, can't get more specific
@@ -657,12 +683,7 @@ fn find_and_invoke_handler<'a>(
         }
     }
 
-    if let Some((handler, params)) = best {
-        let enriched = inject_params(req_record, &params);
-        return Some(apply_function(handler, &[enriched], source, context, Some(node)));
-    }
-
-    None
+    best
 }
 
 /// Inject path parameters into a request record as a `params` field.
@@ -710,14 +731,45 @@ fn parse_url_query<'a>(url: &str) -> (String, RuntimeValue<'a>) {
     (path, RuntimeValue::Record(query_fields))
 }
 
+/// Apply the middleware chain to a request, then invoke the handler.
+///
+/// Builds the chain inside-out: the innermost layer calls the handler directly,
+/// each outer layer receives a `next` NativeClosure to invoke the remaining chain.
+/// Middleware signature: `(Request, Next) -> Result<Response, String>`.
+fn apply_middleware_chain<'a>(
+    middleware: &[RuntimeValue<'a>],
+    handler: &RuntimeValue<'a>,
+    request: &RuntimeValue<'a>,
+    node: &Node<'a>,
+    source: &str,
+    context: &mut Context<'a>,
+) -> Result<RuntimeValue<'a>, RuntimeError> {
+    if middleware.is_empty() {
+        return apply_function(handler, &[request.clone()], source, context, Some(node));
+    }
+
+    let current_mw = &middleware[0];
+    let remaining = &middleware[1..];
+
+    // Build "next" as a NativeClosure: captured_args = [handler, remaining_mw...]
+    let mut next_captured = vec![handler.clone()];
+    for mw in remaining {
+        next_captured.push(mw.clone());
+    }
+    let next = RuntimeValue::NativeClosure("__mw_next".to_string(), next_captured);
+
+    // Invoke current middleware with (request, next)
+    apply_function(current_mw, &[request.clone(), next], source, context, Some(node))
+}
+
 /// Apply a NativeClosure by prepending the piped value to its captured args.
 fn apply_native_closure<'a>(
     name: &str,
     piped_val: &RuntimeValue<'a>,
     captured_args: &[RuntimeValue<'a>],
     node: &Node<'a>,
-    _source: &str,
-    _context: &mut Context<'a>,
+    source: &str,
+    context: &mut Context<'a>,
 ) -> Result<RuntimeValue<'a>, RuntimeError> {
     match name {
         "Router.get" | "Router.post" | "Router.put" | "Router.delete" => {
@@ -725,15 +777,35 @@ fn apply_native_closure<'a>(
             if captured_args.len() != 2 {
                 return Err(err_at(
                     format!("{} NativeClosure expects 2 captured args, got {}", name, captured_args.len()),
-                    node, _context,
+                    node, context,
                 ));
             }
             router::add_route(&method, piped_val, &captured_args[0], &captured_args[1])
-                .map_err(|msg| err_at(msg, node, _context))
+                .map_err(|msg| err_at(msg, node, context))
+        }
+        "Router.use" => {
+            if captured_args.len() != 1 {
+                return Err(err_at(
+                    format!("Router.use NativeClosure expects 1 captured arg, got {}", captured_args.len()),
+                    node, context,
+                ));
+            }
+            router::add_middleware(piped_val, &captured_args[0])
+                .map_err(|msg| err_at(msg, node, context))
+        }
+        // Middleware chain: next(request) invokes the remaining middleware/handler
+        "__mw_next" => {
+            // captured_args[0] = handler, captured_args[1..] = remaining middleware
+            if captured_args.is_empty() {
+                return Err(err_at("Middleware chain error: empty next".to_string(), node, context));
+            }
+            let handler = &captured_args[0];
+            let remaining = &captured_args[1..];
+            apply_middleware_chain(remaining, handler, piped_val, node, source, context)
         }
         _ => Err(err_at(
             format!("Unknown NativeClosure: {}", name),
-            node, _context,
+            node, context,
         )),
     }
 }

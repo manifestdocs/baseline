@@ -375,6 +375,7 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         sigs.insert("Router.put".into(),    Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
         sigs.insert("Router.delete".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
         sigs.insert("Router.routes".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert("Router.use".into(),    Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
     }
 
     // -- Server builtins (effect: Http) --

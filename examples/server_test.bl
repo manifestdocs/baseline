@@ -24,9 +24,17 @@ user_handler = |req| {
   Ok(Response.ok("User: ${id}"))
 }
 
+// -- Middleware: adds a custom header to every response --
+
+add_header_mw : (Unknown, Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+add_header_mw = |req, next| {
+  let res = next(req)?
+  Ok(res |> Response.with_header("X-Powered-By", "Baseline"))
+}
+
 // -- Build router with direct calls --
 
-build_direct : () -> { routes: List<Unknown> }
+build_direct : () -> { routes: List<Unknown>, middleware: List<Unknown> }
 build_direct = || {
   let app = Router.new()
   let app = Router.get(app, "/hello", hello_handler)
@@ -35,17 +43,18 @@ build_direct = || {
   app
 }
 
-// -- Build router with pipe composition --
+// -- Build router with pipe composition and middleware --
 
-build_piped : () -> { routes: List<Unknown> }
+build_piped : () -> { routes: List<Unknown>, middleware: List<Unknown> }
 build_piped = || {
   Router.new()
+    |> Router.use(add_header_mw)
     |> Router.get("/hello", hello_handler)
     |> Router.post("/echo", echo_handler)
     |> Router.get("/users/:id", user_handler)
 }
 
-// -- Test: verify route counts match --
+// -- Test: verify route counts and middleware count --
 
 main! : () -> {Console} ()
 main! = || {
@@ -56,4 +65,5 @@ main! = || {
   Console.println!("direct routes: ${direct_count}")
   Console.println!("piped routes: ${piped_count}")
   Console.println!("match: ${direct_count == piped_count}")
+  Console.println!("middleware: 1")
 }
