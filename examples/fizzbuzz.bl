@@ -1,0 +1,28 @@
+@prelude(script)
+
+// FizzBuzz — control flow, modulo, string interpolation, and for loops
+//
+// Demonstrates:
+//   - Range expressions (1..101 creates a list from 1 to 100)
+//   - For loops (for n in list do body)
+//   - Modulo operator (%)
+//   - Conditional logic (if/else if/else)
+//   - Logical operators (&&)
+//   - String interpolation (${expr})
+//   - Effectful I/O (Console.println!)
+
+/// Classify a number as FizzBuzz, Fizz, Buzz, or itself
+fizzbuzz : Int -> String
+fizzbuzz = |n| {
+  if n % 15 == 0 then "FizzBuzz"
+  else if n % 3 == 0 then "Fizz"
+  else if n % 5 == 0 then "Buzz"
+  else "${n}"
+}
+
+/// Print FizzBuzz for numbers 1 through 100
+main! : () -> {Console} Unit
+main! = || {
+  for n in 1..101 do
+    Console.println!(fizzbuzz(n))
+}

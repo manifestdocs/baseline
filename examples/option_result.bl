@@ -1,0 +1,67 @@
+@prelude(script)
+
+// Option & Result — safe error handling without exceptions
+//
+// Demonstrates:
+//   - Option type: Some(value) and None
+//   - Result type: Ok(value) and Err(message)
+//   - Pattern matching on sum types
+//   - The ? operator for error propagation
+//   - Option/Result module functions (map, unwrap_or)
+
+/// Safe division that returns Result instead of crashing
+safe_divide : (Int, Int) -> Result
+safe_divide = |a, b| {
+  if b == 0 then Err("Division by zero")
+  else Ok(a / b)
+}
+
+/// Chain multiple safe divisions using the ? operator
+chain_divide : (Int, Int, Int) -> Result
+chain_divide = |a, b, c| {
+  let first = safe_divide(a, b)?
+  let second = safe_divide(first, c)?
+  Ok(first + second)
+}
+
+main! : () -> {Console} Unit
+main! = || {
+  // --- Option Examples ---
+  Console.println!("=== Option Examples ===")
+  let items = [10, 20, 30, 42, 50]
+
+  let found = List.find(items, |x| x == 42)
+  Console.println!("Find 42: ${found}")
+
+  let missing = List.find(items, |x| x == 99)
+  Console.println!("Find 99: ${missing}")
+
+  let with_default = Option.unwrap_or(missing, 0)
+  Console.println!("With default: ${with_default}")
+
+  let mapped = Option.map(found, |x| x * 2)
+  Console.println!("Map (*2): ${mapped}")
+
+  // --- Result Examples ---
+  Console.println!("\n=== Result Examples ===")
+  Console.println!("10 / 2: ${safe_divide(10, 2)}")
+  Console.println!("10 / 0: ${safe_divide(10, 0)}")
+
+  let mapped_ok = Result.map(safe_divide(10, 2), |x| x + 1)
+  Console.println!("Map Ok (+1): ${mapped_ok}")
+
+  // --- Error Propagation with ? ---
+  Console.println!("\n=== Using ? operator ===")
+  Console.println!("chain_divide(100, 5, 2): ${chain_divide(100, 5, 2)}")
+  Console.println!("chain_divide(100, 0, 2): ${chain_divide(100, 0, 2)}")
+
+  // --- Pattern Matching ---
+  Console.println!("\n=== Pattern Matching ===")
+  match safe_divide(15, 3)
+    Ok(v) -> Console.println!("15 / 3 = ${v}")
+    Err(msg) -> Console.println!("Error: ${msg}")
+
+  match safe_divide(15, 0)
+    Ok(v) -> Console.println!("15 / 0 = ${v}")
+    Err(msg) -> Console.println!("Error: ${msg}")
+}

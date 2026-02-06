@@ -1,0 +1,40 @@
+@prelude(script)
+
+// List Operations — functional programming patterns with collections
+//
+// Demonstrates:
+//   - List literals and List module functions
+//   - Higher-order functions: map, filter, fold
+//   - Lambda expressions (|args| body)
+//   - Pipe operator (|>) for chaining
+//   - String interpolation with complex expressions
+
+/// Check if a number is even
+is_even : Int -> Bool
+is_even = |x| x % 2 == 0
+
+main! : () -> {Console} Unit
+main! = || {
+  let nums = [1, 2, 3, 4, 5]
+  Console.println!("Original: ${nums}")
+
+  // map — transform each element
+  let doubled = List.map(nums, |x| x * 2)
+  Console.println!("Map (x * 2): ${doubled}")
+
+  // filter — select elements matching a predicate
+  let evens = List.filter(nums, is_even)
+  Console.println!("Filter (even): ${evens}")
+
+  // fold — aggregate elements into a single value
+  let sum = List.fold(nums, 0, |acc, x| acc + x)
+  Console.println!("Fold (sum): ${sum}")
+
+  // Chained pipeline: double, keep evens, sum
+  // Wrap List calls in lambdas so each pipe stage takes one argument
+  let chained = nums
+    |> |xs| List.map(xs, |x| x * 2)
+    |> |xs| List.filter(xs, is_even)
+    |> |xs| List.fold(xs, 0, |acc, x| acc + x)
+  Console.println!("Chained (map -> filter -> fold): ${chained}")
+}
