@@ -1,14 +1,18 @@
 //! Effect checking pass.
 //!
-//! This module implements Level 1 verification from the Technical Specification:
-//! capability checking for effectful function calls.
+//! This module implements capability checking for effectful function calls.
 //!
 //! The algorithm:
 //! 1. Find all function declarations and extract their declared effect sets
 //! 2. Walk each function body looking for effectful calls (identifiers ending in `!`)
 //! 3. For each effectful call, infer the required effect from the callee
 //! 4. Check if the required effect is in the function's declared effect set
-//! 5. Emit CAP_XXX diagnostics for violations
+//! 5. Build a call graph of user-defined function calls
+//! 6. Compute transitive effect closure via fixed-point iteration
+//! 7. Verify that each function's declared effects cover its transitive closure
+//! 8. Emit CAP_XXX diagnostics for violations
+
+use std::collections::{HashMap, HashSet};
 
 use tree_sitter::{Node, Tree};
 
@@ -21,18 +25,327 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     let root = tree.root_node();
 
-    // Recurse function definitions
+    // Collect all function names defined in this module
+    let mut defined_functions: HashSet<String> = HashSet::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-         if child.kind() == "function_def" {
-             check_function(child, source, file, &mut diagnostics);
-         }
+        if child.kind() == "function_def" {
+            if let Some(name) = find_function_name(child, source) {
+                defined_functions.insert(name.to_string());
+            }
+        }
+    }
+
+    // Phase 1: Direct effect checking (existing behavior) +
+    //          Build call graph and direct effects map
+    let mut declared_effects_map: HashMap<String, Vec<String>> = HashMap::new();
+    let mut direct_effects_map: HashMap<String, HashSet<String>> = HashMap::new();
+    let mut call_graph: HashMap<String, HashSet<String>> = HashMap::new();
+
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() == "function_def" {
+            // Existing direct checking (emits CAP_001 for direct ! calls)
+            check_function(child, source, file, &mut diagnostics);
+
+            // Build call graph data
+            if let Some(name) = find_function_name(child, source) {
+                let name = name.to_string();
+                let declared = extract_declared_effects(child, source);
+                declared_effects_map.insert(name.clone(), declared);
+
+                let mut direct_effects = HashSet::new();
+                let mut callees = HashSet::new();
+
+                if let Some(body) = get_function_body(child) {
+                    collect_call_graph_info(
+                        body,
+                        source,
+                        &defined_functions,
+                        &mut direct_effects,
+                        &mut callees,
+                    );
+                }
+
+                direct_effects_map.insert(name.clone(), direct_effects);
+                call_graph.insert(name, callees);
+            }
+        }
+    }
+
+    // Phase 2: Compute transitive effect closure via fixed-point iteration
+    let transitive_effects = compute_transitive_effects(&direct_effects_map, &call_graph);
+
+    // Phase 3: Check transitive effects against declared effects
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() == "function_def" {
+            if let Some(name) = find_function_name(child, source) {
+                let name_str = name.to_string();
+                check_transitive_effects(
+                    child,
+                    &name_str,
+                    source,
+                    file,
+                    &declared_effects_map,
+                    &transitive_effects,
+                    &call_graph,
+                    &direct_effects_map,
+                    &mut diagnostics,
+                );
+            }
+        }
     }
 
     diagnostics
 }
 
-/// Check a single function declaration for effect violations.
+/// Get the body node of a function_def.
+fn get_function_body(node: Node) -> Option<Node> {
+    let mut body_node = node.child_by_field_name("body");
+    if body_node.is_none() {
+        let count = node.named_child_count();
+        if count > 0 {
+            body_node = node.named_child(count - 1);
+        }
+    }
+    body_node
+}
+
+/// Collect call graph information from a function body.
+///
+/// Walks the body to find:
+/// - Direct effect requirements (from `!` calls)
+/// - Calls to user-defined functions (for transitive analysis)
+fn collect_call_graph_info(
+    node: Node,
+    source: &str,
+    defined_functions: &HashSet<String>,
+    direct_effects: &mut HashSet<String>,
+    callees: &mut HashSet<String>,
+) {
+    // Check for effectful identifiers (calls ending in !)
+    if node.kind() == "effect_identifier" {
+        if let Ok(call_name) = node.utf8_text(source.as_bytes()) {
+            let effect = infer_required_effect(call_name);
+            direct_effects.insert(effect);
+        }
+    }
+
+    // Check for field expressions (Log.info!)
+    if node.kind() == "field_expression" {
+        let obj = node.named_child(0);
+        let field = node.named_child(1);
+        if let (Some(obj_node), Some(field_node)) = (obj, field) {
+            if field_node.kind() == "effect_identifier" {
+                if let Ok(effect_name) = obj_node.utf8_text(source.as_bytes()) {
+                    if let Ok(method_name) = field_node.utf8_text(source.as_bytes()) {
+                        let full_name = format!("{}.{}", effect_name, method_name);
+                        let effect = infer_required_effect(&full_name);
+                        direct_effects.insert(effect);
+                    }
+                }
+            }
+        }
+        // Don't recurse to avoid double-counting
+        return;
+    }
+
+    // Check for qualified effectful calls
+    if node.kind() == "qualified_identifier" {
+        if let Some(effect_call) = extract_qualified_effect_call(node, source) {
+            let effect = infer_required_effect(&effect_call);
+            direct_effects.insert(effect);
+        }
+        return;
+    }
+
+    // Check for call_expression to user-defined functions
+    if node.kind() == "call_expression" {
+        // The first named child is the callee expression
+        if let Some(callee) = node.named_child(0) {
+            if callee.kind() == "identifier" {
+                if let Ok(callee_name) = callee.utf8_text(source.as_bytes()) {
+                    if defined_functions.contains(callee_name) {
+                        callees.insert(callee_name.to_string());
+                    }
+                }
+            }
+            // Also check effectful identifiers used as callee in call_expression
+            // e.g., `foo!(x)` — the callee is an effect_identifier
+            if callee.kind() == "effect_identifier" {
+                if let Ok(callee_name) = callee.utf8_text(source.as_bytes()) {
+                    let base_name = callee_name.trim_end_matches('!');
+                    if defined_functions.contains(callee_name) {
+                        callees.insert(callee_name.to_string());
+                    } else if defined_functions.contains(base_name) {
+                        callees.insert(base_name.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    // Recurse into children
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_call_graph_info(child, source, defined_functions, direct_effects, callees);
+    }
+}
+
+/// Compute transitive effects for all functions via fixed-point iteration.
+///
+/// Starting from each function's direct effects, propagate effects through the call graph
+/// until no new effects are added (fixed point reached). Handles mutual recursion.
+fn compute_transitive_effects(
+    direct_effects_map: &HashMap<String, HashSet<String>>,
+    call_graph: &HashMap<String, HashSet<String>>,
+) -> HashMap<String, HashSet<String>> {
+    // Initialize transitive effects with direct effects
+    let mut transitive: HashMap<String, HashSet<String>> = HashMap::new();
+    for (name, effects) in direct_effects_map {
+        transitive.insert(name.clone(), effects.clone());
+    }
+
+    // Fixed-point iteration
+    loop {
+        let mut changed = false;
+
+        for (func_name, callees) in call_graph {
+            let mut new_effects: HashSet<String> = HashSet::new();
+
+            // Collect effects from all callees
+            for callee in callees {
+                if let Some(callee_effects) = transitive.get(callee) {
+                    for effect in callee_effects {
+                        new_effects.insert(effect.clone());
+                    }
+                }
+            }
+
+            // Add new effects to this function's transitive set
+            let func_effects = transitive.entry(func_name.clone()).or_default();
+            for effect in new_effects {
+                if func_effects.insert(effect) {
+                    changed = true;
+                }
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    transitive
+}
+
+/// Find the callee chain that introduces a transitive effect.
+///
+/// Returns the name of the immediate callee through which the effect propagates.
+fn find_effect_source<'a>(
+    func_name: &str,
+    effect: &str,
+    call_graph: &'a HashMap<String, HashSet<String>>,
+    direct_effects_map: &HashMap<String, HashSet<String>>,
+    transitive_effects: &HashMap<String, HashSet<String>>,
+) -> Option<&'a String> {
+    if let Some(callees) = call_graph.get(func_name) {
+        for callee in callees {
+            // Check if this callee has the effect (directly or transitively)
+            if let Some(callee_effects) = transitive_effects.get(callee.as_str()) {
+                if callee_effects.contains(effect) {
+                    return Some(callee);
+                }
+            }
+            if let Some(callee_direct) = direct_effects_map.get(callee.as_str()) {
+                if callee_direct.contains(effect) {
+                    return Some(callee);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check transitive effects for a function and emit diagnostics.
+fn check_transitive_effects(
+    func_node: Node,
+    func_name: &str,
+    source: &str,
+    file: &str,
+    declared_effects_map: &HashMap<String, Vec<String>>,
+    transitive_effects: &HashMap<String, HashSet<String>>,
+    call_graph: &HashMap<String, HashSet<String>>,
+    direct_effects_map: &HashMap<String, HashSet<String>>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let declared = declared_effects_map.get(func_name).cloned().unwrap_or_default();
+    let direct = direct_effects_map.get(func_name).cloned().unwrap_or_default();
+
+    if let Some(transitive) = transitive_effects.get(func_name) {
+        for effect in transitive {
+            // Skip effects that are already caught by direct checking
+            if direct.contains(effect) {
+                continue;
+            }
+
+            // Check if this transitive effect is declared
+            let has_effect = declared
+                .iter()
+                .any(|e| e.eq_ignore_ascii_case(effect));
+
+            if !has_effect {
+                let start = func_node.start_position();
+                let end = func_node.end_position();
+
+                // Find which callee introduces this effect
+                let via = find_effect_source(
+                    func_name,
+                    effect,
+                    call_graph,
+                    direct_effects_map,
+                    transitive_effects,
+                );
+                let via_name = via.map(|s| s.as_str()).unwrap_or("unknown");
+
+                let (patch, _) = build_effect_patch(func_node, source, effect);
+
+                diagnostics.push(Diagnostic {
+                    code: "CAP_001".to_string(),
+                    severity: Severity::Error,
+                    location: Location {
+                        file: file.to_string(),
+                        line: start.row + 1,
+                        col: start.column + 1,
+                        end_line: Some(end.row + 1),
+                        end_col: Some(end.column + 1),
+                    },
+                    message: format!(
+                        "Function '{}' transitively requires {{{}}} via '{}' but does not declare it",
+                        func_name, effect, via_name
+                    ),
+                    context: format!(
+                        "Function '{}' declares effects {{{}}}, but transitively requires {{{}}} through call to '{}'.",
+                        func_name,
+                        declared.join(", "),
+                        effect,
+                        via_name
+                    ),
+                    suggestions: vec![
+                        Suggestion {
+                            strategy: "escalate_capability".to_string(),
+                            description: format!("Add {} to the function signature", effect),
+                            patch: Some(patch),
+                        },
+                    ],
+                });
+            }
+        }
+    }
+}
+
+/// Check a single function declaration for direct effect violations.
 fn check_function(node: Node, source: &str, file: &str, diagnostics: &mut Vec<Diagnostic>) {
     // Extract function name
     let func_name = find_function_name(node, source).unwrap_or("<unknown>");
@@ -40,19 +353,8 @@ fn check_function(node: Node, source: &str, file: &str, diagnostics: &mut Vec<Di
     // Extract declared effects from the type annotation
     let declared_effects = extract_declared_effects(node, source);
 
-    // 4. Find the function body
-    // We try named child "body" first, then fallback to last child
-    let mut body_node = node.child_by_field_name("body");
-    
-    if body_node.is_none() {
-         let count = node.named_child_count();
-         if count > 0 {
-             // Assume last child is body (after = or just the block)
-             body_node = node.named_child(count - 1);
-         }
-    }
-
-    if let Some(body) = body_node {
+    // Find the function body
+    if let Some(body) = get_function_body(node) {
         check_node_for_effects(
             body,
             source,
@@ -138,12 +440,6 @@ fn check_node_for_effects(
     func_node: Node,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // DEBUG: Log everything
-    // eprintln!("DEBUG: visiting node kind: {}", node.kind());
-    if node.kind() == "call_expression" {
-         // eprintln!("DEBUG: visiting call_expression: {}", node.to_sexp());
-    }
-
     // Check for effectful identifiers (calls ending in !)
     if node.kind() == "effect_identifier" {
         if let Ok(call_name) = node.utf8_text(source.as_bytes()) {
@@ -165,32 +461,25 @@ fn check_node_for_effects(
         // field_expression: expr . id
         let obj = node.named_child(0);
         let field = node.named_child(1);
-        
+
         if let (Some(obj_node), Some(field_node)) = (obj, field) {
             if field_node.kind() == "effect_identifier" {
                 if let Ok(effect_name) = obj_node.utf8_text(source.as_bytes()) {
-                     if let Ok(method_name) = field_node.utf8_text(source.as_bytes()) {
-                         // We have Effect.method!
-                         // Construct call name for reporting? Or just use Effect
-                         // required_effect is inferred from Effect name (obj) if possible, 
-                         // or we can rely on existing inference from method name?
-                         // "Log.info!" -> infer from "Log"? 
-                         // infer_required_effect("Log.info!") -> "Log"
-                         
-                         let full_name = format!("{}.{}", effect_name, method_name);
-                          check_effectful_call(
-                                node,
-                                &full_name,
-                                source,
-                                file,
-                                func_name,
-                                declared_effects,
-                                func_node,
-                                diagnostics,
-                            );
-                            // Don't recurse to avoid double reporting
-                            return;
-                     }
+                    if let Ok(method_name) = field_node.utf8_text(source.as_bytes()) {
+                        let full_name = format!("{}.{}", effect_name, method_name);
+                        check_effectful_call(
+                            node,
+                            &full_name,
+                            source,
+                            file,
+                            func_name,
+                            declared_effects,
+                            func_node,
+                            diagnostics,
+                        );
+                        // Don't recurse to avoid double reporting
+                        return;
+                    }
                 }
             }
         }
@@ -321,7 +610,7 @@ fn infer_required_effect(call_name: &str) -> String {
 
     // Handle simple names
     let name = call_name.trim_end_matches('!');
-    
+
     // Check Known Effects Registry first
     match name {
         "print" | "println" | "eprint" | "read_line" => return "Console".to_string(),
