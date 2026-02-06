@@ -7,6 +7,7 @@ use tree_sitter_baseline::LANGUAGE;
 use crate::diagnostics::Location;
 use crate::interpreter::{self, Context, RuntimeValue};
 use crate::prelude;
+use crate::resolver::{self, ModuleLoader, ImportKind};
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -206,7 +207,39 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
 
     // Build interpreter context with all definitions
     let active_prelude = prelude::extract_prelude(&root, &source).unwrap_or(prelude::Prelude::Core);
+
+    // Create ModuleLoader for imports — leak for lifetime compatibility
+    let loader: &'static mut ModuleLoader = match path.parent() {
+        Some(dir) => Box::leak(Box::new(ModuleLoader::with_base_dir(dir.to_path_buf()))),
+        None => Box::leak(Box::new(ModuleLoader::new())),
+    };
+
     let mut context = Context::with_prelude_and_file(active_prelude, file_str.clone());
+
+    // Inject imports
+    if let Err(msg) = inject_imports_for_test(&root, &source, path, loader, &mut context) {
+        return TestSuiteResult {
+            status: "fail".to_string(),
+            tests: vec![TestResult {
+                name: "imports".to_string(),
+                function: None,
+                status: TestStatus::Fail,
+                message: Some(format!("Import error: {}", msg)),
+                location: Location {
+                    file: file_str,
+                    line: 1,
+                    col: 1,
+                    end_line: None,
+                    end_col: None,
+                },
+            }],
+            summary: TestSummary {
+                total: 1,
+                passed: 0,
+                failed: 1,
+            },
+        };
+    }
 
     if let Err(e) = interpreter::eval(&root, &source, &mut context) {
         return TestSuiteResult {
@@ -256,9 +289,86 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
     }
 }
 
+fn inject_imports_for_test<'a>(
+    root: &tree_sitter::Node<'a>,
+    source: &str,
+    file: &Path,
+    loader: &'a mut ModuleLoader,
+    context: &mut Context<'a>,
+) -> Result<(), String> {
+    let imports = ModuleLoader::parse_imports(root, source);
+    let file_str = file.display().to_string();
+
+    // Phase 1: resolve and load all modules (needs &mut loader)
+    let mut resolved: Vec<(resolver::ResolvedImport, usize)> = Vec::new();
+    for (import, import_node) in &imports {
+        let file_path = loader.resolve_path(&import.module_name, &import_node, &file_str)
+            .map_err(|d| d.message.clone())?;
+        let module_idx = loader.load_module(&file_path, &import_node, &file_str)
+            .map_err(|d| d.message.clone())?;
+        resolved.push((import.clone(), module_idx));
+    }
+
+    // Phase 2: eval each module and inject into context (needs &loader)
+    for (import, module_idx) in &resolved {
+        let (mod_root, mod_source, mod_path) = loader.get_module(*module_idx)
+            .ok_or_else(|| format!("Failed to get module {}", import.module_name))?;
+
+        let mod_prelude = prelude::extract_prelude(&mod_root, mod_source)
+            .unwrap_or(prelude::Prelude::Core);
+
+        let mod_file = mod_path.display().to_string();
+        let mut mod_context = Context::with_prelude_and_file(mod_prelude, mod_file);
+
+        interpreter::eval(&mod_root, mod_source, &mut mod_context)
+            .map_err(|e| format!("Error evaluating module `{}`: {}", import.module_name, e))?;
+
+        let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
+        let mut record_fields = std::collections::HashMap::new();
+
+        for (func_name, _) in &exports.functions {
+            if let Some(val) = mod_context.get(func_name) {
+                record_fields.insert(func_name.clone(), val.clone());
+            }
+        }
+
+        for type_name in &exports.types {
+            if let Some(val) = mod_context.get(type_name) {
+                record_fields.insert(type_name.clone(), val.clone());
+            }
+        }
+
+        let short_name = import.module_name.split('.').last()
+            .unwrap_or(&import.module_name);
+
+        context.set(
+            short_name.to_string(),
+            RuntimeValue::Record(record_fields.clone()),
+        );
+
+        match &import.kind {
+            ImportKind::Selective(names) => {
+                for name in names {
+                    if let Some(val) = record_fields.get(name) {
+                        context.set(name.clone(), val.clone());
+                    }
+                }
+            }
+            ImportKind::Wildcard => {
+                for (name, val) in &record_fields {
+                    context.set(name.clone(), val.clone());
+                }
+            }
+            ImportKind::Qualified => {}
+        }
+    }
+
+    Ok(())
+}
+
 fn run_single_test<'a>(
     test: &CollectedTest<'a>,
-    source: &str,
+    source: &'a str,
     context: &mut Context<'a>,
 ) -> TestResult {
     context.enter_scope();

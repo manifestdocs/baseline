@@ -13,9 +13,9 @@ pub enum RuntimeValue<'a> {
     String(String),
     Bool(bool),
     Unit,
-    Function(Vec<String>, Node<'a>),
-    /// Closure: params, body, captured environment
-    Closure(Vec<String>, Node<'a>, HashMap<String, RuntimeValue<'a>>),
+    Function(Vec<String>, Node<'a>, &'a str),
+    /// Closure: params, body, source, captured environment
+    Closure(Vec<String>, Node<'a>, &'a str, HashMap<String, RuntimeValue<'a>>),
     Tuple(Vec<RuntimeValue<'a>>),
     Struct(String, HashMap<String, RuntimeValue<'a>>),
     Record(HashMap<String, RuntimeValue<'a>>),
@@ -36,8 +36,8 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
             RuntimeValue::String(s) => write!(f, "{}", s), // TODO: quote strings?
             RuntimeValue::Bool(b) => write!(f, "{}", b),
             RuntimeValue::Unit => write!(f, "()"),
-            RuntimeValue::Function(args, _) => write!(f, "|{}| ...", args.join(", ")),
-            RuntimeValue::Closure(args, _, _) => write!(f, "|{}| <closure>", args.join(", ")),
+            RuntimeValue::Function(args, _, _) => write!(f, "|{}| ...", args.join(", ")),
+            RuntimeValue::Closure(args, _, _, _) => write!(f, "|{}| <closure>", args.join(", ")),
             RuntimeValue::Tuple(vals) => {
                 let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "({})", s)
@@ -255,12 +255,12 @@ macro_rules! propagate {
 fn apply_function<'a>(
     func: &RuntimeValue<'a>,
     args: &[RuntimeValue<'a>],
-    source: &str,
+    _source: &str,
     context: &mut Context<'a>,
     call_node: Option<&Node>,
 ) -> Result<RuntimeValue<'a>, RuntimeError> {
     match func {
-        RuntimeValue::Function(param_names, body_node) => {
+        RuntimeValue::Function(param_names, body_node, fn_source) => {
             if args.len() != param_names.len() {
                 let msg = format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len());
                 return match call_node {
@@ -275,14 +275,14 @@ fn apply_function<'a>(
             for (name, val) in param_names.iter().zip(args.iter()) {
                 context.set(name.clone(), val.clone());
             }
-            let result = eval(body_node, source, context);
+            let result = eval(body_node, fn_source, context);
             context.exit_scope();
             if call_node.is_some() {
                 context.pop_frame();
             }
             unwrap_early_return(result)
         }
-        RuntimeValue::Closure(param_names, body_node, captured_env) => {
+        RuntimeValue::Closure(param_names, body_node, fn_source, captured_env) => {
             if args.len() != param_names.len() {
                 let msg = format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len());
                 return match call_node {
@@ -300,7 +300,7 @@ fn apply_function<'a>(
             for (name, val) in param_names.iter().zip(args.iter()) {
                 context.set(name.clone(), val.clone());
             }
-            let result = eval(body_node, source, context);
+            let result = eval(body_node, fn_source, context);
             context.exit_scope();
             if call_node.is_some() {
                 context.pop_frame();
@@ -322,7 +322,7 @@ fn apply_function<'a>(
 fn dispatch_hof<'a>(
     qualified: &str,
     node: &Node<'a>,
-    source: &str,
+    source: &'a str,
     context: &mut Context<'a>,
 ) -> Result<Option<RuntimeValue<'a>>, RuntimeError> {
     // Collect all call arguments
@@ -506,7 +506,7 @@ fn server_listen<'a>(
 
     for mut request in server.incoming_requests() {
         let req_method = request.method().to_string();
-        let req_path = request.url().to_string();
+        let raw_url = request.url().to_string();
         let mut req_body = String::new();
         if let Err(e) = request.as_reader().read_to_string(&mut req_body) {
             eprintln!("[server] Failed to read request body: {}", e);
@@ -516,7 +516,10 @@ fn server_listen<'a>(
             continue;
         }
 
-        // Build request record: { method, url, headers, body }
+        // Split URL into path and query string
+        let (req_path, query_record) = parse_url_query(&raw_url);
+
+        // Build request record: { method, url, headers, body, query }
         let req_headers: Vec<RuntimeValue> = request.headers().iter().map(|h| {
             RuntimeValue::Tuple(vec![
                 RuntimeValue::String(h.field.to_string()),
@@ -525,9 +528,10 @@ fn server_listen<'a>(
         }).collect();
         let mut req_fields = std::collections::HashMap::new();
         req_fields.insert("method".to_string(), RuntimeValue::String(req_method.clone()));
-        req_fields.insert("url".to_string(), RuntimeValue::String(req_path.clone()));
+        req_fields.insert("url".to_string(), RuntimeValue::String(raw_url));
         req_fields.insert("headers".to_string(), RuntimeValue::List(req_headers));
         req_fields.insert("body".to_string(), RuntimeValue::String(req_body));
+        req_fields.insert("query".to_string(), query_record);
         let req_record = RuntimeValue::Record(req_fields);
 
         // Find matching route and build response
@@ -678,6 +682,34 @@ fn inject_params<'a>(
     RuntimeValue::Record(fields)
 }
 
+/// Parse a URL into (path, query_record).
+///
+/// Splits on `?` to separate path from query string. Query params are parsed
+/// into a `RuntimeValue::Record` with string values. Duplicate keys: last wins.
+/// No query string → empty record.
+fn parse_url_query<'a>(url: &str) -> (String, RuntimeValue<'a>) {
+    let (path, query_str) = match url.split_once('?') {
+        Some((p, q)) => (p.to_string(), q),
+        None => (url.to_string(), ""),
+    };
+
+    let mut query_fields = std::collections::HashMap::new();
+    if !query_str.is_empty() {
+        for pair in query_str.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let (key, value) = match pair.split_once('=') {
+                Some((k, v)) => (k.to_string(), v.to_string()),
+                None => (pair.to_string(), String::new()),
+            };
+            query_fields.insert(key, RuntimeValue::String(value));
+        }
+    }
+
+    (path, RuntimeValue::Record(query_fields))
+}
+
 /// Apply a NativeClosure by prepending the piped value to its captured args.
 fn apply_native_closure<'a>(
     name: &str,
@@ -706,7 +738,7 @@ fn apply_native_closure<'a>(
     }
 }
 
-pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Result<RuntimeValue<'a>, RuntimeError> {
+pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> Result<RuntimeValue<'a>, RuntimeError> {
     match node.kind() {
         "source_file" | "module_decl" => {
             let mut last_val = RuntimeValue::Unit;
@@ -733,7 +765,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
             } else {
                 // Non-lambda body (block, expression, constructor, etc.)
                 // Store as zero-arg function for deferred evaluation
-                context.set(name, RuntimeValue::Function(Vec::new(), body_node));
+                context.set(name, RuntimeValue::Function(Vec::new(), body_node, source));
             }
             Ok(RuntimeValue::Unit)
         }
@@ -770,7 +802,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
 
             let body = node.named_child(count - 1).unwrap();
             let captured = context.snapshot();
-            Ok(RuntimeValue::Closure(args, body, captured))
+            Ok(RuntimeValue::Closure(args, body, source, captured))
         }
         "call_expression" => {
              // func(arg1, arg2)
@@ -843,7 +875,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              let func_name = func_node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
 
              match func_val {
-                 RuntimeValue::Function(param_names, body_node) => {
+                 RuntimeValue::Function(param_names, body_node, fn_source) => {
                      if arg_vals.len() != param_names.len() {
                          return Err(err_at(
                              format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()),
@@ -857,12 +889,12 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          context.set(name.clone(), val);
                      }
 
-                     let result = eval(&body_node, source, context);
+                     let result = eval(&body_node, fn_source, context);
                      context.exit_scope();
                      context.pop_frame();
                      unwrap_early_return(result)
                  }
-                 RuntimeValue::Closure(param_names, body_node, captured_env) => {
+                 RuntimeValue::Closure(param_names, body_node, fn_source, captured_env) => {
                      if arg_vals.len() != param_names.len() {
                          return Err(err_at(
                              format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()),
@@ -879,7 +911,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          context.set(name.clone(), val);
                      }
 
-                     let result = eval(&body_node, source, context);
+                     let result = eval(&body_node, fn_source, context);
                      context.exit_scope();
                      context.pop_frame();
                      unwrap_early_return(result)
@@ -1287,17 +1319,17 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              propagate!(right_val);
 
              match right_val {
-                 RuntimeValue::Function(params, body_node) => {
+                 RuntimeValue::Function(params, body_node, fn_source) => {
                      if params.len() != 1 {
                          return Err(err_at(format!("Pipe expects a function with 1 argument, found {}", params.len()), node, context));
                      }
                      context.enter_scope();
                      context.set(params[0].clone(), left_val);
-                     let result = eval(&body_node, source, context);
+                     let result = eval(&body_node, fn_source, context);
                      context.exit_scope();
                      result
                  }
-                 RuntimeValue::Closure(params, body_node, captured_env) => {
+                 RuntimeValue::Closure(params, body_node, fn_source, captured_env) => {
                      if params.len() != 1 {
                          return Err(err_at(format!("Pipe expects a function with 1 argument, found {}", params.len()), node, context));
                      }
@@ -1306,7 +1338,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
                          context.set(k.clone(), v.clone());
                      }
                      context.set(params[0].clone(), left_val);
-                     let result = eval(&body_node, source, context);
+                     let result = eval(&body_node, fn_source, context);
                      context.exit_scope();
                      result
                  }
@@ -1598,6 +1630,7 @@ mod tests {
     }
 
     fn eval_with_prelude(source: &str, prelude: Prelude) -> Result<RuntimeValue<'static>, String> {
+        let source: &'static str = Box::leak(source.to_string().into_boxed_str());
         let mut parser = Parser::new();
         parser
             .set_language(&LANGUAGE.into())
@@ -1616,18 +1649,18 @@ mod tests {
 
         // main is a Function or Closure — evaluate its body to get the actual value
         let result = match main_val {
-            RuntimeValue::Function(_, body_node) => {
+            RuntimeValue::Function(_, body_node, fn_source) => {
                 context.enter_scope();
-                let result = eval(&body_node, source, &mut context);
+                let result = eval(&body_node, fn_source, &mut context);
                 context.exit_scope();
                 result
             }
-            RuntimeValue::Closure(_, body_node, captured_env) => {
+            RuntimeValue::Closure(_, body_node, fn_source, captured_env) => {
                 context.enter_scope();
                 for (k, v) in &captured_env {
                     context.set(k.clone(), v.clone());
                 }
-                let result = eval(&body_node, source, &mut context);
+                let result = eval(&body_node, fn_source, &mut context);
                 context.exit_scope();
                 result
             }

@@ -4,5 +4,6 @@ pub mod diagnostics;
 pub mod interpreter;
 pub mod parse;
 pub mod prelude;
+pub mod resolver;
 pub mod stdlib;
 pub mod test_runner;

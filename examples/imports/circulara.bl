@@ -1,0 +1,6 @@
+@prelude(core)
+
+import Circularb
+
+foo : Int -> Int
+foo = |n| n + 1

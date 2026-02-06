@@ -385,3 +385,45 @@ fn test_inline_tests_failure() {
     assert!(out.stdout.contains("FAIL"), "stdout: {}", out.stdout);
     assert!(out.stdout.contains("1 failed"), "stdout: {}", out.stdout);
 }
+
+// ---------------------------------------------------------------------------
+// Cross-module imports
+// ---------------------------------------------------------------------------
+
+#[test]
+fn run_import_qualified() {
+    assert_run_ok("imports/main.bl", "Result: 10\n");
+}
+
+#[test]
+fn run_import_selective() {
+    assert_run_ok("imports/selective.bl", "Result: 10\n");
+}
+
+#[test]
+fn run_import_wildcard() {
+    assert_run_ok("imports/wildcard.bl", "Result: 10\n");
+}
+
+#[test]
+fn check_import_qualified() {
+    assert_check_ok("imports/main.bl");
+}
+
+#[test]
+fn check_import_selective() {
+    assert_check_ok("imports/selective.bl");
+}
+
+#[test]
+fn run_import_missing_module() {
+    assert_run_fails("imports/import_missing.bl", &["Import Error"]);
+}
+
+#[test]
+fn check_import_missing_module() {
+    assert_check_has_errors("imports/import_missing.bl", &["IMP_001"]);
+}
+
+// Note: circular import detection requires recursive import resolution,
+// which is deferred to a future version.

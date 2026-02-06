@@ -5,6 +5,7 @@ use blc::diagnostics::{self, CheckResult};
 use blc::interpreter;
 use blc::parse;
 use blc::prelude;
+use blc::resolver::{self, ImportKind, ModuleLoader};
 use blc::test_runner;
 
 #[derive(Parser)]
@@ -66,59 +67,7 @@ fn main() {
             }
         }
         Commands::Run { file } => {
-             // 1. Parse
-             use tree_sitter::Parser;
-             use tree_sitter_baseline::LANGUAGE;
-
-             let source = std::fs::read_to_string(&file).expect("Failed to read file");
-             let mut parser = Parser::new();
-             parser.set_language(&LANGUAGE.into()).expect("Failed to load language");
-             let tree = parser.parse(&source, None).expect("Failed to parse");
-             let root = tree.root_node();
-
-             // 2. Extract prelude and create context
-             let active_prelude = match prelude::extract_prelude(&root, &source) {
-                 Ok(p) => p,
-                 Err(msg) => {
-                     eprintln!("Prelude Error: {}", msg);
-                     std::process::exit(1);
-                 }
-             };
-             let file_path = file.display().to_string();
-             let mut context = interpreter::Context::with_prelude_and_file(active_prelude, file_path);
-
-             // Evaluate top-level definitions (types/functions)
-             if let Err(e) = interpreter::eval(&root, &source, &mut context) {
-                 eprintln!("Runtime Error: {e}");
-                 std::process::exit(1);
-             }
-
-             // 3. Find and run 'main' or 'main!'
-             let main_val = context.get("main!").cloned()
-                 .or_else(|| context.get("main").cloned());
-
-             if let Some(main_val) = main_val {
-                 let result = run_main(&main_val, &source, &mut context);
-                 match result {
-                     Ok(val) => {
-                         // Unwrap EarlyReturn at the top level
-                         let val = match val {
-                             interpreter::RuntimeValue::EarlyReturn(inner) => *inner,
-                             other => other,
-                         };
-                         if !matches!(val, interpreter::RuntimeValue::Unit) {
-                             println!("{}", val);
-                         }
-                     }
-                     Err(e) => {
-                         eprintln!("Runtime Error: {e}");
-                         std::process::exit(1);
-                     }
-                 }
-             } else {
-                 eprintln!("No 'main' or 'main!' function found");
-                 std::process::exit(1);
-             }
+            run_file(&file);
         }
         Commands::Test { file, json } => {
             let result = test_runner::run_test_file(&file);
@@ -138,29 +87,181 @@ fn main() {
     }
 }
 
+fn run_file(file: &PathBuf) {
+    use tree_sitter::Parser;
+    use tree_sitter_baseline::LANGUAGE;
+
+    let source = std::fs::read_to_string(file).expect("Failed to read file");
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load language");
+    let tree = parser.parse(&source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    let active_prelude = match prelude::extract_prelude(&root, &source) {
+        Ok(p) => p,
+        Err(msg) => {
+            eprintln!("Prelude Error: {}", msg);
+            std::process::exit(1);
+        }
+    };
+    let file_path = file.display().to_string();
+
+    // Leak the loader so imported tree-sitter Nodes get 'static lifetime
+    let loader: &'static mut ModuleLoader = match file.parent() {
+        Some(dir) => Box::leak(Box::new(ModuleLoader::with_base_dir(dir.to_path_buf()))),
+        None => Box::leak(Box::new(ModuleLoader::new())),
+    };
+
+    let mut context = interpreter::Context::with_prelude_and_file(active_prelude, file_path);
+
+    if let Err(msg) = inject_imports(&root, &source, file, loader, &mut context) {
+        eprintln!("Import Error: {}", msg);
+        std::process::exit(1);
+    }
+
+    if let Err(e) = interpreter::eval(&root, &source, &mut context) {
+        eprintln!("Runtime Error: {e}");
+        std::process::exit(1);
+    }
+
+    let main_val = context
+        .get("main!")
+        .cloned()
+        .or_else(|| context.get("main").cloned());
+
+    if let Some(main_val) = main_val {
+        let result = run_main(&main_val, &mut context);
+        match result {
+            Ok(val) => {
+                let val = match val {
+                    interpreter::RuntimeValue::EarlyReturn(inner) => *inner,
+                    other => other,
+                };
+                if !matches!(val, interpreter::RuntimeValue::Unit) {
+                    println!("{}", val);
+                }
+            }
+            Err(e) => {
+                eprintln!("Runtime Error: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        eprintln!("No 'main' or 'main!' function found");
+        std::process::exit(1);
+    }
+}
+
+/// Pre-inject imported modules into the interpreter context.
+fn inject_imports<'a>(
+    root: &tree_sitter::Node<'a>,
+    source: &str,
+    file: &PathBuf,
+    loader: &'a mut ModuleLoader,
+    context: &mut interpreter::Context<'a>,
+) -> Result<(), String> {
+    let imports = ModuleLoader::parse_imports(root, source);
+    let file_str = file.display().to_string();
+
+    // Phase 1: resolve and load all modules (needs &mut loader)
+    let mut resolved: Vec<(resolver::ResolvedImport, usize)> = Vec::new();
+    for (import, import_node) in &imports {
+        let file_path = loader
+            .resolve_path(&import.module_name, import_node, &file_str)
+            .map_err(|d| d.message.clone())?;
+        let module_idx = loader
+            .load_module(&file_path, import_node, &file_str)
+            .map_err(|d| d.message.clone())?;
+        resolved.push((import.clone(), module_idx));
+    }
+
+    // Phase 2: eval each module and inject into context
+    for (import, module_idx) in &resolved {
+        let (mod_root, mod_source, mod_path) = loader
+            .get_module(*module_idx)
+            .ok_or_else(|| format!("Failed to get module {}", import.module_name))?;
+
+        let mod_prelude =
+            prelude::extract_prelude(&mod_root, mod_source).unwrap_or(prelude::Prelude::Core);
+
+        let mod_file = mod_path.display().to_string();
+        let mut mod_context = interpreter::Context::with_prelude_and_file(mod_prelude, mod_file);
+
+        interpreter::eval(&mod_root, mod_source, &mut mod_context)
+            .map_err(|e| format!("Error evaluating module `{}`: {}", import.module_name, e))?;
+
+        let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
+        let mut record_fields = std::collections::HashMap::new();
+
+        for (func_name, _) in &exports.functions {
+            if let Some(val) = mod_context.get(func_name) {
+                record_fields.insert(func_name.clone(), val.clone());
+            }
+        }
+
+        for type_name in &exports.types {
+            if let Some(val) = mod_context.get(type_name) {
+                record_fields.insert(type_name.clone(), val.clone());
+            }
+        }
+
+        let short_name = import
+            .module_name
+            .split('.')
+            .last()
+            .unwrap_or(&import.module_name);
+
+        context.set(
+            short_name.to_string(),
+            interpreter::RuntimeValue::Record(record_fields.clone()),
+        );
+
+        match &import.kind {
+            ImportKind::Selective(names) => {
+                for name in names {
+                    if let Some(val) = record_fields.get(name) {
+                        context.set(name.clone(), val.clone());
+                    }
+                }
+            }
+            ImportKind::Wildcard => {
+                for (name, val) in &record_fields {
+                    context.set(name.clone(), val.clone());
+                }
+            }
+            ImportKind::Qualified => {}
+        }
+    }
+
+    Ok(())
+}
+
 /// Evaluate the main function body.
 fn run_main<'a>(
     main_val: &interpreter::RuntimeValue<'a>,
-    source: &str,
     context: &mut interpreter::Context<'a>,
 ) -> Result<interpreter::RuntimeValue<'a>, interpreter::RuntimeError> {
     match main_val {
-        interpreter::RuntimeValue::Function(_, main_body) => {
+        interpreter::RuntimeValue::Function(_, main_body, fn_source) => {
             context.enter_scope();
-            let result = interpreter::eval(main_body, source, context);
+            let result = interpreter::eval(main_body, fn_source, context);
             context.exit_scope();
             result
         }
-        interpreter::RuntimeValue::Closure(_, main_body, captured_env) => {
+        interpreter::RuntimeValue::Closure(_, main_body, fn_source, captured_env) => {
             context.enter_scope();
             for (k, v) in captured_env {
                 context.set(k.clone(), v.clone());
             }
-            let result = interpreter::eval(main_body, source, context);
+            let result = interpreter::eval(main_body, fn_source, context);
             context.exit_scope();
             result
         }
-        _ => Err(interpreter::RuntimeError::from("'main' is not a function".to_string())),
+        _ => Err(interpreter::RuntimeError::from(
+            "'main' is not a function".to_string(),
+        )),
     }
 }
 
@@ -201,8 +302,8 @@ fn print_human_readable(result: &CheckResult) {
         };
         eprintln!(
             "{}:{}:{}: {}: {} [{}]",
-            diag.location.file, diag.location.line, diag.location.col,
-            prefix, diag.message, diag.code
+            diag.location.file, diag.location.line, diag.location.col, prefix, diag.message,
+            diag.code
         );
         if !diag.context.is_empty() {
             eprintln!("  {}", diag.context);
@@ -212,10 +313,14 @@ fn print_human_readable(result: &CheckResult) {
         }
     }
 
-    let error_count = result.diagnostics.iter()
+    let error_count = result
+        .diagnostics
+        .iter()
         .filter(|d| d.severity == diagnostics::Severity::Error)
         .count();
-    let warning_count = result.diagnostics.iter()
+    let warning_count = result
+        .diagnostics
+        .iter()
         .filter(|d| d.severity == diagnostics::Severity::Warning)
         .count();
 

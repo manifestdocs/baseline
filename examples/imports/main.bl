@@ -1,0 +1,9 @@
+@prelude(script)
+
+import Math
+
+main! : () -> {Console} ()
+main! = {
+  let result = Math.add(Math.square(3), 1)
+  Console.println!("Result: ${result}")
+}

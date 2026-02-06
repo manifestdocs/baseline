@@ -885,6 +885,22 @@
   {
     "type": "import_decl",
     "named": true,
+    "fields": {
+      "path": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "import_path",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "import_path",
+    "named": true,
     "fields": {},
     "children": {
       "multiple": true,
@@ -895,7 +911,7 @@
           "named": true
         },
         {
-          "type": "module_path",
+          "type": "type_identifier",
           "named": true
         }
       ]
@@ -2950,10 +2966,6 @@
     }
   },
   {
-    "type": "!",
-    "named": false
-  },
-  {
     "type": "!=",
     "named": false
   },
@@ -3141,6 +3153,10 @@
   },
   {
     "type": "module",
+    "named": false
+  },
+  {
+    "type": "not",
     "named": false
   },
   {

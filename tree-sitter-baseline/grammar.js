@@ -69,11 +69,13 @@ module.exports = grammar({
 
     import_decl: $ => seq(
       'import',
-      $.module_path,
-      optional(choice(
-        seq('.', '{', commaSep1($.identifier), '}'), // import Http.{get}
-        seq('.', '*') // import Http.*
-      ))
+      field('path', $.import_path),
+    ),
+
+    import_path: $ => choice(
+      seq($.type_identifier, repeat(seq('.', $.type_identifier)), '.', '{', commaSep1($.identifier), '}'),
+      seq($.type_identifier, repeat(seq('.', $.type_identifier)), '.', '*'),
+      seq($.type_identifier, repeat(seq('.', $.type_identifier))),
     ),
 
     _definition: $ => choice(
@@ -219,7 +221,7 @@ module.exports = grammar({
       prec.left(PREC.LOGICAL_OR, seq($._expression, '||', $._expression))
     ),
 
-    unary_expression: $ => prec(PREC.UNARY, seq(choice('!', '-'), $._expression)),
+    unary_expression: $ => prec(PREC.UNARY, seq(choice('not', '-'), $._expression)),
 
     // expr? — unwrap Option/Result or propagate error
     try_expression: $ => prec.left(PREC.CALL, seq($._expression, '?')),

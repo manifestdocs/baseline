@@ -10,3 +10,4 @@ pub mod types;
 pub use effects::check_effects;
 pub use refinements::check_refinements;
 pub use types::check_types;
+pub use types::check_types_with_loader;

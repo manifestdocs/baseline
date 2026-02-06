@@ -10,6 +10,7 @@ use tree_sitter::Parser;
 use tree_sitter_baseline::LANGUAGE;
 
 use crate::diagnostics::{CheckResult, Diagnostic, Location, Severity, Suggestion};
+use crate::resolver::ModuleLoader;
 
 /// Parse a Baseline source file and return check results.
 pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
@@ -31,15 +32,24 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
 
     // Only run semantic analysis if there are no syntax errors
     if diagnostics.is_empty() {
-        // Run type checking pass (P0)
+        // Create a ModuleLoader for cross-module import resolution
+        let base_dir = path.parent().map(|p| p.to_path_buf());
+        let mut loader = match base_dir {
+            Some(dir) => ModuleLoader::with_base_dir(dir),
+            None => ModuleLoader::new(),
+        };
+
+        // Run type checking pass with import support
         let root_node = tree.root_node();
-        let type_diagnostics = crate::analysis::check_types(&root_node, &source, &file_name);
+        let type_diagnostics = crate::analysis::check_types_with_loader(
+            &root_node, &source, &file_name, Some(&mut loader),
+        );
         diagnostics.extend(type_diagnostics);
 
         // Run effect checking pass
         let effect_diagnostics = crate::analysis::check_effects(&tree, &source, &file_name);
         diagnostics.extend(effect_diagnostics);
-        
+
         // Run refinement checking pass
         let refinement_diagnostics = crate::analysis::check_refinements(&tree, &source, &file_name);
         diagnostics.extend(refinement_diagnostics);
@@ -70,6 +80,8 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
     collect_errors(root, source, file_name, &mut diagnostics);
 
     if diagnostics.is_empty() {
+        // No base directory for string-based parsing — imports won't resolve,
+        // but that's fine for unit tests that don't use imports.
         let root_node = tree.root_node();
         let type_diagnostics = crate::analysis::check_types(&root_node, source, file_name);
         diagnostics.extend(type_diagnostics);

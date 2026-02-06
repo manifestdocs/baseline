@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 use crate::diagnostics::{Diagnostic, Location, Severity, Suggestion, Patch};
 use crate::prelude::{self, Prelude};
+use crate::resolver::{ModuleLoader, ImportKind};
 
 /// Classification of what a single match arm pattern covers.
 enum PatternCoverage {
@@ -409,6 +410,15 @@ fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
 }
 
 pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
+    check_types_with_loader(root, source, file, None)
+}
+
+pub fn check_types_with_loader(
+    root: &Node,
+    source: &str,
+    file: &str,
+    loader: Option<&mut ModuleLoader>,
+) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
 
     // Extract prelude from the AST to gate module availability.
@@ -434,9 +444,161 @@ pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
     };
 
     let mut symbols = SymbolTable::with_prelude(prelude);
+
+    // Process imports before collecting signatures
+    if let Some(loader) = loader {
+        process_imports(root, source, file, loader, &mut symbols, &mut diagnostics);
+    }
+
     collect_signatures(root, source, &mut symbols);
     check_node(root, source, file, &mut symbols, &mut diagnostics);
     diagnostics
+}
+
+/// Process import declarations: resolve each import, type-check the imported module,
+/// and register its exports into the current symbol table.
+fn process_imports(
+    root: &Node,
+    source: &str,
+    file: &str,
+    loader: &mut ModuleLoader,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let imports = ModuleLoader::parse_imports(root, source);
+
+    for (import, import_node) in imports {
+        // Resolve module path to a file
+        let file_path = match loader.resolve_path(&import.module_name, &import_node, file) {
+            Ok(p) => p,
+            Err(diag) => {
+                diagnostics.push(diag);
+                continue;
+            }
+        };
+
+        // Load and parse the module
+        let module_idx = match loader.load_module(&file_path, &import_node, file) {
+            Ok(idx) => idx,
+            Err(diag) => {
+                diagnostics.push(diag);
+                continue;
+            }
+        };
+
+        // Get the module file path (owned) so we can release the borrow
+        let mod_file = match loader.get_module(module_idx) {
+            Some((_, _, path)) => path.display().to_string(),
+            None => continue,
+        };
+
+        // Type-check the imported module (needs &mut loader for recursive imports)
+        // Scope the borrows carefully: get root+source, check, then re-borrow for exports.
+        {
+            let (mod_root, mod_source, _) = loader.get_module(module_idx).unwrap();
+            let mod_diagnostics = check_types(&mod_root, mod_source, &mod_file);
+            let has_errors = mod_diagnostics.iter().any(|d| d.severity == Severity::Error);
+            if has_errors {
+                diagnostics.push(Diagnostic {
+                    code: "IMP_003".to_string(),
+                    severity: Severity::Error,
+                    location: loc(file, &import_node),
+                    message: format!(
+                        "Imported module `{}` has {} type error(s)",
+                        import.module_name,
+                        mod_diagnostics.iter().filter(|d| d.severity == Severity::Error).count()
+                    ),
+                    context: "Fix the errors in the imported module first.".to_string(),
+                    suggestions: vec![],
+                });
+                continue;
+            }
+        }
+
+        // Re-borrow to extract exports and build module's symbol table
+        let (mod_root, mod_source, _) = loader.get_module(module_idx).unwrap();
+
+        let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
+
+        // Get the short module name (last segment for dotted paths)
+        let short_name = import.module_name.split('.').last().unwrap_or(&import.module_name);
+
+        // Build a temporary SymbolTable for the imported module to parse types
+        let mod_prelude = prelude::extract_prelude(&mod_root, mod_source).unwrap_or(Prelude::Core);
+        let mut mod_symbols = SymbolTable::with_prelude(mod_prelude);
+        collect_signatures(&mod_root, mod_source, &mut mod_symbols);
+
+        // Register the module namespace
+        symbols.insert(short_name.to_string(), Type::Module(short_name.to_string()));
+
+        // Register each exported function as a module method
+        for (func_name, _sig_text) in &exports.functions {
+            let qualified = format!("{}.{}", short_name, func_name);
+            // Look up the function type from the module's symbol table
+            let func_type = mod_symbols.lookup(func_name)
+                .cloned()
+                .unwrap_or(Type::Unknown);
+            symbols.module_methods.insert(qualified, func_type.clone());
+
+            // For selective/wildcard imports, also put the symbol directly in scope
+            match &import.kind {
+                ImportKind::Selective(names) => {
+                    if names.contains(func_name) {
+                        symbols.insert(func_name.clone(), func_type);
+                    }
+                }
+                ImportKind::Wildcard => {
+                    symbols.insert(func_name.clone(), func_type);
+                }
+                ImportKind::Qualified => {}
+            }
+        }
+
+        // Register exported types
+        for type_name in &exports.types {
+            let type_def = mod_symbols.lookup_type(type_name).cloned();
+            if let Some(ty) = type_def {
+                // For selective/wildcard, register type directly
+                match &import.kind {
+                    ImportKind::Selective(names) => {
+                        if names.contains(type_name) {
+                            symbols.insert_type(type_name.clone(), ty);
+                        }
+                    }
+                    ImportKind::Wildcard => {
+                        symbols.insert_type(type_name.clone(), ty);
+                    }
+                    ImportKind::Qualified => {}
+                }
+            }
+        }
+
+        // Validate selective imports: check that requested symbols exist
+        if let ImportKind::Selective(names) = &import.kind {
+            let exported_names: Vec<&str> = exports.functions.iter()
+                .map(|(n, _)| n.as_str())
+                .chain(exports.types.iter().map(|n| n.as_str()))
+                .collect();
+            for name in names {
+                if !exported_names.contains(&name.as_str()) {
+                    diagnostics.push(Diagnostic {
+                        code: "IMP_004".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &import_node),
+                        message: format!(
+                            "Symbol `{}` not found in module `{}`",
+                            name, import.module_name
+                        ),
+                        context: format!(
+                            "Available exports: {}",
+                            exported_names.join(", ")
+                        ),
+                        suggestions: vec![],
+                    });
+                }
+            }
+        }
+    }
 }
 
 fn check_node(
@@ -456,7 +618,7 @@ fn check_node(
             }
             Type::Unit
         }
-        "prelude_decl" => {
+        "prelude_decl" | "import_decl" => {
             Type::Unit
         }
         "try_expression" => {

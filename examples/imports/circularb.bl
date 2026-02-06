@@ -1,0 +1,6 @@
+@prelude(core)
+
+import Circulara
+
+bar : Int -> Int
+bar = |n| n + 2
