@@ -7,3 +7,4 @@ pub mod prelude;
 pub mod resolver;
 pub mod stdlib;
 pub mod test_runner;
+pub mod vm;
