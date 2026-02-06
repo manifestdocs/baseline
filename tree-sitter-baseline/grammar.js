@@ -160,6 +160,7 @@ module.exports = grammar({
       $.match_expression,
       $.if_expression,
       $.for_expression,
+      $.with_expression,
       $.binary_expression,
       $.unary_expression,
       $.try_expression,
@@ -197,6 +198,9 @@ module.exports = grammar({
 
     // for x in iter do ...
     for_expression: $ => seq('for', $._pattern, 'in', $._expression, 'do', $._expression),
+
+    // with Console.println! { body } — capture effect calls for testing
+    with_expression: $ => prec.right(seq('with', field('effect', $.field_expression), field('body', $.block))),
 
     // req.params.id or Log.info!
     field_expression: $ => prec.left(PREC.MEMBER, seq(

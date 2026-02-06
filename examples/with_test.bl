@@ -1,0 +1,44 @@
+@prelude(script)
+
+// Test effect handler capture with `with` expression
+
+greet! : String -> {Console} Unit
+greet! = |name| Console.println!("Hello, ${name}!")
+
+test "with captures single call" = {
+  let (_, output) = with Console.println! {
+    Console.println!("hello")
+  }
+  output == ["hello"]
+}
+
+test "with captures multiple calls" = {
+  let (_, output) = with Console.println! {
+    Console.println!("first")
+    Console.println!("second")
+    Console.println!("third")
+  }
+  output == ["first", "second", "third"]
+}
+
+test "with returns body result" = {
+  let (result, _) = with Console.println! {
+    Console.println!("ignored")
+    42
+  }
+  result == 42
+}
+
+test "with captures through function calls" = {
+  let (_, output) = with Console.println! {
+    greet!("World")
+  }
+  output == ["Hello, World!"]
+}
+
+test "with returns empty list when no calls" = {
+  let (result, output) = with Console.println! {
+    1 + 2
+  }
+  result == 3 && output == []
+}

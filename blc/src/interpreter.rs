@@ -126,6 +126,14 @@ const ALL_MODULES: &[&str] = &[
     "Router", "Server", "Db", "Metrics",
 ];
 
+/// Tracks a captured effect during `with` expression evaluation.
+pub struct EffectCapture {
+    /// Qualified effect name being captured, e.g. "Console.println!"
+    pub effect_name: String,
+    /// Stringified first arg of each intercepted call
+    pub captured: Vec<String>,
+}
+
 pub struct Context<'a> {
     scopes: Vec<HashMap<String, RuntimeValue<'a>>>,
     builtins: BuiltinRegistry,
@@ -133,6 +141,7 @@ pub struct Context<'a> {
     prelude: Prelude,
     pub file: String,
     call_stack: Vec<StackFrame>,
+    effect_handlers: Vec<EffectCapture>,
 }
 
 impl<'a> Context<'a> {
@@ -155,6 +164,7 @@ impl<'a> Context<'a> {
             prelude,
             file,
             call_stack: Vec::new(),
+            effect_handlers: Vec::new(),
         };
         // Option/Result constructors are language primitives — always available.
         ctx.set("None".to_string(), RuntimeValue::Enum("None".to_string(), Vec::new()));
@@ -226,6 +236,33 @@ impl<'a> Context<'a> {
 
     fn pop_frame(&mut self) {
         self.call_stack.pop();
+    }
+
+    /// Push an effect capture handler for `with` expressions.
+    fn push_effect_handler(&mut self, effect_name: String) {
+        self.effect_handlers.push(EffectCapture {
+            effect_name,
+            captured: Vec::new(),
+        });
+    }
+
+    /// Pop the most recent effect capture handler and return captured args.
+    fn pop_effect_handler(&mut self) -> Option<Vec<String>> {
+        self.effect_handlers.pop().map(|h| h.captured)
+    }
+
+    /// Check if a qualified call (e.g. "Console.println!") is being captured.
+    /// If so, record the first arg and return true.
+    fn try_capture_effect(&mut self, qualified: &str, args: &[String]) -> bool {
+        // Search from top (most recent handler) down
+        for handler in self.effect_handlers.iter_mut().rev() {
+            if handler.effect_name == qualified {
+                let first_arg = args.first().cloned().unwrap_or_default();
+                handler.captured.push(first_arg);
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -852,6 +889,14 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
                          propagate!(val);
                          arg_strs.push(val.to_string());
                      }
+
+                     // Effect handler interception: if this call is being
+                     // captured by a `with` expression, record args and
+                     // return Unit instead of performing real I/O.
+                     if context.try_capture_effect(&qualified, &arg_strs) {
+                         return Ok(RuntimeValue::Unit);
+                     }
+
                      let result_str = builtin_fn(&arg_strs)
                          .map_err(|msg| err_at(msg, node, context))?;
                      return Ok(parse_builtin_result(&result_str));
@@ -1182,6 +1227,26 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
                             _ => Err(err_at(format!("Unknown bool operator {}", op), node, context))
                         },
+                        (RuntimeValue::List(l), RuntimeValue::List(r)) => match op {
+                            "==" => Ok(RuntimeValue::Bool(l == r)),
+                            "!=" => Ok(RuntimeValue::Bool(l != r)),
+                            _ => Err(err_at(format!("Unknown list operator {}", op), node, context))
+                        },
+                        (RuntimeValue::Tuple(l), RuntimeValue::Tuple(r)) => match op {
+                            "==" => Ok(RuntimeValue::Bool(l == r)),
+                            "!=" => Ok(RuntimeValue::Bool(l != r)),
+                            _ => Err(err_at(format!("Unknown tuple operator {}", op), node, context))
+                        },
+                        (RuntimeValue::Enum(ln, lp), RuntimeValue::Enum(rn, rp)) => match op {
+                            "==" => Ok(RuntimeValue::Bool(ln == rn && lp == rp)),
+                            "!=" => Ok(RuntimeValue::Bool(ln != rn || lp != rp)),
+                            _ => Err(err_at(format!("Unknown enum operator {}", op), node, context))
+                        },
+                        (RuntimeValue::Unit, RuntimeValue::Unit) => match op {
+                            "==" => Ok(RuntimeValue::Bool(true)),
+                            "!=" => Ok(RuntimeValue::Bool(false)),
+                            _ => Err(err_at(format!("Unknown unit operator {}", op), node, context))
+                        },
                         (l, r) => Err(err_at(format!("Invalid operands for {}: {} and {}", op, l, r), node, context))
                      }
                  }
@@ -1402,6 +1467,24 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
                  }
                  _ => Err(err_at("Pipe target must be a function", node, context)),
              }
+        }
+        "with_expression" => {
+            // with Console.println! { body } → (result, captured_args)
+            let effect_node = node.child_by_field_name("effect")
+                .unwrap_or_else(|| node.named_child(0).unwrap());
+            let body_node = node.child_by_field_name("body")
+                .unwrap_or_else(|| node.named_child(1).unwrap());
+
+            let effect_name = effect_node.utf8_text(source.as_bytes()).unwrap().to_string();
+
+            context.push_effect_handler(effect_name);
+            let result = eval(&body_node, source, context)?;
+            let captured = context.pop_effect_handler().unwrap_or_default();
+
+            let captured_list = RuntimeValue::List(
+                captured.into_iter().map(RuntimeValue::String).collect(),
+            );
+            Ok(RuntimeValue::Tuple(vec![result, captured_list]))
         }
         "for_expression" => {
             // for <pattern> in <collection> do <body>

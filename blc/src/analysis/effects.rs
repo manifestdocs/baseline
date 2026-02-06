@@ -186,6 +186,13 @@ fn collect_call_graph_info(
         }
     }
 
+    // with_expression suppresses its named effect — skip the body for that effect
+    if node.kind() == "with_expression" {
+        // The body is handled by the with; don't collect effects from it
+        // (they are intercepted at runtime)
+        return;
+    }
+
     // Recurse into children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -500,6 +507,11 @@ fn check_node_for_effects(
             );
         }
         // Don't recurse into qualified identifiers to avoid checking the inner effectful_identifier separately
+        return;
+    }
+
+    // with_expression suppresses its named effect — don't check its body
+    if node.kind() == "with_expression" {
         return;
     }
 

@@ -1011,6 +1011,14 @@ fn check_node(
                 Type::Unknown
             }
         }
+        "with_expression" => {
+            // with Console.println! { body } → (T, List<String>)
+            // Effect field is child 0, body block is child 1
+            let body_node = node.child_by_field_name("body")
+                .unwrap_or_else(|| node.named_child(1).unwrap());
+            let body_type = check_node(&body_node, source, file, symbols, diagnostics);
+            Type::Tuple(vec![body_type, Type::List(Box::new(Type::String))])
+        }
         "struct_expression" => {
             let type_name_node = node.named_child(0).unwrap();
             let type_name = type_name_node.utf8_text(source.as_bytes()).unwrap();
