@@ -1313,6 +1313,35 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             }
             Ok(RuntimeValue::Record(fields))
         }
+        "record_update" => {
+            // { ..base, field: newValue }
+            // named_child(0) = base expression, named_child(1..) = record_field_init overrides
+            let base_node = node.named_child(0).unwrap();
+            let base_val = eval(&base_node, source, context)?;
+            propagate!(base_val);
+
+            let mut fields = match base_val {
+                RuntimeValue::Struct(ref _name, ref f) => f.clone(),
+                RuntimeValue::Record(ref f) => f.clone(),
+                _ => return Err(err_at("Record update requires a record or struct value", node, context)),
+            };
+
+            let count = node.named_child_count();
+            for i in 1..count {
+                let field_init = node.named_child(i).unwrap();
+                let fname_node = field_init.child(0).unwrap();
+                let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                let val_node = field_init.child(2).unwrap();
+                let val = eval(&val_node, source, context)?;
+                propagate!(val);
+                fields.insert(fname, val);
+            }
+
+            match base_val {
+                RuntimeValue::Struct(name, _) => Ok(RuntimeValue::Struct(name, fields)),
+                _ => Ok(RuntimeValue::Record(fields)),
+            }
+        }
         "field_expression" => {
              let obj_node = node.named_child(0).unwrap();
              let field_node = node.named_child(1).unwrap();
@@ -2333,5 +2362,31 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.contains("Module `Console` is not available"), "got: {}", err);
+    }
+
+    // -- Record update syntax --
+
+    #[test]
+    fn test_record_update_struct() {
+        let result = eval_source(
+            "type Point = { x: Int, y: Int }\nmain : () -> Int\nmain = || {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 42 }\n  p2.x\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Int(42)));
+    }
+
+    #[test]
+    fn test_record_update_preserves_unmodified_fields() {
+        let result = eval_source(
+            "type Point = { x: Int, y: Int }\nmain : () -> Int\nmain = || {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 42 }\n  p2.y\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Int(20)));
+    }
+
+    #[test]
+    fn test_record_update_multiple_fields() {
+        let result = eval_source(
+            "type Point = { x: Int, y: Int }\nmain : () -> Int\nmain = || {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 1, y: 2 }\n  p2.x + p2.y\n}",
+        );
+        assert_eq!(result, Ok(RuntimeValue::Int(3)));
     }
 }

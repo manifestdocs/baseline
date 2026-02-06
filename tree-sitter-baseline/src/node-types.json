@@ -72,6 +72,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -168,6 +172,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -268,6 +276,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -435,6 +447,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -531,6 +547,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -634,6 +654,10 @@
           },
           {
             "type": "record_expression",
+            "named": true
+          },
+          {
+            "type": "record_update",
             "named": true
           },
           {
@@ -860,6 +884,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -990,6 +1018,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "string_literal",
           "named": true
         },
@@ -1089,6 +1121,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -1185,6 +1221,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -1306,6 +1346,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -1406,6 +1450,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -1535,6 +1583,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -1639,6 +1691,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -1802,6 +1858,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -1897,6 +1957,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -1989,6 +2053,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -2099,6 +2167,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -2251,6 +2323,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -2283,6 +2359,109 @@
       "types": [
         {
           "type": "record_field_def",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_update",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "call_expression",
+          "named": true
+        },
+        {
+          "type": "effect_identifier",
+          "named": true
+        },
+        {
+          "type": "field_expression",
+          "named": true
+        },
+        {
+          "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "if_expression",
+          "named": true
+        },
+        {
+          "type": "lambda",
+          "named": true
+        },
+        {
+          "type": "list_expression",
+          "named": true
+        },
+        {
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "pipe_expression",
+          "named": true
+        },
+        {
+          "type": "range_expression",
+          "named": true
+        },
+        {
+          "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_field_init",
+          "named": true
+        },
+        {
+          "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "struct_expression",
+          "named": true
+        },
+        {
+          "type": "try_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "type_identifier",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
           "named": true
         }
       ]
@@ -2454,6 +2633,10 @@
           "named": true
         },
         {
+          "type": "record_update",
+          "named": true
+        },
+        {
           "type": "struct_expression",
           "named": true
         },
@@ -2546,6 +2729,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {
@@ -2864,6 +3051,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
           "named": true
         },
         {

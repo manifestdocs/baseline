@@ -1625,3 +1625,137 @@ fn generic_err_produces_concrete_result() {
          }"
     );
 }
+
+// ============================================================
+// Transitive Effect Checking Tests
+// ============================================================
+
+#[test]
+fn transitive_effect_direct_still_works() {
+    // Direct ! call without declared effect still produces CAP_001
+    check_has_error(
+        "fetch! : () -> String\n\
+         fetch! = Http.get!(\"http://example.com\")",
+        "CAP_001"
+    );
+}
+
+#[test]
+fn transitive_effect_via_helper() {
+    // helper calls Console.println! (direct effect), foo calls helper (transitive)
+    // foo should get CAP_001 for missing {Console}
+    let source = "\
+        helper : () -> {Console} ()\n\
+        helper = Console.println!(\"hi\")\n\
+        \n\
+        foo : () -> ()\n\
+        foo = helper()";
+    check_has_error(source, "CAP_001");
+    // Verify the transitive diagnostic mentions 'transitively'
+    let result = parse_source(source, "<test>");
+    let transitive_diags: Vec<_> = result.diagnostics.iter()
+        .filter(|d| d.code == "CAP_001" && d.message.contains("transitively"))
+        .collect();
+    assert!(
+        !transitive_diags.is_empty(),
+        "Expected a transitive CAP_001 diagnostic, got: {:?}",
+        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn transitive_effect_declared_ok() {
+    // foo calls helper which needs Console, but foo declares {Console} — no error
+    check_ok(
+        "helper : () -> {Console} ()\n\
+         helper = Console.println!(\"hi\")\n\
+         \n\
+         foo : () -> {Console} ()\n\
+         foo = helper()"
+    );
+}
+
+#[test]
+fn transitive_effect_chain() {
+    // a calls b (pure), b calls c, c calls Console.println!
+    // Effect should propagate: c -> b -> a
+    let source = "\
+        c : () -> {Console} ()\n\
+        c = Console.println!(\"deep\")\n\
+        \n\
+        b : () -> ()\n\
+        b = c()\n\
+        \n\
+        a : () -> ()\n\
+        a = b()";
+    // Both a and b should get transitive CAP_001
+    let result = parse_source(source, "<test>");
+    let transitive_diags: Vec<_> = result.diagnostics.iter()
+        .filter(|d| d.code == "CAP_001" && d.message.contains("transitively"))
+        .collect();
+    assert!(
+        transitive_diags.len() >= 2,
+        "Expected at least 2 transitive CAP_001 diagnostics (for a and b), got {}: {:?}",
+        transitive_diags.len(),
+        transitive_diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn transitive_effect_mutual_recursion() {
+    // ping calls pong, pong calls ping — mutual recursion should not infinite loop
+    // Neither has effects, so no diagnostics should be emitted
+    check_ok(
+        "ping : () -> ()\n\
+         ping = pong()\n\
+         \n\
+         pong : () -> ()\n\
+         pong = ping()"
+    );
+}
+
+// ============================================================
+// Record Update Syntax Tests
+// ============================================================
+
+#[test]
+fn record_update_basic() {
+    check_no_errors(
+        "type Point = { x: Int, y: Int }\n\
+         update : Point -> Point\n\
+         update = |p| { ..p, x: 42 }"
+    );
+}
+
+#[test]
+fn record_update_preserves_type() {
+    // The result of a record update should have the same type as the base
+    check_no_errors(
+        "type Point = { x: Int, y: Int }\n\
+         shift : Point -> Int\n\
+         shift = |p| {\n\
+           let p2 = { ..p, x: 99 }\n\
+           p2.x\n\
+         }"
+    );
+}
+
+#[test]
+fn record_update_wrong_field_type() {
+    check_has_error(
+        "type Point = { x: Int, y: Int }\n\
+         update : Point -> Point\n\
+         update = |p| { ..p, x: \"hello\" }",
+        "TYP_028"
+    );
+}
+
+#[test]
+fn record_update_nonexistent_field() {
+    check_has_error(
+        "type Point = { x: Int, y: Int }\n\
+         update : Point -> Point\n\
+         update = |p| { ..p, z: 42 }",
+        "TYP_029"
+    );
+}

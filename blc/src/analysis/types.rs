@@ -1077,11 +1077,98 @@ fn check_node(
                 Type::Unknown
             }
         }
+        "record_update" => {
+            // { ..base, field: newValue }
+            // named_child(0) = base expression, named_child(1..) = record_field_init overrides
+            let base_node = node.named_child(0).unwrap();
+            let base_type = check_node(&base_node, source, file, symbols, diagnostics);
+
+            match base_type {
+                Type::Struct(ref name, ref fields) => {
+                    let count = node.named_child_count();
+                    for i in 1..count {
+                        let field_init = node.named_child(i).unwrap();
+                        let fname_node = field_init.child(0).unwrap();
+                        let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                        let fexpr_node = field_init.child(2).unwrap();
+                        let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
+
+                        if let Some(expected_type) = fields.get(&fname) {
+                            if !types_compatible(&ftype, expected_type) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_028".to_string(),
+                                    severity: Severity::Error,
+                                    location: loc(file, &fexpr_node),
+                                    message: format!("Field `{}` expects {}, found {}", fname, expected_type, ftype),
+                                    context: "Record update field type mismatch.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        } else {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_029".to_string(),
+                                severity: Severity::Error,
+                                location: loc(file, &fname_node),
+                                message: format!("Struct `{}` has no field `{}`", name, fname),
+                                context: "Field not defined in struct.".to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+                    }
+                    base_type.clone()
+                }
+                Type::Record(ref fields) => {
+                    let count = node.named_child_count();
+                    for i in 1..count {
+                        let field_init = node.named_child(i).unwrap();
+                        let fname_node = field_init.child(0).unwrap();
+                        let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                        let fexpr_node = field_init.child(2).unwrap();
+                        let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
+
+                        if let Some(expected_type) = fields.get(&fname) {
+                            if !types_compatible(&ftype, expected_type) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_028".to_string(),
+                                    severity: Severity::Error,
+                                    location: loc(file, &fexpr_node),
+                                    message: format!("Field `{}` expects {}, found {}", fname, expected_type, ftype),
+                                    context: "Record update field type mismatch.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        } else {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_029".to_string(),
+                                severity: Severity::Error,
+                                location: loc(file, &fname_node),
+                                message: format!("Record has no field `{}`", fname),
+                                context: "Field not defined in record.".to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+                    }
+                    base_type.clone()
+                }
+                Type::Unknown => Type::Unknown,
+                _ => {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_027".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &base_node),
+                        message: format!("Record update requires a record or struct, found {}", base_type),
+                        context: "Only records and structs support update syntax.".to_string(),
+                        suggestions: vec![],
+                    });
+                    Type::Unknown
+                }
+            }
+        }
         "field_expression" => {
             let obj_node = node.named_child(0).unwrap();
             let field_node = node.named_child(1).unwrap();
             let field_name = field_node.utf8_text(source.as_bytes()).unwrap();
-            
+
             let obj_type = check_node(&obj_node, source, file, symbols, diagnostics);
             
             match obj_type {

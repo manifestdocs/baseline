@@ -172,6 +172,7 @@ module.exports = grammar({
       $.list_expression,
       $.struct_expression, // User { id: 1 }
       $.tuple_expression,
+      $.record_update,    // { ..record, field: newValue }
       $.record_expression,
       $.block,
       $.lambda,
@@ -235,6 +236,9 @@ module.exports = grammar({
     // { id: 1 } (Anonymous)
     record_expression: $ => seq('{', commaSep($.record_field_init), '}'),
     record_field_init: $ => seq($.identifier, ':', $._expression),
+
+    // { ..record, field: newValue }
+    record_update: $ => seq('{', '..', $._expression, repeat(seq(',', $.record_field_init)), optional(','), '}'),
 
     // Lambdas: |x| x + 1
     lambda: $ => seq('|', commaSep($._pattern), '|', $._expression),
