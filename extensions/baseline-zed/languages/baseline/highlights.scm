@@ -1,5 +1,5 @@
-; Rocket syntax highlighting queries
-; Based on tree-sitter highlight conventions
+; Baseline syntax highlighting queries
+; Matches tree-sitter-baseline grammar.js node types
 
 ; ============================================================================
 ; Comments
@@ -19,28 +19,23 @@
 (integer_literal) @number
 (float_literal) @number.float
 (boolean_literal) @boolean
-(char_literal) @character
-(unit_literal) @constant.builtin
 
 ; Strings
 (string_literal) @string
 (escape_sequence) @string.escape
-(interpolation
-  (interpolation_start) @punctuation.special
-  "}" @punctuation.special)
+
 
 ; ============================================================================
 ; Types
 ; ============================================================================
 
-(primitive_type) @type.builtin
 (type_identifier) @type
-(type_parameters
-  (upper_identifier) @type.parameter)
 
-; Generic types
+(type_params
+  (type_identifier) @type.parameter)
+
 (generic_type
-  (upper_identifier) @type)
+  (type_identifier) @type)
 
 ; ============================================================================
 ; Keywords
@@ -56,17 +51,15 @@
   "for"
   "in"
   "do"
-  "try"
-  "catch"
+  "test"
 ] @keyword
 
 [
   "type"
   "effect"
-  "@module"
+  "module"
   "import"
   "export"
-  "as"
 ] @keyword.declaration
 
 [
@@ -78,33 +71,29 @@
 ; Functions
 ; ============================================================================
 
-; Function declarations - first identifier is the function name
-(function_declaration
-  (lower_identifier) @function.definition)
+; Function declarations - name field is the function name
+(function_def
+  name: (identifier) @function.definition)
 
-(function_declaration
-  (effectful_identifier) @function.definition)
+(function_def
+  name: (effect_identifier) @function.definition)
 
-; Effect operations
-(effect_operation
-  (effectful_identifier) @function.method)
+; Function signatures in effect blocks
+(function_signature
+  (identifier) @function.definition)
 
-; Function calls - highlight the callable identifier
+(function_signature
+  (effect_identifier) @function.definition)
+
+; Function calls
 (call_expression
-  (lower_identifier) @function.call)
+  (identifier) @function.call)
 
 (call_expression
-  (qualified_identifier) @function.call)
+  (field_expression) @function.call)
 
-; Lambda parameters - must come before generic variable captures
-(lambda_parameter
-  (identifier_pattern
-    (lower_identifier) @variable.parameter))
-
-(lambda_parameter
-  (lower_identifier) @variable.parameter)
-
-(lambda_expression
+; Lambda delimiters
+(lambda
   "|" @punctuation.delimiter
   "|" @punctuation.delimiter)
 
@@ -113,26 +102,30 @@
 ; ============================================================================
 
 ; Generic fallbacks - must come AFTER specific patterns
-(lower_identifier) @variable
-(upper_identifier) @type
-(effectful_identifier) @function.effectful
+(identifier) @variable
+(effect_identifier) @function.effectful
 
-; Pattern matching identifiers
-(identifier_pattern
-  (lower_identifier) @variable)
-
+; Wildcard pattern
 (wildcard_pattern) @variable.builtin
 
 ; Record fields
-(record_field
-  (lower_identifier) @property)
+(record_field_def
+  (identifier) @property)
 
-(record_field_expression
-  (lower_identifier) @property)
+(record_field_init
+  (identifier) @property)
 
 (field_expression
   "." @punctuation.delimiter
-  (lower_identifier) @property)
+  (identifier) @property)
+
+(field_expression
+  "." @punctuation.delimiter
+  (effect_identifier) @function.effectful)
+
+; Let bindings
+(let_binding
+  (identifier) @variable)
 
 ; ============================================================================
 ; Operators
@@ -144,7 +137,6 @@
   "*"
   "/"
   "%"
-  "**"
   "=="
   "!="
   "<"
@@ -155,12 +147,7 @@
   "||"
   "!"
   "|>"
-  "<|"
-  ">>"
-  "<<"
   "?"
-  "??"
-  "++"
   ".."
 ] @operator
 
@@ -168,6 +155,9 @@
   ":" @punctuation.delimiter)
 
 (function_type
+  "->" @punctuation.delimiter)
+
+(type_signature
   "->" @punctuation.delimiter)
 
 (match_arm
@@ -183,65 +173,57 @@
 "|" @punctuation.delimiter
 "=" @operator
 
+; String interpolation (must come AFTER generic punctuation to take priority)
+(interpolation
+  "${" @punctuation.special)
+(interpolation
+  "}" @punctuation.special)
+
 ; ============================================================================
-; Attributes
+; Attributes / Decorators
 ; ============================================================================
 
-(attribute
-  "@" @attribute.delimiter
-  (lower_identifier) @attribute)
+(prelude_decl
+  "@prelude" @attribute)
 
-(spec_declaration
-  "@spec" @attribute)
-
-(module_declaration
-  "@module" @attribute)
-
-; Spec attributes
-[
-  "@given"
-  "@returns"
-  "@requires"
-  "@ensures"
-  "@effects"
-  "@pure"
-  "@total"
-] @attribute
+(module_decl
+  "@" @attribute)
 
 ; ============================================================================
 ; Effects
 ; ============================================================================
 
-(effect_declaration
+(effect_def
   "effect" @keyword.declaration
-  (upper_identifier) @type.effect)
+  (type_identifier) @type.effect)
 
 (effect_set
   "{" @punctuation.bracket
   "}" @punctuation.bracket)
 
-(effect_reference
-  (upper_identifier) @type.effect)
+(effect_set
+  (type_identifier) @type.effect)
 
 ; ============================================================================
 ; Sum types (variants)
 ; ============================================================================
 
 (variant
-  (upper_identifier) @constructor)
+  name: (type_identifier) @constructor)
 
-(variant_pattern
-  (upper_identifier) @constructor)
+(constructor_pattern
+  (type_identifier) @constructor)
+
+; Struct expressions
+(struct_expression
+  (type_identifier) @constructor)
 
 ; ============================================================================
 ; Modules
 ; ============================================================================
 
 (module_path
-  (upper_identifier) @module)
+  (type_identifier) @module)
 
-(import_statement
+(import_decl
   "import" @keyword.import)
-
-(qualified_identifier
-  (upper_identifier) @module)

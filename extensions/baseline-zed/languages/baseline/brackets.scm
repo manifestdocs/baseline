@@ -1,10 +1,10 @@
-; Rocket bracket matching queries
+; Baseline bracket matching queries
 
 ("{" @open "}" @close)
 ("[" @open "]" @close)
 ("(" @open ")" @close)
 
 ; Lambda pipes
-(lambda_expression
+(lambda
   "|" @open
   "|" @close)

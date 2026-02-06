@@ -1,14 +1,14 @@
-; Rocket indentation queries
+; Baseline indentation queries
 
 ; Increase indent after opening braces/brackets
 [
-  (block_expression)
+  (block)
   (record_expression)
   (record_type)
   (list_expression)
-  (effect_declaration)
+  (effect_def)
   (match_expression)
-  (lambda_expression)
+  (lambda)
 ] @indent
 
 ; Decrease indent at closing braces
