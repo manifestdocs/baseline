@@ -5,6 +5,7 @@ use blc::diagnostics::{self, CheckResult};
 use blc::interpreter;
 use blc::parse;
 use blc::prelude;
+use blc::test_runner;
 
 #[derive(Parser)]
 #[command(name = "blc")]
@@ -34,6 +35,16 @@ enum Commands {
     Run {
         /// The file to run
         file: PathBuf,
+    },
+
+    /// Run inline tests in a Baseline source file
+    Test {
+        /// The file to test
+        file: PathBuf,
+
+        /// Output results as JSON
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -108,6 +119,17 @@ fn main() {
                  eprintln!("No 'main' or 'main!' function found");
                  std::process::exit(1);
              }
+        }
+        Commands::Test { file, json } => {
+            let result = test_runner::run_test_file(&file);
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            } else {
+                print_test_results(&result);
+            }
+            if result.status == "fail" {
+                std::process::exit(1);
+            }
         }
         Commands::Lsp => {
             eprintln!("LSP server not yet implemented");
@@ -202,4 +224,29 @@ fn print_human_readable(result: &CheckResult) {
         (e, 0) => eprintln!("\n{} error(s)", e),
         (e, w) => eprintln!("\n{} error(s), {} warning(s)", e, w),
     }
+}
+
+fn print_test_results(result: &test_runner::TestSuiteResult) {
+    for test in &result.tests {
+        let context = match &test.function {
+            Some(f) => format!("{}, line {}", f, test.location.line),
+            None => format!("line {}", test.location.line),
+        };
+        match test.status {
+            test_runner::TestStatus::Pass => {
+                println!("PASS  {} ({})", test.name, context);
+            }
+            test_runner::TestStatus::Fail => {
+                println!("FAIL  {} ({})", test.name, context);
+                if let Some(msg) = &test.message {
+                    println!("  {}", msg);
+                }
+            }
+        }
+    }
+
+    println!(
+        "\n{} tests: {} passed, {} failed",
+        result.summary.total, result.summary.passed, result.summary.failed
+    );
 }

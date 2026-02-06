@@ -1,0 +1,298 @@
+use std::path::Path;
+
+use serde::Serialize;
+use tree_sitter::{Node, Parser};
+use tree_sitter_baseline::LANGUAGE;
+
+use crate::diagnostics::Location;
+use crate::interpreter::{self, Context, RuntimeValue};
+use crate::prelude;
+
+// ---------------------------------------------------------------------------
+// Result types
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct TestResult {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub function: Option<String>,
+    pub status: TestStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+    pub location: Location,
+}
+
+#[derive(Debug, Serialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TestStatus {
+    Pass,
+    Fail,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TestSuiteResult {
+    pub status: String,
+    pub tests: Vec<TestResult>,
+    pub summary: TestSummary,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TestSummary {
+    pub total: usize,
+    pub passed: usize,
+    pub failed: usize,
+}
+
+// ---------------------------------------------------------------------------
+// Test collection
+// ---------------------------------------------------------------------------
+
+struct CollectedTest<'a> {
+    name: String,
+    function: Option<String>,
+    expr_node: Node<'a>,
+    location: Location,
+}
+
+fn collect_tests<'a>(root: &Node<'a>, source: &str, file: &str) -> Vec<CollectedTest<'a>> {
+    let mut tests = Vec::new();
+    let mut cursor = root.walk();
+
+    for child in root.children(&mut cursor) {
+        match child.kind() {
+            "function_def" => {
+                let func_name = child
+                    .child_by_field_name("name")
+                    .map(|n| n.utf8_text(source.as_bytes()).unwrap_or("").to_string());
+
+                let mut child_cursor = child.walk();
+                for fc in child.children(&mut child_cursor) {
+                    if fc.kind() == "where_block" {
+                        let mut wb_cursor = fc.walk();
+                        for test_node in fc.children(&mut wb_cursor) {
+                            if test_node.kind() == "inline_test" {
+                                if let Some(ct) =
+                                    parse_inline_test(&test_node, source, file, &func_name)
+                                {
+                                    tests.push(ct);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "inline_test" => {
+                if let Some(ct) = parse_inline_test(&child, source, file, &None) {
+                    tests.push(ct);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    tests
+}
+
+fn parse_inline_test<'a>(
+    node: &Node<'a>,
+    source: &str,
+    file: &str,
+    function: &Option<String>,
+) -> Option<CollectedTest<'a>> {
+    // inline_test: "test" string_literal "=" _expression
+    let count = node.named_child_count();
+    if count < 2 {
+        return None;
+    }
+
+    // First named child is the string_literal (test name)
+    let name_node = node.named_child(0)?;
+    let raw_name = name_node.utf8_text(source.as_bytes()).ok()?;
+    // Strip surrounding quotes
+    let name = raw_name
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(raw_name)
+        .to_string();
+
+    // Last named child is the expression
+    let expr_node = node.named_child(count - 1)?;
+
+    let start = node.start_position();
+    let end = node.end_position();
+    let location = Location {
+        file: file.to_string(),
+        line: start.row + 1,
+        col: start.column + 1,
+        end_line: Some(end.row + 1),
+        end_col: Some(end.column + 1),
+    };
+
+    Some(CollectedTest {
+        name,
+        function: function.clone(),
+        expr_node,
+        location,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Test execution
+// ---------------------------------------------------------------------------
+
+pub fn run_test_file(path: &Path) -> TestSuiteResult {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => {
+            return TestSuiteResult {
+                status: "fail".to_string(),
+                tests: vec![],
+                summary: TestSummary {
+                    total: 0,
+                    passed: 0,
+                    failed: 0,
+                },
+            };
+        }
+    };
+
+    let file_str = path.display().to_string();
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load Baseline grammar");
+
+    let tree = parser.parse(&source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    // Run analysis first — bail on errors
+    let check_result = crate::parse::parse_source(&source, &file_str);
+    let has_errors = check_result
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == crate::diagnostics::Severity::Error);
+    if has_errors {
+        return TestSuiteResult {
+            status: "fail".to_string(),
+            tests: vec![TestResult {
+                name: "analysis".to_string(),
+                function: None,
+                status: TestStatus::Fail,
+                message: Some(format!(
+                    "File has {} analysis error(s)",
+                    check_result
+                        .diagnostics
+                        .iter()
+                        .filter(|d| d.severity == crate::diagnostics::Severity::Error)
+                        .count()
+                )),
+                location: Location {
+                    file: file_str.clone(),
+                    line: 1,
+                    col: 1,
+                    end_line: None,
+                    end_col: None,
+                },
+            }],
+            summary: TestSummary {
+                total: 1,
+                passed: 0,
+                failed: 1,
+            },
+        };
+    }
+
+    // Build interpreter context with all definitions
+    let active_prelude = prelude::extract_prelude(&root, &source).unwrap_or(prelude::Prelude::Core);
+    let mut context = Context::with_prelude_and_file(active_prelude, file_str.clone());
+
+    if let Err(e) = interpreter::eval(&root, &source, &mut context) {
+        return TestSuiteResult {
+            status: "fail".to_string(),
+            tests: vec![TestResult {
+                name: "evaluation".to_string(),
+                function: None,
+                status: TestStatus::Fail,
+                message: Some(format!("Runtime error during setup: {}", e)),
+                location: Location {
+                    file: file_str,
+                    line: 1,
+                    col: 1,
+                    end_line: None,
+                    end_col: None,
+                },
+            }],
+            summary: TestSummary {
+                total: 1,
+                passed: 0,
+                failed: 1,
+            },
+        };
+    }
+
+    // Collect and run tests
+    let collected = collect_tests(&root, &source, &file_str);
+    let mut results = Vec::new();
+
+    for test in &collected {
+        let result = run_single_test(test, &source, &mut context);
+        results.push(result);
+    }
+
+    let passed = results.iter().filter(|r| r.status == TestStatus::Pass).count();
+    let failed = results.iter().filter(|r| r.status == TestStatus::Fail).count();
+    let total = results.len();
+
+    TestSuiteResult {
+        status: if failed == 0 { "pass" } else { "fail" }.to_string(),
+        tests: results,
+        summary: TestSummary {
+            total,
+            passed,
+            failed,
+        },
+    }
+}
+
+fn run_single_test<'a>(
+    test: &CollectedTest<'a>,
+    source: &str,
+    context: &mut Context<'a>,
+) -> TestResult {
+    context.enter_scope();
+    let result = interpreter::eval(&test.expr_node, source, context);
+    context.exit_scope();
+
+    match result {
+        Ok(RuntimeValue::Bool(true)) => TestResult {
+            name: test.name.clone(),
+            function: test.function.clone(),
+            status: TestStatus::Pass,
+            message: None,
+            location: test.location.clone(),
+        },
+        Ok(RuntimeValue::Bool(false)) => TestResult {
+            name: test.name.clone(),
+            function: test.function.clone(),
+            status: TestStatus::Fail,
+            message: Some("Expected true, got false".to_string()),
+            location: test.location.clone(),
+        },
+        Ok(other) => TestResult {
+            name: test.name.clone(),
+            function: test.function.clone(),
+            status: TestStatus::Fail,
+            message: Some(format!("Expected Bool, got {}", other)),
+            location: test.location.clone(),
+        },
+        Err(e) => TestResult {
+            name: test.name.clone(),
+            function: test.function.clone(),
+            status: TestStatus::Fail,
+            message: Some(format!("Runtime error: {}", e)),
+            location: test.location.clone(),
+        },
+    }
+}

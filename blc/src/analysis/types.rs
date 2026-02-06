@@ -96,6 +96,55 @@ fn loc(file: &str, node: &Node) -> Location {
     }
 }
 
+/// Check a single `inline_test` node: the expression must type-check to Bool.
+fn check_inline_test(
+    test_node: &Node,
+    source: &str,
+    file: &str,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // inline_test: "test" string_literal "=" _expression
+    // The expression is the last named child
+    let count = test_node.named_child_count();
+    if count == 0 { return; }
+    let expr_node = test_node.named_child(count - 1).unwrap();
+    // Skip string_literal (the test name)
+    if expr_node.kind() == "string_literal" { return; }
+    let test_type = check_node(&expr_node, source, file, symbols, diagnostics);
+    if test_type != Type::Bool && test_type != Type::Unknown {
+        diagnostics.push(Diagnostic {
+            code: "TYP_026".to_string(),
+            severity: Severity::Error,
+            location: loc(file, &expr_node),
+            message: format!("Inline test expression must be Bool, found {}", test_type),
+            context: "Test expressions should evaluate to true or false.".to_string(),
+            suggestions: vec![],
+        });
+    }
+}
+
+/// Check all inline_test nodes within a where_block child of a function_def.
+fn check_where_block(
+    func_node: &Node,
+    source: &str,
+    file: &str,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut cursor = func_node.walk();
+    for child in func_node.children(&mut cursor) {
+        if child.kind() == "where_block" {
+            let mut test_cursor = child.walk();
+            for test_node in child.children(&mut test_cursor) {
+                if test_node.kind() == "inline_test" {
+                    check_inline_test(&test_node, source, file, symbols, diagnostics);
+                }
+            }
+        }
+    }
+}
+
 pub struct SymbolTable {
     scopes: Vec<HashMap<String, Type>>,
     types: HashMap<String, Type>,           // Registry for named types (structs)
@@ -552,10 +601,18 @@ fn check_node(
                      }
                 }
 
+                // Check where_block inline tests (expressions must be Bool)
+                check_where_block(node, source, file, symbols, diagnostics);
+
                 symbols.exit_scope();
             }
 
-            Type::Unit 
+            Type::Unit
+        }
+        "inline_test" => {
+            // Top-level inline test: test "name" = expr
+            check_inline_test(node, source, file, symbols, diagnostics);
+            Type::Unit
         }
         "let_binding" => {
             // Grammar: let pattern [: type_annotation] = expression

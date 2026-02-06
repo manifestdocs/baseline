@@ -33,7 +33,7 @@ pub struct Diagnostic {
 }
 
 /// Source location for a diagnostic.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Location {
     pub file: String,
     pub line: usize,

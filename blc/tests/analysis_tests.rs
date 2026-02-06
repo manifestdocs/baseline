@@ -1261,3 +1261,37 @@ main = f(1, g(2))
         "Multi-arg calls should not trigger STY_001"
     );
 }
+
+// ============================================================
+// Inline Test Type Checking (TYP_026)
+// ============================================================
+
+#[test]
+fn inline_test_bool_ok() {
+    check_ok(r#"
+add : (Int, Int) -> Int
+add = |a, b| a + b
+  where
+    test "basic" = add(1, 2) == 3
+"#);
+}
+
+#[test]
+fn inline_test_non_bool_errors() {
+    check_has_error(r#"
+add : (Int, Int) -> Int
+add = |a, b| a + b
+  where
+    test "returns int" = add(1, 2)
+"#, "TYP_026");
+}
+
+#[test]
+fn inline_test_top_level_bool_ok() {
+    check_ok("test \"sanity\" = 1 + 1 == 2");
+}
+
+#[test]
+fn inline_test_top_level_non_bool_errors() {
+    check_has_error("test \"bad\" = 42", "TYP_026");
+}

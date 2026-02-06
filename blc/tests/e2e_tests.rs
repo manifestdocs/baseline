@@ -313,3 +313,75 @@ fn run_runtime_error_has_location_and_stack() {
         ],
     );
 }
+
+// ===========================================================================
+// Inline test execution — `blc test` subcommand
+// ===========================================================================
+
+fn blc_test(file: &str) -> BlcOutput {
+    let blc = env!("CARGO_BIN_EXE_blc");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+    let output = Command::new(blc)
+        .arg("test")
+        .arg(examples.join(file))
+        .output()
+        .expect("failed to execute blc");
+
+    BlcOutput {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+fn blc_test_json(file: &str) -> BlcOutput {
+    let blc = env!("CARGO_BIN_EXE_blc");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+    let output = Command::new(blc)
+        .arg("test")
+        .arg("--json")
+        .arg(examples.join(file))
+        .output()
+        .expect("failed to execute blc");
+
+    BlcOutput {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+#[test]
+fn test_inline_tests_pass() {
+    let out = blc_test("inline_test.bl");
+    assert_eq!(
+        out.exit_code, 0,
+        "inline_test.bl: expected exit 0.\nstdout: {}\nstderr: {}",
+        out.stdout, out.stderr,
+    );
+    assert!(out.stdout.contains("5 tests: 5 passed, 0 failed"), "stdout: {}", out.stdout);
+}
+
+#[test]
+fn test_inline_tests_json() {
+    let out = blc_test_json("inline_test.bl");
+    assert_eq!(out.exit_code, 0, "expected exit 0.\nstdout: {}", out.stdout);
+    let json: serde_json::Value = serde_json::from_str(&out.stdout)
+        .expect("JSON parse failed");
+    assert_eq!(json["status"], "pass");
+    assert_eq!(json["summary"]["total"], 5);
+    assert_eq!(json["summary"]["passed"], 5);
+    assert_eq!(json["summary"]["failed"], 0);
+}
+
+#[test]
+fn test_inline_tests_failure() {
+    let out = blc_test("inline_test_fail.bl");
+    assert_eq!(
+        out.exit_code, 1,
+        "inline_test_fail.bl: expected exit 1.\nstdout: {}",
+        out.stdout,
+    );
+    assert!(out.stdout.contains("FAIL"), "stdout: {}", out.stdout);
+    assert!(out.stdout.contains("1 failed"), "stdout: {}", out.stdout);
+}
