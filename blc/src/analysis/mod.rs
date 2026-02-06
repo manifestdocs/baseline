@@ -4,6 +4,7 @@
 //! including effect checking, refinement checking, and other verifications.
 
 pub mod effects;
+pub mod infer;
 pub mod refinements;
 pub mod types;
 

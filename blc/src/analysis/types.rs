@@ -3,6 +3,7 @@ use tree_sitter::Node;
 use crate::diagnostics::{Diagnostic, Location, Severity, Suggestion, Patch};
 use crate::prelude::{self, Prelude};
 use crate::resolver::{ModuleLoader, ImportKind};
+use super::infer::{InferCtx, GenericSchema, builtin_generic_schemas};
 
 /// Classification of what a single match arm pattern covers.
 enum PatternCoverage {
@@ -25,6 +26,7 @@ pub enum Type {
     Tuple(Vec<Type>),                      // (T, U, ...)
     Enum(String, Vec<(String, Vec<Type>)>), // Name, [(VariantName, PayloadTypes)]
     Module(String),                        // Module/Effect namespace
+    Var(u32),                              // Inference type variable
     Unknown,
 }
 
@@ -79,6 +81,7 @@ impl std::fmt::Display for Type {
                 }
             }
             Type::Module(name) => write!(f, "Module({})", name),
+            Type::Var(id) => write!(f, "?{}", id),
             Type::Unknown => write!(f, "<unknown>"),
         }
     }
@@ -150,6 +153,7 @@ pub struct SymbolTable {
     scopes: Vec<HashMap<String, Type>>,
     types: HashMap<String, Type>,           // Registry for named types (structs)
     module_methods: HashMap<String, Type>,  // "Module.method" -> Function type
+    generic_schemas: HashMap<String, GenericSchema>, // "Module.method" -> generic schema
 }
 
 impl SymbolTable {
@@ -158,6 +162,7 @@ impl SymbolTable {
             scopes: vec![HashMap::new()],
             types: HashMap::new(),
             module_methods: builtin_type_signatures(&prelude),
+            generic_schemas: builtin_generic_schemas(),
         };
 
         // Option/Result types and constructors are language primitives — always registered.
@@ -224,6 +229,10 @@ impl SymbolTable {
 
     fn lookup_module_method(&self, qualified_name: &str) -> Option<&Type> {
         self.module_methods.get(qualified_name)
+    }
+
+    fn lookup_generic_schema(&self, qualified_name: &str) -> Option<&GenericSchema> {
+        self.generic_schemas.get(qualified_name)
     }
 }
 
@@ -382,6 +391,7 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
     if a == b { return true; }
     if *a == Type::Unknown || *b == Type::Unknown { return true; }
     match (a, b) {
+        (Type::Var(_), _) | (_, Type::Var(_)) => true,
         (Type::Enum(na, _), Type::Enum(nb, _)) => na == nb,
         (Type::List(ia), Type::List(ib)) => types_compatible(ia, ib),
         _ => false,
@@ -601,6 +611,19 @@ fn process_imports(
     }
 }
 
+/// Extract a qualified name like "List.map" from a field_expression node.
+fn extract_qualified_name(node: &Node, source: &str) -> Option<String> {
+    if node.kind() == "field_expression" {
+        let obj = node.named_child(0)?;
+        let field = node.named_child(1)?;
+        let obj_name = obj.utf8_text(source.as_bytes()).ok()?;
+        let field_name = field.utf8_text(source.as_bytes()).ok()?;
+        Some(format!("{}.{}", obj_name, field_name))
+    } else {
+        None
+    }
+}
+
 fn check_node(
     node: &Node,
     source: &str,
@@ -623,9 +646,22 @@ fn check_node(
         }
         "try_expression" => {
             // expr? — unwraps Option<T> to T or Result<T,E> to T
-            // For now return Unknown since we lack full generic inference
-            let _inner = check_node(&node.named_child(0).unwrap(), source, file, symbols, diagnostics);
-            Type::Unknown
+            let inner = check_node(&node.named_child(0).unwrap(), source, file, symbols, diagnostics);
+            match &inner {
+                Type::Enum(name, variants) if name == "Option" => {
+                    variants.iter()
+                        .find(|(v, _)| v == "Some")
+                        .and_then(|(_, payloads)| payloads.first().cloned())
+                        .unwrap_or(Type::Unknown)
+                }
+                Type::Enum(name, variants) if name == "Result" => {
+                    variants.iter()
+                        .find(|(v, _)| v == "Ok")
+                        .and_then(|(_, payloads)| payloads.first().cloned())
+                        .unwrap_or(Type::Unknown)
+                }
+                _ => Type::Unknown,
+            }
         }
         "effect_def" => {
             // effect_def: seq(..., 'effect', $.type_identifier, ...)
@@ -851,6 +887,50 @@ fn check_node(
                 }
             }
 
+            // Try generic schema inference for module method calls (e.g. List.map)
+            let qualified_name = extract_qualified_name(&func_node, source);
+            if let Some(ref qname) = qualified_name {
+                if let Some(schema) = symbols.lookup_generic_schema(qname) {
+                    let mut ctx = InferCtx::new();
+                    let instantiated = (schema.build)(&mut ctx);
+                    if let Type::Function(schema_params, schema_ret) = instantiated {
+                        // Check arg count
+                        if params_provided != schema_params.len() {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_007".to_string(),
+                                severity: Severity::Error,
+                                location: loc(file, &node),
+                                message: format!("Function call expects {} arguments, found {}", schema_params.len(), params_provided),
+                                context: "Argument count mismatch.".to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+
+                        // Unify each arg with the schema param, using lambda inference for HOFs
+                        for i in 0..std::cmp::min(params_provided, schema_params.len()) {
+                            let arg_expr = node.named_child(i + 1).unwrap();
+
+                            // For lambda args with a Function-typed schema param, use
+                            // check_lambda_with_expected with the resolved param types
+                            let arg_type = if arg_expr.kind() == "lambda" {
+                                let resolved_param = ctx.apply(&schema_params[i]);
+                                if let Type::Function(ref expected_params, ref expected_ret) = resolved_param {
+                                    check_lambda_with_expected(&arg_expr, expected_params, expected_ret, source, file, symbols, diagnostics)
+                                } else {
+                                    check_node(&arg_expr, source, file, symbols, diagnostics)
+                                }
+                            } else {
+                                check_node(&arg_expr, source, file, symbols, diagnostics)
+                            };
+
+                            let _ = ctx.unify(&arg_type, &schema_params[i]);
+                        }
+
+                        return ctx.apply(&schema_ret);
+                    }
+                }
+            }
+
             if let Type::Function(arg_types, ret_type) = func_type {
                 if params_provided != arg_types.len() {
                     // Allow partial application in pipe contexts
@@ -871,7 +951,7 @@ fn check_node(
                         suggestions: vec![],
                     });
                 }
-                
+
                 for i in 0..std::cmp::min(params_provided, arg_types.len()) {
                     let arg_expr = node.named_child(i + 1).unwrap();
 

@@ -22,6 +22,19 @@ fn check_has_error(source: &str, code: &str) {
     );
 }
 
+/// Helper: check source has no errors (warnings are allowed)
+fn check_no_errors(source: &str) {
+    let result = parse_source(source, "<test>");
+    let errors: Vec<_> = result.diagnostics.iter()
+        .filter(|d| d.severity == Severity::Error)
+        .collect();
+    assert!(
+        errors.is_empty(),
+        "Expected no errors, got: {:?}",
+        errors.iter().map(|d| &d.message).collect::<Vec<_>>()
+    );
+}
+
 /// Helper: count diagnostics with given code prefix
 fn count_errors(source: &str, prefix: &str) -> usize {
     let result = parse_source(source, "<test>");
@@ -1294,4 +1307,196 @@ fn inline_test_top_level_bool_ok() {
 #[test]
 fn inline_test_top_level_non_bool_errors() {
     check_has_error("test \"bad\" = 42", "TYP_026");
+}
+
+// ============================================================
+// Type Inference Tests
+// ============================================================
+
+#[test]
+fn infer_list_map_returns_typed_list() {
+    // List.map([1,2,3], |x| x + 1) should type-check with inferred types
+    check_ok(r#"
+@prelude(core)
+main : () -> ()
+main = {
+    let doubled = List.map([1, 2, 3], |x| x + 1)
+}
+"#);
+}
+
+#[test]
+fn infer_list_filter_preserves_element_type() {
+    // List.filter preserves element type
+    check_ok(r#"
+@prelude(core)
+main : () -> ()
+main = {
+    let xs = [1, 2, 3, 4]
+    let evens = List.filter(xs, |x| x > 2)
+}
+"#);
+}
+
+#[test]
+fn infer_option_unwrap_extracts_inner() {
+    // Option.unwrap(Some(42)) should return Int (nested call triggers STY_001 warning)
+    check_no_errors(r#"
+@prelude(core)
+main : () -> Int
+main = {
+    let x = Option.unwrap(Some(42))
+    x + 1
+}
+"#);
+}
+
+#[test]
+fn infer_try_expression_option() {
+    // Some(42)? should return Int
+    check_ok(r#"
+@prelude(core)
+wrap : () -> Option<Int>
+wrap = {
+    let x : Option<Int> = Some(42)
+    let val = x?
+    Some(val + 1)
+}
+"#);
+}
+
+#[test]
+fn infer_try_expression_result() {
+    // Ok(42)? should return Int
+    check_ok(r#"
+@prelude(core)
+wrap : () -> Result<Int, String>
+wrap = {
+    let x : Result<Int, String> = Ok(42)
+    let val = x?
+    Ok(val + 1)
+}
+"#);
+}
+
+#[test]
+fn infer_list_head_concrete() {
+    // List.head([1, 2, 3]) should return Int
+    check_ok(r#"
+@prelude(core)
+main : () -> Int
+main = {
+    let first = List.head([1, 2, 3])
+    first + 1
+}
+"#);
+}
+
+#[test]
+fn infer_let_propagation() {
+    // let x = List.head([1,2,3]) then x + 1 type-checks (Int + Int)
+    check_ok(r#"
+@prelude(core)
+main : () -> Int
+main = {
+    let x = List.head([1, 2, 3])
+    x + 1
+}
+"#);
+}
+
+#[test]
+fn infer_nested_generic_calls() {
+    // List.head(List.map([1,2], |x| x > 0)) should return Bool (nested call triggers STY_001)
+    check_no_errors(r#"
+@prelude(core)
+main : () -> Bool
+main = List.head(List.map([1, 2], |x| x > 0))
+"#);
+}
+
+#[test]
+fn infer_list_map_string_result() {
+    // List.map with a lambda that returns String should produce List<String>
+    check_ok(r#"
+@prelude(core)
+main : () -> ()
+main = {
+    let names = List.map([1, 2, 3], |x| "item")
+}
+"#);
+}
+
+#[test]
+fn infer_list_fold_accumulator() {
+    // List.fold([1,2,3], 0, |acc, x| acc + x) should return Int
+    check_ok(r#"
+@prelude(core)
+main : () -> Int
+main = List.fold([1, 2, 3], 0, |acc, x| acc + x)
+"#);
+}
+
+#[test]
+fn infer_list_tail_preserves_type() {
+    // List.tail([1,2,3]) should return List<Int>
+    check_ok(r#"
+@prelude(core)
+main : () -> ()
+main = {
+    let rest = List.tail([1, 2, 3])
+    let first = List.head(rest)
+    let sum = first + 1
+}
+"#);
+}
+
+#[test]
+fn infer_list_concat_types() {
+    // List.concat([1,2], [3,4]) should return List<Int>
+    check_ok(r#"
+@prelude(core)
+main : () -> Int
+main = {
+    let combined = List.concat([1, 2], [3, 4])
+    List.head(combined)
+}
+"#);
+}
+
+#[test]
+fn infer_result_unwrap_extracts_inner() {
+    // Result.unwrap(Ok(42)) should return Int (nested call triggers STY_001 warning)
+    check_no_errors(r#"
+@prelude(core)
+main : () -> Int
+main = {
+    let x = Result.unwrap(Ok(42))
+    x + 1
+}
+"#);
+}
+
+#[test]
+fn infer_list_reverse_preserves_type() {
+    check_ok(r#"
+@prelude(core)
+main : () -> Int
+main = {
+    let rev = List.reverse([1, 2, 3])
+    List.head(rev)
+}
+"#);
+}
+
+#[test]
+fn infer_list_sort_preserves_type() {
+    check_ok(r#"
+@prelude(core)
+main : () -> Int
+main = {
+    let sorted = List.sort([3, 1, 2])
+    List.head(sorted)
+}
+"#);
 }
