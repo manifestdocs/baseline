@@ -5,7 +5,7 @@ use super::value::Value;
 // ---------------------------------------------------------------------------
 
 /// Bytecode instructions for the stack-based VM.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Op {
     /// Push a constant from the pool onto the stack.
     LoadConst(u16),
@@ -64,6 +64,38 @@ pub enum Op {
     ListGet,
     /// Pop list from stack, push its length as Int.
     ListLen,
+    /// Pop N values from stack, push as List.
+    MakeList(u16),
+    /// Pop N key-value pairs from stack, push as Record.
+    /// Keys are Value::String constants from the pool. Stack: [key0, val0, key1, val1, ...] → Record
+    MakeRecord(u16),
+    /// Pop record from stack, push value of field (constant index for field name string).
+    GetField(u16),
+    /// Pop N values from stack, push as Tuple.
+    MakeTuple(u16),
+    /// Pop value and tag from stack, push as Enum { tag, payload }.
+    /// Tag is a constant index (string). Payload is the value (or Unit for nullary).
+    MakeEnum(u16),
+    /// Pop Enum from stack, push its tag as String.
+    EnumTag,
+    /// Pop Enum from stack, push its payload.
+    EnumPayload,
+    /// Pop N key-value updates + base record, push new record with fields merged.
+    /// Stack: [base_record, key0, val0, key1, val1, ...] → updated record
+    UpdateRecord(u16),
+
+    // -- Functions --
+    /// Call a function with N arguments. Stack: [func, arg0, ..., argN-1] → [result]
+    Call(u8),
+    /// Get a captured upvalue by index (for closures).
+    GetUpvalue(u8),
+    /// Create a closure: pop N upvalues, bundle with chunk index.
+    MakeClosure(u16, u8),
+
+    // -- Native functions --
+    /// Call a native function by ID with N arguments.
+    /// Stack: [arg0, ..., argN-1] → [result]
+    CallNative(u16, u8),
 
     // -- Termination --
     Return,
@@ -112,6 +144,18 @@ impl Chunk {
             _ => panic!("patch_jump called on non-jump op"),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Program
+// ---------------------------------------------------------------------------
+
+/// A compiled program: multiple chunks (one per function) plus an entry point.
+#[derive(Debug)]
+pub struct Program {
+    pub chunks: Vec<Chunk>,
+    /// Index of the entry-point chunk in `chunks`.
+    pub entry: usize,
 }
 
 // ---------------------------------------------------------------------------

@@ -1,42 +1,8 @@
-use std::collections::HashMap;
 use std::fmt;
+use std::rc::Rc;
 
-// ---------------------------------------------------------------------------
-// String Interner
-// ---------------------------------------------------------------------------
-
-/// Interned string identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct StrId(pub u32);
-
-/// Interns strings so field names, identifiers, etc. are cheap u32 comparisons.
-#[derive(Debug, Default)]
-pub struct StringInterner {
-    map: HashMap<String, StrId>,
-    strings: Vec<String>,
-}
-
-impl StringInterner {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Intern a string, returning its id. If already interned, returns existing id.
-    pub fn intern(&mut self, s: &str) -> StrId {
-        if let Some(&id) = self.map.get(s) {
-            return id;
-        }
-        let id = StrId(self.strings.len() as u32);
-        self.strings.push(s.to_string());
-        self.map.insert(s.to_string(), id);
-        id
-    }
-
-    /// Resolve an interned id back to its string.
-    pub fn resolve(&self, id: StrId) -> &str {
-        &self.strings[id.0 as usize]
-    }
-}
+/// Shared string type for cheap cloning.
+pub type RcStr = Rc<str>;
 
 // ---------------------------------------------------------------------------
 // Value
@@ -44,14 +10,28 @@ impl StringInterner {
 
 /// Lifetime-free value type for the bytecode VM.
 /// Functions and closures are represented as bytecode offsets, not tree-sitter nodes.
+/// Heap-allocated variants use Rc for O(1) clone on stack operations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     Int(i64),
     Float(f64),
-    String(String),
+    String(RcStr),
     Bool(bool),
     Unit,
-    List(Vec<Value>),
+    List(Rc<Vec<Value>>),
+    /// Ordered key-value pairs. Keys are shared strings (field names).
+    Record(Rc<Vec<(RcStr, Value)>>),
+    /// Positional tuple.
+    Tuple(Rc<Vec<Value>>),
+    /// Tagged enum variant: (tag_name, optional payload).
+    Enum(RcStr, Rc<Value>),
+    /// A compiled function — index into Program.chunks.
+    Function(usize),
+    /// A closure — function + captured upvalues.
+    Closure {
+        chunk_idx: usize,
+        upvalues: Rc<Vec<Value>>,
+    },
 }
 
 impl fmt::Display for Value {
@@ -66,6 +46,25 @@ impl fmt::Display for Value {
                 let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
                 write!(f, "[{}]", s)
             }
+            Value::Record(fields) => {
+                let s = fields.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>().join(", ");
+                write!(f, "{{ {} }}", s)
+            }
+            Value::Tuple(vals) => {
+                let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                write!(f, "({})", s)
+            }
+            Value::Enum(tag, payload) => {
+                if **payload == Value::Unit {
+                    write!(f, "{}", tag)
+                } else {
+                    write!(f, "{}({})", tag, payload)
+                }
+            }
+            Value::Function(idx) => write!(f, "<fn:{}>", idx),
+            Value::Closure { chunk_idx, .. } => write!(f, "<closure:{}>", chunk_idx),
         }
     }
 }
@@ -89,44 +88,6 @@ impl Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // -- StringInterner tests --
-
-    #[test]
-    fn intern_returns_same_id_for_same_string() {
-        let mut interner = StringInterner::new();
-        let a = interner.intern("hello");
-        let b = interner.intern("hello");
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn intern_returns_different_ids_for_different_strings() {
-        let mut interner = StringInterner::new();
-        let a = interner.intern("hello");
-        let b = interner.intern("world");
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn resolve_returns_original_string() {
-        let mut interner = StringInterner::new();
-        let id = interner.intern("baseline");
-        assert_eq!(interner.resolve(id), "baseline");
-    }
-
-    #[test]
-    fn intern_ids_are_sequential() {
-        let mut interner = StringInterner::new();
-        let a = interner.intern("a");
-        let b = interner.intern("b");
-        let c = interner.intern("c");
-        assert_eq!(a.0, 0);
-        assert_eq!(b.0, 1);
-        assert_eq!(c.0, 2);
-    }
-
-    // -- Value tests --
 
     #[test]
     fn value_display() {

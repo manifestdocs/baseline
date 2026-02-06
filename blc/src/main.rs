@@ -7,6 +7,7 @@ use blc::parse;
 use blc::prelude;
 use blc::resolver::{self, ImportKind, ModuleLoader};
 use blc::test_runner;
+use blc::vm;
 
 #[derive(Parser)]
 #[command(name = "blc")]
@@ -36,6 +37,10 @@ enum Commands {
     Run {
         /// The file to run
         file: PathBuf,
+
+        /// Use the bytecode VM instead of the tree-walk interpreter
+        #[arg(long)]
+        vm: bool,
     },
 
     /// Run inline tests in a Baseline source file
@@ -46,6 +51,10 @@ enum Commands {
         /// Output results as JSON
         #[arg(long)]
         json: bool,
+
+        /// Use the bytecode VM instead of the tree-walk interpreter
+        #[arg(long)]
+        vm: bool,
     },
 }
 
@@ -66,11 +75,19 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Run { file } => {
-            run_file(&file);
+        Commands::Run { file, vm: use_vm } => {
+            if use_vm {
+                run_file_vm(&file);
+            } else {
+                run_file(&file);
+            }
         }
-        Commands::Test { file, json } => {
-            let result = test_runner::run_test_file(&file);
+        Commands::Test { file, json, vm: use_vm } => {
+            let result = if use_vm {
+                vm::test_runner::run_test_file(&file)
+            } else {
+                test_runner::run_test_file(&file)
+            };
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap());
             } else {
@@ -82,6 +99,40 @@ fn main() {
         }
         Commands::Lsp => {
             eprintln!("LSP server not yet implemented");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_file_vm(file: &PathBuf) {
+    use tree_sitter::Parser;
+    use tree_sitter_baseline::LANGUAGE;
+
+    let source = std::fs::read_to_string(file).expect("Failed to read file");
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load language");
+    let tree = parser.parse(&source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    let mut vm = vm::vm::Vm::new();
+    let compiler = vm::compiler::Compiler::new(&source, vm.natives());
+    let program = match compiler.compile_program(&root) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Compile Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    match vm.execute_program(&program) {
+        Ok(val) => {
+            if !matches!(val, vm::value::Value::Unit) {
+                println!("{}", val);
+            }
+        }
+        Err(e) => {
+            eprintln!("Runtime Error: {}:{}:{}: {}", file.display(), e.line, e.col, e.message);
             std::process::exit(1);
         }
     }

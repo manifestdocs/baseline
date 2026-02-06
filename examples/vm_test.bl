@@ -1,0 +1,27 @@
+@prelude(script)
+
+greet : String -> String
+greet = |name| "Hello, ${name}!"
+
+double : Int -> Int
+double = |x| x * 2
+
+factorial : Int -> Int
+factorial = |n| if n <= 1 then 1 else n * factorial(n - 1)
+
+main : () -> ()
+main = {
+  let msg = greet("World")
+  Console.println(msg)
+  let result = 5 |> double
+  Console.println("5 * 2 = ${result}")
+  let fact = factorial(6)
+  Console.println("6! = ${fact}")
+  let nums = [1, 2, 3, 4, 5]
+  let doubled = List.map(nums, |x| x * 2)
+  Console.println("doubled: ${doubled}")
+  let sum = List.fold(nums, 0, |acc, x| acc + x)
+  Console.println("sum: ${sum}")
+  let name = "  hello  " |> String.trim |> String.to_upper
+  Console.println("trimmed+upper: ${name}")
+}
