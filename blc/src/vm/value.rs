@@ -51,6 +51,7 @@ pub enum Value {
     String(String),
     Bool(bool),
     Unit,
+    List(Vec<Value>),
 }
 
 impl fmt::Display for Value {
@@ -61,6 +62,10 @@ impl fmt::Display for Value {
             Value::String(s) => write!(f, "{}", s),
             Value::Bool(b) => write!(f, "{}", b),
             Value::Unit => write!(f, "()"),
+            Value::List(vals) => {
+                let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                write!(f, "[{}]", s)
+            }
         }
     }
 }

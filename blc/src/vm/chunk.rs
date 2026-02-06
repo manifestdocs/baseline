@@ -32,6 +32,17 @@ pub enum Op {
     // -- String --
     Concat,
 
+    // -- Variables --
+    /// Push the value of a local variable (by slot index) onto the stack.
+    GetLocal(u16),
+    /// Set a local variable slot to the value on top of stack (does NOT pop).
+    SetLocal(u16),
+    /// Pop n values from the stack (for scope cleanup).
+    PopN(u16),
+    /// Remove n values from UNDER the top of stack (scope cleanup preserving result).
+    /// Stack before: [... locals(n) result] → Stack after: [... result]
+    CloseScope(u16),
+
     // -- Stack manipulation --
     Pop,
 
@@ -42,6 +53,17 @@ pub enum Op {
     JumpIfFalse(u16),
     /// Jump forward by offset if top of stack is truthy (does NOT pop — for short-circuit).
     JumpIfTrue(u16),
+
+    /// Jump backward by offset (for loops).
+    JumpBack(u16),
+
+    // -- Data construction --
+    /// Pop end and start from stack, push List of [start..end).
+    MakeRange,
+    /// Pop index and list from stack, push list[index].
+    ListGet,
+    /// Pop list from stack, push its length as Int.
+    ListLen,
 
     // -- Termination --
     Return,

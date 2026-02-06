@@ -175,6 +175,46 @@ impl Vm {
                     self.stack.push(result);
                 }
 
+                Op::GetLocal(slot) => {
+                    let idx = *slot as usize;
+                    if idx >= self.stack.len() {
+                        return Err(self.error(
+                            format!("Invalid local slot {}", idx), line, col,
+                        ));
+                    }
+                    self.stack.push(self.stack[idx].clone());
+                }
+
+                Op::SetLocal(slot) => {
+                    let idx = *slot as usize;
+                    let val = self.stack.last().ok_or_else(|| {
+                        self.error("Stack underflow on SetLocal".into(), line, col)
+                    })?.clone();
+                    if idx >= self.stack.len() {
+                        return Err(self.error(
+                            format!("Invalid local slot {}", idx), line, col,
+                        ));
+                    }
+                    self.stack[idx] = val;
+                }
+
+                Op::PopN(n) => {
+                    let count = *n as usize;
+                    let new_len = self.stack.len().saturating_sub(count);
+                    self.stack.truncate(new_len);
+                }
+
+                Op::CloseScope(n) => {
+                    // Remove n values from under the top of stack
+                    let count = *n as usize;
+                    if count > 0 && !self.stack.is_empty() {
+                        let top = self.stack.pop().unwrap();
+                        let new_len = self.stack.len().saturating_sub(count);
+                        self.stack.truncate(new_len);
+                        self.stack.push(top);
+                    }
+                }
+
                 Op::Pop => {
                     self.pop(line, col)?;
                 }
@@ -197,6 +237,59 @@ impl Vm {
                     })?;
                     if v.is_truthy() {
                         ip += *offset as usize;
+                    }
+                }
+
+                Op::JumpBack(offset) => {
+                    ip -= *offset as usize;
+                }
+
+                Op::MakeRange => {
+                    let (end_val, start_val) = self.pop2(line, col)?;
+                    match (&start_val, &end_val) {
+                        (Value::Int(start), Value::Int(end)) => {
+                            let list: Vec<Value> = (*start..*end)
+                                .map(Value::Int)
+                                .collect();
+                            self.stack.push(Value::List(list));
+                        }
+                        _ => return Err(self.error(
+                            format!("Range requires integers, got {} and {}", start_val, end_val),
+                            line, col,
+                        )),
+                    }
+                }
+
+                Op::ListGet => {
+                    let (idx_val, list_val) = self.pop2(line, col)?;
+                    match (&list_val, &idx_val) {
+                        (Value::List(items), Value::Int(i)) => {
+                            let idx = *i as usize;
+                            if idx >= items.len() {
+                                return Err(self.error(
+                                    format!("Index {} out of bounds (len {})", idx, items.len()),
+                                    line, col,
+                                ));
+                            }
+                            self.stack.push(items[idx].clone());
+                        }
+                        _ => return Err(self.error(
+                            format!("ListGet requires List and Int, got {} and {}", list_val, idx_val),
+                            line, col,
+                        )),
+                    }
+                }
+
+                Op::ListLen => {
+                    let list_val = self.pop(line, col)?;
+                    match &list_val {
+                        Value::List(items) => {
+                            self.stack.push(Value::Int(items.len() as i64));
+                        }
+                        _ => return Err(self.error(
+                            format!("ListLen requires List, got {}", list_val),
+                            line, col,
+                        )),
                     }
                 }
 
