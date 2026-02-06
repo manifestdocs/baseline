@@ -21,28 +21,31 @@ pub enum Prelude {
 
 /// Stdlib module names gated by prelude.
 impl Prelude {
-    /// Native modules (NativeRegistry): pure functions on data types.
+    /// Native modules (NativeRegistry): functions operating on RuntimeValues directly.
     pub fn native_modules(&self) -> &[&str] {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure | Prelude::Core | Prelude::Script => {
+            Prelude::Pure | Prelude::Core => {
                 &["Option", "Result", "String", "List", "Json"]
             }
+            Prelude::Script => {
+                &["Option", "Result", "String", "List", "Json", "Http"]
+            }
             Prelude::Server => {
-                &["Option", "Result", "String", "List", "Json", "Router"]
+                &["Option", "Result", "String", "List", "Json", "Http", "Router"]
             }
         }
     }
 
-    /// Builtin modules (BuiltinRegistry): effect functions + Math.
+    /// Builtin modules (BuiltinRegistry): string-based effect functions + Math.
     pub fn builtin_modules(&self) -> &[&str] {
         match self {
             Prelude::None | Prelude::Minimal => &[],
             Prelude::Pure | Prelude::Core => &["Math"],
-            Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Http"],
+            Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs"],
             Prelude::Server => {
-                &["Math", "Console", "Log", "Time", "Env", "Http", "Server", "Db", "Metrics"]
+                &["Math", "Console", "Log", "Time", "Env", "Server", "Db", "Metrics"]
             }
         }
     }
@@ -140,8 +143,8 @@ mod tests {
     fn server_has_router_and_server_modules() {
         let p = Prelude::Server;
         assert!(p.native_modules().contains(&"Router"));
+        assert!(p.native_modules().contains(&"Http"));
         assert!(p.builtin_modules().contains(&"Server"));
-        assert!(p.builtin_modules().contains(&"Http"));
         assert!(p.builtin_modules().contains(&"Db"));
         assert!(p.builtin_modules().contains(&"Metrics"));
         assert!(p.type_modules().contains(&"Router"));

@@ -1,12 +1,12 @@
 @prelude(server)
 
-// -- Handler functions --
+// -- Handler functions returning Response records --
 
-hello_handler : { method: String, path: String, body: String } -> {Http} Result<String, String>
-hello_handler = |req| Ok("Hello, World!")
+hello_handler : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+hello_handler = |req| Ok({ status: 200, headers: [("Content-Type", "text/plain")], body: "Hello, World!" })
 
-echo_handler : { method: String, path: String, body: String } -> {Http} Result<String, String>
-echo_handler = |req| Ok(req.body)
+echo_handler : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
+echo_handler = |req| Ok({ status: 200, headers: [("Content-Type", "text/plain")], body: req.body })
 
 // -- Build router with direct calls --
 

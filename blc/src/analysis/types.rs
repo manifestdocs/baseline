@@ -276,13 +276,16 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         sigs.insert("Fs.delete!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
     }
 
-    // -- Http builtins (effect: Http) --
-    if builtin_modules.contains(&"Http") {
-        sigs.insert("Http.get!".into(),     Type::Function(vec![Type::String], Box::new(Type::String)));
-        sigs.insert("Http.post!".into(),    Type::Function(vec![Type::String, Type::String], Box::new(Type::String)));
-        sigs.insert("Http.put!".into(),     Type::Function(vec![Type::String, Type::String], Box::new(Type::String)));
-        sigs.insert("Http.delete!".into(),  Type::Function(vec![Type::String], Box::new(Type::String)));
-        sigs.insert("Http.request!".into(), Type::Function(vec![Type::String, Type::String, Type::String], Box::new(Type::String)));
+    // -- Http natives (effect: Http) — returns Response records --
+    if native_modules.contains(&"Http") {
+        // Http.get!(url) -> Response, Http.post!(url, body) -> Response, etc.
+        // Return type is Unknown (record type) since we don't have named record types yet.
+        sigs.insert("Http.get!".into(),     Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Http.post!".into(),    Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Http.put!".into(),     Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)));
+        sigs.insert("Http.delete!".into(),  Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        // Http.request!(request_record) -> Response
+        sigs.insert("Http.request!".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
     }
 
     // -- Math builtins (pure, no effect) --

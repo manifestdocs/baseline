@@ -65,14 +65,6 @@ impl BuiltinRegistry {
             registry.register("Fs.delete!", fs_delete);
         }
 
-        if modules.contains(&"Http") {
-            registry.register("Http.get!", http_get);
-            registry.register("Http.post!", http_post);
-            registry.register("Http.put!", http_put);
-            registry.register("Http.delete!", http_delete);
-            registry.register("Http.request!", http_request);
-        }
-
         if modules.contains(&"Math") {
             registry.register("Math.abs", math_abs);
             registry.register("Math.min", math_min);
@@ -294,72 +286,6 @@ fn fs_delete(args: &[String]) -> Result<String, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Http builtins
-// ---------------------------------------------------------------------------
-
-fn http_get(args: &[String]) -> Result<String, String> {
-    expect_args("Http.get!", args, 1)?;
-    let err = |e: ureq::Error| format!("Http.get! failed for \"{}\": {}", args[0], e);
-    let body: String = ureq::get(&args[0])
-        .call().map_err(err)?
-        .body_mut().read_to_string().map_err(err)?;
-    Ok(body)
-}
-
-fn http_post(args: &[String]) -> Result<String, String> {
-    expect_args("Http.post!", args, 2)?;
-    let err = |e: ureq::Error| format!("Http.post! failed for \"{}\": {}", args[0], e);
-    let body: String = ureq::post(&args[0])
-        .send(args[1].as_bytes()).map_err(err)?
-        .body_mut().read_to_string().map_err(err)?;
-    Ok(body)
-}
-
-fn http_put(args: &[String]) -> Result<String, String> {
-    expect_args("Http.put!", args, 2)?;
-    let err = |e: ureq::Error| format!("Http.put! failed for \"{}\": {}", args[0], e);
-    let body: String = ureq::put(&args[0])
-        .send(args[1].as_bytes()).map_err(err)?
-        .body_mut().read_to_string().map_err(err)?;
-    Ok(body)
-}
-
-fn http_delete(args: &[String]) -> Result<String, String> {
-    expect_args("Http.delete!", args, 1)?;
-    let err = |e: ureq::Error| format!("Http.delete! failed for \"{}\": {}", args[0], e);
-    let body: String = ureq::delete(&args[0])
-        .call().map_err(err)?
-        .body_mut().read_to_string().map_err(err)?;
-    Ok(body)
-}
-
-fn http_request(args: &[String]) -> Result<String, String> {
-    expect_args("Http.request!", args, 3)?;
-    let method = args[0].to_uppercase();
-    let url = &args[1];
-    let req_body = &args[2];
-
-    let err = |e: ureq::Error| format!("Http.request! failed for \"{}\": {}", url, e);
-
-    let body: String = match method.as_str() {
-        "GET" => ureq::get(url).call().map_err(err)?
-            .body_mut().read_to_string().map_err(err)?,
-        "HEAD" => ureq::head(url).call().map_err(err)?
-            .body_mut().read_to_string().map_err(err)?,
-        "DELETE" => ureq::delete(url).call().map_err(err)?
-            .body_mut().read_to_string().map_err(err)?,
-        "POST" => ureq::post(url).send(req_body.as_bytes()).map_err(err)?
-            .body_mut().read_to_string().map_err(err)?,
-        "PUT" => ureq::put(url).send(req_body.as_bytes()).map_err(err)?
-            .body_mut().read_to_string().map_err(err)?,
-        "PATCH" => ureq::patch(url).send(req_body.as_bytes()).map_err(err)?
-            .body_mut().read_to_string().map_err(err)?,
-        other => return Err(format!("Http.request! unsupported method: {}", other)),
-    };
-    Ok(body)
-}
-
-// ---------------------------------------------------------------------------
 // Math builtins (pure functions — no effect annotation needed)
 // ---------------------------------------------------------------------------
 
@@ -444,11 +370,6 @@ mod tests {
             "Fs.write!",
             "Fs.exists!",
             "Fs.delete!",
-            "Http.get!",
-            "Http.post!",
-            "Http.put!",
-            "Http.delete!",
-            "Http.request!",
             "Math.abs",
             "Math.min",
             "Math.max",

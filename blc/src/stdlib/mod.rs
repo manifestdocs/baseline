@@ -1,3 +1,4 @@
+pub mod http;
 pub mod json;
 pub mod list;
 pub mod option;
@@ -46,6 +47,9 @@ impl NativeRegistry {
         }
         if modules.contains(&"Router") {
             router::register(&mut registry);
+        }
+        if modules.contains(&"Http") {
+            http::register(&mut registry);
         }
         registry
     }

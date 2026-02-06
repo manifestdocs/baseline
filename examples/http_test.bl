@@ -1,27 +1,28 @@
-// HTTP Client example — demonstrates the Http effect module
+// HTTP Client example — demonstrates the Http effect module with structured responses
 @prelude(script)
 
-// Simple GET request
-fetch! : String -> {Http} String
+// Simple GET request — returns Response record { status, headers, body }
+fetch! : String -> {Http} { status: Int, headers: List<(String, String)>, body: String }
 fetch! = |url| Http.get!(url)
 
-// POST with body
-post_data! : (String, String) -> {Http} String
+// POST with body — returns Response record
+post_data! : (String, String) -> {Http} { status: Int, headers: List<(String, String)>, body: String }
 post_data! = |url, body| Http.post!(url, body)
 
-// Flexible request via method + url + body
-send_request! : (String, String, String) -> {Http} String
-send_request! = |method, url, body| Http.request!(method, url, body)
+// Flexible request via Request record
+send_request! : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} { status: Int, headers: List<(String, String)>, body: String }
+send_request! = |req| Http.request!(req)
 
-// Combined effects: fetch and log
+// Combined effects: fetch and print the response body
 fetch_and_log! : String -> {Http, Console} ()
 fetch_and_log! = |url| {
-  let body = Http.get!(url)
-  Console.println!(body)
+  let response = Http.get!(url)
+  Console.println!(response.body)
 }
 
 main! : () -> {Http, Console} ()
 main! = || {
   let response = Http.get!("https://httpbin.org/get")
-  Console.println!(response)
+  Console.println!("Status: ${response.status}")
+  Console.println!(response.body)
 }

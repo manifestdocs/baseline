@@ -516,39 +516,93 @@ fn server_listen<'a>(
             continue;
         }
 
-        // Build request record
+        // Build request record: { method, url, headers, body }
+        let req_headers: Vec<RuntimeValue> = request.headers().iter().map(|h| {
+            RuntimeValue::Tuple(vec![
+                RuntimeValue::String(h.field.to_string()),
+                RuntimeValue::String(h.value.to_string()),
+            ])
+        }).collect();
         let mut req_fields = std::collections::HashMap::new();
         req_fields.insert("method".to_string(), RuntimeValue::String(req_method.clone()));
-        req_fields.insert("path".to_string(), RuntimeValue::String(req_path.clone()));
+        req_fields.insert("url".to_string(), RuntimeValue::String(req_path.clone()));
+        req_fields.insert("headers".to_string(), RuntimeValue::List(req_headers));
         req_fields.insert("body".to_string(), RuntimeValue::String(req_body));
         let req_record = RuntimeValue::Record(req_fields);
 
         // Find matching route and build response
-        let (status, body) = match find_and_invoke_handler(&routes, &req_method, &req_path, &req_record, node, source, context) {
-            Some(Ok(RuntimeValue::Enum(ref name, ref payload)))
-                if name == "Ok" && payload.len() == 1 =>
-            {
-                (200, payload[0].to_string())
-            }
-            Some(Ok(RuntimeValue::Enum(ref name, ref payload)))
-                if name == "Err" && payload.len() == 1 =>
-            {
-                (500, payload[0].to_string())
-            }
-            Some(Ok(other)) => (200, other.to_string()),
+        let (status, resp_headers, body) = match find_and_invoke_handler(&routes, &req_method, &req_path, &req_record, node, source, context) {
+            Some(Ok(handler_result)) => extract_response(handler_result),
             Some(Err(e)) => {
                 eprintln!("[server] Handler error: {}", e);
-                (500, "Internal Server Error".to_string())
+                (500, Vec::new(), "Internal Server Error".to_string())
             }
-            None => (404, "Not Found".to_string()),
+            None => (404, Vec::new(), "Not Found".to_string()),
         };
 
-        let response = tiny_http::Response::from_string(&body)
+        let mut response = tiny_http::Response::from_string(&body)
             .with_status_code(tiny_http::StatusCode(status));
+        for (name, value) in &resp_headers {
+            if let Ok(header) = tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+                response = response.with_header(header);
+            }
+        }
         let _ = request.respond(response);
     }
 
     Ok(())
+}
+
+/// Extract (status, headers, body) from a handler return value.
+///
+/// Supports multiple return conventions:
+/// - Response record: `{ status: Int, headers: List<(String, String)>, body: String }`
+/// - Result<Response, _>: `Ok(response_record)` extracts the record; `Err(msg)` → 500
+/// - Result<String, String>: `Ok(body)` → 200; `Err(msg)` → 500 (backwards compat)
+/// - Plain String: body with 200 (backwards compat)
+fn extract_response(value: RuntimeValue) -> (u16, Vec<(String, String)>, String) {
+    match value {
+        // Ok(payload)
+        RuntimeValue::Enum(ref name, ref payload) if name == "Ok" && payload.len() == 1 => {
+            extract_response(payload[0].clone())
+        }
+        // Err(msg) → 500
+        RuntimeValue::Enum(ref name, ref payload) if name == "Err" && payload.len() == 1 => {
+            (500, Vec::new(), payload[0].to_string())
+        }
+        // Response record: { status, headers, body }
+        RuntimeValue::Record(ref fields) if fields.contains_key("status") => {
+            let status = match fields.get("status") {
+                Some(RuntimeValue::Int(s)) => *s as u16,
+                _ => 200,
+            };
+            let body = match fields.get("body") {
+                Some(RuntimeValue::String(b)) => b.clone(),
+                Some(other) => other.to_string(),
+                None => String::new(),
+            };
+            let headers = match fields.get("headers") {
+                Some(RuntimeValue::List(items)) => {
+                    items.iter().filter_map(|item| {
+                        if let RuntimeValue::Tuple(pair) = item {
+                            if pair.len() == 2 {
+                                if let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1]) {
+                                    return Some((k.clone(), v.clone()));
+                                }
+                            }
+                        }
+                        None
+                    }).collect()
+                }
+                _ => Vec::new(),
+            };
+            (status, headers, body)
+        }
+        // Plain string → 200 (backwards compat)
+        RuntimeValue::String(s) => (200, Vec::new(), s),
+        // Anything else → 200 with stringified body
+        other => (200, Vec::new(), other.to_string()),
+    }
 }
 
 /// Find a matching route and invoke its handler. Returns None for no match.
@@ -1042,10 +1096,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &str, context: &mut Context<'a>) -> Res
              let operand = eval(&node.named_child(0).unwrap(), source, context)?;
              propagate!(operand);
              match (op, operand) {
-                 ("!", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
+                 ("not", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
                  ("-", RuntimeValue::Int(i)) => Ok(RuntimeValue::Int(-i)),
                  ("-", RuntimeValue::Float(f)) => Ok(RuntimeValue::Float(-f)),
-                 ("!", v) => Err(err_at(format!("Cannot apply ! to {}", v), node, context)),
+                 ("not", v) => Err(err_at(format!("Cannot apply not to {}", v), node, context)),
                  ("-", v) => Err(err_at(format!("Cannot negate {}", v), node, context)),
                  _ => Err(err_at(format!("Unknown unary operator {}", op), node, context)),
              }
@@ -1668,13 +1722,13 @@ mod tests {
 
     #[test]
     fn test_not_true() {
-        let result = eval_source("main : () -> Bool\nmain = || !true");
+        let result = eval_source("main : () -> Bool\nmain = || not true");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
     #[test]
     fn test_not_false() {
-        let result = eval_source("main : () -> Bool\nmain = || !false");
+        let result = eval_source("main : () -> Bool\nmain = || not false");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
