@@ -988,11 +988,15 @@ impl<'a> Compiler<'a> {
             self.compiled_chunks[chunk_offset + i] = chunk;
         }
 
-        // Determine entry point: prefer main!/main, fall back to last function
+        // Determine entry point: require main!/main
         let entry = self.functions.get("main!")
             .or_else(|| self.functions.get("main"))
             .copied()
-            .unwrap_or(chunk_offset + num_funcs - 1);
+            .ok_or_else(|| CompileError {
+                message: "No 'main' or 'main!' function found".into(),
+                line: 1,
+                col: 0,
+            })?;
         Ok(Program {
             chunks: self.compiled_chunks,
             entry,
@@ -2408,8 +2412,8 @@ mod tests {
     #[test]
     fn compile_try_ok_unwraps() {
         let result = eval_program(
-            "get_value : () -> Unknown\n\
-             get_value = {\n  let x = Ok(42)\n  let v = x?\n  v + 1\n}"
+            "main : () -> Unknown\n\
+             main = {\n  let x = Ok(42)\n  let v = x?\n  v + 1\n}"
         );
         assert_eq!(result, Value::Int(43));
     }
@@ -2417,8 +2421,8 @@ mod tests {
     #[test]
     fn compile_try_err_returns_early() {
         let result = eval_program(
-            "get_value : () -> Unknown\n\
-             get_value = {\n  let x = Err(\"oops\")\n  let v = x?\n  v + 1\n}"
+            "main : () -> Unknown\n\
+             main = {\n  let x = Err(\"oops\")\n  let v = x?\n  v + 1\n}"
         );
         assert_eq!(result, Value::Enum("Err".into(), Rc::new(Value::String("oops".into()))));
     }
