@@ -73,19 +73,6 @@ fn assert_run_ok(file: &str, expected_stdout: &str) {
     );
 }
 
-fn assert_run_ok_interp(file: &str, expected_stdout: &str) {
-    let out = blc_run_interp(file);
-    assert_eq!(
-        out.exit_code, 0,
-        "{file}: expected exit 0, got {}.\nstderr: {}",
-        out.exit_code, out.stderr,
-    );
-    assert_eq!(
-        out.stdout, expected_stdout,
-        "{file}: stdout mismatch",
-    );
-}
-
 fn assert_run_fails_interp(file: &str, expected_fragments: &[&str]) {
     let out = blc_run_interp(file);
     assert_eq!(
@@ -264,8 +251,7 @@ fn check_json_test() {
 
 #[test]
 fn run_json_test() {
-    // JSON module uses features not yet compiled by the VM
-    assert_run_ok_interp(
+    assert_run_ok(
         "json_test.bl",
         "name: Alice\n\
          age: 30\n\
@@ -336,8 +322,7 @@ fn check_server_test() {
 
 #[test]
 fn run_server_test() {
-    // Server/Router uses features not yet compiled by the VM
-    assert_run_ok_interp(
+    assert_run_ok(
         "server_test.bl",
         "direct routes: 3\n\
          piped routes: 3\n\
@@ -357,8 +342,7 @@ fn check_middleware_test() {
 
 #[test]
 fn run_middleware_test() {
-    // Middleware uses features not yet compiled by the VM
-    assert_run_ok_interp(
+    assert_run_ok(
         "middleware_test.bl",
         "no-mw routes: 1\n\
          single-mw routes: 1\n\

@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use super::value::Value;
+use super::value::{RcStr, Value};
 
 // ---------------------------------------------------------------------------
 // Native Function Registry
@@ -135,6 +135,31 @@ impl NativeRegistry {
         // -- Int/String conversion --
         self.register("Int.to_string", native_int_to_string);
         self.register("Int.parse", native_int_parse);
+
+        // -- Json --
+        self.register("Json.parse", native_json_parse);
+        self.register("Json.to_string", native_json_to_string);
+        self.register("Json.to_string_pretty", native_json_to_string_pretty);
+
+        // -- Response --
+        self.register("Response.ok", native_response_ok);
+        self.register("Response.json", native_response_json);
+        self.register("Response.created", native_response_created);
+        self.register("Response.no_content", native_response_no_content);
+        self.register("Response.bad_request", native_response_bad_request);
+        self.register("Response.not_found", native_response_not_found);
+        self.register("Response.error", native_response_error);
+        self.register("Response.status", native_response_status);
+        self.register("Response.with_header", native_response_with_header);
+
+        // -- Router --
+        self.register("Router.new", native_router_new);
+        self.register("Router.routes", native_router_routes);
+        self.register("Router.get", native_router_get);
+        self.register("Router.post", native_router_post);
+        self.register("Router.put", native_router_put);
+        self.register("Router.delete", native_router_delete);
+        self.register("Router.use", native_router_use);
     }
 }
 
@@ -503,6 +528,313 @@ fn native_int_parse(args: &[Value]) -> Result<Value, NativeError> {
         },
         v => Err(NativeError(format!("Int.parse: expected String, got {}", v))),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Json
+// ---------------------------------------------------------------------------
+
+fn serde_to_vm(value: serde_json::Value) -> Value {
+    match value {
+        serde_json::Value::Null => Value::Enum("Null".into(), Rc::new(Value::Unit)),
+        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else if let Some(f) = n.as_f64() {
+                Value::Float(f)
+            } else {
+                Value::Float(f64::NAN)
+            }
+        }
+        serde_json::Value::String(s) => Value::String(s.into()),
+        serde_json::Value::Array(arr) => {
+            Value::List(Rc::new(arr.into_iter().map(serde_to_vm).collect()))
+        }
+        serde_json::Value::Object(obj) => {
+            let fields: Vec<(RcStr, Value)> = obj
+                .into_iter()
+                .map(|(k, v)| (RcStr::from(k.as_str()), serde_to_vm(v)))
+                .collect();
+            Value::Record(Rc::new(fields))
+        }
+    }
+}
+
+fn vm_to_serde(value: &Value) -> Result<serde_json::Value, NativeError> {
+    match value {
+        Value::Enum(tag, payload) if &**tag == "Null" && **payload == Value::Unit => {
+            Ok(serde_json::Value::Null)
+        }
+        Value::Enum(tag, _) if &**tag == "None" => Ok(serde_json::Value::Null),
+        Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
+        Value::Int(i) => Ok(serde_json::json!(*i)),
+        Value::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| NativeError(format!("Json.to_string: cannot serialize float {}", f))),
+        Value::String(s) => Ok(serde_json::Value::String(s.to_string())),
+        Value::List(items) => {
+            let arr: Result<Vec<_>, _> = items.iter().map(vm_to_serde).collect();
+            Ok(serde_json::Value::Array(arr?))
+        }
+        Value::Record(fields) => {
+            let mut map = serde_json::Map::new();
+            for (k, v) in fields.iter() {
+                map.insert(k.to_string(), vm_to_serde(v)?);
+            }
+            Ok(serde_json::Value::Object(map))
+        }
+        Value::Struct(name, fields) => {
+            let mut map = serde_json::Map::new();
+            map.insert("_type".to_string(), serde_json::Value::String(name.to_string()));
+            for (k, v) in fields.iter() {
+                map.insert(k.to_string(), vm_to_serde(v)?);
+            }
+            Ok(serde_json::Value::Object(map))
+        }
+        Value::Tuple(items) => {
+            let arr: Result<Vec<_>, _> = items.iter().map(vm_to_serde).collect();
+            Ok(serde_json::Value::Array(arr?))
+        }
+        Value::Unit => Ok(serde_json::Value::Null),
+        Value::Enum(tag, payload) if &**tag == "Some" => vm_to_serde(payload),
+        Value::Enum(tag, payload) if &**tag == "Ok" => vm_to_serde(payload),
+        other => Err(NativeError(format!("Json.to_string: cannot serialize {}", other))),
+    }
+}
+
+fn native_json_parse(args: &[Value]) -> Result<Value, NativeError> {
+    let s = match &args[0] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Json.parse expects String, got {}", other))),
+    };
+    let value: serde_json::Value = serde_json::from_str(s)
+        .map_err(|e| NativeError(format!("Json.parse: {}", e)))?;
+    Ok(serde_to_vm(value))
+}
+
+fn native_json_to_string(args: &[Value]) -> Result<Value, NativeError> {
+    let serde_val = vm_to_serde(&args[0])?;
+    let json_str = serde_json::to_string(&serde_val)
+        .map_err(|e| NativeError(format!("Json.to_string: {}", e)))?;
+    Ok(Value::String(json_str.into()))
+}
+
+fn native_json_to_string_pretty(args: &[Value]) -> Result<Value, NativeError> {
+    let serde_val = vm_to_serde(&args[0])?;
+    let json_str = serde_json::to_string_pretty(&serde_val)
+        .map_err(|e| NativeError(format!("Json.to_string_pretty: {}", e)))?;
+    Ok(Value::String(json_str.into()))
+}
+
+// ---------------------------------------------------------------------------
+// Response
+// ---------------------------------------------------------------------------
+
+fn make_response(status: i64, headers: Vec<Value>, body: &str) -> Value {
+    Value::Record(Rc::new(vec![
+        ("body".into(), Value::String(body.into())),
+        ("headers".into(), Value::List(Rc::new(headers))),
+        ("status".into(), Value::Int(status)),
+    ]))
+}
+
+fn native_response_ok(args: &[Value]) -> Result<Value, NativeError> {
+    let body = match &args[0] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Response.ok expects String body, got {}", other))),
+    };
+    Ok(make_response(200, Vec::new(), body))
+}
+
+fn native_response_json(args: &[Value]) -> Result<Value, NativeError> {
+    let body = match &args[0] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Response.json expects String body, got {}", other))),
+    };
+    let headers = vec![Value::Tuple(Rc::new(vec![
+        Value::String("Content-Type".into()),
+        Value::String("application/json".into()),
+    ]))];
+    Ok(make_response(200, headers, body))
+}
+
+fn native_response_created(args: &[Value]) -> Result<Value, NativeError> {
+    let body = match &args[0] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Response.created expects String body, got {}", other))),
+    };
+    Ok(make_response(201, Vec::new(), body))
+}
+
+fn native_response_no_content(_args: &[Value]) -> Result<Value, NativeError> {
+    Ok(make_response(204, Vec::new(), ""))
+}
+
+fn native_response_bad_request(args: &[Value]) -> Result<Value, NativeError> {
+    let body = match &args[0] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Response.bad_request expects String body, got {}", other))),
+    };
+    Ok(make_response(400, Vec::new(), body))
+}
+
+fn native_response_not_found(args: &[Value]) -> Result<Value, NativeError> {
+    let body = match &args[0] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Response.not_found expects String body, got {}", other))),
+    };
+    Ok(make_response(404, Vec::new(), body))
+}
+
+fn native_response_error(args: &[Value]) -> Result<Value, NativeError> {
+    let body = match &args[0] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Response.error expects String body, got {}", other))),
+    };
+    Ok(make_response(500, Vec::new(), body))
+}
+
+fn native_response_status(args: &[Value]) -> Result<Value, NativeError> {
+    let code = match &args[0] {
+        Value::Int(i) => *i,
+        other => return Err(NativeError(format!("Response.status expects Int, got {}", other))),
+    };
+    let body = match &args[1] {
+        Value::String(s) => s,
+        other => return Err(NativeError(format!("Response.status expects String body, got {}", other))),
+    };
+    Ok(make_response(code, Vec::new(), body))
+}
+
+fn native_response_with_header(args: &[Value]) -> Result<Value, NativeError> {
+    let fields = match &args[0] {
+        Value::Record(f) => f,
+        other => return Err(NativeError(format!("Response.with_header expects Response record, got {}", other))),
+    };
+    let name = match &args[1] {
+        Value::String(s) => s.clone(),
+        other => return Err(NativeError(format!("Response.with_header expects String header name, got {}", other))),
+    };
+    let val = match &args[2] {
+        Value::String(s) => s.clone(),
+        other => return Err(NativeError(format!("Response.with_header expects String header value, got {}", other))),
+    };
+
+    let mut new_fields: Vec<(RcStr, Value)> = (**fields).clone();
+    for (k, v) in &mut new_fields {
+        if &**k == "headers" {
+            let mut headers = match v {
+                Value::List(list) => (**list).clone(),
+                _ => Vec::new(),
+            };
+            headers.push(Value::Tuple(Rc::new(vec![
+                Value::String(name),
+                Value::String(val),
+            ])));
+            *v = Value::List(Rc::new(headers));
+            return Ok(Value::Record(Rc::new(new_fields)));
+        }
+    }
+    // No headers field; add one
+    new_fields.push(("headers".into(), Value::List(Rc::new(vec![
+        Value::Tuple(Rc::new(vec![Value::String(name), Value::String(val)])),
+    ]))));
+    Ok(Value::Record(Rc::new(new_fields)))
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+fn native_router_new(_args: &[Value]) -> Result<Value, NativeError> {
+    Ok(Value::Record(Rc::new(vec![
+        ("middleware".into(), Value::List(Rc::new(Vec::new()))),
+        ("routes".into(), Value::List(Rc::new(Vec::new()))),
+    ])))
+}
+
+fn native_router_routes(args: &[Value]) -> Result<Value, NativeError> {
+    match &args[0] {
+        Value::Record(fields) => {
+            for (k, v) in fields.iter() {
+                if &**k == "routes" {
+                    return Ok(v.clone());
+                }
+            }
+            Err(NativeError("Router.routes: no routes field".into()))
+        }
+        other => Err(NativeError(format!("Router.routes: expected Router, got {}", other))),
+    }
+}
+
+fn router_add_route(method: &str, args: &[Value]) -> Result<Value, NativeError> {
+    let fields = match &args[0] {
+        Value::Record(f) => f,
+        other => return Err(NativeError(format!("Router.{}: expected Router, got {}", method.to_lowercase(), other))),
+    };
+    match &args[1] {
+        Value::String(_) => {}
+        other => return Err(NativeError(format!("Router.{}: expected String path, got {}", method.to_lowercase(), other))),
+    };
+
+    let route = Value::Record(Rc::new(vec![
+        ("handler".into(), args[2].clone()),
+        ("method".into(), Value::String(method.into())),
+        ("path".into(), args[1].clone()),
+    ]));
+
+    let mut new_fields = Vec::new();
+    for (k, v) in fields.iter() {
+        if &**k == "routes" {
+            let mut routes = match v {
+                Value::List(list) => (**list).clone(),
+                _ => Vec::new(),
+            };
+            routes.push(route.clone());
+            new_fields.push((k.clone(), Value::List(Rc::new(routes))));
+        } else {
+            new_fields.push((k.clone(), v.clone()));
+        }
+    }
+    Ok(Value::Record(Rc::new(new_fields)))
+}
+
+fn native_router_get(args: &[Value]) -> Result<Value, NativeError> {
+    router_add_route("GET", args)
+}
+
+fn native_router_post(args: &[Value]) -> Result<Value, NativeError> {
+    router_add_route("POST", args)
+}
+
+fn native_router_put(args: &[Value]) -> Result<Value, NativeError> {
+    router_add_route("PUT", args)
+}
+
+fn native_router_delete(args: &[Value]) -> Result<Value, NativeError> {
+    router_add_route("DELETE", args)
+}
+
+fn native_router_use(args: &[Value]) -> Result<Value, NativeError> {
+    let fields = match &args[0] {
+        Value::Record(f) => f,
+        other => return Err(NativeError(format!("Router.use: expected Router, got {}", other))),
+    };
+    let mut new_fields = Vec::new();
+    for (k, v) in fields.iter() {
+        if &**k == "middleware" {
+            let mut mw = match v {
+                Value::List(list) => (**list).clone(),
+                _ => Vec::new(),
+            };
+            mw.push(args[1].clone());
+            new_fields.push((k.clone(), Value::List(Rc::new(mw))));
+        } else {
+            new_fields.push((k.clone(), v.clone()));
+        }
+    }
+    Ok(Value::Record(Rc::new(new_fields)))
 }
 
 // ---------------------------------------------------------------------------
