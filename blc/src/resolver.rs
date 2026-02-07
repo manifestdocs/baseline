@@ -90,14 +90,13 @@ impl ModuleLoader {
             }
 
             // Find the import_path node (field "path", or first named child)
-            let path_node = child.child_by_field_name("path")
-                .or_else(|| {
-                    // Fallback: find import_path or module_path child
-                    let mut c = child.walk();
-                    child.children(&mut c).find(|n| {
-                        n.kind() == "import_path" || n.kind() == "module_path"
-                    })
-                });
+            let path_node = child.child_by_field_name("path").or_else(|| {
+                // Fallback: find import_path or module_path child
+                let mut c = child.walk();
+                child
+                    .children(&mut c)
+                    .find(|n| n.kind() == "import_path" || n.kind() == "module_path")
+            });
 
             let path_node = match path_node {
                 Some(n) => n,
@@ -203,9 +202,20 @@ impl ModuleLoader {
             let lower_dir: PathBuf = dir_parts.iter().map(|p| p.to_lowercase()).collect();
 
             candidates.push(base.join(&exact_dir).join(format!("{}.bl", last)));
-            candidates.push(base.join(&lower_dir).join(format!("{}.bl", last.to_lowercase())));
-            candidates.push(base.join("lib").join(&exact_dir).join(format!("{}.bl", last)));
-            candidates.push(base.join("lib").join(&lower_dir).join(format!("{}.bl", last.to_lowercase())));
+            candidates.push(
+                base.join(&lower_dir)
+                    .join(format!("{}.bl", last.to_lowercase())),
+            );
+            candidates.push(
+                base.join("lib")
+                    .join(&exact_dir)
+                    .join(format!("{}.bl", last)),
+            );
+            candidates.push(
+                base.join("lib")
+                    .join(&lower_dir)
+                    .join(format!("{}.bl", last.to_lowercase())),
+            );
         }
 
         for candidate in &candidates {
@@ -214,7 +224,8 @@ impl ModuleLoader {
             }
         }
 
-        let tried = candidates.iter()
+        let tried = candidates
+            .iter()
             .map(|p| p.display().to_string())
             .collect::<Vec<_>>()
             .join(", ");
@@ -247,7 +258,9 @@ impl ModuleLoader {
 
         // Check for circular imports
         if self.resolution_stack.contains(&canonical) {
-            let cycle = self.resolution_stack.iter()
+            let cycle = self
+                .resolution_stack
+                .iter()
                 .map(|p| p.display().to_string())
                 .collect::<Vec<_>>()
                 .join(" -> ");
@@ -255,7 +268,11 @@ impl ModuleLoader {
                 code: "IMP_002".to_string(),
                 severity: Severity::Error,
                 location: node_location(file, import_node),
-                message: format!("Circular import detected: {} -> {}", cycle, canonical.display()),
+                message: format!(
+                    "Circular import detected: {} -> {}",
+                    cycle,
+                    canonical.display()
+                ),
                 context: "Modules cannot import each other in a cycle.".to_string(),
                 suggestions: vec![],
             });
@@ -313,9 +330,9 @@ impl ModuleLoader {
 
     /// Get the root node and source for a loaded module.
     pub fn get_module(&self, idx: usize) -> Option<(tree_sitter::Node<'_>, &str, &Path)> {
-        self.modules.get(idx).map(|(path, source, tree)| {
-            (tree.root_node(), source.as_str(), path.as_path())
-        })
+        self.modules
+            .get(idx)
+            .map(|(path, source, tree)| (tree.root_node(), source.as_str(), path.as_path()))
     }
 
     /// Extract exported symbols from a loaded module's root node.
@@ -328,15 +345,22 @@ impl ModuleLoader {
             match child.kind() {
                 "function_def" => {
                     if let Some(name_node) = child.child_by_field_name("name") {
-                        let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
-                        let sig = child.child_by_field_name("signature")
+                        let name = name_node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string();
+                        let sig = child
+                            .child_by_field_name("signature")
                             .map(|s| s.utf8_text(source.as_bytes()).unwrap_or("").to_string());
                         functions.push((name, sig));
                     }
                 }
                 "type_def" => {
                     if let Some(name_node) = child.child_by_field_name("name") {
-                        let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        let name = name_node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string();
                         types.push(name);
                     }
                 }
@@ -507,13 +531,23 @@ mod tests {
         let root = tree.root_node();
 
         let imports = ModuleLoader::parse_imports(&root, source);
-        assert_eq!(imports.len(), 1, "Expected 1 import, got {}: tree={}", imports.len(), root.to_sexp());
+        assert_eq!(
+            imports.len(),
+            1,
+            "Expected 1 import, got {}: tree={}",
+            imports.len(),
+            root.to_sexp()
+        );
         assert_eq!(imports[0].0.module_name, "Math");
         match &imports[0].0.kind {
             ImportKind::Selective(names) => {
                 assert_eq!(names, &["add", "multiply"]);
             }
-            other => panic!("Expected Selective, got {:?}; tree={}", other, root.to_sexp()),
+            other => panic!(
+                "Expected Selective, got {:?}; tree={}",
+                other,
+                root.to_sexp()
+            ),
         }
     }
 

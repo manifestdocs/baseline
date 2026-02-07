@@ -1,9 +1,9 @@
+use super::infer::{GenericSchema, InferCtx, builtin_generic_schemas};
+use crate::diagnostics::{Diagnostic, Location, Patch, Severity, Suggestion};
+use crate::prelude::{self, Prelude};
+use crate::resolver::{ImportKind, ModuleLoader};
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
-use crate::diagnostics::{Diagnostic, Location, Severity, Suggestion, Patch};
-use crate::prelude::{self, Prelude};
-use crate::resolver::{ModuleLoader, ImportKind};
-use super::infer::{InferCtx, GenericSchema, builtin_generic_schemas};
 
 /// Maps CST node `start_byte()` to the resolved Type for that expression.
 /// Used by the VM compiler for type-directed opcode specialization.
@@ -25,12 +25,12 @@ pub enum Type {
     Unit,
     Function(Vec<Type>, Box<Type>),
     List(Box<Type>),
-    Struct(String, HashMap<String, Type>), // Name, Fields
-    Record(HashMap<String, Type>),         // Anonymous record
-    Tuple(Vec<Type>),                      // (T, U, ...)
+    Struct(String, HashMap<String, Type>),  // Name, Fields
+    Record(HashMap<String, Type>),          // Anonymous record
+    Tuple(Vec<Type>),                       // (T, U, ...)
     Enum(String, Vec<(String, Vec<Type>)>), // Name, [(VariantName, PayloadTypes)]
-    Module(String),                        // Module/Effect namespace
-    Var(u32),                              // Inference type variable
+    Module(String),                         // Module/Effect namespace
+    Var(u32),                               // Inference type variable
     Unknown,
 }
 
@@ -43,7 +43,11 @@ impl std::fmt::Display for Type {
             Type::Bool => write!(f, "Bool"),
             Type::Unit => write!(f, "Unit"),
             Type::Function(args, ret) => {
-                let args_str = args.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+                let args_str = args
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "({}) -> {}", args_str, ret)
             }
             Type::List(inner) => write!(f, "List<{}>", inner),
@@ -51,11 +55,19 @@ impl std::fmt::Display for Type {
             Type::Record(fields) => {
                 let mut sorted_fields: Vec<_> = fields.iter().collect();
                 sorted_fields.sort_by_key(|(k, _)| *k);
-                let fields_str = sorted_fields.iter().map(|(k, v)| format!("{}: {}", k, v)).collect::<Vec<_>>().join(", ");
+                let fields_str = sorted_fields
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "{{ {} }}", fields_str)
             }
             Type::Tuple(elems) => {
-                let elems_str = elems.iter().map(|t| t.to_string()).collect::<Vec<_>>().join(", ");
+                let elems_str = elems
+                    .iter()
+                    .map(|t| t.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "({})", elems_str)
             }
             Type::Enum(name, variants) => {
@@ -64,18 +76,20 @@ impl std::fmt::Display for Type {
                     "Option" => {
                         if let Some((_, payload)) = variants.first()
                             && let Some(inner) = payload.first()
-                                && *inner != Type::Unknown {
-                                    return write!(f, "Option<{}>", inner);
-                                }
+                            && *inner != Type::Unknown
+                        {
+                            return write!(f, "Option<{}>", inner);
+                        }
                         write!(f, "Option")
                     }
                     "Result" => {
                         let ok_t = variants.first().and_then(|(_, p)| p.first());
                         let err_t = variants.get(1).and_then(|(_, p)| p.first());
                         if let (Some(ok), Some(err)) = (ok_t, err_t)
-                            && (*ok != Type::Unknown || *err != Type::Unknown) {
-                                return write!(f, "Result<{}, {}>", ok, err);
-                            }
+                            && (*ok != Type::Unknown || *err != Type::Unknown)
+                        {
+                            return write!(f, "Result<{}, {}>", ok, err);
+                        }
                         write!(f, "Result")
                     }
                     _ => write!(f, "{}", name),
@@ -112,10 +126,14 @@ fn check_inline_test(
     // inline_test: "test" string_literal "=" _expression
     // The expression is the last named child
     let count = test_node.named_child_count();
-    if count == 0 { return; }
+    if count == 0 {
+        return;
+    }
     let expr_node = test_node.named_child(count - 1).unwrap();
     // Skip string_literal (the test name)
-    if expr_node.kind() == "string_literal" { return; }
+    if expr_node.kind() == "string_literal" {
+        return;
+    }
     let test_type = check_node(&expr_node, source, file, symbols, diagnostics);
     if test_type != Type::Bool && test_type != Type::Unknown {
         diagnostics.push(Diagnostic {
@@ -152,8 +170,8 @@ fn check_where_block(
 
 pub struct SymbolTable {
     scopes: Vec<HashMap<String, Type>>,
-    types: HashMap<String, Type>,           // Registry for named types (structs)
-    module_methods: HashMap<String, Type>,  // "Module.method" -> Function type
+    types: HashMap<String, Type>, // Registry for named types (structs)
+    module_methods: HashMap<String, Type>, // "Module.method" -> Function type
     generic_schemas: HashMap<String, GenericSchema>, // "Module.method" -> generic schema
     /// Accumulated type map: CST node start_byte → resolved Type.
     /// Populated during type checking for use by the VM compiler.
@@ -180,7 +198,10 @@ impl SymbolTable {
         );
         table.insert_type("Option".to_string(), option_type.clone());
         table.insert("None".to_string(), option_type.clone());
-        table.insert("Some".to_string(), Type::Function(vec![Type::Unknown], Box::new(option_type.clone())));
+        table.insert(
+            "Some".to_string(),
+            Type::Function(vec![Type::Unknown], Box::new(option_type.clone())),
+        );
 
         let result_type = Type::Enum(
             "Result".to_string(),
@@ -190,8 +211,14 @@ impl SymbolTable {
             ],
         );
         table.insert_type("Result".to_string(), result_type.clone());
-        table.insert("Ok".to_string(), Type::Function(vec![Type::Unknown], Box::new(result_type.clone())));
-        table.insert("Err".to_string(), Type::Function(vec![Type::Unknown], Box::new(result_type.clone())));
+        table.insert(
+            "Ok".to_string(),
+            Type::Function(vec![Type::Unknown], Box::new(result_type.clone())),
+        );
+        table.insert(
+            "Err".to_string(),
+            Type::Function(vec![Type::Unknown], Box::new(result_type.clone())),
+        );
 
         // Register module namespaces gated by prelude.
         for module in prelude.type_modules() {
@@ -251,141 +278,381 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
 
     // -- Console builtins (effect: Console) --
     if builtin_modules.contains(&"Console") {
-        sigs.insert("Console.println!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
-        sigs.insert("Console.print!".into(),   Type::Function(vec![Type::String], Box::new(Type::Unit)));
-        sigs.insert("Console.error!".into(),   Type::Function(vec![Type::String], Box::new(Type::Unit)));
-        sigs.insert("Console.read_line!".into(), Type::Function(vec![], Box::new(Type::String)));
+        sigs.insert(
+            "Console.println!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Console.print!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Console.error!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Console.read_line!".into(),
+            Type::Function(vec![], Box::new(Type::String)),
+        );
     }
 
     // -- Log builtins (effect: Log) --
     if builtin_modules.contains(&"Log") {
-        sigs.insert("Log.info!".into(),  Type::Function(vec![Type::String], Box::new(Type::Unit)));
-        sigs.insert("Log.warn!".into(),  Type::Function(vec![Type::String], Box::new(Type::Unit)));
-        sigs.insert("Log.error!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
-        sigs.insert("Log.debug!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert(
+            "Log.info!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Log.warn!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Log.error!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Log.debug!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
     }
 
     // -- Time builtins (effect: Time) --
     if builtin_modules.contains(&"Time") {
-        sigs.insert("Time.now!".into(),   Type::Function(vec![], Box::new(Type::Int)));
-        sigs.insert("Time.sleep!".into(), Type::Function(vec![Type::Int], Box::new(Type::Unit)));
+        sigs.insert(
+            "Time.now!".into(),
+            Type::Function(vec![], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "Time.sleep!".into(),
+            Type::Function(vec![Type::Int], Box::new(Type::Unit)),
+        );
     }
 
     // -- Random builtins (effect: Random) --
     if builtin_modules.contains(&"Random") {
-        sigs.insert("Random.int!".into(),  Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)));
-        sigs.insert("Random.bool!".into(), Type::Function(vec![], Box::new(Type::Bool)));
+        sigs.insert(
+            "Random.int!".into(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "Random.bool!".into(),
+            Type::Function(vec![], Box::new(Type::Bool)),
+        );
     }
 
     // -- Env builtins (effect: Env) --
     if builtin_modules.contains(&"Env") {
-        sigs.insert("Env.get!".into(), Type::Function(vec![Type::String], Box::new(Type::String)));
-        sigs.insert("Env.set!".into(), Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)));
+        sigs.insert(
+            "Env.get!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Env.set!".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)),
+        );
     }
 
     // -- Fs builtins (effect: Fs) --
     if builtin_modules.contains(&"Fs") {
-        sigs.insert("Fs.read!".into(),   Type::Function(vec![Type::String], Box::new(Type::String)));
-        sigs.insert("Fs.write!".into(),  Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)));
-        sigs.insert("Fs.exists!".into(), Type::Function(vec![Type::String], Box::new(Type::Bool)));
-        sigs.insert("Fs.delete!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
+        sigs.insert(
+            "Fs.read!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Fs.write!".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Fs.exists!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "Fs.delete!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
     }
 
     // -- Http natives (effect: Http) — returns Response records --
     if native_modules.contains(&"Http") {
         // Http.get!(url) -> Response, Http.post!(url, body) -> Response, etc.
         // Return type is Unknown (record type) since we don't have named record types yet.
-        sigs.insert("Http.get!".into(),     Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Http.post!".into(),    Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Http.put!".into(),     Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Http.delete!".into(),  Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+        sigs.insert(
+            "Http.get!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Http.post!".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Http.put!".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Http.delete!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
         // Http.request!(request_record) -> Response
-        sigs.insert("Http.request!".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert(
+            "Http.request!".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
     }
 
     // -- Math builtins (pure, no effect) --
     // Math functions accept both Int and Float at runtime; use Unknown args to avoid false positives.
     if builtin_modules.contains(&"Math") {
-        sigs.insert("Math.abs".into(),   Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Math.min".into(),   Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Math.max".into(),   Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Math.clamp".into(), Type::Function(vec![Type::Unknown, Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Math.pow".into(),   Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert(
+            "Math.abs".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Math.min".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Math.max".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Math.clamp".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Unknown, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Math.pow".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
     }
 
     // -- Json native methods (pure) --
     if native_modules.contains(&"Json") {
-        sigs.insert("Json.parse".into(),            Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Json.to_string".into(),        Type::Function(vec![Type::Unknown], Box::new(Type::String)));
-        sigs.insert("Json.to_string_pretty".into(), Type::Function(vec![Type::Unknown], Box::new(Type::String)));
+        sigs.insert(
+            "Json.parse".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Json.to_string".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Json.to_string_pretty".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+        );
     }
 
     // -- String native methods --
     if native_modules.contains(&"String") {
-        sigs.insert("String.length".into(),      Type::Function(vec![Type::String], Box::new(Type::Int)));
-        sigs.insert("String.trim".into(),         Type::Function(vec![Type::String], Box::new(Type::String)));
-        sigs.insert("String.contains".into(),     Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)));
-        sigs.insert("String.starts_with".into(),  Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)));
-        sigs.insert("String.to_upper".into(),     Type::Function(vec![Type::String], Box::new(Type::String)));
-        sigs.insert("String.to_lower".into(),     Type::Function(vec![Type::String], Box::new(Type::String)));
-        sigs.insert("String.split".into(),        Type::Function(vec![Type::String, Type::String], Box::new(Type::List(Box::new(Type::String)))));
-        sigs.insert("String.join".into(),         Type::Function(vec![Type::List(Box::new(Type::String)), Type::String], Box::new(Type::String)));
-        sigs.insert("String.slice".into(),        Type::Function(vec![Type::String, Type::Int, Type::Int], Box::new(Type::String)));
+        sigs.insert(
+            "String.length".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "String.trim".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "String.contains".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "String.starts_with".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "String.to_upper".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "String.to_lower".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "String.split".into(),
+            Type::Function(
+                vec![Type::String, Type::String],
+                Box::new(Type::List(Box::new(Type::String))),
+            ),
+        );
+        sigs.insert(
+            "String.join".into(),
+            Type::Function(
+                vec![Type::List(Box::new(Type::String)), Type::String],
+                Box::new(Type::String),
+            ),
+        );
+        sigs.insert(
+            "String.slice".into(),
+            Type::Function(
+                vec![Type::String, Type::Int, Type::Int],
+                Box::new(Type::String),
+            ),
+        );
     }
 
     // -- Option native methods (generic — use Unknown for type params) --
     if native_modules.contains(&"Option") {
-        sigs.insert("Option.unwrap".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Option.unwrap_or".into(), Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Option.is_some".into(),   Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
-        sigs.insert("Option.is_none".into(),   Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
+        sigs.insert(
+            "Option.unwrap".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Option.unwrap_or".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Option.is_some".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "Option.is_none".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Bool)),
+        );
     }
 
     // -- Result native methods (generic — use Unknown for type params) --
     if native_modules.contains(&"Result") {
-        sigs.insert("Result.unwrap".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Result.unwrap_or".into(), Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Result.is_ok".into(),     Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
-        sigs.insert("Result.is_err".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Bool)));
+        sigs.insert(
+            "Result.unwrap".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Result.unwrap_or".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Result.is_ok".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "Result.is_err".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Bool)),
+        );
     }
 
     // -- List native methods (generic — use Unknown for element type) --
     if native_modules.contains(&"List") {
-        sigs.insert("List.length".into(),  Type::Function(vec![Type::Unknown], Box::new(Type::Int)));
-        sigs.insert("List.head".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("List.tail".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("List.reverse".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("List.sort".into(),    Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("List.concat".into(),  Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert(
+            "List.length".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "List.head".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "List.tail".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "List.reverse".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "List.sort".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "List.concat".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
     }
 
     // -- Response builder (pure) --
     if native_modules.contains(&"Response") {
-        sigs.insert("Response.ok".into(),          Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Response.json".into(),        Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Response.created".into(),     Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Response.no_content".into(),  Type::Function(vec![], Box::new(Type::Unknown)));
-        sigs.insert("Response.bad_request".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Response.not_found".into(),   Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Response.error".into(),       Type::Function(vec![Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Response.status".into(),      Type::Function(vec![Type::Int, Type::String], Box::new(Type::Unknown)));
-        sigs.insert("Response.with_header".into(), Type::Function(vec![Type::Unknown, Type::String, Type::String], Box::new(Type::Unknown)));
+        sigs.insert(
+            "Response.ok".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.json".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.created".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.no_content".into(),
+            Type::Function(vec![], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.bad_request".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.not_found".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.error".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.status".into(),
+            Type::Function(vec![Type::Int, Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.with_header".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::String],
+                Box::new(Type::Unknown),
+            ),
+        );
     }
 
     // -- Router native methods (pure) --
     if native_modules.contains(&"Router") {
-        sigs.insert("Router.new".into(),    Type::Function(vec![], Box::new(Type::Unknown)));
-        sigs.insert("Router.get".into(),    Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Router.post".into(),   Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Router.put".into(),    Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Router.delete".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Router.routes".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
-        sigs.insert("Router.use".into(),    Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
+        sigs.insert(
+            "Router.new".into(),
+            Type::Function(vec![], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Router.get".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Router.post".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Router.put".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Router.delete".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Router.routes".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Router.use".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
     }
 
     // -- Server builtins (effect: Http) --
     if builtin_modules.contains(&"Server") {
-        sigs.insert("Server.listen!".into(), Type::Function(vec![Type::Int, Type::Unknown], Box::new(Type::Unit)));
+        sigs.insert(
+            "Server.listen!".into(),
+            Type::Function(vec![Type::Int, Type::Unknown], Box::new(Type::Unit)),
+        );
     }
 
     sigs
@@ -394,16 +661,24 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
 /// Check if two types are compatible, treating Unknown as a wildcard.
 /// Same-named Enums check payload types recursively for generic enforcement.
 fn types_compatible(a: &Type, b: &Type) -> bool {
-    if a == b { return true; }
-    if *a == Type::Unknown || *b == Type::Unknown { return true; }
+    if a == b {
+        return true;
+    }
+    if *a == Type::Unknown || *b == Type::Unknown {
+        return true;
+    }
     match (a, b) {
         (Type::Var(_), _) | (_, Type::Var(_)) => true,
         (Type::Enum(na, va), Type::Enum(nb, vb)) => {
-            if na != nb { return false; }
+            if na != nb {
+                return false;
+            }
             // Same-named enums: check payload types are compatible
             for ((_, pa), (_, pb)) in va.iter().zip(vb.iter()) {
                 for (ta, tb) in pa.iter().zip(pb.iter()) {
-                    if !types_compatible(ta, tb) { return false; }
+                    if !types_compatible(ta, tb) {
+                        return false;
+                    }
                 }
             }
             true
@@ -483,11 +758,7 @@ pub fn check_types_with_loader(
 /// Run the type checker and return both diagnostics and a TypeMap.
 /// The TypeMap maps CST node start_byte to resolved Type, enabling
 /// the VM compiler to emit specialized opcodes.
-pub fn check_types_with_map(
-    root: &Node,
-    source: &str,
-    file: &str,
-) -> (Vec<Diagnostic>, TypeMap) {
+pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagnostic>, TypeMap) {
     let mut diagnostics = Vec::new();
 
     let prelude = match prelude::extract_prelude(root, source) {
@@ -560,7 +831,9 @@ fn process_imports(
         {
             let (mod_root, mod_source, _) = loader.get_module(module_idx).unwrap();
             let mod_diagnostics = check_types(&mod_root, mod_source, &mod_file);
-            let has_errors = mod_diagnostics.iter().any(|d| d.severity == Severity::Error);
+            let has_errors = mod_diagnostics
+                .iter()
+                .any(|d| d.severity == Severity::Error);
             if has_errors {
                 diagnostics.push(Diagnostic {
                     code: "IMP_003".to_string(),
@@ -569,7 +842,10 @@ fn process_imports(
                     message: format!(
                         "Imported module `{}` has {} type error(s)",
                         import.module_name,
-                        mod_diagnostics.iter().filter(|d| d.severity == Severity::Error).count()
+                        mod_diagnostics
+                            .iter()
+                            .filter(|d| d.severity == Severity::Error)
+                            .count()
                     ),
                     context: "Fix the errors in the imported module first.".to_string(),
                     suggestions: vec![],
@@ -584,7 +860,11 @@ fn process_imports(
         let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
 
         // Get the short module name (last segment for dotted paths)
-        let short_name = import.module_name.split('.').next_back().unwrap_or(&import.module_name);
+        let short_name = import
+            .module_name
+            .split('.')
+            .next_back()
+            .unwrap_or(&import.module_name);
 
         // Build a temporary SymbolTable for the imported module to parse types
         let mod_prelude = prelude::extract_prelude(&mod_root, mod_source).unwrap_or(Prelude::Core);
@@ -598,7 +878,8 @@ fn process_imports(
         for (func_name, _sig_text) in &exports.functions {
             let qualified = format!("{}.{}", short_name, func_name);
             // Look up the function type from the module's symbol table
-            let func_type = mod_symbols.lookup(func_name)
+            let func_type = mod_symbols
+                .lookup(func_name)
                 .cloned()
                 .unwrap_or(Type::Unknown);
             symbols.module_methods.insert(qualified, func_type.clone());
@@ -638,7 +919,9 @@ fn process_imports(
 
         // Validate selective imports: check that requested symbols exist
         if let ImportKind::Selective(names) = &import.kind {
-            let exported_names: Vec<&str> = exports.functions.iter()
+            let exported_names: Vec<&str> = exports
+                .functions
+                .iter()
                 .map(|(n, _)| n.as_str())
                 .chain(exports.types.iter().map(|n| n.as_str()))
                 .collect();
@@ -652,10 +935,7 @@ fn process_imports(
                             "Symbol `{}` not found in module `{}`",
                             name, import.module_name
                         ),
-                        context: format!(
-                            "Available exports: {}",
-                            exported_names.join(", ")
-                        ),
+                        context: format!("Available exports: {}", exported_names.join(", ")),
                         suggestions: vec![],
                     });
                 }
@@ -707,25 +987,27 @@ fn check_node_inner(
             }
             Type::Unit
         }
-        "prelude_decl" | "import_decl" => {
-            Type::Unit
-        }
+        "prelude_decl" | "import_decl" => Type::Unit,
         "try_expression" => {
             // expr? — unwraps Option<T> to T or Result<T,E> to T
-            let inner = check_node(&node.named_child(0).unwrap(), source, file, symbols, diagnostics);
+            let inner = check_node(
+                &node.named_child(0).unwrap(),
+                source,
+                file,
+                symbols,
+                diagnostics,
+            );
             match &inner {
-                Type::Enum(name, variants) if name == "Option" => {
-                    variants.iter()
-                        .find(|(v, _)| v == "Some")
-                        .and_then(|(_, payloads)| payloads.first().cloned())
-                        .unwrap_or(Type::Unknown)
-                }
-                Type::Enum(name, variants) if name == "Result" => {
-                    variants.iter()
-                        .find(|(v, _)| v == "Ok")
-                        .and_then(|(_, payloads)| payloads.first().cloned())
-                        .unwrap_or(Type::Unknown)
-                }
+                Type::Enum(name, variants) if name == "Option" => variants
+                    .iter()
+                    .find(|(v, _)| v == "Some")
+                    .and_then(|(_, payloads)| payloads.first().cloned())
+                    .unwrap_or(Type::Unknown),
+                Type::Enum(name, variants) if name == "Result" => variants
+                    .iter()
+                    .find(|(v, _)| v == "Ok")
+                    .and_then(|(_, payloads)| payloads.first().cloned())
+                    .unwrap_or(Type::Unknown),
                 _ => Type::Unknown,
             }
         }
@@ -735,10 +1017,10 @@ fn check_node_inner(
             let mut name = String::new();
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                 if child.kind() == "type_identifier" {
-                     name = child.utf8_text(source.as_bytes()).unwrap().to_string();
-                     break;
-                 }
+                if child.kind() == "type_identifier" {
+                    name = child.utf8_text(source.as_bytes()).unwrap().to_string();
+                    break;
+                }
             }
             if !name.is_empty() {
                 symbols.insert_type(name.clone(), Type::Module(name));
@@ -748,12 +1030,17 @@ fn check_node_inner(
         "type_def" => {
             // type Point = { x: Int, y: Int }
             // type Status = | Active | Inactive | Pending(String)
-            let name_node = node.child_by_field_name("name")
+            let name_node = node
+                .child_by_field_name("name")
                 .unwrap_or_else(|| node.child(1).unwrap());
-            let name = name_node.utf8_text(source.as_bytes()).unwrap_or("Unknown").to_string();
+            let name = name_node
+                .utf8_text(source.as_bytes())
+                .unwrap_or("Unknown")
+                .to_string();
 
             // Def node is after '=' — use field if available, else positional
-            let def_node_candidate = node.child_by_field_name("def")
+            let def_node_candidate = node
+                .child_by_field_name("def")
                 .unwrap_or_else(|| node.child(3).unwrap());
 
             if def_node_candidate.kind() == "variant_list" {
@@ -771,12 +1058,16 @@ fn check_node_inner(
                         for vi in 0..vcount {
                             let vc = child.child(vi).unwrap();
                             if (vc.kind() != "type_identifier" || vc.id() != vname_node.id())
-                                && vc.kind() != "|" && vc.kind() != "(" && vc.kind() != ")" && vc.kind() != "," {
-                                    let pt = parse_type(&vc, source, symbols);
-                                    if pt != Type::Unknown {
-                                        payload_types.push(pt);
-                                    }
+                                && vc.kind() != "|"
+                                && vc.kind() != "("
+                                && vc.kind() != ")"
+                                && vc.kind() != ","
+                            {
+                                let pt = parse_type(&vc, source, symbols);
+                                if pt != Type::Unknown {
+                                    payload_types.push(pt);
                                 }
+                            }
                         }
 
                         variants.push((vname, payload_types));
@@ -793,7 +1084,10 @@ fn check_node_inner(
                         symbols.insert(vname.clone(), enum_type.clone());
                     } else {
                         // Constructor with payload: Some(T) -> function T -> Enum
-                        symbols.insert(vname.clone(), Type::Function(payload.clone(), Box::new(enum_type.clone())));
+                        symbols.insert(
+                            vname.clone(),
+                            Type::Function(payload.clone(), Box::new(enum_type.clone())),
+                        );
                     }
                 }
             } else {
@@ -816,68 +1110,84 @@ fn check_node_inner(
             // Check signature
             let sig_node = node.child_by_field_name("signature").unwrap();
             let function_type = parse_type(&sig_node, source, symbols);
-            
+
             symbols.insert(name.clone(), function_type.clone());
-
-
 
             if let Type::Function(arg_types, ret_type) = &function_type {
                 symbols.enter_scope();
 
                 let body_node = node.child_by_field_name("body").unwrap();
-                
+
                 // Special handling if body is a lambda to bind args
                 if body_node.kind() == "lambda" {
-                     let child_count = body_node.named_child_count();
-                     // Last identified named child is body, others are args
-                     let arg_count = if child_count > 0 { child_count - 1 } else { 0 };
-                     
-                     if arg_count != arg_types.len() {
-                          diagnostics.push(Diagnostic {
-                             code: "TYP_005".to_string(),
-                             severity: Severity::Error,
-                             location: loc(file, &body_node),
-                             message: format!("Function `{}` expects {} arguments, lambda has {}", name, arg_types.len(), arg_count),
-                             context: "Function implementation must match signature.".to_string(),
-                             suggestions: vec![],
-                         });
-                     }
+                    let child_count = body_node.named_child_count();
+                    // Last identified named child is body, others are args
+                    let arg_count = if child_count > 0 { child_count - 1 } else { 0 };
 
-                     for (i, arg_type) in arg_types.iter().enumerate().take(std::cmp::min(arg_count, arg_types.len())) {
-                         let arg_node = body_node.named_child(i).unwrap();
-                         if arg_node.kind() == "identifier" {
-                             let arg_name = arg_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                             symbols.insert(arg_name, arg_type.clone());
-                         }
-                     }
-                     
-                     if child_count > 0 {
-                         let lambda_body = body_node.named_child(child_count - 1).unwrap();
-                         let body_type = check_node(&lambda_body, source, file, symbols, diagnostics);
-                         
-                         if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
-                              diagnostics.push(Diagnostic {
-                                 code: "TYP_006".to_string(),
-                                 severity: Severity::Error,
-                                 location: loc(file, &lambda_body),
-                                 message: format!("Function `{}` declares return type {}, body returns {}", name, ret_type, body_type),
-                                 context: "Function body return type must match signature.".to_string(),
-                                 suggestions: vec![],
-                             });
-                         }
-                     }
+                    if arg_count != arg_types.len() {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_005".to_string(),
+                            severity: Severity::Error,
+                            location: loc(file, &body_node),
+                            message: format!(
+                                "Function `{}` expects {} arguments, lambda has {}",
+                                name,
+                                arg_types.len(),
+                                arg_count
+                            ),
+                            context: "Function implementation must match signature.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
+
+                    for (i, arg_type) in arg_types
+                        .iter()
+                        .enumerate()
+                        .take(std::cmp::min(arg_count, arg_types.len()))
+                    {
+                        let arg_node = body_node.named_child(i).unwrap();
+                        if arg_node.kind() == "identifier" {
+                            let arg_name =
+                                arg_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                            symbols.insert(arg_name, arg_type.clone());
+                        }
+                    }
+
+                    if child_count > 0 {
+                        let lambda_body = body_node.named_child(child_count - 1).unwrap();
+                        let body_type =
+                            check_node(&lambda_body, source, file, symbols, diagnostics);
+
+                        if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_006".to_string(),
+                                severity: Severity::Error,
+                                location: loc(file, &lambda_body),
+                                message: format!(
+                                    "Function `{}` declares return type {}, body returns {}",
+                                    name, ret_type, body_type
+                                ),
+                                context: "Function body return type must match signature."
+                                    .to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+                    }
                 } else {
-                     let body_type = check_node(&body_node, source, file, symbols, diagnostics);
-                     if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
-                          diagnostics.push(Diagnostic {
-                                 code: "TYP_006".to_string(),
-                                 severity: Severity::Error,
-                                 location: loc(file, &body_node),
-                                 message: format!("Function `{}` declares return type {}, body returns {}", name, ret_type, body_type),
-                                 context: "Function body return type must match signature.".to_string(),
-                                 suggestions: vec![],
-                             });
-                     }
+                    let body_type = check_node(&body_node, source, file, symbols, diagnostics);
+                    if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_006".to_string(),
+                            severity: Severity::Error,
+                            location: loc(file, &body_node),
+                            message: format!(
+                                "Function `{}` declares return type {}, body returns {}",
+                                name, ret_type, body_type
+                            ),
+                            context: "Function body return type must match signature.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
                 }
 
                 // Check where_block inline tests (expressions must be Bool)
@@ -912,8 +1222,12 @@ fn check_node_inner(
                                 code: "TYP_021".to_string(),
                                 severity: Severity::Error,
                                 location: loc(file, &expr_node),
-                                message: format!("Binding type mismatch: declared {}, found {}", declared_type, expr_type),
-                                context: "Expression type must match declared type annotation.".to_string(),
+                                message: format!(
+                                    "Binding type mismatch: declared {}, found {}",
+                                    declared_type, expr_type
+                                ),
+                                context: "Expression type must match declared type annotation."
+                                    .to_string(),
                                 suggestions: vec![],
                             });
                         }
@@ -942,7 +1256,8 @@ fn check_node_inner(
                         severity: Severity::Warning,
                         location: loc(file, node),
                         message: "Nested call could use pipe syntax".to_string(),
-                        context: "Consider rewriting f(g(x)) as x |> g |> f for readability.".to_string(),
+                        context: "Consider rewriting f(g(x)) as x |> g |> f for readability."
+                            .to_string(),
                         suggestions: vec![Suggestion {
                             strategy: "rewrite".to_string(),
                             description: "Use pipe operator |> instead of nested calls".to_string(),
@@ -953,60 +1268,82 @@ fn check_node_inner(
             }
 
             // Try generic schema inference for module methods (List.map) and constructors (Some, Ok)
-            let schema_name = extract_qualified_name(&func_node, source)
-                .or_else(|| {
-                    let k = func_node.kind();
-                    if k == "identifier" || k == "type_identifier" {
-                        func_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
-                    } else {
-                        None
-                    }
-                });
+            let schema_name = extract_qualified_name(&func_node, source).or_else(|| {
+                let k = func_node.kind();
+                if k == "identifier" || k == "type_identifier" {
+                    func_node
+                        .utf8_text(source.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            });
             if let Some(ref qname) = schema_name
-                && let Some(schema) = symbols.lookup_generic_schema(qname) {
-                    let mut ctx = InferCtx::new();
-                    let instantiated = (schema.build)(&mut ctx);
-                    if let Type::Function(schema_params, schema_ret) = instantiated {
-                        // Check arg count
-                        if params_provided != schema_params.len() {
-                            diagnostics.push(Diagnostic {
-                                code: "TYP_007".to_string(),
-                                severity: Severity::Error,
-                                location: loc(file, node),
-                                message: format!("Function call expects {} arguments, found {}", schema_params.len(), params_provided),
-                                context: "Argument count mismatch.".to_string(),
-                                suggestions: vec![],
-                            });
-                        }
+                && let Some(schema) = symbols.lookup_generic_schema(qname)
+            {
+                let mut ctx = InferCtx::new();
+                let instantiated = (schema.build)(&mut ctx);
+                if let Type::Function(schema_params, schema_ret) = instantiated {
+                    // Check arg count
+                    if params_provided != schema_params.len() {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_007".to_string(),
+                            severity: Severity::Error,
+                            location: loc(file, node),
+                            message: format!(
+                                "Function call expects {} arguments, found {}",
+                                schema_params.len(),
+                                params_provided
+                            ),
+                            context: "Argument count mismatch.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
 
-                        // Unify each arg with the schema param, using lambda inference for HOFs
-                        for (i, schema_param) in schema_params.iter().enumerate().take(std::cmp::min(params_provided, schema_params.len())) {
-                            let arg_expr = node.named_child(i + 1).unwrap();
+                    // Unify each arg with the schema param, using lambda inference for HOFs
+                    for (i, schema_param) in schema_params
+                        .iter()
+                        .enumerate()
+                        .take(std::cmp::min(params_provided, schema_params.len()))
+                    {
+                        let arg_expr = node.named_child(i + 1).unwrap();
 
-                            // For lambda args with a Function-typed schema param, use
-                            // check_lambda_with_expected with the resolved param types
-                            let arg_type = if arg_expr.kind() == "lambda" {
-                                let resolved_param = ctx.apply(schema_param);
-                                if let Type::Function(ref expected_params, ref expected_ret) = resolved_param {
-                                    check_lambda_with_expected(&arg_expr, expected_params, expected_ret, source, file, symbols, diagnostics)
-                                } else {
-                                    check_node(&arg_expr, source, file, symbols, diagnostics)
-                                }
+                        // For lambda args with a Function-typed schema param, use
+                        // check_lambda_with_expected with the resolved param types
+                        let arg_type = if arg_expr.kind() == "lambda" {
+                            let resolved_param = ctx.apply(schema_param);
+                            if let Type::Function(ref expected_params, ref expected_ret) =
+                                resolved_param
+                            {
+                                check_lambda_with_expected(
+                                    &arg_expr,
+                                    expected_params,
+                                    expected_ret,
+                                    source,
+                                    file,
+                                    symbols,
+                                    diagnostics,
+                                )
                             } else {
                                 check_node(&arg_expr, source, file, symbols, diagnostics)
-                            };
+                            }
+                        } else {
+                            check_node(&arg_expr, source, file, symbols, diagnostics)
+                        };
 
-                            let _ = ctx.unify(&arg_type, schema_param);
-                        }
-
-                        return ctx.apply(&schema_ret);
+                        let _ = ctx.unify(&arg_type, schema_param);
                     }
+
+                    return ctx.apply(&schema_ret);
                 }
+            }
 
             if let Type::Function(arg_types, ret_type) = func_type {
                 if params_provided != arg_types.len() {
                     // Allow partial application in pipe contexts
-                    let in_pipe = node.parent()
+                    let in_pipe = node
+                        .parent()
                         .map(|p| p.kind() == "pipe_expression")
                         .unwrap_or(false);
                     if params_provided < arg_types.len() && in_pipe {
@@ -1018,20 +1355,38 @@ fn check_node_inner(
                         code: "TYP_007".to_string(),
                         severity: Severity::Error,
                         location: loc(file, node),
-                        message: format!("Function call expects {} arguments, found {}", arg_types.len(), params_provided),
+                        message: format!(
+                            "Function call expects {} arguments, found {}",
+                            arg_types.len(),
+                            params_provided
+                        ),
                         context: "Argument count mismatch.".to_string(),
                         suggestions: vec![],
                     });
                 }
 
-                for (i, expected_arg_type) in arg_types.iter().enumerate().take(std::cmp::min(params_provided, arg_types.len())) {
+                for (i, expected_arg_type) in arg_types
+                    .iter()
+                    .enumerate()
+                    .take(std::cmp::min(params_provided, arg_types.len()))
+                {
                     let arg_expr = node.named_child(i + 1).unwrap();
 
                     // Lambda argument inference: if expected type is Function and arg is
                     // a lambda, check the lambda body with expected param types injected.
                     let arg_type = if arg_expr.kind() == "lambda" {
-                        if let Type::Function(ref expected_params, ref expected_ret) = *expected_arg_type {
-                            check_lambda_with_expected(&arg_expr, expected_params, expected_ret, source, file, symbols, diagnostics)
+                        if let Type::Function(ref expected_params, ref expected_ret) =
+                            *expected_arg_type
+                        {
+                            check_lambda_with_expected(
+                                &arg_expr,
+                                expected_params,
+                                expected_ret,
+                                source,
+                                file,
+                                symbols,
+                                diagnostics,
+                            )
                         } else {
                             check_node(&arg_expr, source, file, symbols, diagnostics)
                         }
@@ -1040,11 +1395,16 @@ fn check_node_inner(
                     };
 
                     if !types_compatible(&arg_type, expected_arg_type) {
-                         diagnostics.push(Diagnostic {
+                        diagnostics.push(Diagnostic {
                             code: "TYP_008".to_string(),
                             severity: Severity::Error,
                             location: loc(file, &arg_expr),
-                            message: format!("Argument {} mismatch: expected {}, found {}", i+1, expected_arg_type, arg_type),
+                            message: format!(
+                                "Argument {} mismatch: expected {}, found {}",
+                                i + 1,
+                                expected_arg_type,
+                                arg_type
+                            ),
                             context: "Argument type must match function signature.".to_string(),
                             suggestions: vec![],
                         });
@@ -1054,7 +1414,7 @@ fn check_node_inner(
             } else if func_type == Type::Unknown {
                 Type::Unknown
             } else {
-                 diagnostics.push(Diagnostic {
+                diagnostics.push(Diagnostic {
                     code: "TYP_009".to_string(),
                     severity: Severity::Error,
                     location: loc(file, &func_node),
@@ -1068,7 +1428,8 @@ fn check_node_inner(
         "with_expression" => {
             // with Console.println! { body } → (T, List<String>)
             // Effect field is child 0, body block is child 1
-            let body_node = node.child_by_field_name("body")
+            let body_node = node
+                .child_by_field_name("body")
                 .unwrap_or_else(|| node.named_child(1).unwrap());
             let body_type = check_node(&body_node, source, file, symbols, diagnostics);
             Type::Tuple(vec![body_type, Type::List(Box::new(Type::String))])
@@ -1076,33 +1437,36 @@ fn check_node_inner(
         "struct_expression" => {
             let type_name_node = node.named_child(0).unwrap();
             let type_name = type_name_node.utf8_text(source.as_bytes()).unwrap();
-            
+
             if let Some(Type::Struct(name, fields)) = symbols.lookup_type(type_name).cloned() {
-                 let mut initialized_fields = std::collections::HashSet::new();
-                 
-                 let count = node.named_child_count();
-                 for i in 1..count {
-                     let field_init = node.named_child(i).unwrap();
-                     let fname_node = field_init.child(0).unwrap(); 
-                     let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                     
-                     let fexpr_node = field_init.child(2).unwrap();
-                     let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
-                     
-                     if let Some(expected_type) = fields.get(&fname) {
-                         if !types_compatible(&ftype, expected_type) {
-                              diagnostics.push(Diagnostic {
+                let mut initialized_fields = std::collections::HashSet::new();
+
+                let count = node.named_child_count();
+                for i in 1..count {
+                    let field_init = node.named_child(i).unwrap();
+                    let fname_node = field_init.child(0).unwrap();
+                    let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+
+                    let fexpr_node = field_init.child(2).unwrap();
+                    let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
+
+                    if let Some(expected_type) = fields.get(&fname) {
+                        if !types_compatible(&ftype, expected_type) {
+                            diagnostics.push(Diagnostic {
                                 code: "TYP_010".to_string(),
                                 severity: Severity::Error,
                                 location: loc(file, &fexpr_node),
-                                message: format!("Field `{}` expects {}, found {}", fname, expected_type, ftype),
+                                message: format!(
+                                    "Field `{}` expects {}, found {}",
+                                    fname, expected_type, ftype
+                                ),
                                 context: "Struct field type mismatch.".to_string(),
                                 suggestions: vec![],
                             });
-                         }
-                         initialized_fields.insert(fname);
-                     } else {
-                          diagnostics.push(Diagnostic {
+                        }
+                        initialized_fields.insert(fname);
+                    } else {
+                        diagnostics.push(Diagnostic {
                             code: "TYP_011".to_string(),
                             severity: Severity::Error,
                             location: loc(file, &fname_node),
@@ -1110,12 +1474,12 @@ fn check_node_inner(
                             context: "Field not defined in struct.".to_string(),
                             suggestions: vec![],
                         });
-                     }
-                 }
-                 
-                 for required_field in fields.keys() {
-                     if !initialized_fields.contains(required_field) {
-                          diagnostics.push(Diagnostic {
+                    }
+                }
+
+                for required_field in fields.keys() {
+                    if !initialized_fields.contains(required_field) {
+                        diagnostics.push(Diagnostic {
                             code: "TYP_012".to_string(),
                             severity: Severity::Error,
                             location: loc(file, node),
@@ -1123,12 +1487,12 @@ fn check_node_inner(
                             context: "All struct fields must be initialized.".to_string(),
                             suggestions: vec![],
                         });
-                     }
-                 }
-                 
-                 Type::Struct(name, fields)
+                    }
+                }
+
+                Type::Struct(name, fields)
             } else {
-                 diagnostics.push(Diagnostic {
+                diagnostics.push(Diagnostic {
                     code: "TYP_013".to_string(),
                     severity: Severity::Error,
                     location: loc(file, &type_name_node),
@@ -1161,7 +1525,10 @@ fn check_node_inner(
                                     code: "TYP_028".to_string(),
                                     severity: Severity::Error,
                                     location: loc(file, &fexpr_node),
-                                    message: format!("Field `{}` expects {}, found {}", fname, expected_type, ftype),
+                                    message: format!(
+                                        "Field `{}` expects {}, found {}",
+                                        fname, expected_type, ftype
+                                    ),
                                     context: "Record update field type mismatch.".to_string(),
                                     suggestions: vec![],
                                 });
@@ -1194,7 +1561,10 @@ fn check_node_inner(
                                     code: "TYP_028".to_string(),
                                     severity: Severity::Error,
                                     location: loc(file, &fexpr_node),
-                                    message: format!("Field `{}` expects {}, found {}", fname, expected_type, ftype),
+                                    message: format!(
+                                        "Field `{}` expects {}, found {}",
+                                        fname, expected_type, ftype
+                                    ),
                                     context: "Record update field type mismatch.".to_string(),
                                     suggestions: vec![],
                                 });
@@ -1218,7 +1588,10 @@ fn check_node_inner(
                         code: "TYP_027".to_string(),
                         severity: Severity::Error,
                         location: loc(file, &base_node),
-                        message: format!("Record update requires a record or struct, found {}", base_type),
+                        message: format!(
+                            "Record update requires a record or struct, found {}",
+                            base_type
+                        ),
                         context: "Only records and structs support update syntax.".to_string(),
                         suggestions: vec![],
                     });
@@ -1232,7 +1605,7 @@ fn check_node_inner(
             let field_name = field_node.utf8_text(source.as_bytes()).unwrap();
 
             let obj_type = check_node(&obj_node, source, file, symbols, diagnostics);
-            
+
             match obj_type {
                 Type::Struct(name, fields) => {
                     if let Some(ty) = fields.get(field_name) {
@@ -1280,7 +1653,8 @@ fn check_node_inner(
                         severity: Severity::Error,
                         location: loc(file, &obj_node),
                         message: format!("Type {} excludes field access", obj_type),
-                        context: "Only Structs, Records, and Modules support field access.".to_string(),
+                        context: "Only Structs, Records, and Modules support field access."
+                            .to_string(),
                         suggestions: vec![],
                     });
                     Type::Unknown
@@ -1295,7 +1669,11 @@ fn check_node_inner(
                 if child.kind() == "let_binding" {
                     check_node(&child, source, file, symbols, diagnostics);
                     last_type = Type::Unit;
-                } else if child.kind().ends_with("_expression") || child.kind() == "identifier" || child.kind().ends_with("_literal") || child.kind() == "literal" {
+                } else if child.kind().ends_with("_expression")
+                    || child.kind() == "identifier"
+                    || child.kind().ends_with("_literal")
+                    || child.kind() == "literal"
+                {
                     last_type = check_node(&child, source, file, symbols, diagnostics);
                 }
             }
@@ -1307,7 +1685,7 @@ fn check_node_inner(
             if let Some(ty) = symbols.lookup(name) {
                 ty.clone()
             } else {
-                 diagnostics.push(Diagnostic {
+                diagnostics.push(Diagnostic {
                     code: "TYP_002".to_string(),
                     severity: Severity::Error,
                     location: loc(file, node),
@@ -1321,14 +1699,14 @@ fn check_node_inner(
         "effect_identifier" | "effectful_identifier" => {
             // TODO: Lookup in a real Effect Registry for return types.
             // For now, assume most effects return Unit or Unknown to allow flow.
-            Type::Unknown 
+            Type::Unknown
         }
         "literal" | "parenthesized_expression" => {
-             if let Some(child) = node.named_child(0) {
-                 check_node(&child, source, file, symbols, diagnostics)
-             } else {
-                 Type::Unit
-             }
+            if let Some(child) = node.named_child(0) {
+                check_node(&child, source, file, symbols, diagnostics)
+            } else {
+                Type::Unit
+            }
         }
         "integer_literal" => Type::Int,
         "float_literal" => Type::Float,
@@ -1338,18 +1716,31 @@ fn check_node_inner(
             for i in 0..named_count {
                 let child = node.named_child(i).unwrap();
                 if child.kind() == "interpolation"
-                    && let Some(expr) = child.named_child(0) {
-                        check_node(&expr, source, file, symbols, diagnostics);
-                    }
+                    && let Some(expr) = child.named_child(0)
+                {
+                    check_node(&expr, source, file, symbols, diagnostics);
+                }
             }
             Type::String
         }
         "boolean_literal" => Type::Bool,
         "binary_expression" => {
-            let left_type = check_node(&node.named_child(0).unwrap(), source, file, symbols, diagnostics);
-            let right_type = check_node(&node.named_child(1).unwrap(), source, file, symbols, diagnostics);
+            let left_type = check_node(
+                &node.named_child(0).unwrap(),
+                source,
+                file,
+                symbols,
+                diagnostics,
+            );
+            let right_type = check_node(
+                &node.named_child(1).unwrap(),
+                source,
+                file,
+                symbols,
+                diagnostics,
+            );
             let op_str = node.child(1).unwrap().utf8_text(source.as_bytes()).unwrap();
-            
+
             match op_str {
                 "+" | "-" | "*" | "/" | "%" => {
                     if left_type == Type::Int && right_type == Type::Int {
@@ -1357,7 +1748,8 @@ fn check_node_inner(
                     } else if left_type == Type::Float && right_type == Type::Float {
                         Type::Float
                     } else if (left_type == Type::Int && right_type == Type::Float)
-                           || (left_type == Type::Float && right_type == Type::Int) {
+                        || (left_type == Type::Float && right_type == Type::Int)
+                    {
                         // Int/Float promotion: mixed arithmetic produces Float
                         Type::Float
                     } else {
@@ -1375,15 +1767,15 @@ fn check_node_inner(
                     }
                 }
                 "==" | "!=" | "<" | ">" | "<=" | ">=" => Type::Bool,
-                _ => Type::Unknown
+                _ => Type::Unknown,
             }
         }
         "if_expression" => {
-             let cond = node.named_child(0).unwrap();
-             let cond_type = check_node(&cond, source, file, symbols, diagnostics);
-             
-             if cond_type != Type::Bool && cond_type != Type::Unknown {
-                   diagnostics.push(Diagnostic {
+            let cond = node.named_child(0).unwrap();
+            let cond_type = check_node(&cond, source, file, symbols, diagnostics);
+
+            if cond_type != Type::Bool && cond_type != Type::Unknown {
+                diagnostics.push(Diagnostic {
                     code: "TYP_003".to_string(),
                     severity: Severity::Error,
                     location: loc(file, &cond),
@@ -1391,31 +1783,34 @@ fn check_node_inner(
                     context: "Control flow conditions must evaluate to true or false.".to_string(),
                     suggestions: vec![],
                 });
-             }
+            }
 
-             let then_branch = node.named_child(1).unwrap();
-             let then_type = check_node(&then_branch, source, file, symbols, diagnostics);
-             
-             if let Some(else_branch) = node.named_child(2) {
-                 let else_type = check_node(&else_branch, source, file, symbols, diagnostics);
-                 
-                 if !types_compatible(&then_type, &else_type) {
-                      diagnostics.push(Diagnostic {
+            let then_branch = node.named_child(1).unwrap();
+            let then_type = check_node(&then_branch, source, file, symbols, diagnostics);
+
+            if let Some(else_branch) = node.named_child(2) {
+                let else_type = check_node(&else_branch, source, file, symbols, diagnostics);
+
+                if !types_compatible(&then_type, &else_type) {
+                    diagnostics.push(Diagnostic {
                         code: "TYP_004".to_string(),
                         severity: Severity::Error,
                         location: loc(file, &else_branch),
-                        message: format!("If branches match mismatch: then is {}, else is {}", then_type, else_type),
-                        context: "Both branches of an if expression must return the same type.".to_string(),
+                        message: format!(
+                            "If branches match mismatch: then is {}, else is {}",
+                            then_type, else_type
+                        ),
+                        context: "Both branches of an if expression must return the same type."
+                            .to_string(),
                         suggestions: vec![],
                     });
-                    Type::Unknown 
-                 } else {
-                     then_type
-                 }
-             } else {
-                 Type::Unit 
-             }
-
+                    Type::Unknown
+                } else {
+                    then_type
+                }
+            } else {
+                Type::Unit
+            }
         }
         "tuple_expression" => {
             let count = node.named_child_count();
@@ -1423,7 +1818,15 @@ fn check_node_inner(
                 Type::Unit
             } else {
                 let elems: Vec<Type> = (0..count)
-                    .map(|i| check_node(&node.named_child(i).unwrap(), source, file, symbols, diagnostics))
+                    .map(|i| {
+                        check_node(
+                            &node.named_child(i).unwrap(),
+                            source,
+                            file,
+                            symbols,
+                            diagnostics,
+                        )
+                    })
                     .collect();
                 if elems.len() == 1 {
                     // (expr) is parenthesized, not a 1-tuple
@@ -1437,124 +1840,133 @@ fn check_node_inner(
             // [1, 2, 3]
             let mut element_type = Type::Unknown;
             let mut first = true;
-            
+
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "[" || child.kind() == "]" || child.kind() == "," {
                     continue;
                 }
-                
+
                 let ty = check_node(&child, source, file, symbols, diagnostics);
-                
+
                 if first {
                     element_type = ty;
                     first = false;
                 } else if !types_compatible(&ty, &element_type) {
-                     diagnostics.push(Diagnostic {
+                    diagnostics.push(Diagnostic {
                         code: "TYP_016".to_string(),
                         severity: Severity::Error,
                         location: loc(file, &child),
-                        message: format!("List element type mismatch: expected {}, found {}", element_type, ty),
+                        message: format!(
+                            "List element type mismatch: expected {}, found {}",
+                            element_type, ty
+                        ),
                         context: "All elements in a list must have the same type.".to_string(),
                         suggestions: vec![],
                     });
                 }
             }
-            
+
             Type::List(Box::new(element_type))
         }
         "lambda" => {
-             // |x| body
-             let mut arg_types = Vec::new();
-             
-             // Last named child is body, others are args
-             let count = node.named_child_count();
-             symbols.enter_scope();
-             
-             for i in 0..count-1 {
-                 let arg = node.named_child(i).unwrap();
-                 if arg.kind() == "identifier" {
-                      let name = arg.utf8_text(source.as_bytes()).unwrap().to_string();
-                      symbols.insert(name, Type::Unknown);
-                      arg_types.push(Type::Unknown);
-                 }
-             }
-             
-             let body = node.named_child(count-1).unwrap();
-             let body_type = check_node(&body, source, file, symbols, diagnostics);
-             
-             symbols.exit_scope();
-             
-             Type::Function(arg_types, Box::new(body_type))
+            // |x| body
+            let mut arg_types = Vec::new();
+
+            // Last named child is body, others are args
+            let count = node.named_child_count();
+            symbols.enter_scope();
+
+            for i in 0..count - 1 {
+                let arg = node.named_child(i).unwrap();
+                if arg.kind() == "identifier" {
+                    let name = arg.utf8_text(source.as_bytes()).unwrap().to_string();
+                    symbols.insert(name, Type::Unknown);
+                    arg_types.push(Type::Unknown);
+                }
+            }
+
+            let body = node.named_child(count - 1).unwrap();
+            let body_type = check_node(&body, source, file, symbols, diagnostics);
+
+            symbols.exit_scope();
+
+            Type::Function(arg_types, Box::new(body_type))
         }
         "match_expression" => {
-             let expr_node = node.named_child(0).unwrap();
-             let expr_type = check_node(&expr_node, source, file, symbols, diagnostics);
-             
-             let mut ret_type = Type::Unknown;
-             let mut first = true;
-             
-             let count = node.named_child_count();
-             for i in 1..count {
-                  let arm = node.named_child(i).unwrap();
-                  let pat = arm.child(0).unwrap();
-                  let body = arm.child(2).unwrap();
-                  
-                  symbols.enter_scope();
-                  check_pattern(&pat, &expr_type, source, symbols, diagnostics);
-                  
-                  let body_type = check_node(&body, source, file, symbols, diagnostics);
-                  symbols.exit_scope();
-                  
-                  if first {
-                      ret_type = body_type;
-                      first = false;
-                  } else if !types_compatible(&body_type, &ret_type) {
-                       diagnostics.push(Diagnostic {
-                            code: "TYP_017".to_string(),
-                            severity: Severity::Error,
-                            location: loc(file, &body),
-                            message: format!("Match arm mismatch: expected {}, found {}", ret_type, body_type),
-                            context: "All match arms must return same type.".to_string(),
-                            suggestions: vec![],
-                        });
-                  }
-             }
-             check_match_exhaustiveness(node, &expr_type, source, file, diagnostics);
-             ret_type
+            let expr_node = node.named_child(0).unwrap();
+            let expr_type = check_node(&expr_node, source, file, symbols, diagnostics);
+
+            let mut ret_type = Type::Unknown;
+            let mut first = true;
+
+            let count = node.named_child_count();
+            for i in 1..count {
+                let arm = node.named_child(i).unwrap();
+                let pat = arm.child(0).unwrap();
+                let body = arm.child(2).unwrap();
+
+                symbols.enter_scope();
+                check_pattern(&pat, &expr_type, source, symbols, diagnostics);
+
+                let body_type = check_node(&body, source, file, symbols, diagnostics);
+                symbols.exit_scope();
+
+                if first {
+                    ret_type = body_type;
+                    first = false;
+                } else if !types_compatible(&body_type, &ret_type) {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_017".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &body),
+                        message: format!(
+                            "Match arm mismatch: expected {}, found {}",
+                            ret_type, body_type
+                        ),
+                        context: "All match arms must return same type.".to_string(),
+                        suggestions: vec![],
+                    });
+                }
+            }
+            check_match_exhaustiveness(node, &expr_type, source, file, diagnostics);
+            ret_type
         }
         "pipe_expression" => {
             let left_node = node.named_child(0).unwrap();
             let right_node = node.named_child(1).unwrap();
-            
+
             let left_type = check_node(&left_node, source, file, symbols, diagnostics);
             let right_type = check_node(&right_node, source, file, symbols, diagnostics);
-            
+
             if let Type::Function(args, ret) = right_type {
-                 if args.len() != 1 {
-                       diagnostics.push(Diagnostic {
-                            code: "TYP_018".to_string(),
-                            severity: Severity::Error,
-                            location: loc(file, &right_node),
-                            message: format!("Pipe function expects 1 argument, found {}", args.len()),
-                            context: "Pipe operator expects a unary function.".to_string(),
-                            suggestions: vec![],
-                        });
-                 } else if !types_compatible(&left_type, &args[0]) {
-                       diagnostics.push(Diagnostic {
-                            code: "TYP_019".to_string(),
-                            severity: Severity::Error,
-                            location: loc(file, &left_node),
-                            message: format!("Pipe argument mismatch: expected {}, found {}", args[0], left_type),
-                            context: "Argument type must match function signature.".to_string(),
-                            suggestions: vec![],
-                        });
-                 }
-                 *ret
+                if args.len() != 1 {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_018".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &right_node),
+                        message: format!("Pipe function expects 1 argument, found {}", args.len()),
+                        context: "Pipe operator expects a unary function.".to_string(),
+                        suggestions: vec![],
+                    });
+                } else if !types_compatible(&left_type, &args[0]) {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_019".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &left_node),
+                        message: format!(
+                            "Pipe argument mismatch: expected {}, found {}",
+                            args[0], left_type
+                        ),
+                        context: "Argument type must match function signature.".to_string(),
+                        suggestions: vec![],
+                    });
+                }
+                *ret
             } else if right_type == Type::Unknown {
-                Type::Unknown 
+                Type::Unknown
             } else {
-                 diagnostics.push(Diagnostic {
+                diagnostics.push(Diagnostic {
                     code: "TYP_020".to_string(),
                     severity: Severity::Error,
                     location: loc(file, &right_node),
@@ -1566,17 +1978,17 @@ fn check_node_inner(
             }
         }
         "type_identifier" => {
-             // In expression context, could be a constructor, module, or type reference
-             let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
-             // First check if it's a constructor in the value namespace
-             if let Some(ty) = symbols.lookup(&name) {
-                 ty.clone()
-             } else if let Some(ty) = symbols.lookup_type(&name) {
-                 ty.clone()
-             } else {
-                 // Assume it might be a module not yet defined or external
-                 Type::Module(name)
-             }
+            // In expression context, could be a constructor, module, or type reference
+            let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
+            // First check if it's a constructor in the value namespace
+            if let Some(ty) = symbols.lookup(&name) {
+                ty.clone()
+            } else if let Some(ty) = symbols.lookup_type(&name) {
+                ty.clone()
+            } else {
+                // Assume it might be a module not yet defined or external
+                Type::Module(name)
+            }
         }
         "for_expression" => {
             // for <pattern> in <collection> do <body>
@@ -1654,20 +2066,28 @@ fn check_node_inner(
                             severity: Severity::Error,
                             location: loc(file, &operand_node),
                             message: format!("Logical NOT requires Bool, found {}", operand_type),
-                            context: "The not operator can only be applied to Bool values.".to_string(),
+                            context: "The not operator can only be applied to Bool values."
+                                .to_string(),
                             suggestions: vec![],
                         });
                     }
                     Type::Bool
                 }
                 "-" => {
-                    if operand_type != Type::Int && operand_type != Type::Float && operand_type != Type::Unknown {
+                    if operand_type != Type::Int
+                        && operand_type != Type::Float
+                        && operand_type != Type::Unknown
+                    {
                         diagnostics.push(Diagnostic {
                             code: "TYP_025".to_string(),
                             severity: Severity::Error,
                             location: loc(file, &operand_node),
-                            message: format!("Negation requires Int or Float, found {}", operand_type),
-                            context: "The - operator can only be applied to numeric values.".to_string(),
+                            message: format!(
+                                "Negation requires Int or Float, found {}",
+                                operand_type
+                            ),
+                            context: "The - operator can only be applied to numeric values."
+                                .to_string(),
                             suggestions: vec![],
                         });
                         Type::Unknown
@@ -1704,70 +2124,72 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
             }
         }
         "type_signature" => {
-             // A -> B
-             // If A is a Tuple, we decompose it into args.
-             let left = node.child(0).unwrap();
-             let right = node.child(node.child_count() - 1).unwrap();
-             let right_type = parse_type(&right, source, symbols);
-             
-             if left.kind() == "tuple_type" {
-                 // Decompose tuple into args
-                 let mut args = Vec::new();
-                 let mut cursor = left.walk();
-                 
-                 // tuple_type children: (, type, ,, type, ...)
-                 for child in left.children(&mut cursor) {
-                     let k = child.kind();
-                     if k != "(" && k != "," && k != ")" {
-                         args.push(parse_type(&child, source, symbols));
-                     }
-                 }
-                 Type::Function(args, Box::new(right_type))
-             } else {
-                  let left_type = parse_type(&left, source, symbols);
-                  Type::Function(vec![left_type], Box::new(right_type))
-             }
+            // A -> B
+            // If A is a Tuple, we decompose it into args.
+            let left = node.child(0).unwrap();
+            let right = node.child(node.child_count() - 1).unwrap();
+            let right_type = parse_type(&right, source, symbols);
+
+            if left.kind() == "tuple_type" {
+                // Decompose tuple into args
+                let mut args = Vec::new();
+                let mut cursor = left.walk();
+
+                // tuple_type children: (, type, ,, type, ...)
+                for child in left.children(&mut cursor) {
+                    let k = child.kind();
+                    if k != "(" && k != "," && k != ")" {
+                        args.push(parse_type(&child, source, symbols));
+                    }
+                }
+                Type::Function(args, Box::new(right_type))
+            } else {
+                let left_type = parse_type(&left, source, symbols);
+                Type::Function(vec![left_type], Box::new(right_type))
+            }
         }
         "function_type" => {
             // (T, U) -> V in other contexts
             let mut args = Vec::new();
             let mut cursor = node.walk();
-             for child in node.children(&mut cursor) {
-                 if child.kind() == "->" { break; }
-                 if child.kind() != "(" && child.kind() != "," && child.kind() != ")" {
-                     args.push(parse_type(&child, source, symbols));
-                 }
-             }
-             let ret_node = node.child(node.child_count() - 1).unwrap();
-             let ret = parse_type(&ret_node, source, symbols);
-             Type::Function(args, Box::new(ret))
+            for child in node.children(&mut cursor) {
+                if child.kind() == "->" {
+                    break;
+                }
+                if child.kind() != "(" && child.kind() != "," && child.kind() != ")" {
+                    args.push(parse_type(&child, source, symbols));
+                }
+            }
+            let ret_node = node.child(node.child_count() - 1).unwrap();
+            let ret = parse_type(&ret_node, source, symbols);
+            Type::Function(args, Box::new(ret))
         }
         "tuple_type" => {
-             let count = node.named_child_count();
-             if count == 0 {
-                 Type::Unit
-             } else if count == 1 {
-                 // (T) is just parenthesized, not a 1-tuple
-                 parse_type(&node.named_child(0).unwrap(), source, symbols)
-             } else {
-                 let elems: Vec<Type> = (0..count)
-                     .map(|i| parse_type(&node.named_child(i).unwrap(), source, symbols))
-                     .collect();
-                 Type::Tuple(elems)
-             }
+            let count = node.named_child_count();
+            if count == 0 {
+                Type::Unit
+            } else if count == 1 {
+                // (T) is just parenthesized, not a 1-tuple
+                parse_type(&node.named_child(0).unwrap(), source, symbols)
+            } else {
+                let elems: Vec<Type> = (0..count)
+                    .map(|i| parse_type(&node.named_child(i).unwrap(), source, symbols))
+                    .collect();
+                Type::Tuple(elems)
+            }
         }
         "record_type" => {
             let mut fields = HashMap::new();
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                 if child.kind() == "record_field_def" {
-                     let name_node = child.child(0).unwrap();
-                     let type_node = child.child(2).unwrap();
-                     
-                     let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                     let ty = parse_type(&type_node, source, symbols);
-                     fields.insert(name, ty);
-                 }
+                if child.kind() == "record_field_def" {
+                    let name_node = child.child(0).unwrap();
+                    let type_node = child.child(2).unwrap();
+
+                    let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                    let ty = parse_type(&type_node, source, symbols);
+                    fields.insert(name, ty);
+                }
             }
             Type::Record(fields)
         }
@@ -1797,7 +2219,8 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                 "Result" => {
                     let ok_node = node.named_child(1).unwrap();
                     let ok_type = parse_type(&ok_node, source, symbols);
-                    let err_type = node.named_child(2)
+                    let err_type = node
+                        .named_child(2)
                         .map(|n| parse_type(&n, source, symbols))
                         .unwrap_or(Type::Unknown);
                     Type::Enum(
@@ -1823,7 +2246,7 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                 ],
             )
         }
-        _ => Type::Unknown
+        _ => Type::Unknown,
     }
 }
 
@@ -1900,17 +2323,23 @@ fn bind_pattern(node: &Node, ty: Type, source: &str, symbols: &mut SymbolTable) 
 }
 
 #[allow(clippy::only_used_in_recursion)]
-fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
+fn check_pattern(
+    node: &Node,
+    expected_type: &Type,
+    source: &str,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match node.kind() {
-        "wildcard_pattern" => {},
+        "wildcard_pattern" => {}
         "identifier" => {
-             let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
-             symbols.insert(name, expected_type.clone());
-        },
+            let name = node.utf8_text(source.as_bytes()).unwrap().to_string();
+            symbols.insert(name, expected_type.clone());
+        }
         "type_identifier" => {
             // Nullary constructor pattern: None, Active
             // Verify it's a valid constructor for the expected type
-        },
+        }
         "constructor_pattern" => {
             // Constructor pattern: Some(v), Pending(msg)
             let ctor_name_node = node.child(0).unwrap();
@@ -1919,12 +2348,14 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
             // Extract payload types from the expected enum type if available,
             // otherwise fall back to the constructor's signature in the symbol table.
             let payload_types: Vec<Type> = if let Type::Enum(_, variants) = expected_type {
-                variants.iter()
+                variants
+                    .iter()
                     .find(|(name, _)| name == ctor_name)
                     .map(|(_, payloads)| payloads.clone())
                     .unwrap_or_default()
             } else {
-                symbols.lookup(ctor_name)
+                symbols
+                    .lookup(ctor_name)
                     .and_then(|ty| match ty {
                         Type::Function(params, _) => Some(params.clone()),
                         _ => None,
@@ -1937,18 +2368,28 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
             let child_count = node.child_count();
             for ci in 0..child_count {
                 let child = node.child(ci).unwrap();
-                if child.kind() != "type_identifier" && child.kind() != "(" && child.kind() != ")" && child.kind() != ","
-                    && pattern_idx < payload_types.len() {
-                        check_pattern(&child, &payload_types[pattern_idx], source, symbols, diagnostics);
-                        pattern_idx += 1;
-                    }
+                if child.kind() != "type_identifier"
+                    && child.kind() != "("
+                    && child.kind() != ")"
+                    && child.kind() != ","
+                    && pattern_idx < payload_types.len()
+                {
+                    check_pattern(
+                        &child,
+                        &payload_types[pattern_idx],
+                        source,
+                        symbols,
+                        diagnostics,
+                    );
+                    pattern_idx += 1;
+                }
             }
-        },
+        }
         "literal" => {
-             if let Some(child) = node.named_child(0) {
-                 check_pattern(&child, expected_type, source, symbols, diagnostics);
-             }
-        },
+            if let Some(child) = node.named_child(0) {
+                check_pattern(&child, expected_type, source, symbols, diagnostics);
+            }
+        }
         "tuple_pattern" => {
             let count = node.named_child_count();
             if let Type::Tuple(elem_types) = expected_type {
@@ -1968,10 +2409,10 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
                     check_pattern(&sub_pat, &Type::Unknown, source, symbols, diagnostics);
                 }
             }
-        },
+        }
         "integer_literal" => {
-             // Basic check
-        },
+            // Basic check
+        }
         _ => {}
     }
 }
@@ -2024,10 +2465,18 @@ fn check_match_exhaustiveness(
         let pat = arm.child(0).unwrap();
         if let Some(coverage) = extract_pattern_coverage(&pat, source) {
             match coverage {
-                PatternCoverage::CatchAll => { has_catch_all = true; }
-                PatternCoverage::Variant(name) => { covered_variants.insert(name); }
+                PatternCoverage::CatchAll => {
+                    has_catch_all = true;
+                }
+                PatternCoverage::Variant(name) => {
+                    covered_variants.insert(name);
+                }
                 PatternCoverage::BoolLiteral(val) => {
-                    if val { covered_true = true; } else { covered_false = true; }
+                    if val {
+                        covered_true = true;
+                    } else {
+                        covered_false = true;
+                    }
                 }
             }
         }
@@ -2051,18 +2500,23 @@ fn check_match_exhaustiveness(
                 return;
             }
             let mut missing = Vec::new();
-            if !covered_true { missing.push("true".to_string()); }
-            if !covered_false { missing.push("false".to_string()); }
+            if !covered_true {
+                missing.push("true".to_string());
+            }
+            if !covered_false {
+                missing.push("false".to_string());
+            }
             (missing, "Bool".to_string())
         }
-        Type::Int | Type::String | Type::Float => {
-            (vec!["_".to_string()], match expr_type {
+        Type::Int | Type::String | Type::Float => (
+            vec!["_".to_string()],
+            match expr_type {
                 Type::Int => "Int".to_string(),
                 Type::String => "String".to_string(),
                 Type::Float => "Float".to_string(),
                 _ => unreachable!(),
-            })
-        }
+            },
+        ),
         _ => return,
     };
 
@@ -2087,10 +2541,11 @@ fn check_match_exhaustiveness(
                     start_line: insert_line,
                     original_text: None,
                     replacement_text: Some(
-                        missing_desc.iter()
+                        missing_desc
+                            .iter()
                             .map(|v| format!("    {} -> todo", v))
                             .collect::<Vec<_>>()
-                            .join("\n")
+                            .join("\n"),
                     ),
                     operation: Some("insert".to_string()),
                 }),

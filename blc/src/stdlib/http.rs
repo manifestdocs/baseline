@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use crate::interpreter::RuntimeValue;
 use super::NativeRegistry;
+use crate::interpreter::RuntimeValue;
+use std::collections::HashMap;
 
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("Http.get!", http_get);
@@ -11,12 +11,14 @@ pub fn register(registry: &mut NativeRegistry) {
 }
 
 /// Build a Response record: { status: Int, headers: List<(String, String)>, body: String }
-fn build_response<'a>(status: u16, headers: Vec<(String, String)>, body: String) -> RuntimeValue<'a> {
-    let header_tuples = headers.into_iter()
-        .map(|(k, v)| RuntimeValue::Tuple(vec![
-            RuntimeValue::String(k),
-            RuntimeValue::String(v),
-        ]))
+fn build_response<'a>(
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+) -> RuntimeValue<'a> {
+    let header_tuples = headers
+        .into_iter()
+        .map(|(k, v)| RuntimeValue::Tuple(vec![RuntimeValue::String(k), RuntimeValue::String(v)]))
         .collect();
 
     let mut fields = HashMap::new();
@@ -27,27 +29,44 @@ fn build_response<'a>(status: u16, headers: Vec<(String, String)>, body: String)
 }
 
 /// Execute a GET/HEAD/DELETE request (no body) and return a Response record.
-fn call_without_body<'a>(builder: ureq::RequestBuilder<ureq::typestate::WithoutBody>, url: &str) -> Result<RuntimeValue<'a>, String> {
-    let mut resp = builder.call()
+fn call_without_body<'a>(
+    builder: ureq::RequestBuilder<ureq::typestate::WithoutBody>,
+    url: &str,
+) -> Result<RuntimeValue<'a>, String> {
+    let mut resp = builder
+        .call()
         .map_err(|e| format!("Http request failed for \"{}\": {}", url, e))?;
     let status = resp.status().as_u16();
-    let headers: Vec<(String, String)> = resp.headers().iter()
+    let headers: Vec<(String, String)> = resp
+        .headers()
+        .iter()
         .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
         .collect();
-    let body = resp.body_mut().read_to_string()
+    let body = resp
+        .body_mut()
+        .read_to_string()
         .map_err(|e| format!("Failed to read response body: {}", e))?;
     Ok(build_response(status, headers, body))
 }
 
 /// Execute a POST/PUT/PATCH request (with body) and return a Response record.
-fn call_with_body<'a>(builder: ureq::RequestBuilder<ureq::typestate::WithBody>, url: &str, body: &[u8]) -> Result<RuntimeValue<'a>, String> {
-    let mut resp = builder.send(body)
+fn call_with_body<'a>(
+    builder: ureq::RequestBuilder<ureq::typestate::WithBody>,
+    url: &str,
+    body: &[u8],
+) -> Result<RuntimeValue<'a>, String> {
+    let mut resp = builder
+        .send(body)
         .map_err(|e| format!("Http request failed for \"{}\": {}", url, e))?;
     let status = resp.status().as_u16();
-    let headers: Vec<(String, String)> = resp.headers().iter()
+    let headers: Vec<(String, String)> = resp
+        .headers()
+        .iter()
         .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
         .collect();
-    let resp_body = resp.body_mut().read_to_string()
+    let resp_body = resp
+        .body_mut()
+        .read_to_string()
         .map_err(|e| format!("Failed to read response body: {}", e))?;
     Ok(build_response(status, headers, resp_body))
 }
@@ -65,7 +84,10 @@ fn http_get<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
 
 fn http_post<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 2 {
-        return Err(format!("Http.post! expects 2 arguments, got {}", args.len()));
+        return Err(format!(
+            "Http.post! expects 2 arguments, got {}",
+            args.len()
+        ));
     }
     let url = match &args[0] {
         RuntimeValue::String(s) => s.as_str(),
@@ -95,7 +117,10 @@ fn http_put<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
 
 fn http_delete<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Http.delete! expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Http.delete! expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let url = match &args[0] {
         RuntimeValue::String(s) => s.as_str(),
@@ -106,16 +131,28 @@ fn http_delete<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String
 
 fn http_request<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Http.request! expects 1 argument (Request record), got {}", args.len()));
+        return Err(format!(
+            "Http.request! expects 1 argument (Request record), got {}",
+            args.len()
+        ));
     }
     let fields = match &args[0] {
         RuntimeValue::Record(f) => f,
-        other => return Err(format!("Http.request! expects a Request record, got {}", other)),
+        other => {
+            return Err(format!(
+                "Http.request! expects a Request record, got {}",
+                other
+            ));
+        }
     };
 
     let method = match fields.get("method") {
         Some(RuntimeValue::String(m)) => m.to_uppercase(),
-        _ => return Err("Http.request! Request record must have 'method' field (String)".to_string()),
+        _ => {
+            return Err(
+                "Http.request! Request record must have 'method' field (String)".to_string(),
+            );
+        }
     };
     let url = match fields.get("url") {
         Some(RuntimeValue::String(u)) => u.clone(),
@@ -126,16 +163,18 @@ fn http_request<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Strin
         _ => String::new(),
     };
     let req_headers: Vec<(String, String)> = match fields.get("headers") {
-        Some(RuntimeValue::List(items)) => {
-            items.iter().filter_map(|item| {
+        Some(RuntimeValue::List(items)) => items
+            .iter()
+            .filter_map(|item| {
                 if let RuntimeValue::Tuple(pair) = item
                     && pair.len() == 2
-                        && let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1]) {
-                            return Some((k.clone(), v.clone()));
-                        }
+                    && let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1])
+                {
+                    return Some((k.clone(), v.clone()));
+                }
                 None
-            }).collect()
-        }
+            })
+            .collect(),
         _ => Vec::new(),
     };
 

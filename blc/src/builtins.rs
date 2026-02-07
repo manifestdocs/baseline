@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
-use std::time::{SystemTime, UNIX_EPOCH, Duration};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::prelude::Prelude;
 
@@ -190,9 +190,12 @@ fn time_now(args: &[String]) -> Result<String, String> {
 
 fn time_sleep(args: &[String]) -> Result<String, String> {
     expect_args("Time.sleep!", args, 1)?;
-    let ms: u64 = args[0]
-        .parse()
-        .map_err(|_| format!("Time.sleep! expected integer milliseconds, got \"{}\"", args[0]))?;
+    let ms: u64 = args[0].parse().map_err(|_| {
+        format!(
+            "Time.sleep! expected integer milliseconds, got \"{}\"",
+            args[0]
+        )
+    })?;
     std::thread::sleep(Duration::from_millis(ms));
     Ok("()".to_string())
 }
@@ -224,9 +227,7 @@ fn random_int(args: &[String]) -> Result<String, String> {
         .parse()
         .map_err(|_| format!("Random.int! expected integer max, got \"{}\"", args[1]))?;
     if min > max {
-        return Err(format!(
-            "Random.int! min ({min}) must be <= max ({max})"
-        ));
+        return Err(format!("Random.int! min ({min}) must be <= max ({max})"));
     }
     let range = (max - min) as u64 + 1;
     let value = min + (simple_random_u64() % range) as i64;
@@ -245,9 +246,8 @@ fn random_bool(args: &[String]) -> Result<String, String> {
 
 fn env_get(args: &[String]) -> Result<String, String> {
     expect_args("Env.get!", args, 1)?;
-    std::env::var(&args[0]).map_err(|_| {
-        format!("Env.get! environment variable \"{}\" is not set", args[0])
-    })
+    std::env::var(&args[0])
+        .map_err(|_| format!("Env.get! environment variable \"{}\" is not set", args[0]))
 }
 
 fn env_set(args: &[String]) -> Result<String, String> {
@@ -265,16 +265,14 @@ fn env_set(args: &[String]) -> Result<String, String> {
 
 fn fs_read(args: &[String]) -> Result<String, String> {
     expect_args("Fs.read!", args, 1)?;
-    std::fs::read_to_string(&args[0]).map_err(|e| {
-        format!("Fs.read! failed for \"{}\": {e}", args[0])
-    })
+    std::fs::read_to_string(&args[0])
+        .map_err(|e| format!("Fs.read! failed for \"{}\": {e}", args[0]))
 }
 
 fn fs_write(args: &[String]) -> Result<String, String> {
     expect_args("Fs.write!", args, 2)?;
-    std::fs::write(&args[0], &args[1]).map_err(|e| {
-        format!("Fs.write! failed for \"{}\": {e}", args[0])
-    })?;
+    std::fs::write(&args[0], &args[1])
+        .map_err(|e| format!("Fs.write! failed for \"{}\": {e}", args[0]))?;
     Ok("()".to_string())
 }
 
@@ -285,9 +283,8 @@ fn fs_exists(args: &[String]) -> Result<String, String> {
 
 fn fs_delete(args: &[String]) -> Result<String, String> {
     expect_args("Fs.delete!", args, 1)?;
-    std::fs::remove_file(&args[0]).map_err(|e| {
-        format!("Fs.delete! failed for \"{}\": {e}", args[0])
-    })?;
+    std::fs::remove_file(&args[0])
+        .map_err(|e| format!("Fs.delete! failed for \"{}\": {e}", args[0]))?;
     Ok("()".to_string())
 }
 
@@ -510,17 +507,26 @@ mod tests {
 
     #[test]
     fn math_clamp_above_range() {
-        assert_eq!(math_clamp(&["15".into(), "0".into(), "10".into()]).unwrap(), "10");
+        assert_eq!(
+            math_clamp(&["15".into(), "0".into(), "10".into()]).unwrap(),
+            "10"
+        );
     }
 
     #[test]
     fn math_clamp_below_range() {
-        assert_eq!(math_clamp(&["-5".into(), "0".into(), "10".into()]).unwrap(), "0");
+        assert_eq!(
+            math_clamp(&["-5".into(), "0".into(), "10".into()]).unwrap(),
+            "0"
+        );
     }
 
     #[test]
     fn math_clamp_within_range() {
-        assert_eq!(math_clamp(&["5".into(), "0".into(), "10".into()]).unwrap(), "5");
+        assert_eq!(
+            math_clamp(&["5".into(), "0".into(), "10".into()]).unwrap(),
+            "5"
+        );
     }
 
     #[test]

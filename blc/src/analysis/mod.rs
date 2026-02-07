@@ -13,4 +13,4 @@ pub use refinements::check_refinements;
 pub use types::check_types;
 pub use types::check_types_with_loader;
 pub use types::check_types_with_map;
-pub use types::{TypeMap, Type};
+pub use types::{Type, TypeMap};

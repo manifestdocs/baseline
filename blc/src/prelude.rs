@@ -26,15 +26,13 @@ impl Prelude {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure | Prelude::Core => {
-                &["Option", "Result", "String", "List", "Json"]
-            }
-            Prelude::Script => {
-                &["Option", "Result", "String", "List", "Json", "Http", "Response"]
-            }
-            Prelude::Server => {
-                &["Option", "Result", "String", "List", "Json", "Http", "Response", "Router"]
-            }
+            Prelude::Pure | Prelude::Core => &["Option", "Result", "String", "List", "Json"],
+            Prelude::Script => &[
+                "Option", "Result", "String", "List", "Json", "Http", "Response",
+            ],
+            Prelude::Server => &[
+                "Option", "Result", "String", "List", "Json", "Http", "Response", "Router",
+            ],
         }
     }
 
@@ -44,9 +42,9 @@ impl Prelude {
             Prelude::None | Prelude::Minimal => &[],
             Prelude::Pure | Prelude::Core => &["Math"],
             Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs"],
-            Prelude::Server => {
-                &["Math", "Console", "Log", "Time", "Env", "Server", "Db", "Metrics"]
-            }
+            Prelude::Server => &[
+                "Math", "Console", "Log", "Time", "Env", "Server", "Db", "Metrics",
+            ],
         }
     }
 
@@ -59,13 +57,12 @@ impl Prelude {
                 &["Option", "Result", "String", "List", "Json", "Math"]
             }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Json", "Math",
-                "Console", "Log", "Time", "Random", "Env", "Fs", "Http", "Response",
+                "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time",
+                "Random", "Env", "Fs", "Http", "Response",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Json", "Math",
-                "Console", "Log", "Time", "Env", "Http", "Response",
-                "Router", "Server", "Db", "Metrics",
+                "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time",
+                "Env", "Http", "Response", "Router", "Server", "Db", "Metrics",
             ],
         }
     }
@@ -116,27 +113,42 @@ mod tests {
 
     #[test]
     fn minimal_prelude() {
-        assert_eq!(parse("@prelude(minimal)\nmain : () -> Int\nmain = || 1"), Prelude::Minimal);
+        assert_eq!(
+            parse("@prelude(minimal)\nmain : () -> Int\nmain = || 1"),
+            Prelude::Minimal
+        );
     }
 
     #[test]
     fn pure_prelude() {
-        assert_eq!(parse("@prelude(pure)\nmain : () -> Int\nmain = || 1"), Prelude::Pure);
+        assert_eq!(
+            parse("@prelude(pure)\nmain : () -> Int\nmain = || 1"),
+            Prelude::Pure
+        );
     }
 
     #[test]
     fn core_prelude() {
-        assert_eq!(parse("@prelude(core)\nmain : () -> Int\nmain = || 1"), Prelude::Core);
+        assert_eq!(
+            parse("@prelude(core)\nmain : () -> Int\nmain = || 1"),
+            Prelude::Core
+        );
     }
 
     #[test]
     fn script_prelude() {
-        assert_eq!(parse("@prelude(script)\nmain : () -> Int\nmain = || 1"), Prelude::Script);
+        assert_eq!(
+            parse("@prelude(script)\nmain : () -> Int\nmain = || 1"),
+            Prelude::Script
+        );
     }
 
     #[test]
     fn server_prelude() {
-        assert_eq!(parse("@prelude(server)\nmain : () -> Int\nmain = || 1"), Prelude::Server);
+        assert_eq!(
+            parse("@prelude(server)\nmain : () -> Int\nmain = || 1"),
+            Prelude::Server
+        );
     }
 
     #[test]
@@ -162,9 +174,15 @@ mod tests {
     #[test]
     fn pure_has_no_effects() {
         let p = Prelude::Pure;
-        assert_eq!(p.native_modules(), &["Option", "Result", "String", "List", "Json"]);
+        assert_eq!(
+            p.native_modules(),
+            &["Option", "Result", "String", "List", "Json"]
+        );
         assert_eq!(p.builtin_modules(), &["Math"]);
-        assert_eq!(p.type_modules(), &["Option", "Result", "String", "List", "Json", "Math"]);
+        assert_eq!(
+            p.type_modules(),
+            &["Option", "Result", "String", "List", "Json", "Math"]
+        );
     }
 
     #[test]

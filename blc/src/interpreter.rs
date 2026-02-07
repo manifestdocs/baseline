@@ -15,7 +15,12 @@ pub enum RuntimeValue<'a> {
     Unit,
     Function(Vec<String>, Node<'a>, &'a str),
     /// Closure: params, body, source, captured environment
-    Closure(Vec<String>, Node<'a>, &'a str, HashMap<String, RuntimeValue<'a>>),
+    Closure(
+        Vec<String>,
+        Node<'a>,
+        &'a str,
+        HashMap<String, RuntimeValue<'a>>,
+    ),
     Tuple(Vec<RuntimeValue<'a>>),
     Struct(String, HashMap<String, RuntimeValue<'a>>),
     Record(HashMap<String, RuntimeValue<'a>>),
@@ -39,22 +44,34 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
             RuntimeValue::Function(args, _, _) => write!(f, "|{}| ...", args.join(", ")),
             RuntimeValue::Closure(args, _, _, _) => write!(f, "|{}| <closure>", args.join(", ")),
             RuntimeValue::Tuple(vals) => {
-                let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                let s = vals
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "({})", s)
             }
             RuntimeValue::Struct(name, _fields) => {
-                 write!(f, "{} {{ ... }}", name)
+                write!(f, "{} {{ ... }}", name)
             }
             RuntimeValue::Record(_) => write!(f, "{{ ... }}"),
             RuntimeValue::List(vals) => {
-                 let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
-                 write!(f, "[{}]", s)
+                let s = vals
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "[{}]", s)
             }
             RuntimeValue::Enum(name, payload) => {
                 if payload.is_empty() {
                     write!(f, "{}", name)
                 } else {
-                    let s = payload.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                    let s = payload
+                        .iter()
+                        .map(|v| v.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     write!(f, "{}({})", name, s)
                 }
             }
@@ -91,7 +108,11 @@ impl std::fmt::Display for RuntimeError {
             write!(f, "{}: {}", self.file, self.message)?;
         }
         for frame in &self.stack {
-            write!(f, "\n  at {} ({}:{}:{})", frame.name, self.file, frame.line, frame.col)?;
+            write!(
+                f,
+                "\n  at {} ({}:{}:{})",
+                frame.name, self.file, frame.line, frame.col
+            )?;
         }
         Ok(())
     }
@@ -121,9 +142,8 @@ fn err_at(msg: impl Into<String>, node: &Node, ctx: &Context) -> RuntimeError {
 
 /// All known module names in the language (for error messages).
 const ALL_MODULES: &[&str] = &[
-    "Option", "Result", "String", "List", "Json", "Math",
-    "Console", "Log", "Time", "Random", "Env", "Fs", "Http", "Response",
-    "Router", "Server", "Db", "Metrics",
+    "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time", "Random",
+    "Env", "Fs", "Http", "Response", "Router", "Server", "Db", "Metrics",
 ];
 
 /// Tracks a captured effect during `with` expression evaluation.
@@ -173,10 +193,22 @@ impl<'a> Context<'a> {
             effect_handlers: Vec::new(),
         };
         // Option/Result constructors are language primitives — always available.
-        ctx.set("None".to_string(), RuntimeValue::Enum("None".to_string(), Vec::new()));
-        ctx.set("Some".to_string(), RuntimeValue::Enum("Some".to_string(), Vec::new()));
-        ctx.set("Ok".to_string(), RuntimeValue::Enum("Ok".to_string(), Vec::new()));
-        ctx.set("Err".to_string(), RuntimeValue::Enum("Err".to_string(), Vec::new()));
+        ctx.set(
+            "None".to_string(),
+            RuntimeValue::Enum("None".to_string(), Vec::new()),
+        );
+        ctx.set(
+            "Some".to_string(),
+            RuntimeValue::Enum("Some".to_string(), Vec::new()),
+        );
+        ctx.set(
+            "Ok".to_string(),
+            RuntimeValue::Enum("Ok".to_string(), Vec::new()),
+        );
+        ctx.set(
+            "Err".to_string(),
+            RuntimeValue::Enum("Err".to_string(), Vec::new()),
+        );
         ctx
     }
 
@@ -305,7 +337,11 @@ fn apply_function<'a>(
     match func {
         RuntimeValue::Function(param_names, body_node, fn_source) => {
             if args.len() != param_names.len() {
-                let msg = format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len());
+                let msg = format!(
+                    "Arg count mismatch: expected {}, got {}",
+                    param_names.len(),
+                    args.len()
+                );
                 return match call_node {
                     Some(n) => Err(err_at(msg, n, context)),
                     None => Err(RuntimeError::from(msg)),
@@ -327,7 +363,11 @@ fn apply_function<'a>(
         }
         RuntimeValue::Closure(param_names, body_node, fn_source, captured_env) => {
             if args.len() != param_names.len() {
-                let msg = format!("Arg count mismatch: expected {}, got {}", param_names.len(), args.len());
+                let msg = format!(
+                    "Arg count mismatch: expected {}, got {}",
+                    param_names.len(),
+                    args.len()
+                );
                 return match call_node {
                     Some(n) => Err(err_at(msg, n, context)),
                     None => Err(RuntimeError::from(msg)),
@@ -380,68 +420,118 @@ fn dispatch_hof<'a>(
         // Option.map(opt, fn) -> Option
         "Option.map" => {
             if arg_vals.len() != 2 {
-                return Err(err_at(format!("Option.map expects 2 arguments, got {}", arg_vals.len()), node, context));
+                return Err(err_at(
+                    format!("Option.map expects 2 arguments, got {}", arg_vals.len()),
+                    node,
+                    context,
+                ));
             }
             let opt_val = &arg_vals[0];
             let map_fn = &arg_vals[1];
             match opt_val {
                 RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
-                    let result = apply_function(map_fn, &[payload[0].clone()], source, context, Some(node))?;
+                    let result =
+                        apply_function(map_fn, &[payload[0].clone()], source, context, Some(node))?;
                     Ok(Some(RuntimeValue::Enum("Some".to_string(), vec![result])))
                 }
                 RuntimeValue::Enum(name, payload) if name == "None" && payload.is_empty() => {
                     Ok(Some(RuntimeValue::Enum("None".to_string(), Vec::new())))
                 }
-                other => Err(err_at(format!("Option.map expects Option as first argument, got {}", other), node, context)),
+                other => Err(err_at(
+                    format!("Option.map expects Option as first argument, got {}", other),
+                    node,
+                    context,
+                )),
             }
         }
         // Result.map(res, fn) -> Result
         "Result.map" => {
             if arg_vals.len() != 2 {
-                return Err(err_at(format!("Result.map expects 2 arguments, got {}", arg_vals.len()), node, context));
+                return Err(err_at(
+                    format!("Result.map expects 2 arguments, got {}", arg_vals.len()),
+                    node,
+                    context,
+                ));
             }
             let res_val = &arg_vals[0];
             let map_fn = &arg_vals[1];
             match res_val {
                 RuntimeValue::Enum(name, payload) if name == "Ok" && payload.len() == 1 => {
-                    let result = apply_function(map_fn, &[payload[0].clone()], source, context, Some(node))?;
+                    let result =
+                        apply_function(map_fn, &[payload[0].clone()], source, context, Some(node))?;
                     Ok(Some(RuntimeValue::Enum("Ok".to_string(), vec![result])))
                 }
                 RuntimeValue::Enum(name, _payload) if name == "Err" => {
                     Ok(Some(arg_vals[0].clone()))
                 }
-                other => Err(err_at(format!("Result.map expects Result as first argument, got {}", other), node, context)),
+                other => Err(err_at(
+                    format!("Result.map expects Result as first argument, got {}", other),
+                    node,
+                    context,
+                )),
             }
         }
         // List.map(list, fn) -> List
         "List.map" => {
             if arg_vals.len() != 2 {
-                return Err(err_at(format!("List.map expects 2 arguments, got {}", arg_vals.len()), node, context));
+                return Err(err_at(
+                    format!("List.map expects 2 arguments, got {}", arg_vals.len()),
+                    node,
+                    context,
+                ));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(err_at(format!("List.map expects List as first argument, got {}", other), node, context)),
+                other => {
+                    return Err(err_at(
+                        format!("List.map expects List as first argument, got {}", other),
+                        node,
+                        context,
+                    ));
+                }
             };
             let map_fn = &arg_vals[1];
             let mut results = Vec::with_capacity(items.len());
             for item in items {
-                results.push(apply_function(map_fn, &[item], source, context, Some(node))?);
+                results.push(apply_function(
+                    map_fn,
+                    &[item],
+                    source,
+                    context,
+                    Some(node),
+                )?);
             }
             Ok(Some(RuntimeValue::List(results)))
         }
         // List.filter(list, fn) -> List
         "List.filter" => {
             if arg_vals.len() != 2 {
-                return Err(err_at(format!("List.filter expects 2 arguments, got {}", arg_vals.len()), node, context));
+                return Err(err_at(
+                    format!("List.filter expects 2 arguments, got {}", arg_vals.len()),
+                    node,
+                    context,
+                ));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(err_at(format!("List.filter expects List as first argument, got {}", other), node, context)),
+                other => {
+                    return Err(err_at(
+                        format!("List.filter expects List as first argument, got {}", other),
+                        node,
+                        context,
+                    ));
+                }
             };
             let pred_fn = &arg_vals[1];
             let mut results = Vec::new();
             for item in items {
-                let keep = apply_function(pred_fn, std::slice::from_ref(&item), source, context, Some(node))?;
+                let keep = apply_function(
+                    pred_fn,
+                    std::slice::from_ref(&item),
+                    source,
+                    context,
+                    Some(node),
+                )?;
                 if let RuntimeValue::Bool(true) = keep {
                     results.push(item);
                 }
@@ -451,11 +541,21 @@ fn dispatch_hof<'a>(
         // List.fold(list, init, fn) -> T
         "List.fold" => {
             if arg_vals.len() != 3 {
-                return Err(err_at(format!("List.fold expects 3 arguments, got {}", arg_vals.len()), node, context));
+                return Err(err_at(
+                    format!("List.fold expects 3 arguments, got {}", arg_vals.len()),
+                    node,
+                    context,
+                ));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(err_at(format!("List.fold expects List as first argument, got {}", other), node, context)),
+                other => {
+                    return Err(err_at(
+                        format!("List.fold expects List as first argument, got {}", other),
+                        node,
+                        context,
+                    ));
+                }
             };
             let mut acc = arg_vals[1].clone();
             let fold_fn = &arg_vals[2];
@@ -467,15 +567,31 @@ fn dispatch_hof<'a>(
         // List.find(list, fn) -> Option
         "List.find" => {
             if arg_vals.len() != 2 {
-                return Err(err_at(format!("List.find expects 2 arguments, got {}", arg_vals.len()), node, context));
+                return Err(err_at(
+                    format!("List.find expects 2 arguments, got {}", arg_vals.len()),
+                    node,
+                    context,
+                ));
             }
             let items = match &arg_vals[0] {
                 RuntimeValue::List(items) => items.clone(),
-                other => return Err(err_at(format!("List.find expects List as first argument, got {}", other), node, context)),
+                other => {
+                    return Err(err_at(
+                        format!("List.find expects List as first argument, got {}", other),
+                        node,
+                        context,
+                    ));
+                }
             };
             let pred_fn = &arg_vals[1];
             for item in items {
-                let found = apply_function(pred_fn, std::slice::from_ref(&item), source, context, Some(node))?;
+                let found = apply_function(
+                    pred_fn,
+                    std::slice::from_ref(&item),
+                    source,
+                    context,
+                    Some(node),
+                )?;
                 if let RuntimeValue::Bool(true) = found {
                     return Ok(Some(RuntimeValue::Enum("Some".to_string(), vec![item])));
                 }
@@ -487,17 +603,22 @@ fn dispatch_hof<'a>(
             let method = qualified.strip_prefix("Router.").unwrap().to_uppercase();
             match arg_vals.len() {
                 3 => {
-                    let result = router::add_route(&method, &arg_vals[0], &arg_vals[1], &arg_vals[2])
-                        .map_err(|msg| err_at(msg, node, context))?;
+                    let result =
+                        router::add_route(&method, &arg_vals[0], &arg_vals[1], &arg_vals[2])
+                            .map_err(|msg| err_at(msg, node, context))?;
                     Ok(Some(result))
                 }
                 2 => {
                     // Partial application: return NativeClosure for pipe composition
-                    Ok(Some(RuntimeValue::NativeClosure(qualified.to_string(), arg_vals)))
+                    Ok(Some(RuntimeValue::NativeClosure(
+                        qualified.to_string(),
+                        arg_vals,
+                    )))
                 }
                 n => Err(err_at(
                     format!("{} expects 2 or 3 arguments, got {}", qualified, n),
-                    node, context,
+                    node,
+                    context,
                 )),
             }
         }
@@ -511,11 +632,15 @@ fn dispatch_hof<'a>(
                 }
                 1 => {
                     // Partial application: return NativeClosure for pipe composition
-                    Ok(Some(RuntimeValue::NativeClosure("Router.use".to_string(), arg_vals)))
+                    Ok(Some(RuntimeValue::NativeClosure(
+                        "Router.use".to_string(),
+                        arg_vals,
+                    )))
                 }
                 n => Err(err_at(
                     format!("Router.use expects 1 or 2 arguments, got {}", n),
-                    node, context,
+                    node,
+                    context,
                 )),
             }
         }
@@ -523,16 +648,23 @@ fn dispatch_hof<'a>(
         "Server.listen!" => {
             if arg_vals.len() != 2 {
                 return Err(err_at(
-                    format!("Server.listen! expects 2 arguments (port, router), got {}", arg_vals.len()),
-                    node, context,
+                    format!(
+                        "Server.listen! expects 2 arguments (port, router), got {}",
+                        arg_vals.len()
+                    ),
+                    node,
+                    context,
                 ));
             }
             let port = match &arg_vals[0] {
                 RuntimeValue::Int(p) => *p as u16,
-                other => return Err(err_at(
-                    format!("Server.listen! port must be Int, got {}", other),
-                    node, context,
-                )),
+                other => {
+                    return Err(err_at(
+                        format!("Server.listen! port must be Int, got {}", other),
+                        node,
+                        context,
+                    ));
+                }
             };
             let router_val = arg_vals[1].clone();
             server_listen(port, &router_val, node, source, context)?;
@@ -556,15 +688,26 @@ fn server_listen<'a>(
             Some(RuntimeValue::List(routes)) => routes.clone(),
             _ => return Err(err_at("Server.listen! expects a Router", node, context)),
         },
-        _ => return Err(err_at("Server.listen! second argument must be a Router", node, context)),
+        _ => {
+            return Err(err_at(
+                "Server.listen! second argument must be a Router",
+                node,
+                context,
+            ));
+        }
     };
-    let middleware = router::extract_middleware(router_val)
-        .map_err(|msg| err_at(msg, node, context))?;
+    let middleware =
+        router::extract_middleware(router_val).map_err(|msg| err_at(msg, node, context))?;
     let route_tree = router::compile_routes(&routes);
 
     let addr = format!("0.0.0.0:{}", port);
-    let server = tiny_http::Server::http(&addr)
-        .map_err(|e| err_at(format!("Failed to start server on {}: {}", addr, e), node, context))?;
+    let server = tiny_http::Server::http(&addr).map_err(|e| {
+        err_at(
+            format!("Failed to start server on {}: {}", addr, e),
+            node,
+            context,
+        )
+    })?;
 
     eprintln!("[server] Listening on http://0.0.0.0:{}", port);
 
@@ -584,14 +727,21 @@ fn server_listen<'a>(
         let (req_path, query_record) = parse_url_query(&raw_url);
 
         // Build request record: { method, url, headers, body, query }
-        let req_headers: Vec<RuntimeValue> = request.headers().iter().map(|h| {
-            RuntimeValue::Tuple(vec![
-                RuntimeValue::String(h.field.to_string()),
-                RuntimeValue::String(h.value.to_string()),
-            ])
-        }).collect();
+        let req_headers: Vec<RuntimeValue> = request
+            .headers()
+            .iter()
+            .map(|h| {
+                RuntimeValue::Tuple(vec![
+                    RuntimeValue::String(h.field.to_string()),
+                    RuntimeValue::String(h.value.to_string()),
+                ])
+            })
+            .collect();
         let mut req_fields = std::collections::HashMap::new();
-        req_fields.insert("method".to_string(), RuntimeValue::String(req_method.clone()));
+        req_fields.insert(
+            "method".to_string(),
+            RuntimeValue::String(req_method.clone()),
+        );
         req_fields.insert("url".to_string(), RuntimeValue::String(raw_url));
         req_fields.insert("headers".to_string(), RuntimeValue::List(req_headers));
         req_fields.insert("body".to_string(), RuntimeValue::String(req_body));
@@ -618,8 +768,8 @@ fn server_listen<'a>(
             None => (404, Vec::new(), "Not Found".to_string()),
         };
 
-        let mut response = tiny_http::Response::from_string(&body)
-            .with_status_code(tiny_http::StatusCode(status));
+        let mut response =
+            tiny_http::Response::from_string(&body).with_status_code(tiny_http::StatusCode(status));
         for (name, value) in &resp_headers {
             if let Ok(header) = tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()) {
                 response = response.with_header(header);
@@ -660,16 +810,19 @@ fn extract_response(value: RuntimeValue) -> (u16, Vec<(String, String)>, String)
                 None => String::new(),
             };
             let headers = match fields.get("headers") {
-                Some(RuntimeValue::List(items)) => {
-                    items.iter().filter_map(|item| {
+                Some(RuntimeValue::List(items)) => items
+                    .iter()
+                    .filter_map(|item| {
                         if let RuntimeValue::Tuple(pair) = item
                             && pair.len() == 2
-                                && let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1]) {
-                                    return Some((k.clone(), v.clone()));
-                                }
+                            && let (RuntimeValue::String(k), RuntimeValue::String(v)) =
+                                (&pair[0], &pair[1])
+                        {
+                            return Some((k.clone(), v.clone()));
+                        }
                         None
-                    }).collect()
-                }
+                    })
+                    .collect(),
                 _ => Vec::new(),
             };
             (status, headers, body)
@@ -682,10 +835,7 @@ fn extract_response(value: RuntimeValue) -> (u16, Vec<(String, String)>, String)
 }
 
 /// Inject path parameters into a request record as a `params` field.
-fn inject_params<'a>(
-    req: &RuntimeValue<'a>,
-    params: &[(String, String)],
-) -> RuntimeValue<'a> {
+fn inject_params<'a>(req: &RuntimeValue<'a>, params: &[(String, String)]) -> RuntimeValue<'a> {
     let mut fields = match req {
         RuntimeValue::Record(f) => f.clone(),
         _ => return req.clone(),
@@ -740,7 +890,13 @@ fn apply_middleware_chain<'a>(
     context: &mut Context<'a>,
 ) -> Result<RuntimeValue<'a>, RuntimeError> {
     if middleware.is_empty() {
-        return apply_function(handler, std::slice::from_ref(request), source, context, Some(node));
+        return apply_function(
+            handler,
+            std::slice::from_ref(request),
+            source,
+            context,
+            Some(node),
+        );
     }
 
     let current_mw = &middleware[0];
@@ -754,7 +910,13 @@ fn apply_middleware_chain<'a>(
     let next = RuntimeValue::NativeClosure("__mw_next".to_string(), next_captured);
 
     // Invoke current middleware with (request, next)
-    apply_function(current_mw, &[request.clone(), next], source, context, Some(node))
+    apply_function(
+        current_mw,
+        &[request.clone(), next],
+        source,
+        context,
+        Some(node),
+    )
 }
 
 /// Apply a NativeClosure by prepending the piped value to its captured args.
@@ -771,8 +933,13 @@ fn apply_native_closure<'a>(
             let method = name.strip_prefix("Router.").unwrap().to_uppercase();
             if captured_args.len() != 2 {
                 return Err(err_at(
-                    format!("{} NativeClosure expects 2 captured args, got {}", name, captured_args.len()),
-                    node, context,
+                    format!(
+                        "{} NativeClosure expects 2 captured args, got {}",
+                        name,
+                        captured_args.len()
+                    ),
+                    node,
+                    context,
                 ));
             }
             router::add_route(&method, piped_val, &captured_args[0], &captured_args[1])
@@ -781,8 +948,12 @@ fn apply_native_closure<'a>(
         "Router.use" => {
             if captured_args.len() != 1 {
                 return Err(err_at(
-                    format!("Router.use NativeClosure expects 1 captured arg, got {}", captured_args.len()),
-                    node, context,
+                    format!(
+                        "Router.use NativeClosure expects 1 captured arg, got {}",
+                        captured_args.len()
+                    ),
+                    node,
+                    context,
                 ));
             }
             router::add_middleware(piped_val, &captured_args[0])
@@ -792,7 +963,11 @@ fn apply_native_closure<'a>(
         "__mw_next" => {
             // captured_args[0] = handler, captured_args[1..] = remaining middleware
             if captured_args.is_empty() {
-                return Err(err_at("Middleware chain error: empty next".to_string(), node, context));
+                return Err(err_at(
+                    "Middleware chain error: empty next".to_string(),
+                    node,
+                    context,
+                ));
             }
             let handler = &captured_args[0];
             let remaining = &captured_args[1..];
@@ -800,12 +975,17 @@ fn apply_native_closure<'a>(
         }
         _ => Err(err_at(
             format!("Unknown NativeClosure: {}", name),
-            node, context,
+            node,
+            context,
         )),
     }
 }
 
-pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> Result<RuntimeValue<'a>, RuntimeError> {
+pub fn eval<'a>(
+    node: &Node<'a>,
+    source: &'a str,
+    context: &mut Context<'a>,
+) -> Result<RuntimeValue<'a>, RuntimeError> {
     match node.kind() {
         "source_file" | "module_decl" => {
             let mut last_val = RuntimeValue::Unit;
@@ -816,9 +996,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             Ok(last_val)
         }
         // Import declarations and where blocks are processed before eval; skip them.
-        "import_decl" | "where_block" | "inline_test" | "prelude_decl" => {
-            Ok(RuntimeValue::Unit)
-        }
+        "import_decl" | "where_block" | "inline_test" | "prelude_decl" => Ok(RuntimeValue::Unit),
         "function_def" => {
             let name_node = node.child_by_field_name("name").unwrap();
             let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
@@ -839,18 +1017,20 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
         "type_def" => {
             // Register enum constructors as values in context
             if let Some(def_node) = node.child_by_field_name("def")
-                && def_node.kind() == "variant_list" {
-                    let mut cursor = def_node.walk();
-                    for child in def_node.children(&mut cursor) {
-                        if child.kind() == "variant"
-                            && let Some(vname_node) = child.child_by_field_name("name") {
-                                let vname = vname_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                                // Register nullary constructors as enum values
-                                // Constructors with payload will be created via call_expression
-                                context.set(vname.clone(), RuntimeValue::Enum(vname, Vec::new()));
-                            }
+                && def_node.kind() == "variant_list"
+            {
+                let mut cursor = def_node.walk();
+                for child in def_node.children(&mut cursor) {
+                    if child.kind() == "variant"
+                        && let Some(vname_node) = child.child_by_field_name("name")
+                    {
+                        let vname = vname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                        // Register nullary constructors as enum values
+                        // Constructors with payload will be created via call_expression
+                        context.set(vname.clone(), RuntimeValue::Enum(vname, Vec::new()));
                     }
                 }
+            }
             Ok(RuntimeValue::Unit)
         }
         "lambda" | "lambda_expression" => {
@@ -870,141 +1050,157 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             Ok(RuntimeValue::Closure(args, body, source, captured))
         }
         "call_expression" => {
-             // func(arg1, arg2)
-             let func_node = node.named_child(0).unwrap();
+            // func(arg1, arg2)
+            let func_node = node.named_child(0).unwrap();
 
-             // Check for builtin dispatch: Module.method!(args)
-             if func_node.kind() == "field_expression" {
-                 let obj_node = func_node.named_child(0).unwrap();
-                 let method_node = func_node.named_child(1).unwrap();
-                 let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
-                 let method_name = method_node.utf8_text(source.as_bytes()).unwrap();
-                 let qualified = format!("{}.{}", obj_name, method_name);
+            // Check for builtin dispatch: Module.method!(args)
+            if func_node.kind() == "field_expression" {
+                let obj_node = func_node.named_child(0).unwrap();
+                let method_node = func_node.named_child(1).unwrap();
+                let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
+                let method_name = method_node.utf8_text(source.as_bytes()).unwrap();
+                let qualified = format!("{}.{}", obj_name, method_name);
 
-                 if let Some(builtin_fn) = context.builtins.get(&qualified) {
-                     let builtin_fn = *builtin_fn;
-                     let mut arg_strs = Vec::new();
-                     let total_children = node.named_child_count();
-                     for i in 1..total_children {
-                         let arg_node = node.named_child(i).unwrap();
-                         let val = eval(&arg_node, source, context)?;
-                         propagate!(val);
-                         arg_strs.push(val.to_string());
-                     }
+                if let Some(builtin_fn) = context.builtins.get(&qualified) {
+                    let builtin_fn = *builtin_fn;
+                    let mut arg_strs = Vec::new();
+                    let total_children = node.named_child_count();
+                    for i in 1..total_children {
+                        let arg_node = node.named_child(i).unwrap();
+                        let val = eval(&arg_node, source, context)?;
+                        propagate!(val);
+                        arg_strs.push(val.to_string());
+                    }
 
-                     // Effect handler interception: if this call is being
-                     // captured by a `with` expression, record args and
-                     // return Unit instead of performing real I/O.
-                     if context.try_capture_effect(&qualified, &arg_strs) {
-                         return Ok(RuntimeValue::Unit);
-                     }
+                    // Effect handler interception: if this call is being
+                    // captured by a `with` expression, record args and
+                    // return Unit instead of performing real I/O.
+                    if context.try_capture_effect(&qualified, &arg_strs) {
+                        return Ok(RuntimeValue::Unit);
+                    }
 
-                     let result_str = builtin_fn(&arg_strs)
-                         .map_err(|msg| err_at(msg, node, context))?;
-                     return Ok(parse_builtin_result(&result_str));
-                 }
-
-                 // HOF dispatch: functions that take closures and need eval access
-                 if let Some(result) = dispatch_hof(&qualified, node, source, context)? {
-                     return Ok(result);
-                 }
-
-                 if let Some(native_fn) = context.natives.get(&qualified) {
-                     let native_fn = *native_fn;
-                     let total_children = node.named_child_count();
-                     let mut arg_vals = Vec::new();
-                     for i in 1..total_children {
-                         let arg_node = node.named_child(i).unwrap();
-                         let val = eval(&arg_node, source, context)?;
-                         propagate!(val);
-                         arg_vals.push(val);
-                     }
-                     return native_fn(&arg_vals)
-                         .map_err(|msg| err_at(msg, node, context));
-                 }
-
-                 // No builtin/native matched — check if it's a known module not in scope
-                 if obj_node.kind() == "type_identifier"
-                     && let Some(err_msg) = context.check_module_scope(obj_name) {
-                         return Err(err_at(err_msg, node, context));
-                     }
-             }
-
-             let func_val = eval(&func_node, source, context)?;
-             propagate!(func_val);
-
-             // Eval args (shared for all call forms)
-             let mut arg_vals = Vec::new();
-             let total_children = node.named_child_count();
-             for i in 1..total_children {
-                 let arg_node = node.named_child(i).unwrap();
-                 let val = eval(&arg_node, source, context)?;
-                 propagate!(val);
-                 arg_vals.push(val);
-             }
-
-             // Resolve the function name for stack frame tracking
-             let func_name = func_node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
-
-             match func_val {
-                 RuntimeValue::Function(param_names, body_node, fn_source) => {
-                     if arg_vals.len() != param_names.len() {
-                         return Err(err_at(
-                             format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()),
-                             node, context,
-                         ));
-                     }
-
-                     context.push_frame(func_name.to_string(), node);
-                     context.enter_scope();
-                     for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
-                         context.set(name.clone(), val);
-                     }
-
-                     let result = eval(&body_node, fn_source, context);
-                     context.exit_scope();
-                     context.pop_frame();
-                     unwrap_early_return(result)
-                 }
-                 RuntimeValue::Closure(param_names, body_node, fn_source, captured_env) => {
-                     if arg_vals.len() != param_names.len() {
-                         return Err(err_at(
-                             format!("Arg count mismatch: expected {}, got {}", param_names.len(), arg_vals.len()),
-                             node, context,
-                         ));
-                     }
-
-                     context.push_frame(func_name.to_string(), node);
-                     context.enter_scope();
-                     for (k, v) in &captured_env {
-                         context.set(k.clone(), v.clone());
-                     }
-                     for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
-                         context.set(name.clone(), val);
-                     }
-
-                     let result = eval(&body_node, fn_source, context);
-                     context.exit_scope();
-                     context.pop_frame();
-                     unwrap_early_return(result)
+                    let result_str =
+                        builtin_fn(&arg_strs).map_err(|msg| err_at(msg, node, context))?;
+                    return Ok(parse_builtin_result(&result_str));
                 }
-                RuntimeValue::Enum(ctor_name, _) => {
-                     Ok(RuntimeValue::Enum(ctor_name, arg_vals))
-                 }
-                 RuntimeValue::NativeClosure(name, captured_args) => {
-                     if arg_vals.len() != 1 {
-                         return Err(err_at(
-                             format!("NativeClosure {} expects 1 argument, got {}", name, arg_vals.len()),
-                             node, context,
-                         ));
-                     }
-                     apply_native_closure(&name, &arg_vals[0], &captured_args, node, source, context)
-                 }
-                 _ => Err(err_at(
-                     format!("Not a function: {}", func_name),
-                     node, context,
-                 ))
-             }
+
+                // HOF dispatch: functions that take closures and need eval access
+                if let Some(result) = dispatch_hof(&qualified, node, source, context)? {
+                    return Ok(result);
+                }
+
+                if let Some(native_fn) = context.natives.get(&qualified) {
+                    let native_fn = *native_fn;
+                    let total_children = node.named_child_count();
+                    let mut arg_vals = Vec::new();
+                    for i in 1..total_children {
+                        let arg_node = node.named_child(i).unwrap();
+                        let val = eval(&arg_node, source, context)?;
+                        propagate!(val);
+                        arg_vals.push(val);
+                    }
+                    return native_fn(&arg_vals).map_err(|msg| err_at(msg, node, context));
+                }
+
+                // No builtin/native matched — check if it's a known module not in scope
+                if obj_node.kind() == "type_identifier"
+                    && let Some(err_msg) = context.check_module_scope(obj_name)
+                {
+                    return Err(err_at(err_msg, node, context));
+                }
+            }
+
+            let func_val = eval(&func_node, source, context)?;
+            propagate!(func_val);
+
+            // Eval args (shared for all call forms)
+            let mut arg_vals = Vec::new();
+            let total_children = node.named_child_count();
+            for i in 1..total_children {
+                let arg_node = node.named_child(i).unwrap();
+                let val = eval(&arg_node, source, context)?;
+                propagate!(val);
+                arg_vals.push(val);
+            }
+
+            // Resolve the function name for stack frame tracking
+            let func_name = func_node
+                .utf8_text(source.as_bytes())
+                .unwrap_or("<unknown>");
+
+            match func_val {
+                RuntimeValue::Function(param_names, body_node, fn_source) => {
+                    if arg_vals.len() != param_names.len() {
+                        return Err(err_at(
+                            format!(
+                                "Arg count mismatch: expected {}, got {}",
+                                param_names.len(),
+                                arg_vals.len()
+                            ),
+                            node,
+                            context,
+                        ));
+                    }
+
+                    context.push_frame(func_name.to_string(), node);
+                    context.enter_scope();
+                    for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
+                        context.set(name.clone(), val);
+                    }
+
+                    let result = eval(&body_node, fn_source, context);
+                    context.exit_scope();
+                    context.pop_frame();
+                    unwrap_early_return(result)
+                }
+                RuntimeValue::Closure(param_names, body_node, fn_source, captured_env) => {
+                    if arg_vals.len() != param_names.len() {
+                        return Err(err_at(
+                            format!(
+                                "Arg count mismatch: expected {}, got {}",
+                                param_names.len(),
+                                arg_vals.len()
+                            ),
+                            node,
+                            context,
+                        ));
+                    }
+
+                    context.push_frame(func_name.to_string(), node);
+                    context.enter_scope();
+                    for (k, v) in &captured_env {
+                        context.set(k.clone(), v.clone());
+                    }
+                    for (name, val) in param_names.iter().zip(arg_vals.into_iter()) {
+                        context.set(name.clone(), val);
+                    }
+
+                    let result = eval(&body_node, fn_source, context);
+                    context.exit_scope();
+                    context.pop_frame();
+                    unwrap_early_return(result)
+                }
+                RuntimeValue::Enum(ctor_name, _) => Ok(RuntimeValue::Enum(ctor_name, arg_vals)),
+                RuntimeValue::NativeClosure(name, captured_args) => {
+                    if arg_vals.len() != 1 {
+                        return Err(err_at(
+                            format!(
+                                "NativeClosure {} expects 1 argument, got {}",
+                                name,
+                                arg_vals.len()
+                            ),
+                            node,
+                            context,
+                        ));
+                    }
+                    apply_native_closure(&name, &arg_vals[0], &captured_args, node, source, context)
+                }
+                _ => Err(err_at(
+                    format!("Not a function: {}", func_name),
+                    node,
+                    context,
+                )),
+            }
         }
         "block" | "block_expression" => {
             context.enter_scope();
@@ -1036,7 +1232,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
         }
         "identifier" | "lower_identifier" | "effect_identifier" => {
             let name = node.utf8_text(source.as_bytes()).unwrap();
-            context.get(name).cloned().ok_or_else(|| err_at(format!("Undefined variable: {}", name), node, context))
+            context
+                .get(name)
+                .cloned()
+                .ok_or_else(|| err_at(format!("Undefined variable: {}", name), node, context))
         }
         "type_identifier" => {
             // Nullary constructor or type reference in expression context
@@ -1050,13 +1249,15 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
         }
         "integer_literal" => {
             let text = node.utf8_text(source.as_bytes()).unwrap();
-            let val = text.parse::<i64>()
+            let val = text
+                .parse::<i64>()
                 .map_err(|_| err_at("Invalid integer", node, context))?;
             Ok(RuntimeValue::Int(val))
         }
         "float_literal" => {
             let text = node.utf8_text(source.as_bytes()).unwrap();
-            let val = text.parse::<f64>()
+            let val = text
+                .parse::<f64>()
                 .map_err(|_| err_at("Invalid float", node, context))?;
             Ok(RuntimeValue::Float(val))
         }
@@ -1068,7 +1269,7 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
 
             // Start after the opening quote
             let str_start = node.start_byte() + 1; // skip "
-            let str_end = node.end_byte() - 1;     // skip "
+            let str_end = node.end_byte() - 1; // skip "
 
             let named_count = node.named_child_count();
             if named_count == 0 {
@@ -1118,53 +1319,53 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             Ok(RuntimeValue::String(result))
         }
         "boolean_literal" => {
-             let text = node.utf8_text(source.as_bytes()).unwrap();
-             Ok(RuntimeValue::Bool(text == "true"))
+            let text = node.utf8_text(source.as_bytes()).unwrap();
+            Ok(RuntimeValue::Bool(text == "true"))
         }
         "binary_expression" => {
-             let op = node.child(1).unwrap().utf8_text(source.as_bytes()).unwrap();
+            let op = node.child(1).unwrap().utf8_text(source.as_bytes()).unwrap();
 
-             // Short-circuit logical operators: evaluate left first,
-             // only evaluate right if needed
-             match op {
-                 "&&" => {
-                     let left = eval(&node.named_child(0).unwrap(), source, context)?;
-                     propagate!(left);
-                     match left {
-                         RuntimeValue::Bool(false) => Ok(RuntimeValue::Bool(false)),
-                         RuntimeValue::Bool(true) => {
-                             let right = eval(&node.named_child(1).unwrap(), source, context)?;
-                             propagate!(right);
-                             match right {
-                                 RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
-                                 _ => Err(err_at("Right operand of && must be Bool", node, context)),
-                             }
-                         }
-                         _ => Err(err_at("Left operand of && must be Bool", node, context)),
-                     }
-                 }
-                 "||" => {
-                     let left = eval(&node.named_child(0).unwrap(), source, context)?;
-                     propagate!(left);
-                     match left {
-                         RuntimeValue::Bool(true) => Ok(RuntimeValue::Bool(true)),
-                         RuntimeValue::Bool(false) => {
-                             let right = eval(&node.named_child(1).unwrap(), source, context)?;
-                             propagate!(right);
-                             match right {
-                                 RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
-                                 _ => Err(err_at("Right operand of || must be Bool", node, context)),
-                             }
-                         }
-                         _ => Err(err_at("Left operand of || must be Bool", node, context)),
-                     }
-                 }
-                 _ => {
-                     let left = eval(&node.named_child(0).unwrap(), source, context)?;
-                     propagate!(left);
-                     let right = eval(&node.named_child(1).unwrap(), source, context)?;
-                     propagate!(right);
-                     match (left, right) {
+            // Short-circuit logical operators: evaluate left first,
+            // only evaluate right if needed
+            match op {
+                "&&" => {
+                    let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                    propagate!(left);
+                    match left {
+                        RuntimeValue::Bool(false) => Ok(RuntimeValue::Bool(false)),
+                        RuntimeValue::Bool(true) => {
+                            let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                            propagate!(right);
+                            match right {
+                                RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
+                                _ => Err(err_at("Right operand of && must be Bool", node, context)),
+                            }
+                        }
+                        _ => Err(err_at("Left operand of && must be Bool", node, context)),
+                    }
+                }
+                "||" => {
+                    let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                    propagate!(left);
+                    match left {
+                        RuntimeValue::Bool(true) => Ok(RuntimeValue::Bool(true)),
+                        RuntimeValue::Bool(false) => {
+                            let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                            propagate!(right);
+                            match right {
+                                RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
+                                _ => Err(err_at("Right operand of || must be Bool", node, context)),
+                            }
+                        }
+                        _ => Err(err_at("Left operand of || must be Bool", node, context)),
+                    }
+                }
+                _ => {
+                    let left = eval(&node.named_child(0).unwrap(), source, context)?;
+                    propagate!(left);
+                    let right = eval(&node.named_child(1).unwrap(), source, context)?;
+                    propagate!(right);
+                    match (left, right) {
                         (RuntimeValue::Int(l), RuntimeValue::Int(r)) => match op {
                             "+" => Ok(RuntimeValue::Int(l + r)),
                             "-" => Ok(RuntimeValue::Int(l - r)),
@@ -1189,7 +1390,11 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
                             ">" => Ok(RuntimeValue::Bool(l > r)),
                             "<=" => Ok(RuntimeValue::Bool(l <= r)),
                             ">=" => Ok(RuntimeValue::Bool(l >= r)),
-                            _ => Err(err_at(format!("Unknown int operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown int operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
                         (RuntimeValue::Float(l), RuntimeValue::Float(r)) => match op {
                             "+" => Ok(RuntimeValue::Float(l + r)),
@@ -1215,56 +1420,92 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
                             ">" => Ok(RuntimeValue::Bool(l > r)),
                             "<=" => Ok(RuntimeValue::Bool(l <= r)),
                             ">=" => Ok(RuntimeValue::Bool(l >= r)),
-                            _ => Err(err_at(format!("Unknown float operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown float operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
                         (RuntimeValue::String(l), RuntimeValue::String(r)) => match op {
                             "+" => Ok(RuntimeValue::String(format!("{}{}", l, r))),
                             "==" => Ok(RuntimeValue::Bool(l == r)),
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                            _ => Err(err_at(format!("Unknown string operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown string operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
                         (RuntimeValue::Bool(l), RuntimeValue::Bool(r)) => match op {
                             "==" => Ok(RuntimeValue::Bool(l == r)),
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                            _ => Err(err_at(format!("Unknown bool operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown bool operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
                         (RuntimeValue::List(l), RuntimeValue::List(r)) => match op {
                             "==" => Ok(RuntimeValue::Bool(l == r)),
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                            _ => Err(err_at(format!("Unknown list operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown list operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
                         (RuntimeValue::Tuple(l), RuntimeValue::Tuple(r)) => match op {
                             "==" => Ok(RuntimeValue::Bool(l == r)),
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
-                            _ => Err(err_at(format!("Unknown tuple operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown tuple operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
                         (RuntimeValue::Enum(ln, lp), RuntimeValue::Enum(rn, rp)) => match op {
                             "==" => Ok(RuntimeValue::Bool(ln == rn && lp == rp)),
                             "!=" => Ok(RuntimeValue::Bool(ln != rn || lp != rp)),
-                            _ => Err(err_at(format!("Unknown enum operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown enum operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
                         (RuntimeValue::Unit, RuntimeValue::Unit) => match op {
                             "==" => Ok(RuntimeValue::Bool(true)),
                             "!=" => Ok(RuntimeValue::Bool(false)),
-                            _ => Err(err_at(format!("Unknown unit operator {}", op), node, context))
+                            _ => Err(err_at(
+                                format!("Unknown unit operator {}", op),
+                                node,
+                                context,
+                            )),
                         },
-                        (l, r) => Err(err_at(format!("Invalid operands for {}: {} and {}", op, l, r), node, context))
-                     }
-                 }
-             }
+                        (l, r) => Err(err_at(
+                            format!("Invalid operands for {}: {} and {}", op, l, r),
+                            node,
+                            context,
+                        )),
+                    }
+                }
+            }
         }
         "unary_expression" => {
-             let op = node.child(0).unwrap().utf8_text(source.as_bytes()).unwrap();
-             let operand = eval(&node.named_child(0).unwrap(), source, context)?;
-             propagate!(operand);
-             match (op, operand) {
-                 ("not", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
-                 ("-", RuntimeValue::Int(i)) => Ok(RuntimeValue::Int(-i)),
-                 ("-", RuntimeValue::Float(f)) => Ok(RuntimeValue::Float(-f)),
-                 ("not", v) => Err(err_at(format!("Cannot apply not to {}", v), node, context)),
-                 ("-", v) => Err(err_at(format!("Cannot negate {}", v), node, context)),
-                 _ => Err(err_at(format!("Unknown unary operator {}", op), node, context)),
-             }
+            let op = node.child(0).unwrap().utf8_text(source.as_bytes()).unwrap();
+            let operand = eval(&node.named_child(0).unwrap(), source, context)?;
+            propagate!(operand);
+            match (op, operand) {
+                ("not", RuntimeValue::Bool(b)) => Ok(RuntimeValue::Bool(!b)),
+                ("-", RuntimeValue::Int(i)) => Ok(RuntimeValue::Int(-i)),
+                ("-", RuntimeValue::Float(f)) => Ok(RuntimeValue::Float(-f)),
+                ("not", v) => Err(err_at(format!("Cannot apply not to {}", v), node, context)),
+                ("-", v) => Err(err_at(format!("Cannot negate {}", v), node, context)),
+                _ => Err(err_at(
+                    format!("Unknown unary operator {}", op),
+                    node,
+                    context,
+                )),
+            }
         }
         "try_expression" => {
             // expr? — unwrap Some/Ok or propagate None/Err as EarlyReturn
@@ -1272,96 +1513,109 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             match &operand {
                 RuntimeValue::Enum(name, payload) => match name.as_str() {
                     "Some" if payload.len() == 1 => Ok(payload[0].clone()),
-                    "None" if payload.is_empty() => Ok(RuntimeValue::EarlyReturn(Box::new(operand))),
+                    "None" if payload.is_empty() => {
+                        Ok(RuntimeValue::EarlyReturn(Box::new(operand)))
+                    }
                     "Ok" if payload.len() == 1 => Ok(payload[0].clone()),
                     "Err" => Ok(RuntimeValue::EarlyReturn(Box::new(operand))),
-                    _ => Err(err_at(format!("? operator requires Option or Result, got {}(..)", name), node, context)),
+                    _ => Err(err_at(
+                        format!("? operator requires Option or Result, got {}(..)", name),
+                        node,
+                        context,
+                    )),
                 },
                 RuntimeValue::EarlyReturn(_) => Ok(operand), // propagate
-                _ => Err(err_at(format!("? operator requires Option or Result, got {}", operand), node, context)),
+                _ => Err(err_at(
+                    format!("? operator requires Option or Result, got {}", operand),
+                    node,
+                    context,
+                )),
             }
         }
         "range_expression" => {
-             let start = eval(&node.named_child(0).unwrap(), source, context)?;
-             propagate!(start);
-             let end = eval(&node.named_child(1).unwrap(), source, context)?;
-             propagate!(end);
-             match (start, end) {
-                 (RuntimeValue::Int(s), RuntimeValue::Int(e)) => {
-                     let vals: Vec<RuntimeValue<'a>> = (s..e)
-                         .map(RuntimeValue::Int)
-                         .collect();
-                     Ok(RuntimeValue::List(vals))
-                 }
-                 (s, e) => Err(err_at(format!("Range requires Int operands, got {} and {}", s, e), node, context)),
-             }
+            let start = eval(&node.named_child(0).unwrap(), source, context)?;
+            propagate!(start);
+            let end = eval(&node.named_child(1).unwrap(), source, context)?;
+            propagate!(end);
+            match (start, end) {
+                (RuntimeValue::Int(s), RuntimeValue::Int(e)) => {
+                    let vals: Vec<RuntimeValue<'a>> = (s..e).map(RuntimeValue::Int).collect();
+                    Ok(RuntimeValue::List(vals))
+                }
+                (s, e) => Err(err_at(
+                    format!("Range requires Int operands, got {} and {}", s, e),
+                    node,
+                    context,
+                )),
+            }
         }
         "if_expression" => {
             let cond = eval(&node.named_child(0).unwrap(), source, context)?;
             propagate!(cond);
             if let RuntimeValue::Bool(b) = cond {
                 if b {
-                     eval(&node.named_child(1).unwrap(), source, context)
+                    eval(&node.named_child(1).unwrap(), source, context)
                 } else if let Some(else_branch) = node.named_child(2) {
-                     eval(&else_branch, source, context)
+                    eval(&else_branch, source, context)
                 } else {
-                     Ok(RuntimeValue::Unit)
+                    Ok(RuntimeValue::Unit)
                 }
             } else {
                 Err(err_at("Condition must be boolean", node, context))
             }
         }
-        "parenthesized_expression" => {
-             eval(&node.named_child(0).unwrap(), source, context)
-        }
+        "parenthesized_expression" => eval(&node.named_child(0).unwrap(), source, context),
         "literal" => {
-             if let Some(child) = node.named_child(0) {
-                 eval(&child, source, context)
-             } else {
-                 Ok(RuntimeValue::Unit)
-             }
+            if let Some(child) = node.named_child(0) {
+                eval(&child, source, context)
+            } else {
+                Ok(RuntimeValue::Unit)
+            }
         }
         "tuple_expression" => {
-             let count = node.named_child_count();
-             if count == 0 {
-                 return Ok(RuntimeValue::Unit);
-             }
-             let mut vals = Vec::new();
-             for i in 0..count {
-                 let val = eval(&node.named_child(i).unwrap(), source, context)?;
-                 propagate!(val);
-                 vals.push(val);
-             }
-             Ok(RuntimeValue::Tuple(vals))
+            let count = node.named_child_count();
+            if count == 0 {
+                return Ok(RuntimeValue::Unit);
+            }
+            let mut vals = Vec::new();
+            for i in 0..count {
+                let val = eval(&node.named_child(i).unwrap(), source, context)?;
+                propagate!(val);
+                vals.push(val);
+            }
+            Ok(RuntimeValue::Tuple(vals))
         }
         "list_expression" => {
-             // [expr, expr]
-             let mut vals = Vec::new();
-             let mut cursor = node.walk();
-             for child in node.children(&mut cursor) {
-                 if child.kind() == "[" || child.kind() == "]" || child.kind() == "," {
-                     continue;
-                 }
-                 let val = eval(&child, source, context)?;
-                 propagate!(val);
-                 vals.push(val);
-             }
-             Ok(RuntimeValue::List(vals))
+            // [expr, expr]
+            let mut vals = Vec::new();
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                if child.kind() == "[" || child.kind() == "]" || child.kind() == "," {
+                    continue;
+                }
+                let val = eval(&child, source, context)?;
+                propagate!(val);
+                vals.push(val);
+            }
+            Ok(RuntimeValue::List(vals))
         }
         "struct_expression" => {
             let type_name_node = node.named_child(0).unwrap();
-            let type_name = type_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+            let type_name = type_name_node
+                .utf8_text(source.as_bytes())
+                .unwrap()
+                .to_string();
 
             let mut fields = HashMap::new();
             let count = node.named_child_count();
             for i in 1..count {
-                 let field_init = node.named_child(i).unwrap();
-                 let fname_node = field_init.child(0).unwrap();
-                 let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                 let val_node = field_init.child(2).unwrap();
-                 let val = eval(&val_node, source, context)?;
-                 propagate!(val);
-                 fields.insert(fname, val);
+                let field_init = node.named_child(i).unwrap();
+                let fname_node = field_init.child(0).unwrap();
+                let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                let val_node = field_init.child(2).unwrap();
+                let val = eval(&val_node, source, context)?;
+                propagate!(val);
+                fields.insert(fname, val);
             }
             Ok(RuntimeValue::Struct(type_name, fields))
         }
@@ -1369,13 +1623,13 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             let mut fields = HashMap::new();
             let count = node.named_child_count();
             for i in 0..count {
-                 let field_init = node.named_child(i).unwrap();
-                 let fname_node = field_init.child(0).unwrap();
-                 let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                 let val_node = field_init.child(2).unwrap();
-                 let val = eval(&val_node, source, context)?;
-                 propagate!(val);
-                 fields.insert(fname, val);
+                let field_init = node.named_child(i).unwrap();
+                let fname_node = field_init.child(0).unwrap();
+                let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                let val_node = field_init.child(2).unwrap();
+                let val = eval(&val_node, source, context)?;
+                propagate!(val);
+                fields.insert(fname, val);
             }
             Ok(RuntimeValue::Record(fields))
         }
@@ -1389,7 +1643,13 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             let mut fields = match base_val {
                 RuntimeValue::Struct(ref _name, ref f) => f.clone(),
                 RuntimeValue::Record(ref f) => f.clone(),
-                _ => return Err(err_at("Record update requires a record or struct value", node, context)),
+                _ => {
+                    return Err(err_at(
+                        "Record update requires a record or struct value",
+                        node,
+                        context,
+                    ));
+                }
             };
 
             let count = node.named_child_count();
@@ -1409,82 +1669,106 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             }
         }
         "field_expression" => {
-             let obj_node = node.named_child(0).unwrap();
-             let field_node = node.named_child(1).unwrap();
-             let field_name = field_node.utf8_text(source.as_bytes()).unwrap();
+            let obj_node = node.named_child(0).unwrap();
+            let field_node = node.named_child(1).unwrap();
+            let field_name = field_node.utf8_text(source.as_bytes()).unwrap();
 
-             // Check for module-not-in-scope before evaluating
-             if obj_node.kind() == "type_identifier" {
-                 let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
-                 if let Some(err_msg) = context.check_module_scope(obj_name) {
-                     return Err(err_at(err_msg, node, context));
-                 }
-             }
+            // Check for module-not-in-scope before evaluating
+            if obj_node.kind() == "type_identifier" {
+                let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
+                if let Some(err_msg) = context.check_module_scope(obj_name) {
+                    return Err(err_at(err_msg, node, context));
+                }
+            }
 
-             let obj_val = eval(&obj_node, source, context)?;
-             propagate!(obj_val);
-             match obj_val {
-                 RuntimeValue::Struct(_, fields) | RuntimeValue::Record(fields) => {
-                      fields.get(field_name).cloned().ok_or_else(|| err_at(format!("Field not found: {}", field_name), node, context))
-                 }
-                 _ => Err(err_at(format!("Cannot access field {} on non-struct", field_name), node, context))
-             }
+            let obj_val = eval(&obj_node, source, context)?;
+            propagate!(obj_val);
+            match obj_val {
+                RuntimeValue::Struct(_, fields) | RuntimeValue::Record(fields) => {
+                    fields.get(field_name).cloned().ok_or_else(|| {
+                        err_at(format!("Field not found: {}", field_name), node, context)
+                    })
+                }
+                _ => Err(err_at(
+                    format!("Cannot access field {} on non-struct", field_name),
+                    node,
+                    context,
+                )),
+            }
         }
         "pipe_expression" => {
-             let left_node = node.named_child(0).unwrap();
-             let right_node = node.named_child(1).unwrap();
+            let left_node = node.named_child(0).unwrap();
+            let right_node = node.named_child(1).unwrap();
 
-             let left_val = eval(&left_node, source, context)?;
-             propagate!(left_val);
-             let right_val = eval(&right_node, source, context)?;
-             propagate!(right_val);
+            let left_val = eval(&left_node, source, context)?;
+            propagate!(left_val);
+            let right_val = eval(&right_node, source, context)?;
+            propagate!(right_val);
 
-             match right_val {
-                 RuntimeValue::Function(params, body_node, fn_source) => {
-                     if params.len() != 1 {
-                         return Err(err_at(format!("Pipe expects a function with 1 argument, found {}", params.len()), node, context));
-                     }
-                     context.enter_scope();
-                     context.set(params[0].clone(), left_val);
-                     let result = eval(&body_node, fn_source, context);
-                     context.exit_scope();
-                     result
-                 }
-                 RuntimeValue::Closure(params, body_node, fn_source, captured_env) => {
-                     if params.len() != 1 {
-                         return Err(err_at(format!("Pipe expects a function with 1 argument, found {}", params.len()), node, context));
-                     }
-                     context.enter_scope();
-                     for (k, v) in &captured_env {
-                         context.set(k.clone(), v.clone());
-                     }
-                     context.set(params[0].clone(), left_val);
-                     let result = eval(&body_node, fn_source, context);
-                     context.exit_scope();
-                     result
-                 }
-                 RuntimeValue::NativeClosure(name, captured_args) => {
-                     apply_native_closure(&name, &left_val, &captured_args, node, source, context)
-                 }
-                 _ => Err(err_at("Pipe target must be a function", node, context)),
-             }
+            match right_val {
+                RuntimeValue::Function(params, body_node, fn_source) => {
+                    if params.len() != 1 {
+                        return Err(err_at(
+                            format!(
+                                "Pipe expects a function with 1 argument, found {}",
+                                params.len()
+                            ),
+                            node,
+                            context,
+                        ));
+                    }
+                    context.enter_scope();
+                    context.set(params[0].clone(), left_val);
+                    let result = eval(&body_node, fn_source, context);
+                    context.exit_scope();
+                    result
+                }
+                RuntimeValue::Closure(params, body_node, fn_source, captured_env) => {
+                    if params.len() != 1 {
+                        return Err(err_at(
+                            format!(
+                                "Pipe expects a function with 1 argument, found {}",
+                                params.len()
+                            ),
+                            node,
+                            context,
+                        ));
+                    }
+                    context.enter_scope();
+                    for (k, v) in &captured_env {
+                        context.set(k.clone(), v.clone());
+                    }
+                    context.set(params[0].clone(), left_val);
+                    let result = eval(&body_node, fn_source, context);
+                    context.exit_scope();
+                    result
+                }
+                RuntimeValue::NativeClosure(name, captured_args) => {
+                    apply_native_closure(&name, &left_val, &captured_args, node, source, context)
+                }
+                _ => Err(err_at("Pipe target must be a function", node, context)),
+            }
         }
         "with_expression" => {
             // with Console.println! { body } → (result, captured_args)
-            let effect_node = node.child_by_field_name("effect")
+            let effect_node = node
+                .child_by_field_name("effect")
                 .unwrap_or_else(|| node.named_child(0).unwrap());
-            let body_node = node.child_by_field_name("body")
+            let body_node = node
+                .child_by_field_name("body")
                 .unwrap_or_else(|| node.named_child(1).unwrap());
 
-            let effect_name = effect_node.utf8_text(source.as_bytes()).unwrap().to_string();
+            let effect_name = effect_node
+                .utf8_text(source.as_bytes())
+                .unwrap()
+                .to_string();
 
             context.push_effect_handler(effect_name);
             let result = eval(&body_node, source, context)?;
             let captured = context.pop_effect_handler().unwrap_or_default();
 
-            let captured_list = RuntimeValue::List(
-                captured.into_iter().map(RuntimeValue::String).collect(),
-            );
+            let captured_list =
+                RuntimeValue::List(captured.into_iter().map(RuntimeValue::String).collect());
             Ok(RuntimeValue::Tuple(vec![result, captured_list]))
         }
         "for_expression" => {
@@ -1517,29 +1801,29 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
             }
         }
         "match_expression" => {
-             // match expr { pat -> body, ... }
-             let expr_node = node.named_child(0).unwrap();
-             let val = eval(&expr_node, source, context)?;
-             propagate!(val);
+            // match expr { pat -> body, ... }
+            let expr_node = node.named_child(0).unwrap();
+            let val = eval(&expr_node, source, context)?;
+            propagate!(val);
 
-             let count = node.named_child_count();
-             for i in 1..count {
-                 let arm = node.named_child(i).unwrap();
-                 // match_arm: pattern -> expression
-                 let pat = arm.child(0).unwrap();
-                 let body = arm.child(2).unwrap();
+            let count = node.named_child_count();
+            for i in 1..count {
+                let arm = node.named_child(i).unwrap();
+                // match_arm: pattern -> expression
+                let pat = arm.child(0).unwrap();
+                let body = arm.child(2).unwrap();
 
-                 if let Some(bindings) = match_pattern(&pat, &val, source) {
-                     context.enter_scope();
-                     for (k, v) in bindings {
-                         context.set(k, v);
-                     }
-                     let result = eval(&body, source, context);
-                     context.exit_scope();
-                     return result;
-                 }
-             }
-             Err(err_at("No match found", node, context))
+                if let Some(bindings) = match_pattern(&pat, &val, source) {
+                    context.enter_scope();
+                    for (k, v) in bindings {
+                        context.set(k, v);
+                    }
+                    let result = eval(&body, source, context);
+                    context.exit_scope();
+                    return result;
+                }
+            }
+            Err(err_at("No match found", node, context))
         }
         _ => {
             // Ignore others or return Unit
@@ -1646,24 +1930,36 @@ fn match_pattern<'a>(
             }
         }
         "literal" => {
-             if let Some(child) = pattern.named_child(0) {
-                 match_pattern(&child, value, source)
-             } else {
-                 None
-             }
+            if let Some(child) = pattern.named_child(0) {
+                match_pattern(&child, value, source)
+            } else {
+                None
+            }
         }
         "integer_literal" => {
             let text = pattern.utf8_text(source.as_bytes()).unwrap();
             let p_val = text.parse::<i64>().ok()?;
             if let RuntimeValue::Int(v) = value {
-                if *v == p_val { Some(HashMap::new()) } else { None }
-            } else { None }
+                if *v == p_val {
+                    Some(HashMap::new())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         }
         "boolean_literal" => {
             let text = pattern.utf8_text(source.as_bytes()).unwrap();
-             if let RuntimeValue::Bool(v) = value {
-                if *v == (text == "true") { Some(HashMap::new()) } else { None }
-            } else { None }
+            if let RuntimeValue::Bool(v) = value {
+                if *v == (text == "true") {
+                    Some(HashMap::new())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
         }
         "tuple_pattern" => {
             if let RuntimeValue::Tuple(vals) = value {
@@ -1699,7 +1995,7 @@ fn match_pattern<'a>(
             map.insert(name, value.clone());
             Some(map)
         }
-        _ => None
+        _ => None,
     }
 }
 
@@ -1972,10 +2268,7 @@ mod tests {
     #[test]
     fn test_range_single() {
         let result = eval_source("main : () -> List\nmain = || 3..4");
-        assert_eq!(
-            result,
-            Ok(RuntimeValue::List(vec![RuntimeValue::Int(3)]))
-        );
+        assert_eq!(result, Ok(RuntimeValue::List(vec![RuntimeValue::Int(3)])));
     }
 
     #[test]
@@ -2062,7 +2355,12 @@ mod tests {
         match result {
             Ok(RuntimeValue::Float(f)) => {
                 let expected = 10.0_f64 / 3.0_f64;
-                assert!((f - expected).abs() < f64::EPSILON, "Expected approximately {}, got {}", expected, f);
+                assert!(
+                    (f - expected).abs() < f64::EPSILON,
+                    "Expected approximately {}, got {}",
+                    expected,
+                    f
+                );
             }
             other => panic!("Expected Ok(Float(...)), got {:?}", other),
         }
@@ -2083,7 +2381,11 @@ mod tests {
     #[test]
     fn test_float_division_by_zero() {
         let result = eval_source("main : () -> Float\nmain = || 1.0 / 0.0");
-        assert!(result.is_err(), "Expected error for division by zero, got {:?}", result);
+        assert!(
+            result.is_err(),
+            "Expected error for division by zero, got {:?}",
+            result
+        );
     }
 
     // -- Option type --
@@ -2091,7 +2393,13 @@ mod tests {
     #[test]
     fn test_option_some_constructor() {
         let result = eval_source("main : () -> Option\nmain = || Some(42)");
-        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(42)])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum(
+                "Some".into(),
+                vec![RuntimeValue::Int(42)]
+            ))
+        );
     }
 
     #[test]
@@ -2146,7 +2454,13 @@ mod tests {
     fn test_option_map_some() {
         let source = "main : () -> Option\nmain = || Option.map(Some(10), |x| x + 1)";
         let result = eval_source(source);
-        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(11)])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum(
+                "Some".into(),
+                vec![RuntimeValue::Int(11)]
+            ))
+        );
     }
 
     #[test]
@@ -2168,13 +2482,22 @@ mod tests {
     #[test]
     fn test_result_ok_constructor() {
         let result = eval_source("main : () -> Result\nmain = || Ok(42)");
-        assert_eq!(result, Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(42)])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(42)]))
+        );
     }
 
     #[test]
     fn test_result_err_constructor() {
         let result = eval_source("main : () -> Result\nmain = || Err(\"failed\")");
-        assert_eq!(result, Ok(RuntimeValue::Enum("Err".into(), vec![RuntimeValue::String("failed".into())])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum(
+                "Err".into(),
+                vec![RuntimeValue::String("failed".into())]
+            ))
+        );
     }
 
     #[test]
@@ -2204,13 +2527,23 @@ mod tests {
     #[test]
     fn test_result_map_ok() {
         let result = eval_source("main : () -> Result\nmain = || Result.map(Ok(10), |x| x + 1)");
-        assert_eq!(result, Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(11)])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(11)]))
+        );
     }
 
     #[test]
     fn test_result_map_err() {
-        let result = eval_source("main : () -> Result\nmain = || Result.map(Err(\"e\"), |x| x + 1)");
-        assert_eq!(result, Ok(RuntimeValue::Enum("Err".into(), vec![RuntimeValue::String("e".into())])));
+        let result =
+            eval_source("main : () -> Result\nmain = || Result.map(Err(\"e\"), |x| x + 1)");
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum(
+                "Err".into(),
+                vec![RuntimeValue::String("e".into())]
+            ))
+        );
     }
 
     // -- String module --
@@ -2229,13 +2562,15 @@ mod tests {
 
     #[test]
     fn test_string_contains() {
-        let result = eval_source("main : () -> Bool\nmain = || String.contains(\"hello\", \"ell\")");
+        let result =
+            eval_source("main : () -> Bool\nmain = || String.contains(\"hello\", \"ell\")");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_string_starts_with() {
-        let result = eval_source("main : () -> Bool\nmain = || String.starts_with(\"hello\", \"he\")");
+        let result =
+            eval_source("main : () -> Bool\nmain = || String.starts_with(\"hello\", \"he\")");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
@@ -2248,16 +2583,20 @@ mod tests {
     #[test]
     fn test_string_split() {
         let result = eval_source("main : () -> List\nmain = || String.split(\"a,b,c\", \",\")");
-        assert_eq!(result, Ok(RuntimeValue::List(vec![
-            RuntimeValue::String("a".into()),
-            RuntimeValue::String("b".into()),
-            RuntimeValue::String("c".into()),
-        ])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::List(vec![
+                RuntimeValue::String("a".into()),
+                RuntimeValue::String("b".into()),
+                RuntimeValue::String("c".into()),
+            ]))
+        );
     }
 
     #[test]
     fn test_string_join() {
-        let result = eval_source("main : () -> String\nmain = || String.join([\"a\", \"b\"], \"-\")");
+        let result =
+            eval_source("main : () -> String\nmain = || String.join([\"a\", \"b\"], \"-\")");
         assert_eq!(result, Ok(RuntimeValue::String("a-b".into())));
     }
 
@@ -2278,51 +2617,84 @@ mod tests {
     #[test]
     fn test_list_head() {
         let result = eval_source("main : () -> Option\nmain = || List.head([1, 2, 3])");
-        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(1)])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum(
+                "Some".into(),
+                vec![RuntimeValue::Int(1)]
+            ))
+        );
     }
 
     #[test]
     fn test_list_reverse() {
         let result = eval_source("main : () -> List\nmain = || List.reverse([1, 2, 3])");
-        assert_eq!(result, Ok(RuntimeValue::List(vec![
-            RuntimeValue::Int(3), RuntimeValue::Int(2), RuntimeValue::Int(1),
-        ])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::List(vec![
+                RuntimeValue::Int(3),
+                RuntimeValue::Int(2),
+                RuntimeValue::Int(1),
+            ]))
+        );
     }
 
     #[test]
     fn test_list_sort() {
         let result = eval_source("main : () -> List\nmain = || List.sort([3, 1, 2])");
-        assert_eq!(result, Ok(RuntimeValue::List(vec![
-            RuntimeValue::Int(1), RuntimeValue::Int(2), RuntimeValue::Int(3),
-        ])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::List(vec![
+                RuntimeValue::Int(1),
+                RuntimeValue::Int(2),
+                RuntimeValue::Int(3),
+            ]))
+        );
     }
 
     #[test]
     fn test_list_map() {
         let result = eval_source("main : () -> List\nmain = || List.map([1, 2, 3], |x| x * 2)");
-        assert_eq!(result, Ok(RuntimeValue::List(vec![
-            RuntimeValue::Int(2), RuntimeValue::Int(4), RuntimeValue::Int(6),
-        ])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::List(vec![
+                RuntimeValue::Int(2),
+                RuntimeValue::Int(4),
+                RuntimeValue::Int(6),
+            ]))
+        );
     }
 
     #[test]
     fn test_list_filter() {
-        let result = eval_source("main : () -> List\nmain = || List.filter([1, 2, 3, 4], |x| x > 2)");
-        assert_eq!(result, Ok(RuntimeValue::List(vec![
-            RuntimeValue::Int(3), RuntimeValue::Int(4),
-        ])));
+        let result =
+            eval_source("main : () -> List\nmain = || List.filter([1, 2, 3, 4], |x| x > 2)");
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::List(vec![
+                RuntimeValue::Int(3),
+                RuntimeValue::Int(4),
+            ]))
+        );
     }
 
     #[test]
     fn test_list_fold() {
-        let result = eval_source("main : () -> Int\nmain = || List.fold([1, 2, 3], 0, |acc, x| acc + x)");
+        let result =
+            eval_source("main : () -> Int\nmain = || List.fold([1, 2, 3], 0, |acc, x| acc + x)");
         assert_eq!(result, Ok(RuntimeValue::Int(6)));
     }
 
     #[test]
     fn test_list_find_some() {
         let result = eval_source("main : () -> Option\nmain = || List.find([1, 2, 3], |x| x == 2)");
-        assert_eq!(result, Ok(RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(2)])));
+        assert_eq!(
+            result,
+            Ok(RuntimeValue::Enum(
+                "Some".into(),
+                vec![RuntimeValue::Int(2)]
+            ))
+        );
     }
 
     #[test]
@@ -2375,7 +2747,11 @@ mod tests {
     fn test_try_on_plain_value_errors() {
         let result = eval_source("main : () -> Int\nmain = || 42?");
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("? operator requires Option or Result"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("? operator requires Option or Result")
+        );
     }
 
     // -- Early return propagation through nested expressions --
@@ -2433,7 +2809,11 @@ mod tests {
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("Module `String` is not available"), "got: {}", err);
+        assert!(
+            err.contains("Module `String` is not available"),
+            "got: {}",
+            err
+        );
     }
 
     #[test]
@@ -2444,7 +2824,11 @@ mod tests {
         );
         assert!(result.is_err());
         let err = result.unwrap_err();
-        assert!(err.contains("Module `Console` is not available"), "got: {}", err);
+        assert!(
+            err.contains("Module `Console` is not available"),
+            "got: {}",
+            err
+        );
     }
 
     // -- Record update syntax --

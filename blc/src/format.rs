@@ -637,7 +637,8 @@ greet = |name| "Hello, ${name}!"
 
     #[test]
     fn test_blank_line_between_defs() {
-        let source = "greet : String -> String\ngreet = |name| name\nadd : Int -> Int\nadd = |n| n + 1\n";
+        let source =
+            "greet : String -> String\ngreet = |name| name\nadd : Int -> Int\nadd = |n| n + 1\n";
         let result = format_source(source).unwrap();
         assert!(
             result.contains("\n\n"),
@@ -650,10 +651,7 @@ greet = |name| "Hello, ${name}!"
     fn test_preserves_comments() {
         let source = "// A comment\n@prelude(script)\n";
         let result = format_source(source).unwrap();
-        assert!(
-            result.contains("// A comment"),
-            "should preserve comments"
-        );
+        assert!(result.contains("// A comment"), "should preserve comments");
     }
 
     #[test]

@@ -1,5 +1,5 @@
-use crate::interpreter::RuntimeValue;
 use super::NativeRegistry;
+use crate::interpreter::RuntimeValue;
 
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("List.length", list_length);
@@ -21,7 +21,10 @@ fn expect_list<'a>(name: &str, val: &RuntimeValue<'a>) -> Result<Vec<RuntimeValu
 
 fn list_length<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("List.length expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "List.length expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let items = expect_list("List.length", &args[0])?;
     Ok(RuntimeValue::Int(items.len() as i64))
@@ -53,7 +56,10 @@ fn list_tail<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> 
 
 fn list_reverse<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("List.reverse expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "List.reverse expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let mut items = expect_list("List.reverse", &args[0])?;
     items.reverse();
@@ -65,20 +71,23 @@ fn list_sort<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> 
         return Err(format!("List.sort expects 1 argument, got {}", args.len()));
     }
     let mut items = expect_list("List.sort", &args[0])?;
-    items.sort_by(|a, b| {
-        match (a, b) {
-            (RuntimeValue::Int(a), RuntimeValue::Int(b)) => a.cmp(b),
-            (RuntimeValue::Float(a), RuntimeValue::Float(b)) => a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal),
-            (RuntimeValue::String(a), RuntimeValue::String(b)) => a.cmp(b),
-            _ => std::cmp::Ordering::Equal,
+    items.sort_by(|a, b| match (a, b) {
+        (RuntimeValue::Int(a), RuntimeValue::Int(b)) => a.cmp(b),
+        (RuntimeValue::Float(a), RuntimeValue::Float(b)) => {
+            a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal)
         }
+        (RuntimeValue::String(a), RuntimeValue::String(b)) => a.cmp(b),
+        _ => std::cmp::Ordering::Equal,
     });
     Ok(RuntimeValue::List(items))
 }
 
 fn list_concat<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 2 {
-        return Err(format!("List.concat expects 2 arguments, got {}", args.len()));
+        return Err(format!(
+            "List.concat expects 2 arguments, got {}",
+            args.len()
+        ));
     }
     let mut a = expect_list("List.concat", &args[0])?;
     let b = expect_list("List.concat", &args[1])?;
@@ -96,7 +105,10 @@ mod tests {
 
     #[test]
     fn length() {
-        assert_eq!(list_length(&[int_list(&[1, 2, 3])]).unwrap(), RuntimeValue::Int(3));
+        assert_eq!(
+            list_length(&[int_list(&[1, 2, 3])]).unwrap(),
+            RuntimeValue::Int(3)
+        );
     }
 
     #[test]
@@ -107,7 +119,10 @@ mod tests {
     #[test]
     fn head_some() {
         let result = list_head(&[int_list(&[1, 2, 3])]).unwrap();
-        assert_eq!(result, RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(1)]));
+        assert_eq!(
+            result,
+            RuntimeValue::Enum("Some".into(), vec![RuntimeValue::Int(1)])
+        );
     }
 
     #[test]
@@ -118,7 +133,10 @@ mod tests {
 
     #[test]
     fn tail() {
-        assert_eq!(list_tail(&[int_list(&[1, 2, 3])]).unwrap(), int_list(&[2, 3]));
+        assert_eq!(
+            list_tail(&[int_list(&[1, 2, 3])]).unwrap(),
+            int_list(&[2, 3])
+        );
     }
 
     #[test]
@@ -128,12 +146,18 @@ mod tests {
 
     #[test]
     fn reverse() {
-        assert_eq!(list_reverse(&[int_list(&[1, 2, 3])]).unwrap(), int_list(&[3, 2, 1]));
+        assert_eq!(
+            list_reverse(&[int_list(&[1, 2, 3])]).unwrap(),
+            int_list(&[3, 2, 1])
+        );
     }
 
     #[test]
     fn sort() {
-        assert_eq!(list_sort(&[int_list(&[3, 1, 2])]).unwrap(), int_list(&[1, 2, 3]));
+        assert_eq!(
+            list_sort(&[int_list(&[3, 1, 2])]).unwrap(),
+            int_list(&[1, 2, 3])
+        );
     }
 
     #[test]

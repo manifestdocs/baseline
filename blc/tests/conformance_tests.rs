@@ -108,7 +108,10 @@ fn conformance_positive_tests() {
         if is_check_only(file) {
             let out = blc_cmd(&["check"], file);
             if out.exit_code != 0 {
-                failed.push(format!("{relative}: check failed\n  stderr: {}", out.stderr));
+                failed.push(format!(
+                    "{relative}: check failed\n  stderr: {}",
+                    out.stderr
+                ));
             } else {
                 passed += 1;
             }

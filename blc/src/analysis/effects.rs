@@ -30,9 +30,10 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         if child.kind() == "function_def"
-            && let Some(name) = find_function_name(child, source) {
-                defined_functions.insert(name.to_string());
-            }
+            && let Some(name) = find_function_name(child, source)
+        {
+            defined_functions.insert(name.to_string());
+        }
     }
 
     // Phase 1: Direct effect checking (existing behavior) +
@@ -79,20 +80,21 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         if child.kind() == "function_def"
-            && let Some(name) = find_function_name(child, source) {
-                let name_str = name.to_string();
-                check_transitive_effects(
-                    child,
-                    &name_str,
-                    source,
-                    file,
-                    &declared_effects_map,
-                    &transitive_effects,
-                    &call_graph,
-                    &direct_effects_map,
-                    &mut diagnostics,
-                );
-            }
+            && let Some(name) = find_function_name(child, source)
+        {
+            let name_str = name.to_string();
+            check_transitive_effects(
+                child,
+                &name_str,
+                source,
+                file,
+                &declared_effects_map,
+                &transitive_effects,
+                &call_graph,
+                &direct_effects_map,
+                &mut diagnostics,
+            );
+        }
     }
 
     diagnostics
@@ -124,10 +126,11 @@ fn collect_call_graph_info(
 ) {
     // Check for effectful identifiers (calls ending in !)
     if node.kind() == "effect_identifier"
-        && let Ok(call_name) = node.utf8_text(source.as_bytes()) {
-            let effect = infer_required_effect(call_name);
-            direct_effects.insert(effect);
-        }
+        && let Ok(call_name) = node.utf8_text(source.as_bytes())
+    {
+        let effect = infer_required_effect(call_name);
+        direct_effects.insert(effect);
+    }
 
     // Check for field expressions (Log.info!)
     if node.kind() == "field_expression" {
@@ -135,12 +138,13 @@ fn collect_call_graph_info(
         let field = node.named_child(1);
         if let (Some(obj_node), Some(field_node)) = (obj, field)
             && field_node.kind() == "effect_identifier"
-                && let Ok(effect_name) = obj_node.utf8_text(source.as_bytes())
-                    && let Ok(method_name) = field_node.utf8_text(source.as_bytes()) {
-                        let full_name = format!("{}.{}", effect_name, method_name);
-                        let effect = infer_required_effect(&full_name);
-                        direct_effects.insert(effect);
-                    }
+            && let Ok(effect_name) = obj_node.utf8_text(source.as_bytes())
+            && let Ok(method_name) = field_node.utf8_text(source.as_bytes())
+        {
+            let full_name = format!("{}.{}", effect_name, method_name);
+            let effect = infer_required_effect(&full_name);
+            direct_effects.insert(effect);
+        }
         // Don't recurse to avoid double-counting
         return;
     }
@@ -160,20 +164,22 @@ fn collect_call_graph_info(
         if let Some(callee) = node.named_child(0) {
             if callee.kind() == "identifier"
                 && let Ok(callee_name) = callee.utf8_text(source.as_bytes())
-                    && defined_functions.contains(callee_name) {
-                        callees.insert(callee_name.to_string());
-                    }
+                && defined_functions.contains(callee_name)
+            {
+                callees.insert(callee_name.to_string());
+            }
             // Also check effectful identifiers used as callee in call_expression
             // e.g., `foo!(x)` — the callee is an effect_identifier
             if callee.kind() == "effect_identifier"
-                && let Ok(callee_name) = callee.utf8_text(source.as_bytes()) {
-                    let base_name = callee_name.trim_end_matches('!');
-                    if defined_functions.contains(callee_name) {
-                        callees.insert(callee_name.to_string());
-                    } else if defined_functions.contains(base_name) {
-                        callees.insert(base_name.to_string());
-                    }
+                && let Ok(callee_name) = callee.utf8_text(source.as_bytes())
+            {
+                let base_name = callee_name.trim_end_matches('!');
+                if defined_functions.contains(callee_name) {
+                    callees.insert(callee_name.to_string());
+                } else if defined_functions.contains(base_name) {
+                    callees.insert(base_name.to_string());
                 }
+            }
         }
     }
 
@@ -252,13 +258,15 @@ fn find_effect_source<'a>(
         for callee in callees {
             // Check if this callee has the effect (directly or transitively)
             if let Some(callee_effects) = transitive_effects.get(callee.as_str())
-                && callee_effects.contains(effect) {
-                    return Some(callee);
-                }
+                && callee_effects.contains(effect)
+            {
+                return Some(callee);
+            }
             if let Some(callee_direct) = direct_effects_map.get(callee.as_str())
-                && callee_direct.contains(effect) {
-                    return Some(callee);
-                }
+                && callee_direct.contains(effect)
+            {
+                return Some(callee);
+            }
         }
     }
     None
@@ -277,8 +285,14 @@ fn check_transitive_effects(
     direct_effects_map: &HashMap<String, HashSet<String>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let declared = declared_effects_map.get(func_name).cloned().unwrap_or_default();
-    let direct = direct_effects_map.get(func_name).cloned().unwrap_or_default();
+    let declared = declared_effects_map
+        .get(func_name)
+        .cloned()
+        .unwrap_or_default();
+    let direct = direct_effects_map
+        .get(func_name)
+        .cloned()
+        .unwrap_or_default();
 
     if let Some(transitive) = transitive_effects.get(func_name) {
         for effect in transitive {
@@ -288,9 +302,7 @@ fn check_transitive_effects(
             }
 
             // Check if this transitive effect is declared
-            let has_effect = declared
-                .iter()
-                .any(|e| e.eq_ignore_ascii_case(effect));
+            let has_effect = declared.iter().any(|e| e.eq_ignore_ascii_case(effect));
 
             if !has_effect {
                 let start = func_node.start_position();
@@ -413,9 +425,10 @@ fn collect_effects_from_type(node: Node, source: &str, effects: &mut Vec<String>
         let mut cursor = node.walk();
         for child in node.children(&mut cursor) {
             if child.kind() == "type_identifier"
-                && let Ok(name) = child.utf8_text(source.as_bytes()) {
-                    effects.push(name.to_string());
-                }
+                && let Ok(name) = child.utf8_text(source.as_bytes())
+            {
+                effects.push(name.to_string());
+            }
         }
     }
 
@@ -438,18 +451,19 @@ fn check_node_for_effects(
 ) {
     // Check for effectful identifiers (calls ending in !)
     if node.kind() == "effect_identifier"
-        && let Ok(call_name) = node.utf8_text(source.as_bytes()) {
-            check_effectful_call(
-                node,
-                call_name,
-                source,
-                file,
-                func_name,
-                declared_effects,
-                func_node,
-                diagnostics,
-            );
-        }
+        && let Ok(call_name) = node.utf8_text(source.as_bytes())
+    {
+        check_effectful_call(
+            node,
+            call_name,
+            source,
+            file,
+            func_name,
+            declared_effects,
+            func_node,
+            diagnostics,
+        );
+    }
 
     // Check for field expressions (Log.info!)
     if node.kind() == "field_expression" {
@@ -459,22 +473,23 @@ fn check_node_for_effects(
 
         if let (Some(obj_node), Some(field_node)) = (obj, field)
             && field_node.kind() == "effect_identifier"
-                && let Ok(effect_name) = obj_node.utf8_text(source.as_bytes())
-                    && let Ok(method_name) = field_node.utf8_text(source.as_bytes()) {
-                        let full_name = format!("{}.{}", effect_name, method_name);
-                        check_effectful_call(
-                            node,
-                            &full_name,
-                            source,
-                            file,
-                            func_name,
-                            declared_effects,
-                            func_node,
-                            diagnostics,
-                        );
-                        // Don't recurse to avoid double reporting
-                        return;
-                    }
+            && let Ok(effect_name) = obj_node.utf8_text(source.as_bytes())
+            && let Ok(method_name) = field_node.utf8_text(source.as_bytes())
+        {
+            let full_name = format!("{}.{}", effect_name, method_name);
+            check_effectful_call(
+                node,
+                &full_name,
+                source,
+                file,
+                func_name,
+                declared_effects,
+                func_node,
+                diagnostics,
+            );
+            // Don't recurse to avoid double reporting
+            return;
+        }
     }
 
     // Check for qualified effectful calls like Http.get! (Legacy/Alternative)

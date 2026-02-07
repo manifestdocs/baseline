@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use tree_sitter::Node;
 
-use crate::analysis::types::TypeMap;
 use crate::analysis::types::Type;
+use crate::analysis::types::TypeMap;
 
 use super::chunk::{Chunk, Op, Program};
 use super::natives::NativeRegistry;
@@ -106,7 +106,11 @@ impl<'a> Compiler<'a> {
 
     /// Create a compiler with type information from the static type checker.
     /// Enables type-directed opcode specialization.
-    pub fn new_with_type_map(source: &'a str, natives: &'a NativeRegistry, type_map: TypeMap) -> Self {
+    pub fn new_with_type_map(
+        source: &'a str,
+        natives: &'a NativeRegistry,
+        type_map: TypeMap,
+    ) -> Self {
         let mut compiler = Self::new(source, natives);
         compiler.type_map = Some(type_map);
         compiler
@@ -141,15 +145,15 @@ impl<'a> Compiler<'a> {
                 self.compile_block(node)?;
             }
             "parenthesized_expression" => {
-                let inner = node.named_child(0).ok_or_else(|| {
-                    self.error("Empty parenthesized expression".into(), node)
-                })?;
+                let inner = node
+                    .named_child(0)
+                    .ok_or_else(|| self.error("Empty parenthesized expression".into(), node))?;
                 self.compile_expression(&inner)?;
             }
             "literal" => {
-                let child = node.named_child(0).ok_or_else(|| {
-                    self.error("Empty literal".into(), node)
-                })?;
+                let child = node
+                    .named_child(0)
+                    .ok_or_else(|| self.error("Empty literal".into(), node))?;
                 self.compile_expression(&child)?;
             }
             // --- Non-tail types: clear tail_position ---
@@ -169,9 +173,9 @@ impl<'a> Compiler<'a> {
         match kind {
             "integer_literal" => {
                 let text = self.node_text(node);
-                let val: i64 = text.parse().map_err(|_| {
-                    self.error(format!("Invalid integer: {}", text), node)
-                })?;
+                let val: i64 = text
+                    .parse()
+                    .map_err(|_| self.error(format!("Invalid integer: {}", text), node))?;
                 if val >= i16::MIN as i64 && val <= i16::MAX as i64 {
                     self.emit(Op::LoadSmallInt(val as i16), node);
                 } else {
@@ -181,9 +185,9 @@ impl<'a> Compiler<'a> {
             }
             "float_literal" => {
                 let text = self.node_text(node);
-                let val: f64 = text.parse().map_err(|_| {
-                    self.error(format!("Invalid float: {}", text), node)
-                })?;
+                let val: f64 = text
+                    .parse()
+                    .map_err(|_| self.error(format!("Invalid float: {}", text), node))?;
                 let idx = self.chunk.add_constant(Value::Float(val));
                 self.emit(Op::LoadConst(idx), node);
             }
@@ -245,9 +249,7 @@ impl<'a> Compiler<'a> {
                 // Comments are no-ops — skip them
             }
             _ => {
-                return Err(self.error(
-                    format!("Unsupported expression kind: {}", kind), node,
-                ));
+                return Err(self.error(format!("Unsupported expression kind: {}", kind), node));
             }
         }
         Ok(())
@@ -305,7 +307,9 @@ impl<'a> Compiler<'a> {
                     break;
                 }
             }
-            if found_at.is_some() { break; }
+            if found_at.is_some() {
+                break;
+            }
             // Check upvalues at this depth
             for (i, uv) in self.enclosing[d].upvalues.iter().enumerate() {
                 if uv.name == name {
@@ -313,7 +317,9 @@ impl<'a> Compiler<'a> {
                     break;
                 }
             }
-            if found_at.is_some() { break; }
+            if found_at.is_some() {
+                break;
+            }
         }
 
         let (found_depth, mut index, mut is_local) = found_at?;
@@ -404,15 +410,15 @@ impl<'a> Compiler<'a> {
 
     fn compile_let(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         // Grammar: 'let' _pattern optional(type_annotation) '=' _expression
-        let pattern = node.named_child(0).ok_or_else(|| {
-            self.error("Let binding missing pattern".into(), node)
-        })?;
+        let pattern = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Let binding missing pattern".into(), node))?;
 
         // Find the value expression — it's the last named child
         // (pattern is first, optional type_annotation is second, value is last)
-        let value_node = node.named_child(node.named_child_count() - 1).ok_or_else(|| {
-            self.error("Let binding missing value".into(), node)
-        })?;
+        let value_node = node
+            .named_child(node.named_child_count() - 1)
+            .ok_or_else(|| self.error("Let binding missing value".into(), node))?;
 
         // Compile the value — this pushes it onto the stack
         self.compile_expression(&value_node)?;
@@ -423,8 +429,7 @@ impl<'a> Compiler<'a> {
             let tuple_slot = (self.locals.len() - 1) as u16;
 
             let mut pat_cursor = pattern.walk();
-            let bindings: Vec<Node<'a>> =
-                pattern.named_children(&mut pat_cursor).collect();
+            let bindings: Vec<Node<'a>> = pattern.named_children(&mut pat_cursor).collect();
 
             for (i, binding) in bindings.iter().enumerate() {
                 self.emit(Op::GetLocal(tuple_slot), node);
@@ -461,9 +466,11 @@ impl<'a> Compiler<'a> {
         }
         if pop_count > 0 {
             // CloseScope removes n locals from under the result value on top
-            self.chunk.emit(Op::CloseScope(pop_count),
+            self.chunk.emit(
+                Op::CloseScope(pop_count),
                 node.start_position().row + 1,
-                node.start_position().column);
+                node.start_position().column,
+            );
         }
     }
 
@@ -540,7 +547,8 @@ impl<'a> Compiler<'a> {
         // Subject is on stack — declare it as a temporary local so GetLocal works
         self.declare_local("__match_subject");
 
-        let arms: Vec<&Node<'a>> = children[1..].iter()
+        let arms: Vec<&Node<'a>> = children[1..]
+            .iter()
             .filter(|c| c.kind() == "match_arm")
             .collect();
 
@@ -577,8 +585,8 @@ impl<'a> Compiler<'a> {
                     self.end_scope(arm);
                     end_jumps.push(self.emit(Op::Jump(0), arm));
                 }
-                "literal" | "integer_literal" | "float_literal"
-                | "boolean_literal" | "string_literal" => {
+                "literal" | "integer_literal" | "float_literal" | "boolean_literal"
+                | "string_literal" => {
                     // Duplicate subject, compile pattern, compare
                     self.emit(Op::GetLocal(subject_slot), arm);
                     self.compile_expression(pattern)?;
@@ -608,7 +616,8 @@ impl<'a> Compiler<'a> {
                 "constructor_pattern" => {
                     // Constructor with payload: Some(v), Ok(val), Err(e)
                     let mut pat_cursor = pattern.walk();
-                    let pat_children: Vec<Node<'a>> = pattern.named_children(&mut pat_cursor).collect();
+                    let pat_children: Vec<Node<'a>> =
+                        pattern.named_children(&mut pat_cursor).collect();
 
                     if pat_children.is_empty() {
                         return Err(self.error("Constructor pattern missing tag".into(), pattern));
@@ -805,12 +814,12 @@ impl<'a> Compiler<'a> {
         // Grammar: _expression '..' _expression
         // For now, compile as constructing a list [start..end)
         // We need a MakeRange op
-        let lhs = node.named_child(0).ok_or_else(|| {
-            self.error("Range missing start".into(), node)
-        })?;
-        let rhs = node.named_child(1).ok_or_else(|| {
-            self.error("Range missing end".into(), node)
-        })?;
+        let lhs = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Range missing start".into(), node))?;
+        let rhs = node
+            .named_child(1)
+            .ok_or_else(|| self.error("Range missing end".into(), node))?;
 
         self.compile_expression(&lhs)?;
         self.compile_expression(&rhs)?;
@@ -829,12 +838,13 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
 
-        let op_text = node.child(0)
+        let op_text = node
+            .child(0)
             .map(|c| self.node_text(&c))
             .unwrap_or_default();
-        let operand = node.named_child(0).ok_or_else(|| {
-            self.error("Unary missing operand".into(), node)
-        })?;
+        let operand = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Unary missing operand".into(), node))?;
 
         // Operand of a unary op is not in tail position (the op still applies)
         let was_tail = self.tail_position;
@@ -845,9 +855,7 @@ impl<'a> Compiler<'a> {
         match op_text.as_str() {
             "-" => self.emit(Op::Negate, node),
             "not" => self.emit(Op::Not, node),
-            _ => return Err(self.error(
-                format!("Unknown unary operator: {}", op_text), node,
-            )),
+            _ => return Err(self.error(format!("Unknown unary operator: {}", op_text), node)),
         };
         Ok(())
     }
@@ -858,7 +866,8 @@ impl<'a> Compiler<'a> {
             "integer_literal" => true,
             "unary_expression" => {
                 // -integer_literal is still int
-                node.named_child(0).is_some_and(|c| c.kind() == "integer_literal")
+                node.named_child(0)
+                    .is_some_and(|c| c.kind() == "integer_literal")
             }
             "binary_expression" => {
                 // int +/-/*/%// int is still int
@@ -882,15 +891,9 @@ impl<'a> Compiler<'a> {
     /// Uses [`eval_const_binary`] for binary sub-expressions.
     fn try_eval_const(&self, node: &Node) -> Option<Value> {
         match node.kind() {
-            "integer_literal" => {
-                self.node_text(node).parse::<i64>().ok().map(Value::Int)
-            }
-            "float_literal" => {
-                self.node_text(node).parse::<f64>().ok().map(Value::Float)
-            }
-            "boolean_literal" => {
-                Some(Value::Bool(self.node_text(node) == "true"))
-            }
+            "integer_literal" => self.node_text(node).parse::<i64>().ok().map(Value::Int),
+            "float_literal" => self.node_text(node).parse::<f64>().ok().map(Value::Float),
+            "boolean_literal" => Some(Value::Bool(self.node_text(node) == "true")),
             "string_literal" if node.named_child_count() == 0 => {
                 let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
                 Some(Value::String(text.into()))
@@ -921,10 +924,12 @@ impl<'a> Compiler<'a> {
     /// Emit a single load instruction for a constant value.
     fn emit_const_value(&mut self, val: Value, node: &Node<'a>) {
         if let Value::Int(n) = val
-            && n >= i16::MIN as i64 && n <= i16::MAX as i64 {
-                self.emit(Op::LoadSmallInt(n as i16), node);
-                return;
-            }
+            && n >= i16::MIN as i64
+            && n <= i16::MAX as i64
+        {
+            self.emit(Op::LoadSmallInt(n as i16), node);
+            return;
+        }
         let idx = self.chunk.add_constant(val);
         self.emit(Op::LoadConst(idx), node);
     }
@@ -936,16 +941,18 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
 
-        let lhs = node.child_by_field_name("left")
+        let lhs = node
+            .child_by_field_name("left")
             .or_else(|| node.named_child(0))
             .ok_or_else(|| self.error("Binary missing lhs".into(), node))?;
-        let rhs = node.child_by_field_name("right")
+        let rhs = node
+            .child_by_field_name("right")
             .or_else(|| node.named_child(1))
             .ok_or_else(|| self.error("Binary missing rhs".into(), node))?;
 
-        let op_node = node.child(1).ok_or_else(|| {
-            self.error("Binary missing operator".into(), node)
-        })?;
+        let op_node = node
+            .child(1)
+            .ok_or_else(|| self.error("Binary missing operator".into(), node))?;
         let op_text = self.node_text(&op_node);
 
         match op_text.as_str() {
@@ -992,16 +999,19 @@ impl<'a> Compiler<'a> {
             "<=" => Op::Le,
             ">=" if both_int => Op::GeInt,
             ">=" => Op::Ge,
-            _ => return Err(self.error(
-                format!("Unknown binary operator: {}", op_text), node,
-            )),
+            _ => return Err(self.error(format!("Unknown binary operator: {}", op_text), node)),
         };
 
         self.emit(op, node);
         Ok(())
     }
 
-    fn compile_and(&mut self, node: &Node<'a>, lhs: &Node<'a>, rhs: &Node<'a>) -> Result<(), CompileError> {
+    fn compile_and(
+        &mut self,
+        node: &Node<'a>,
+        lhs: &Node<'a>,
+        rhs: &Node<'a>,
+    ) -> Result<(), CompileError> {
         self.compile_expression(lhs)?;
         let jump_idx = self.emit(Op::JumpIfFalse(0), node);
         self.compile_expression(rhs)?;
@@ -1013,7 +1023,12 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn compile_or(&mut self, node: &Node<'a>, lhs: &Node<'a>, rhs: &Node<'a>) -> Result<(), CompileError> {
+    fn compile_or(
+        &mut self,
+        node: &Node<'a>,
+        lhs: &Node<'a>,
+        rhs: &Node<'a>,
+    ) -> Result<(), CompileError> {
         self.compile_expression(lhs)?;
         let jump_idx = self.emit(Op::JumpIfFalse(0), node);
         let true_const = self.chunk.add_constant(Value::Bool(true));
@@ -1085,9 +1100,9 @@ impl<'a> Compiler<'a> {
                     self.emit(Op::LoadConst(idx), node);
                 }
                 StringPart::Interpolation(interp_node) => {
-                    let expr = interp_node.named_child(0).ok_or_else(|| {
-                        self.error("Empty interpolation".into(), interp_node)
-                    })?;
+                    let expr = interp_node
+                        .named_child(0)
+                        .ok_or_else(|| self.error("Empty interpolation".into(), interp_node))?;
                     self.compile_expression(&expr)?;
                 }
             }
@@ -1097,7 +1112,9 @@ impl<'a> Compiler<'a> {
             segment_count += 1;
         }
 
-        let has_interpolation = parts.iter().any(|p| matches!(p, StringPart::Interpolation(_)));
+        let has_interpolation = parts
+            .iter()
+            .any(|p| matches!(p, StringPart::Interpolation(_)));
         if segment_count == 1 && has_interpolation {
             let idx = self.chunk.add_constant(Value::String("".into()));
             self.emit(Op::LoadConst(idx), node);
@@ -1146,9 +1163,9 @@ impl<'a> Compiler<'a> {
 
         // Second pass: compile each function body, replacing pre-allocated slots
         for (i, func_node) in func_defs.iter().enumerate() {
-            let body = func_node.child_by_field_name("body").ok_or_else(|| {
-                self.error("Function missing body".into(), func_node)
-            })?;
+            let body = func_node
+                .child_by_field_name("body")
+                .ok_or_else(|| self.error("Function missing body".into(), func_node))?;
 
             // Reset state for this function
             self.chunk = Chunk::new();
@@ -1175,7 +1192,9 @@ impl<'a> Compiler<'a> {
         }
 
         // Determine entry point: require main!/main
-        let entry = self.functions.get("main!")
+        let entry = self
+            .functions
+            .get("main!")
             .or_else(|| self.functions.get("main"))
             .copied()
             .ok_or_else(|| CompileError {
@@ -1190,9 +1209,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile a module (no entry point required). Returns chunks and name→index map.
-    pub fn compile_module(mut self, root: &Node<'a>)
-        -> Result<(Vec<Chunk>, HashMap<String, usize>), CompileError>
-    {
+    pub fn compile_module(
+        mut self,
+        root: &Node<'a>,
+    ) -> Result<(Vec<Chunk>, HashMap<String, usize>), CompileError> {
         // First pass: register all function names with their chunk indices
         let mut func_defs: Vec<Node<'a>> = Vec::new();
         for i in 0..root.named_child_count() {
@@ -1213,9 +1233,9 @@ impl<'a> Compiler<'a> {
 
         // Second pass: compile each function body
         for (i, func_node) in func_defs.iter().enumerate() {
-            let body = func_node.child_by_field_name("body").ok_or_else(|| {
-                self.error("Function missing body".into(), func_node)
-            })?;
+            let body = func_node
+                .child_by_field_name("body")
+                .ok_or_else(|| self.error("Function missing body".into(), func_node))?;
 
             self.chunk = Chunk::new();
             self.locals.clear();
@@ -1242,7 +1262,10 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile a full program plus all inline test expressions as additional chunks.
-    pub fn compile_program_with_tests(mut self, root: &Node<'a>) -> Result<TestProgram, CompileError> {
+    pub fn compile_program_with_tests(
+        mut self,
+        root: &Node<'a>,
+    ) -> Result<TestProgram, CompileError> {
         let chunk_offset = self.compiled_chunks.len();
 
         // First pass: register all function names with their chunk indices
@@ -1267,9 +1290,9 @@ impl<'a> Compiler<'a> {
 
             // Second pass: compile each function body
             for (i, func_node) in func_defs.iter().enumerate() {
-                let body = func_node.child_by_field_name("body").ok_or_else(|| {
-                    self.error("Function missing body".into(), func_node)
-                })?;
+                let body = func_node
+                    .child_by_field_name("body")
+                    .ok_or_else(|| self.error("Function missing body".into(), func_node))?;
 
                 self.chunk = Chunk::new();
                 self.locals.clear();
@@ -1317,9 +1340,11 @@ impl<'a> Compiler<'a> {
                             let mut wb_cursor = fc.walk();
                             for test_node in fc.children(&mut wb_cursor) {
                                 if test_node.kind() == "inline_test"
-                                    && let Some(ct) = self.compile_inline_test(&test_node, &func_name)? {
-                                        compiled_tests.push(ct);
-                                    }
+                                    && let Some(ct) =
+                                        self.compile_inline_test(&test_node, &func_name)?
+                                {
+                                    compiled_tests.push(ct);
+                                }
                             }
                         }
                     }
@@ -1333,7 +1358,9 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        let entry = self.functions.get("main!")
+        let entry = self
+            .functions
+            .get("main!")
             .or_else(|| self.functions.get("main"))
             .copied()
             .unwrap_or(chunk_offset);
@@ -1465,23 +1492,23 @@ impl<'a> Compiler<'a> {
         // TCO: detect self-recursive tail calls.
         // Conditions: callee is an identifier, matches current function name,
         // we're in tail position, and not inside a nested function/lambda.
-        if self.tail_position && self.enclosing.is_empty()
-            && callee.kind() == "identifier" {
-                let callee_name = self.node_text(callee);
-                if let Some(ref fn_name) = self.current_fn_name
-                    && callee_name == *fn_name {
-                        // Emit args (no function value), then TailCall
-                        // Args are NOT in tail position themselves
-                        let was_tail = self.tail_position;
-                        self.tail_position = false;
-                        for arg in args {
-                            self.compile_expression(arg)?;
-                        }
-                        self.tail_position = was_tail;
-                        self.emit(Op::TailCall(args.len() as u8), node);
-                        return Ok(());
-                    }
+        if self.tail_position && self.enclosing.is_empty() && callee.kind() == "identifier" {
+            let callee_name = self.node_text(callee);
+            if let Some(ref fn_name) = self.current_fn_name
+                && callee_name == *fn_name
+            {
+                // Emit args (no function value), then TailCall
+                // Args are NOT in tail position themselves
+                let was_tail = self.tail_position;
+                self.tail_position = false;
+                for arg in args {
+                    self.compile_expression(arg)?;
+                }
+                self.tail_position = was_tail;
+                self.emit(Op::TailCall(args.len() as u8), node);
+                return Ok(());
             }
+        }
 
         // Arguments are never in tail position
         let was_tail = self.tail_position;
@@ -1489,28 +1516,29 @@ impl<'a> Compiler<'a> {
 
         // Check if callee is Module.method (field_expression with type_identifier object)
         if callee.kind() == "field_expression"
-            && let Some(qualified) = self.try_resolve_native(callee) {
-                if let Some(fn_id) = self.natives.lookup(&qualified) {
-                    // Emit args, then CallNative
-                    for arg in args {
-                        self.compile_expression(arg)?;
-                    }
-                    self.tail_position = was_tail;
-                    self.emit(Op::CallNative(fn_id, args.len() as u8), node);
-                    return Ok(());
+            && let Some(qualified) = self.try_resolve_native(callee)
+        {
+            if let Some(fn_id) = self.natives.lookup(&qualified) {
+                // Emit args, then CallNative
+                for arg in args {
+                    self.compile_expression(arg)?;
                 }
-                // Check imported module functions (e.g., Math.add)
-                if let Some(&chunk_idx) = self.functions.get(&qualified) {
-                    let idx = self.chunk.add_constant(Value::Function(chunk_idx));
-                    self.emit(Op::LoadConst(idx), node);
-                    for arg in args {
-                        self.compile_expression(arg)?;
-                    }
-                    self.tail_position = was_tail;
-                    self.emit(Op::Call(args.len() as u8), node);
-                    return Ok(());
-                }
+                self.tail_position = was_tail;
+                self.emit(Op::CallNative(fn_id, args.len() as u8), node);
+                return Ok(());
             }
+            // Check imported module functions (e.g., Math.add)
+            if let Some(&chunk_idx) = self.functions.get(&qualified) {
+                let idx = self.chunk.add_constant(Value::Function(chunk_idx));
+                self.emit(Op::LoadConst(idx), node);
+                for arg in args {
+                    self.compile_expression(arg)?;
+                }
+                self.tail_position = was_tail;
+                self.emit(Op::Call(args.len() as u8), node);
+                return Ok(());
+            }
+        }
 
         // Regular function call
         self.compile_expression(callee)?;
@@ -1586,7 +1614,10 @@ impl<'a> Compiler<'a> {
                     self.emit(Op::GetUpvalue(uv.index as u8), node);
                 }
             }
-            self.emit(Op::MakeClosure(chunk_idx as u16, captured.len() as u8), node);
+            self.emit(
+                Op::MakeClosure(chunk_idx as u16, captured.len() as u8),
+                node,
+            );
         }
 
         Ok(())
@@ -1597,12 +1628,12 @@ impl<'a> Compiler<'a> {
     // -----------------------------------------------------------------------
 
     fn compile_pipe(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
-        let lhs = node.named_child(0).ok_or_else(|| {
-            self.error("Pipe missing left operand".into(), node)
-        })?;
-        let rhs = node.named_child(1).ok_or_else(|| {
-            self.error("Pipe missing right operand".into(), node)
-        })?;
+        let lhs = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Pipe missing left operand".into(), node))?;
+        let rhs = node
+            .named_child(1)
+            .ok_or_else(|| self.error("Pipe missing right operand".into(), node))?;
 
         if rhs.kind() == "call_expression" {
             // x |> f(a, b) → f(x, a, b)
@@ -1617,32 +1648,33 @@ impl<'a> Compiler<'a> {
 
             // Check for native module call: x |> Module.method(a, b) → CallNative(x, a, b)
             if callee.kind() == "field_expression"
-                && let Some(qualified) = self.try_resolve_native(callee) {
-                    if let Some(fn_id) = self.natives.lookup(&qualified) {
-                        self.compile_expression(&lhs)?;    // pipe value as first arg
-                        for arg in &rhs_children[1..] {
-                            self.compile_expression(arg)?;
-                        }
-                        let arg_count = 1 + (rhs_children.len() - 1);
-                        self.emit(Op::CallNative(fn_id, arg_count as u8), node);
-                        return Ok(());
+                && let Some(qualified) = self.try_resolve_native(callee)
+            {
+                if let Some(fn_id) = self.natives.lookup(&qualified) {
+                    self.compile_expression(&lhs)?; // pipe value as first arg
+                    for arg in &rhs_children[1..] {
+                        self.compile_expression(arg)?;
                     }
-                    // Check imported module functions
-                    if let Some(&chunk_idx) = self.functions.get(&qualified) {
-                        let idx = self.chunk.add_constant(Value::Function(chunk_idx));
-                        self.emit(Op::LoadConst(idx), node);
-                        self.compile_expression(&lhs)?;
-                        for arg in &rhs_children[1..] {
-                            self.compile_expression(arg)?;
-                        }
-                        let arg_count = 1 + (rhs_children.len() - 1);
-                        self.emit(Op::Call(arg_count as u8), node);
-                        return Ok(());
-                    }
+                    let arg_count = 1 + (rhs_children.len() - 1);
+                    self.emit(Op::CallNative(fn_id, arg_count as u8), node);
+                    return Ok(());
                 }
+                // Check imported module functions
+                if let Some(&chunk_idx) = self.functions.get(&qualified) {
+                    let idx = self.chunk.add_constant(Value::Function(chunk_idx));
+                    self.emit(Op::LoadConst(idx), node);
+                    self.compile_expression(&lhs)?;
+                    for arg in &rhs_children[1..] {
+                        self.compile_expression(arg)?;
+                    }
+                    let arg_count = 1 + (rhs_children.len() - 1);
+                    self.emit(Op::Call(arg_count as u8), node);
+                    return Ok(());
+                }
+            }
 
-            self.compile_expression(callee)?;  // push function
-            self.compile_expression(&lhs)?;    // push pipe value as first arg
+            self.compile_expression(callee)?; // push function
+            self.compile_expression(&lhs)?; // push pipe value as first arg
             for arg in &rhs_children[1..] {
                 self.compile_expression(arg)?; // push remaining args
             }
@@ -1671,8 +1703,8 @@ impl<'a> Compiler<'a> {
             self.emit(Op::Call(1), node);
         } else {
             // x |> f → f(x)
-            self.compile_expression(&rhs)?;   // push function
-            self.compile_expression(&lhs)?;   // push arg
+            self.compile_expression(&rhs)?; // push function
+            self.compile_expression(&lhs)?; // push arg
             self.emit(Op::Call(1), node);
         }
 
@@ -1700,12 +1732,12 @@ impl<'a> Compiler<'a> {
             if field_init.kind() != "record_field_init" {
                 continue;
             }
-            let key_node = field_init.named_child(0).ok_or_else(|| {
-                self.error("Record field missing key".into(), &field_init)
-            })?;
-            let val_node = field_init.named_child(1).ok_or_else(|| {
-                self.error("Record field missing value".into(), &field_init)
-            })?;
+            let key_node = field_init
+                .named_child(0)
+                .ok_or_else(|| self.error("Record field missing key".into(), &field_init))?;
+            let val_node = field_init
+                .named_child(1)
+                .ok_or_else(|| self.error("Record field missing value".into(), &field_init))?;
             // Push key as string constant
             let key_name = self.node_text(&key_node);
             let key_idx = self.chunk.add_constant(Value::String(key_name.into()));
@@ -1720,12 +1752,12 @@ impl<'a> Compiler<'a> {
 
     fn compile_field_access(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         // field_expression: _expression '.' identifier
-        let obj = node.named_child(0).ok_or_else(|| {
-            self.error("Field access missing object".into(), node)
-        })?;
-        let field = node.named_child(1).ok_or_else(|| {
-            self.error("Field access missing field name".into(), node)
-        })?;
+        let obj = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Field access missing object".into(), node))?;
+        let field = node
+            .named_child(1)
+            .ok_or_else(|| self.error("Field access missing field name".into(), node))?;
         self.compile_expression(&obj)?;
         let field_name = self.node_text(&field);
         let name_idx = self.chunk.add_constant(Value::String(field_name.into()));
@@ -1758,9 +1790,9 @@ impl<'a> Compiler<'a> {
         // For enums like Some(x), Ok(v) — grammar uses call_expression with type_identifier
         // This handles: TypeName { field: val } — not really enum, but named record
         // For now, treat as named record (same as record_expression but with a type tag)
-        let type_node = node.named_child(0).ok_or_else(|| {
-            self.error("Struct expression missing type".into(), node)
-        })?;
+        let type_node = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Struct expression missing type".into(), node))?;
         let type_name = self.node_text(&type_node);
 
         // If it has record fields, compile as tagged record
@@ -1804,9 +1836,9 @@ impl<'a> Compiler<'a> {
     fn compile_try(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         // try_expression: _expression '?'
         // Semantics: if Err(e) or None, return early; else unwrap Ok(v)/Some(v) to v
-        let expr = node.named_child(0).ok_or_else(|| {
-            self.error("Try expression missing operand".into(), node)
-        })?;
+        let expr = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Try expression missing operand".into(), node))?;
         self.compile_expression(&expr)?;
 
         // Store in a local for repeated access
@@ -1944,9 +1976,10 @@ impl<'a> Compiler<'a> {
     }
 
     fn node_text(&self, node: &Node) -> String {
-        node.utf8_text(self.source.as_bytes()).unwrap_or("").to_string()
+        node.utf8_text(self.source.as_bytes())
+            .unwrap_or("")
+            .to_string()
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -2048,8 +2081,8 @@ impl std::fmt::Display for CompileError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::rc::Rc;
     use crate::vm::vm::Vm;
+    use std::rc::Rc;
 
     /// Helper: wrap expr in a function def, parse, compile the body, execute.
     fn eval_expr(expr: &str) -> Value {
@@ -2061,12 +2094,16 @@ mod tests {
         let tree = parser.parse(&source, None).expect("Parse failed");
         let root = tree.root_node();
 
-        let func_def = root.named_child(0)
-            .expect("No function def found");
-        assert_eq!(func_def.kind(), "function_def",
+        let func_def = root.named_child(0).expect("No function def found");
+        assert_eq!(
+            func_def.kind(),
+            "function_def",
             "Expected function_def, got {}. Tree: {}",
-            func_def.kind(), root.to_sexp());
-        let body = func_def.child_by_field_name("body")
+            func_def.kind(),
+            root.to_sexp()
+        );
+        let body = func_def
+            .child_by_field_name("body")
             .expect("No body field in function_def");
 
         let natives = NativeRegistry::new();
@@ -2193,17 +2230,29 @@ mod tests {
     // ===== Comparisons =====
 
     #[test]
-    fn compile_eq() { assert_eq!(eval_expr("5 == 5"), Value::Bool(true)); }
+    fn compile_eq() {
+        assert_eq!(eval_expr("5 == 5"), Value::Bool(true));
+    }
     #[test]
-    fn compile_ne() { assert_eq!(eval_expr("5 != 3"), Value::Bool(true)); }
+    fn compile_ne() {
+        assert_eq!(eval_expr("5 != 3"), Value::Bool(true));
+    }
     #[test]
-    fn compile_lt() { assert_eq!(eval_expr("3 < 5"), Value::Bool(true)); }
+    fn compile_lt() {
+        assert_eq!(eval_expr("3 < 5"), Value::Bool(true));
+    }
     #[test]
-    fn compile_gt() { assert_eq!(eval_expr("5 > 3"), Value::Bool(true)); }
+    fn compile_gt() {
+        assert_eq!(eval_expr("5 > 3"), Value::Bool(true));
+    }
     #[test]
-    fn compile_le() { assert_eq!(eval_expr("3 <= 3"), Value::Bool(true)); }
+    fn compile_le() {
+        assert_eq!(eval_expr("3 <= 3"), Value::Bool(true));
+    }
     #[test]
-    fn compile_ge() { assert_eq!(eval_expr("5 >= 5"), Value::Bool(true)); }
+    fn compile_ge() {
+        assert_eq!(eval_expr("5 >= 5"), Value::Bool(true));
+    }
 
     // ===== Boolean short-circuit =====
 
@@ -2239,10 +2288,7 @@ mod tests {
     }
     #[test]
     fn compile_mixed_interpolation() {
-        assert_eq!(
-            eval_expr("\"a${1}b${2}c\""),
-            Value::String("a1b2c".into()),
-        );
+        assert_eq!(eval_expr("\"a${1}b${2}c\""), Value::String("a1b2c".into()),);
     }
 
     // ===== Let bindings & blocks =====
@@ -2250,10 +2296,7 @@ mod tests {
     #[test]
     fn compile_let_and_use() {
         // let x = 10, then x + 1
-        assert_eq!(
-            eval_expr("{\n  let x = 10\n  x + 1\n}"),
-            Value::Int(11),
-        );
+        assert_eq!(eval_expr("{\n  let x = 10\n  x + 1\n}"), Value::Int(11),);
     }
 
     #[test]
@@ -2284,26 +2327,17 @@ mod tests {
 
     #[test]
     fn compile_if_true_branch() {
-        assert_eq!(
-            eval_expr("if true then 1 else 2"),
-            Value::Int(1),
-        );
+        assert_eq!(eval_expr("if true then 1 else 2"), Value::Int(1),);
     }
 
     #[test]
     fn compile_if_false_branch() {
-        assert_eq!(
-            eval_expr("if false then 1 else 2"),
-            Value::Int(2),
-        );
+        assert_eq!(eval_expr("if false then 1 else 2"), Value::Int(2),);
     }
 
     #[test]
     fn compile_if_with_expression_condition() {
-        assert_eq!(
-            eval_expr("if 3 > 2 then 10 else 20"),
-            Value::Int(10),
-        );
+        assert_eq!(eval_expr("if 3 > 2 then 10 else 20"), Value::Int(10),);
     }
 
     #[test]
@@ -2326,18 +2360,12 @@ mod tests {
 
     #[test]
     fn compile_match_wildcard() {
-        assert_eq!(
-            eval_expr("match 42\n  _ -> 99"),
-            Value::Int(99),
-        );
+        assert_eq!(eval_expr("match 42\n  _ -> 99"), Value::Int(99),);
     }
 
     #[test]
     fn compile_match_binding() {
-        assert_eq!(
-            eval_expr("match 5\n  x -> x + 1"),
-            Value::Int(6),
-        );
+        assert_eq!(eval_expr("match 5\n  x -> x + 1"), Value::Int(6),);
     }
 
     #[test]
@@ -2363,10 +2391,7 @@ mod tests {
     #[test]
     fn compile_for_loop_unit() {
         // For loop produces Unit
-        assert_eq!(
-            eval_expr("for x in 1..4 do x + 1"),
-            Value::Unit,
-        );
+        assert_eq!(eval_expr("for x in 1..4 do x + 1"), Value::Unit,);
     }
 
     // ===== Named function definition + call =====
@@ -2377,7 +2402,7 @@ mod tests {
             "double : Int -> Int\n\
              double = |x| x * 2\n\
              main : () -> Int\n\
-             main = double(5)"
+             main = double(5)",
         );
         assert_eq!(result, Value::Int(10));
     }
@@ -2388,7 +2413,7 @@ mod tests {
             "add : (Int, Int) -> Int\n\
              add = |a, b| a + b\n\
              main : () -> Int\n\
-             main = add(3, 4)"
+             main = add(3, 4)",
         );
         assert_eq!(result, Value::Int(7));
     }
@@ -2401,7 +2426,7 @@ mod tests {
              inc : Int -> Int\n\
              inc = |x| x + 1\n\
              main : () -> Int\n\
-             main = inc(double(3))"
+             main = inc(double(3))",
         );
         assert_eq!(result, Value::Int(7));
     }
@@ -2412,7 +2437,7 @@ mod tests {
             "factorial : Int -> Int\n\
              factorial = |n| if n <= 1 then 1 else n * factorial(n - 1)\n\
              main : () -> Int\n\
-             main = factorial(5)"
+             main = factorial(5)",
         );
         assert_eq!(result, Value::Int(120));
     }
@@ -2423,7 +2448,7 @@ mod tests {
             "answer : () -> Int\n\
              answer = 42\n\
              main : () -> Int\n\
-             main = answer()"
+             main = answer()",
         );
         assert_eq!(result, Value::Int(42));
     }
@@ -2433,17 +2458,13 @@ mod tests {
     #[test]
     fn compile_lambda_as_value() {
         // Lambda assigned to let binding, then called
-        let result = eval_expr(
-            "{\n  let f = |x| x + 1\n  f(3)\n}"
-        );
+        let result = eval_expr("{\n  let f = |x| x + 1\n  f(3)\n}");
         assert_eq!(result, Value::Int(4));
     }
 
     #[test]
     fn compile_lambda_two_params() {
-        let result = eval_expr(
-            "{\n  let add = |a, b| a + b\n  add(3, 4)\n}"
-        );
+        let result = eval_expr("{\n  let add = |a, b| a + b\n  add(3, 4)\n}");
         assert_eq!(result, Value::Int(7));
     }
 
@@ -2453,7 +2474,7 @@ mod tests {
             "apply : ((Int -> Int), Int) -> Int\n\
              apply = |f, x| f(x)\n\
              main : () -> Int\n\
-             main = apply(|x| x * 3, 5)"
+             main = apply(|x| x * 3, 5)",
         );
         assert_eq!(result, Value::Int(15));
     }
@@ -2466,7 +2487,7 @@ mod tests {
             "double : Int -> Int\n\
              double = |x| x * 2\n\
              main : () -> Int\n\
-             main = 5 |> double"
+             main = 5 |> double",
         );
         assert_eq!(result, Value::Int(10));
     }
@@ -2479,7 +2500,7 @@ mod tests {
              inc : Int -> Int\n\
              inc = |x| x + 1\n\
              main : () -> Int\n\
-             main = 3 |> double |> inc"
+             main = 3 |> double |> inc",
         );
         assert_eq!(result, Value::Int(7));
     }
@@ -2490,7 +2511,7 @@ mod tests {
             "add : (Int, Int) -> Int\n\
              add = |a, b| a + b\n\
              main : () -> Int\n\
-             main = 3 |> add(4)"
+             main = 3 |> add(4)",
         );
         assert_eq!(result, Value::Int(7));
     }
@@ -2499,7 +2520,7 @@ mod tests {
     fn compile_pipe_to_lambda() {
         let result = eval_program(
             "main : () -> Int\n\
-             main = 5 |> |x| x * 2"
+             main = 5 |> |x| x * 2",
         );
         assert_eq!(result, Value::Int(10));
     }
@@ -2508,17 +2529,13 @@ mod tests {
 
     #[test]
     fn compile_closure_captures_local() {
-        let result = eval_expr(
-            "{\n  let x = 10\n  let f = |y| x + y\n  f(5)\n}"
-        );
+        let result = eval_expr("{\n  let x = 10\n  let f = |y| x + y\n  f(5)\n}");
         assert_eq!(result, Value::Int(15));
     }
 
     #[test]
     fn compile_closure_captures_multiple() {
-        let result = eval_expr(
-            "{\n  let a = 1\n  let b = 2\n  let f = |c| a + b + c\n  f(3)\n}"
-        );
+        let result = eval_expr("{\n  let a = 1\n  let b = 2\n  let f = |c| a + b + c\n  f(3)\n}");
         assert_eq!(result, Value::Int(6));
     }
 
@@ -2528,7 +2545,7 @@ mod tests {
             "make_adder : Int -> (Int -> Int)\n\
              make_adder = |n| |x| n + x\n\
              main : () -> Int\n\
-             main = {\n  let add5 = make_adder(5)\n  add5(3)\n}"
+             main = {\n  let add5 = make_adder(5)\n  add5(3)\n}",
         );
         assert_eq!(result, Value::Int(8));
     }
@@ -2539,7 +2556,7 @@ mod tests {
             "apply : ((Int -> Int), Int) -> Int\n\
              apply = |f, x| f(x)\n\
              main : () -> Int\n\
-             main = {\n  let offset = 100\n  apply(|x| x + offset, 5)\n}"
+             main = {\n  let offset = 100\n  apply(|x| x + offset, 5)\n}",
         );
         assert_eq!(result, Value::Int(105));
     }
@@ -2602,7 +2619,11 @@ mod tests {
     fn compile_tuple_literal() {
         assert_eq!(
             eval_expr("(1, \"hello\", true)"),
-            Value::Tuple(Rc::new(vec![Value::Int(1), Value::String("hello".into()), Value::Bool(true)])),
+            Value::Tuple(Rc::new(vec![
+                Value::Int(1),
+                Value::String("hello".into()),
+                Value::Bool(true)
+            ])),
         );
     }
 
@@ -2677,7 +2698,7 @@ mod tests {
     fn compile_try_ok_unwraps() {
         let result = eval_program(
             "main : () -> Unknown\n\
-             main = {\n  let x = Ok(42)\n  let v = x?\n  v + 1\n}"
+             main = {\n  let x = Ok(42)\n  let v = x?\n  v + 1\n}",
         );
         assert_eq!(result, Value::Int(43));
     }
@@ -2686,9 +2707,12 @@ mod tests {
     fn compile_try_err_returns_early() {
         let result = eval_program(
             "main : () -> Unknown\n\
-             main = {\n  let x = Err(\"oops\")\n  let v = x?\n  v + 1\n}"
+             main = {\n  let x = Err(\"oops\")\n  let v = x?\n  v + 1\n}",
         );
-        assert_eq!(result, Value::Enum("Err".into(), Rc::new(Value::String("oops".into()))));
+        assert_eq!(
+            result,
+            Value::Enum("Err".into(), Rc::new(Value::String("oops".into())))
+        );
     }
 
     // ===== Record update =====
@@ -2697,7 +2721,10 @@ mod tests {
     fn compile_record_update() {
         assert_eq!(
             eval_expr("{\n  let r = { x: 1, y: 2 }\n  { ..r, x: 10 }\n}"),
-            Value::Record(Rc::new(vec![("x".into(), Value::Int(10)), ("y".into(), Value::Int(2))])),
+            Value::Record(Rc::new(vec![
+                ("x".into(), Value::Int(10)),
+                ("y".into(), Value::Int(2))
+            ])),
         );
     }
 
@@ -2705,10 +2732,7 @@ mod tests {
 
     #[test]
     fn compile_string_length() {
-        assert_eq!(
-            eval_expr("String.length(\"hello\")"),
-            Value::Int(5),
-        );
+        assert_eq!(eval_expr("String.length(\"hello\")"), Value::Int(5),);
     }
 
     #[test]
@@ -2779,29 +2803,20 @@ mod tests {
 
     #[test]
     fn compile_int_to_string() {
-        assert_eq!(
-            eval_expr("Int.to_string(42)"),
-            Value::String("42".into()),
-        );
+        assert_eq!(eval_expr("Int.to_string(42)"), Value::String("42".into()),);
     }
 
     #[test]
     fn compile_console_println() {
         // Console.println returns Unit
-        assert_eq!(
-            eval_expr("Console.println(\"test\")"),
-            Value::Unit,
-        );
+        assert_eq!(eval_expr("Console.println(\"test\")"), Value::Unit,);
     }
 
     // ===== Native calls with pipe =====
 
     #[test]
     fn compile_pipe_to_native() {
-        assert_eq!(
-            eval_expr("\"hello\" |> String.length"),
-            Value::Int(5),
-        );
+        assert_eq!(eval_expr("\"hello\" |> String.length"), Value::Int(5),);
     }
 
     #[test]
@@ -2892,7 +2907,11 @@ mod tests {
     fn compile_pipe_list_map() {
         assert_eq!(
             eval_expr("[1, 2, 3] |> List.map(|x| x * 10)"),
-            Value::List(Rc::new(vec![Value::Int(10), Value::Int(20), Value::Int(30)])),
+            Value::List(Rc::new(vec![
+                Value::Int(10),
+                Value::Int(20),
+                Value::Int(30)
+            ])),
         );
     }
 
@@ -2910,7 +2929,11 @@ mod tests {
     fn compile_list_map_with_closure() {
         assert_eq!(
             eval_expr("{\n  let offset = 100\n  List.map([1, 2, 3], |x| x + offset)\n}"),
-            Value::List(Rc::new(vec![Value::Int(101), Value::Int(102), Value::Int(103)])),
+            Value::List(Rc::new(vec![
+                Value::Int(101),
+                Value::Int(102),
+                Value::Int(103)
+            ])),
         );
     }
 
@@ -2955,7 +2978,9 @@ mod tests {
         // but the compilation should succeed (the error happens at runtime)
         let source = "x : () -> Int\nx = 10 / 0";
         let mut parser = tree_sitter::Parser::new();
-        parser.set_language(&tree_sitter_baseline::LANGUAGE.into()).unwrap();
+        parser
+            .set_language(&tree_sitter_baseline::LANGUAGE.into())
+            .unwrap();
         let tree = parser.parse(source, None).unwrap();
         let root = tree.root_node();
         let func_def = root.named_child(0).unwrap();
@@ -3012,8 +3037,15 @@ main = countdown(5)
 
         // Find the countdown function's chunk and check it contains TailCall
         let countdown_chunk = &program.chunks[0]; // first function defined
-        let has_tail_call = countdown_chunk.code.iter().any(|op| matches!(op, Op::TailCall(_)));
-        assert!(has_tail_call, "Expected TailCall opcode in countdown chunk, got: {:?}", countdown_chunk.code);
+        let has_tail_call = countdown_chunk
+            .code
+            .iter()
+            .any(|op| matches!(op, Op::TailCall(_)));
+        assert!(
+            has_tail_call,
+            "Expected TailCall opcode in countdown chunk, got: {:?}",
+            countdown_chunk.code
+        );
     }
 
     #[test]
@@ -3055,8 +3087,15 @@ main = fib(10)
 
         // fib's calls are NOT in tail position, so no TailCall should be emitted
         let fib_chunk = &program.chunks[0];
-        let has_tail_call = fib_chunk.code.iter().any(|op| matches!(op, Op::TailCall(_)));
-        assert!(!has_tail_call, "fib should NOT have TailCall opcode, got: {:?}", fib_chunk.code);
+        let has_tail_call = fib_chunk
+            .code
+            .iter()
+            .any(|op| matches!(op, Op::TailCall(_)));
+        assert!(
+            !has_tail_call,
+            "fib should NOT have TailCall opcode, got: {:?}",
+            fib_chunk.code
+        );
 
         // But it should still produce correct results
         let mut vm = Vm::new();

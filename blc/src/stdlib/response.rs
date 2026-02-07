@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use crate::interpreter::RuntimeValue;
 use super::NativeRegistry;
+use crate::interpreter::RuntimeValue;
+use std::collections::HashMap;
 
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("Response.ok", response_ok);
@@ -30,7 +30,10 @@ fn simple_response<'a>(status: i64, body: String) -> RuntimeValue<'a> {
 // Response.ok(body) -> { status: 200, headers: [], body }
 fn response_ok<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Response.ok expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Response.ok expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let body = match &args[0] {
         RuntimeValue::String(s) => s.clone(),
@@ -42,7 +45,10 @@ fn response_ok<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String
 // Response.json(body) -> { status: 200, headers: [("Content-Type", "application/json")], body }
 fn response_json<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Response.json expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Response.json expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let body = match &args[0] {
         RuntimeValue::String(s) => s.clone(),
@@ -58,11 +64,19 @@ fn response_json<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Stri
 // Response.created(body) -> { status: 201, headers: [], body }
 fn response_created<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Response.created expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Response.created expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let body = match &args[0] {
         RuntimeValue::String(s) => s.clone(),
-        other => return Err(format!("Response.created expects String body, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.created expects String body, got {}",
+                other
+            ));
+        }
     };
     Ok(simple_response(201, body))
 }
@@ -70,7 +84,10 @@ fn response_created<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, S
 // Response.no_content() -> { status: 204, headers: [], body: "" }
 fn response_no_content<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if !args.is_empty() {
-        return Err(format!("Response.no_content expects 0 arguments, got {}", args.len()));
+        return Err(format!(
+            "Response.no_content expects 0 arguments, got {}",
+            args.len()
+        ));
     }
     Ok(simple_response(204, String::new()))
 }
@@ -78,11 +95,19 @@ fn response_no_content<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>
 // Response.bad_request(body) -> { status: 400, headers: [], body }
 fn response_bad_request<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Response.bad_request expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Response.bad_request expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let body = match &args[0] {
         RuntimeValue::String(s) => s.clone(),
-        other => return Err(format!("Response.bad_request expects String body, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.bad_request expects String body, got {}",
+                other
+            ));
+        }
     };
     Ok(simple_response(400, body))
 }
@@ -90,11 +115,19 @@ fn response_bad_request<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a
 // Response.not_found(body) -> { status: 404, headers: [], body }
 fn response_not_found<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Response.not_found expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Response.not_found expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let body = match &args[0] {
         RuntimeValue::String(s) => s.clone(),
-        other => return Err(format!("Response.not_found expects String body, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.not_found expects String body, got {}",
+                other
+            ));
+        }
     };
     Ok(simple_response(404, body))
 }
@@ -102,7 +135,10 @@ fn response_not_found<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>,
 // Response.error(body) -> { status: 500, headers: [], body }
 fn response_error<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Response.error expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Response.error expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let body = match &args[0] {
         RuntimeValue::String(s) => s.clone(),
@@ -114,15 +150,28 @@ fn response_error<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Str
 // Response.status(code, body) -> { status: code, headers: [], body }
 fn response_status<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 2 {
-        return Err(format!("Response.status expects 2 arguments, got {}", args.len()));
+        return Err(format!(
+            "Response.status expects 2 arguments, got {}",
+            args.len()
+        ));
     }
     let code = match &args[0] {
         RuntimeValue::Int(i) => *i,
-        other => return Err(format!("Response.status expects Int status code, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.status expects Int status code, got {}",
+                other
+            ));
+        }
     };
     let body = match &args[1] {
         RuntimeValue::String(s) => s.clone(),
-        other => return Err(format!("Response.status expects String body, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.status expects String body, got {}",
+                other
+            ));
+        }
     };
     Ok(simple_response(code, body))
 }
@@ -130,19 +179,37 @@ fn response_status<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, St
 // Response.with_header(response, name, value) -> response with header prepended
 fn response_with_header<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 3 {
-        return Err(format!("Response.with_header expects 3 arguments, got {}", args.len()));
+        return Err(format!(
+            "Response.with_header expects 3 arguments, got {}",
+            args.len()
+        ));
     }
     let fields = match &args[0] {
         RuntimeValue::Record(f) => f,
-        other => return Err(format!("Response.with_header expects Response record, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.with_header expects Response record, got {}",
+                other
+            ));
+        }
     };
     let name = match &args[1] {
         RuntimeValue::String(s) => s.clone(),
-        other => return Err(format!("Response.with_header expects String header name, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.with_header expects String header name, got {}",
+                other
+            ));
+        }
     };
     let value = match &args[2] {
         RuntimeValue::String(s) => s.clone(),
-        other => return Err(format!("Response.with_header expects String header value, got {}", other)),
+        other => {
+            return Err(format!(
+                "Response.with_header expects String header value, got {}",
+                other
+            ));
+        }
     };
 
     let mut new_fields = fields.clone();
@@ -167,7 +234,10 @@ mod tests {
         let result = response_ok(&[RuntimeValue::String("hello".into())]).unwrap();
         if let RuntimeValue::Record(fields) = result {
             assert_eq!(fields.get("status"), Some(&RuntimeValue::Int(200)));
-            assert_eq!(fields.get("body"), Some(&RuntimeValue::String("hello".into())));
+            assert_eq!(
+                fields.get("body"),
+                Some(&RuntimeValue::String("hello".into()))
+            );
             assert_eq!(fields.get("headers"), Some(&RuntimeValue::List(vec![])));
         } else {
             panic!("Expected Record");
@@ -197,7 +267,11 @@ mod tests {
 
     #[test]
     fn status_codes() {
-        fn check(f: for<'a> fn(&[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String>, arg: &str, code: i64) {
+        fn check(
+            f: for<'a> fn(&[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String>,
+            arg: &str,
+            code: i64,
+        ) {
             let result = f(&[RuntimeValue::String(arg.into())]).unwrap();
             if let RuntimeValue::Record(fields) = result {
                 assert_eq!(fields.get("status"), Some(&RuntimeValue::Int(code)));
@@ -216,7 +290,10 @@ mod tests {
         let result = response_no_content(&[]).unwrap();
         if let RuntimeValue::Record(fields) = result {
             assert_eq!(fields.get("status"), Some(&RuntimeValue::Int(204)));
-            assert_eq!(fields.get("body"), Some(&RuntimeValue::String(String::new())));
+            assert_eq!(
+                fields.get("body"),
+                Some(&RuntimeValue::String(String::new()))
+            );
         } else {
             panic!("Expected Record");
         }
@@ -224,10 +301,15 @@ mod tests {
 
     #[test]
     fn custom_status() {
-        let result = response_status(&[RuntimeValue::Int(301), RuntimeValue::String("Moved".into())]).unwrap();
+        let result =
+            response_status(&[RuntimeValue::Int(301), RuntimeValue::String("Moved".into())])
+                .unwrap();
         if let RuntimeValue::Record(fields) = result {
             assert_eq!(fields.get("status"), Some(&RuntimeValue::Int(301)));
-            assert_eq!(fields.get("body"), Some(&RuntimeValue::String("Moved".into())));
+            assert_eq!(
+                fields.get("body"),
+                Some(&RuntimeValue::String("Moved".into()))
+            );
         } else {
             panic!("Expected Record");
         }
@@ -240,7 +322,8 @@ mod tests {
             resp,
             RuntimeValue::String("X-Foo".into()),
             RuntimeValue::String("bar".into()),
-        ]).unwrap();
+        ])
+        .unwrap();
         if let RuntimeValue::Record(fields) = result {
             if let Some(RuntimeValue::List(headers)) = fields.get("headers") {
                 assert_eq!(headers.len(), 1);
@@ -259,12 +342,14 @@ mod tests {
             resp,
             RuntimeValue::String("X-A".into()),
             RuntimeValue::String("1".into()),
-        ]).unwrap();
+        ])
+        .unwrap();
         let resp = response_with_header(&[
             resp,
             RuntimeValue::String("X-B".into()),
             RuntimeValue::String("2".into()),
-        ]).unwrap();
+        ])
+        .unwrap();
         if let RuntimeValue::Record(fields) = resp {
             if let Some(RuntimeValue::List(headers)) = fields.get("headers") {
                 // Content-Type + X-A + X-B

@@ -48,9 +48,7 @@ fn blc_run_source(source: &str) -> (i32, String, String) {
 
 /// Generate a random arithmetic expression
 fn arith_expr() -> impl Strategy<Value = String> {
-    let leaf = prop_oneof![
-        (-1000i64..1000).prop_map(|n| n.to_string()),
-    ];
+    let leaf = prop_oneof![(-1000i64..1000).prop_map(|n| n.to_string()),];
 
     leaf.prop_recursive(4, 32, 2, |inner| {
         let op = prop_oneof![
@@ -64,11 +62,7 @@ fn arith_expr() -> impl Strategy<Value = String> {
 
 /// Generate a well-typed pure program that should run without errors
 fn pure_program() -> impl Strategy<Value = String> {
-    arith_expr().prop_map(|expr| {
-        format!(
-            "@prelude(core)\n\nmain : () -> Int\nmain = || {expr}\n"
-        )
-    })
+    arith_expr().prop_map(|expr| format!("@prelude(core)\n\nmain : () -> Int\nmain = || {expr}\n"))
 }
 
 proptest! {

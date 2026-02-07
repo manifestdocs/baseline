@@ -1,5 +1,5 @@
-use crate::interpreter::RuntimeValue;
 use super::NativeRegistry;
+use crate::interpreter::RuntimeValue;
 
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("Option.unwrap", option_unwrap);
@@ -11,7 +11,10 @@ pub fn register(registry: &mut NativeRegistry) {
 
 fn option_unwrap<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Option.unwrap expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Option.unwrap expects 1 argument, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
@@ -26,7 +29,10 @@ fn option_unwrap<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Stri
 
 fn option_unwrap_or<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 2 {
-        return Err(format!("Option.unwrap_or expects 2 arguments, got {}", args.len()));
+        return Err(format!(
+            "Option.unwrap_or expects 2 arguments, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
@@ -35,13 +41,19 @@ fn option_unwrap_or<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, S
         RuntimeValue::Enum(name, payload) if name == "None" && payload.is_empty() => {
             Ok(args[1].clone())
         }
-        other => Err(format!("Option.unwrap_or expects Option as first argument, got {}", other)),
+        other => Err(format!(
+            "Option.unwrap_or expects Option as first argument, got {}",
+            other
+        )),
     }
 }
 
 fn option_is_some<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Option.is_some expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Option.is_some expects 1 argument, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {
@@ -56,7 +68,10 @@ fn option_is_some<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Str
 
 fn option_is_none<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Option.is_none expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Option.is_none expects 1 argument, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Some" && payload.len() == 1 => {

@@ -173,8 +173,14 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         }
     }
 
-    let passed = results.iter().filter(|r| r.status == TestStatus::Pass).count();
-    let failed = results.iter().filter(|r| r.status == TestStatus::Fail).count();
+    let passed = results
+        .iter()
+        .filter(|r| r.status == TestStatus::Pass)
+        .count();
+    let failed = results
+        .iter()
+        .filter(|r| r.status == TestStatus::Fail)
+        .count();
     let total = results.len();
 
     TestSuiteResult {

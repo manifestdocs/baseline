@@ -1,5 +1,5 @@
-use crate::interpreter::RuntimeValue;
 use super::NativeRegistry;
+use crate::interpreter::RuntimeValue;
 
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("Result.unwrap", result_unwrap);
@@ -11,7 +11,10 @@ pub fn register(registry: &mut NativeRegistry) {
 
 fn result_unwrap<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Result.unwrap expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Result.unwrap expects 1 argument, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Ok" && payload.len() == 1 => {
@@ -26,7 +29,10 @@ fn result_unwrap<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Stri
 
 fn result_unwrap_or<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 2 {
-        return Err(format!("Result.unwrap_or expects 2 arguments, got {}", args.len()));
+        return Err(format!(
+            "Result.unwrap_or expects 2 arguments, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Ok" && payload.len() == 1 => {
@@ -35,13 +41,19 @@ fn result_unwrap_or<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, S
         RuntimeValue::Enum(name, payload) if name == "Err" && payload.len() == 1 => {
             Ok(args[1].clone())
         }
-        other => Err(format!("Result.unwrap_or expects Result as first argument, got {}", other)),
+        other => Err(format!(
+            "Result.unwrap_or expects Result as first argument, got {}",
+            other
+        )),
     }
 }
 
 fn result_is_ok<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Result.is_ok expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Result.is_ok expects 1 argument, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Ok" && payload.len() == 1 => {
@@ -56,7 +68,10 @@ fn result_is_ok<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Strin
 
 fn result_is_err<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Result.is_err expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Result.is_err expects 1 argument, got {}",
+            args.len()
+        ));
     }
     match &args[0] {
         RuntimeValue::Enum(name, payload) if name == "Ok" && payload.len() == 1 => {
@@ -88,13 +103,19 @@ mod tests {
     #[test]
     fn unwrap_or_ok() {
         let val = RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(42)]);
-        assert_eq!(result_unwrap_or(&[val, RuntimeValue::Int(0)]).unwrap(), RuntimeValue::Int(42));
+        assert_eq!(
+            result_unwrap_or(&[val, RuntimeValue::Int(0)]).unwrap(),
+            RuntimeValue::Int(42)
+        );
     }
 
     #[test]
     fn unwrap_or_err() {
         let val = RuntimeValue::Enum("Err".into(), vec![RuntimeValue::String("fail".into())]);
-        assert_eq!(result_unwrap_or(&[val, RuntimeValue::Int(99)]).unwrap(), RuntimeValue::Int(99));
+        assert_eq!(
+            result_unwrap_or(&[val, RuntimeValue::Int(99)]).unwrap(),
+            RuntimeValue::Int(99)
+        );
     }
 
     #[test]

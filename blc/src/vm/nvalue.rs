@@ -40,9 +40,18 @@ pub enum HeapObject {
     List(Vec<NValue>),
     Record(Vec<(RcStr, NValue)>),
     Tuple(Vec<NValue>),
-    Enum { tag: RcStr, payload: NValue },
-    Struct { name: RcStr, fields: Vec<(RcStr, NValue)> },
-    Closure { chunk_idx: usize, upvalues: Vec<NValue> },
+    Enum {
+        tag: RcStr,
+        payload: NValue,
+    },
+    Struct {
+        name: RcStr,
+        fields: Vec<(RcStr, NValue)>,
+    },
+    Closure {
+        chunk_idx: usize,
+        upvalues: Vec<NValue>,
+    },
     /// Integers that don't fit in 48-bit signed range.
     BigInt(i64),
 }
@@ -120,7 +129,10 @@ impl NValue {
     }
 
     pub fn closure(chunk_idx: usize, upvalues: Vec<NValue>) -> Self {
-        Self::from_heap(HeapObject::Closure { chunk_idx, upvalues })
+        Self::from_heap(HeapObject::Closure {
+            chunk_idx,
+            upvalues,
+        })
     }
 
     fn from_heap(obj: HeapObject) -> Self {
@@ -187,7 +199,9 @@ impl NValue {
     /// Returns true if this is a BigInt (heap-allocated large integer).
     #[inline(always)]
     fn is_bigint(&self) -> bool {
-        if !self.is_heap() { return false; }
+        if !self.is_heap() {
+            return false;
+        }
         matches!(self.as_heap_ref(), HeapObject::BigInt(_))
     }
 
@@ -260,7 +274,9 @@ impl NValue {
     /// Extract string reference from a heap String.
     #[inline]
     pub fn as_string(&self) -> Option<&RcStr> {
-        if !self.is_heap() { return None; }
+        if !self.is_heap() {
+            return None;
+        }
         match self.as_heap_ref() {
             HeapObject::String(s) => Some(s),
             _ => None,
@@ -270,7 +286,9 @@ impl NValue {
     /// Extract list reference from a heap List.
     #[inline]
     pub fn as_list(&self) -> Option<&Vec<NValue>> {
-        if !self.is_heap() { return None; }
+        if !self.is_heap() {
+            return None;
+        }
         match self.as_heap_ref() {
             HeapObject::List(items) => Some(items),
             _ => None,
@@ -280,7 +298,9 @@ impl NValue {
     /// Extract record fields reference from a heap Record.
     #[inline]
     pub fn as_record(&self) -> Option<&Vec<(RcStr, NValue)>> {
-        if !self.is_heap() { return None; }
+        if !self.is_heap() {
+            return None;
+        }
         match self.as_heap_ref() {
             HeapObject::Record(fields) => Some(fields),
             _ => None,
@@ -290,7 +310,9 @@ impl NValue {
     /// Extract enum tag and payload from a heap Enum.
     #[inline]
     pub fn as_enum(&self) -> Option<(&RcStr, &NValue)> {
-        if !self.is_heap() { return None; }
+        if !self.is_heap() {
+            return None;
+        }
         match self.as_heap_ref() {
             HeapObject::Enum { tag, payload } => Some((tag, payload)),
             _ => None,
@@ -305,7 +327,9 @@ impl Clone for NValue {
     fn clone(&self) -> Self {
         if self.is_heap() {
             let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
-            unsafe { Rc::increment_strong_count(ptr); }
+            unsafe {
+                Rc::increment_strong_count(ptr);
+            }
         }
         NValue(self.0)
     }
@@ -318,7 +342,9 @@ impl Drop for NValue {
     fn drop(&mut self) {
         if self.is_heap() {
             let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
-            unsafe { Rc::decrement_strong_count(ptr); }
+            unsafe {
+                Rc::decrement_strong_count(ptr);
+            }
         }
     }
 }
@@ -368,8 +394,10 @@ impl fmt::Display for NValue {
                     write!(f, "[{}]", s.join(", "))
                 }
                 HeapObject::Record(fields) => {
-                    let s: Vec<String> = fields.iter()
-                        .map(|(k, v)| format!("{}: {}", k, v)).collect();
+                    let s: Vec<String> = fields
+                        .iter()
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect();
                     write!(f, "{{ {} }}", s.join(", "))
                 }
                 HeapObject::Tuple(items) => {
@@ -384,8 +412,10 @@ impl fmt::Display for NValue {
                     }
                 }
                 HeapObject::Struct { name, fields } => {
-                    let s: Vec<String> = fields.iter()
-                        .map(|(k, v)| format!("{}: {}", k, v)).collect();
+                    let s: Vec<String> = fields
+                        .iter()
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect();
                     write!(f, "{} {{ {} }}", name, s.join(", "))
                 }
                 HeapObject::Closure { chunk_idx, .. } => {
@@ -419,23 +449,28 @@ impl NValue {
                 NValue::list(nv)
             }
             Value::Record(fields) => {
-                let nf: Vec<(RcStr, NValue)> = fields.iter()
-                    .map(|(k, v)| (k.clone(), NValue::from_value(v))).collect();
+                let nf: Vec<(RcStr, NValue)> = fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), NValue::from_value(v)))
+                    .collect();
                 NValue::record(nf)
             }
             Value::Tuple(items) => {
                 let nv: Vec<NValue> = items.iter().map(NValue::from_value).collect();
                 NValue::tuple(nv)
             }
-            Value::Enum(tag, payload) => {
-                NValue::enum_val(tag.clone(), NValue::from_value(payload))
-            }
+            Value::Enum(tag, payload) => NValue::enum_val(tag.clone(), NValue::from_value(payload)),
             Value::Struct(name, fields) => {
-                let nf: Vec<(RcStr, NValue)> = fields.iter()
-                    .map(|(k, v)| (k.clone(), NValue::from_value(v))).collect();
+                let nf: Vec<(RcStr, NValue)> = fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), NValue::from_value(v)))
+                    .collect();
                 NValue::struct_val(name.clone(), nf)
             }
-            Value::Closure { chunk_idx, upvalues } => {
+            Value::Closure {
+                chunk_idx,
+                upvalues,
+            } => {
                 let nv: Vec<NValue> = upvalues.iter().map(NValue::from_value).collect();
                 NValue::closure(*chunk_idx, nv)
             }
@@ -463,26 +498,34 @@ impl NValue {
             HeapObject::List(items) => {
                 Value::List(Rc::new(items.iter().map(|v| v.to_value()).collect()))
             }
-            HeapObject::Record(fields) => {
-                Value::Record(Rc::new(fields.iter()
-                    .map(|(k, v)| (k.clone(), v.to_value())).collect()))
-            }
+            HeapObject::Record(fields) => Value::Record(Rc::new(
+                fields
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.to_value()))
+                    .collect(),
+            )),
             HeapObject::Tuple(items) => {
                 Value::Tuple(Rc::new(items.iter().map(|v| v.to_value()).collect()))
             }
             HeapObject::Enum { tag, payload } => {
                 Value::Enum(tag.clone(), Rc::new(payload.to_value()))
             }
-            HeapObject::Struct { name, fields } => {
-                Value::Struct(name.clone(), Rc::new(fields.iter()
-                    .map(|(k, v)| (k.clone(), v.to_value())).collect()))
-            }
-            HeapObject::Closure { chunk_idx, upvalues } => {
-                Value::Closure {
-                    chunk_idx: *chunk_idx,
-                    upvalues: Rc::new(upvalues.iter().map(|v| v.to_value()).collect()),
-                }
-            }
+            HeapObject::Struct { name, fields } => Value::Struct(
+                name.clone(),
+                Rc::new(
+                    fields
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.to_value()))
+                        .collect(),
+                ),
+            ),
+            HeapObject::Closure {
+                chunk_idx,
+                upvalues,
+            } => Value::Closure {
+                chunk_idx: *chunk_idx,
+                upvalues: Rc::new(upvalues.iter().map(|v| v.to_value()).collect()),
+            },
             HeapObject::BigInt(i) => Value::Int(*i),
         }
     }
@@ -498,7 +541,17 @@ mod tests {
 
     #[test]
     fn int_roundtrip() {
-        for i in [-1i64, 0, 1, 42, -42, 1000000, -1000000, (1 << 47) - 1, -(1 << 47)] {
+        for i in [
+            -1i64,
+            0,
+            1,
+            42,
+            -42,
+            1000000,
+            -1000000,
+            (1 << 47) - 1,
+            -(1 << 47),
+        ] {
             let v = NValue::int(i);
             assert!(v.is_int() || v.is_heap(), "failed for {}", i);
             assert_eq!(v.as_any_int(), i, "roundtrip failed for {}", i);

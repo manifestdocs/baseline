@@ -42,7 +42,10 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
         // Run type checking pass with import support
         let root_node = tree.root_node();
         let type_diagnostics = crate::analysis::check_types_with_loader(
-            &root_node, &source, &file_name, Some(&mut loader),
+            &root_node,
+            &source,
+            &file_name,
+            Some(&mut loader),
         );
         diagnostics.extend(type_diagnostics);
 
@@ -62,7 +65,10 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
         "success".to_string()
     };
 
-    Ok(CheckResult { status, diagnostics })
+    Ok(CheckResult {
+        status,
+        diagnostics,
+    })
 }
 
 /// Parse a source string and return check results (used by tests and API).
@@ -100,7 +106,10 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
         "success".to_string()
     };
 
-    CheckResult { status, diagnostics }
+    CheckResult {
+        status,
+        diagnostics,
+    }
 }
 
 /// Recursively collect ERROR and MISSING nodes from the syntax tree.
@@ -125,7 +134,10 @@ fn collect_errors(
                 end_line: Some(end.row + 1),
                 end_col: Some(end.column + 1),
             },
-            message: format!("Syntax error: unexpected `{}`", text.chars().take(20).collect::<String>()),
+            message: format!(
+                "Syntax error: unexpected `{}`",
+                text.chars().take(20).collect::<String>()
+            ),
             context: "The parser encountered unexpected tokens.".to_string(),
             suggestions: vec![],
         });
