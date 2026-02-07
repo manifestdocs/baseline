@@ -286,7 +286,6 @@ fn run_file_jit(file: &PathBuf) {
         }
     };
 
-    vm::jit::reset_call_depth();
     match jit_program.run_entry() {
         Some(val) => {
             println!("{}", val);

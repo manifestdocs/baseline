@@ -63,6 +63,12 @@ pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
     flag_builder
         .set("opt_level", "speed")
         .map_err(|e| e.to_string())?;
+    flag_builder
+        .set("preserve_frame_pointers", "false")
+        .map_err(|e| e.to_string())?;
+    flag_builder
+        .set("enable_probestack", "false")
+        .map_err(|e| e.to_string())?;
 
     let isa_builder =
         cranelift_native::builder().map_err(|e| format!("Native ISA not available: {}", e))?;
@@ -70,10 +76,7 @@ pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
         .finish(settings::Flags::new(flag_builder))
         .map_err(|e| e.to_string())?;
 
-    let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
-
-    // Register the stack overflow check helper
-    builder.symbol("__blc_stack_check", __blc_stack_check as *const u8);
+    let builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
     let mut jit_module = JITModule::new(builder);
     let ptr_type = jit_module.target_config().pointer_type();
@@ -98,14 +101,6 @@ pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
             }
         }
     }
-
-    // Declare the stack check function
-    let mut stack_check_sig = jit_module.make_signature();
-    stack_check_sig.params.push(AbiParam::new(ptr_type));
-    stack_check_sig.returns.push(AbiParam::new(types::I8));
-    let stack_check_id = jit_module
-        .declare_function("__blc_stack_check", Linkage::Import, &stack_check_sig)
-        .map_err(|e| e.to_string())?;
 
     // Phase 2: Compile each function
     let mut fb_ctx = FunctionBuilderContext::new();
@@ -134,32 +129,55 @@ pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
             builder.switch_to_block(entry_block);
             builder.seal_block(entry_block);
 
+            // Declare param variables (before creating ctx)
+            let mut param_vars = Vec::new();
+            let mut vars_map = HashMap::new();
+            for (p, param_name) in func.params.iter().enumerate() {
+                let var = builder.declare_var(types::I64);
+                let param_val = builder.block_params(entry_block)[p];
+                builder.def_var(var, param_val);
+                vars_map.insert(param_name.clone(), var);
+                param_vars.push(var);
+            }
+
+            // For tail-recursive functions: create a loop header block.
+            // Self-tail-calls jump back here instead of making real calls.
+            let is_tail_recursive = has_self_tail_call(&func.body, &func.name);
+            let loop_header = if is_tail_recursive {
+                let lh = builder.create_block();
+                // Don't seal lh yet — tail-call sites will jump back to it
+                builder.ins().jump(lh, &[]);
+                builder.switch_to_block(lh);
+                Some(lh)
+            } else {
+                None
+            };
+
             let mut ctx = FnCompileCtx {
                 builder: &mut builder,
                 func_ids: &func_ids,
                 module: &mut jit_module,
-                vars: HashMap::new(),
-                next_var: 0,
+                vars: vars_map,
+                next_var: param_vars.len() as u32,
                 func_names: &func_names,
-                stack_check_id,
-                ptr_type,
+                ir_functions: &module.functions,
+                current_func_name: func.name.clone(),
+                param_vars,
+                loop_header,
             };
-
-            // Declare params as variables
-            for (p, param_name) in func.params.iter().enumerate() {
-                let var = ctx.new_var();
-                let param_val = ctx.builder.block_params(entry_block)[p];
-                ctx.builder.def_var(var, param_val);
-                ctx.vars.insert(param_name.clone(), var);
-            }
 
             // Compile body
             let result = ctx.compile_expr(&func.body);
+            let saved_loop_header = ctx.loop_header;
             drop(ctx); // Release borrow on builder
 
             match result {
                 Ok(val) => {
                     builder.ins().return_(&[val]);
+                    // Seal loop header now — all predecessors (entry + tail-call sites) are known
+                    if let Some(lh) = saved_loop_header {
+                        builder.seal_block(lh);
+                    }
                     builder.finalize();
                     Ok(())
                 }
@@ -220,36 +238,6 @@ pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Stack overflow check (called from JIT code)
-// ---------------------------------------------------------------------------
-
-// Thread-local call depth counter for JIT-compiled code.
-thread_local! {
-    static JIT_CALL_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
-}
-
-const MAX_JIT_CALL_DEPTH: u32 = 1024;
-
-/// Called from JIT code before each function call to check stack depth.
-/// Returns 0 if OK, 1 if stack overflow.
-extern "C" fn __blc_stack_check(_dummy: *const u8) -> u8 {
-    JIT_CALL_DEPTH.with(|depth| {
-        let d = depth.get();
-        if d >= MAX_JIT_CALL_DEPTH {
-            1
-        } else {
-            depth.set(d + 1);
-            0
-        }
-    })
-}
-
-/// Reset the JIT call depth counter (call before JIT entry).
-pub fn reset_call_depth() {
-    JIT_CALL_DEPTH.with(|depth| depth.set(0));
-}
-
-// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -259,7 +247,7 @@ fn build_signature(
     _ptr_type: cranelift_codegen::ir::Type,
 ) -> cranelift_codegen::ir::Signature {
     let mut sig = module.make_signature();
-    sig.call_conv = CallConv::SystemV;
+    sig.call_conv = CallConv::Fast;
     for _ in 0..param_count {
         sig.params.push(AbiParam::new(types::I64));
     }
@@ -270,6 +258,38 @@ fn build_signature(
 /// Check if a function can be JIT-compiled (no unsupported constructs).
 fn can_jit(func: &IrFunction) -> bool {
     expr_can_jit(&func.body)
+}
+
+/// Check if an expression contains a self-tail-call to the given function name.
+fn has_self_tail_call(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::TailCall {
+            name: call_name, ..
+        } => call_name == name,
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            has_self_tail_call(condition, name)
+                || has_self_tail_call(then_branch, name)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| has_self_tail_call(e, name))
+        }
+        Expr::Block(exprs, _) => exprs.iter().any(|e| has_self_tail_call(e, name)),
+        Expr::Let { value, .. } => has_self_tail_call(value, name),
+        Expr::BinOp { lhs, rhs, .. } => {
+            has_self_tail_call(lhs, name) || has_self_tail_call(rhs, name)
+        }
+        Expr::UnaryOp { operand, .. } => has_self_tail_call(operand, name),
+        Expr::And(a, b) | Expr::Or(a, b) => {
+            has_self_tail_call(a, name) || has_self_tail_call(b, name)
+        }
+        Expr::CallDirect { args, .. } => args.iter().any(|a| has_self_tail_call(a, name)),
+        _ => false,
+    }
 }
 
 fn expr_can_jit(expr: &Expr) -> bool {
@@ -313,6 +333,20 @@ fn expr_can_jit(expr: &Expr) -> bool {
     }
 }
 
+/// Check if an expression only references the given parameter names
+/// (no local variables or complex sub-expressions).
+fn expr_only_refs_params(expr: &Expr, params: &[String]) -> bool {
+    match expr {
+        Expr::Var(name, _) => params.iter().any(|p| p == name),
+        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Unit => true,
+        Expr::BinOp { lhs, rhs, .. } => {
+            expr_only_refs_params(lhs, params) && expr_only_refs_params(rhs, params)
+        }
+        Expr::UnaryOp { operand, .. } => expr_only_refs_params(operand, params),
+        _ => false,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Function compile context
 // ---------------------------------------------------------------------------
@@ -325,8 +359,14 @@ struct FnCompileCtx<'a, 'b> {
     vars: HashMap<String, Variable>,
     next_var: u32,
     func_names: &'a HashMap<String, usize>,
-    stack_check_id: FuncId,
-    ptr_type: cranelift_codegen::ir::Type,
+    /// All IR functions (for base-case speculation at call sites).
+    ir_functions: &'a [IrFunction],
+    /// Current function name (for detecting self-tail-calls).
+    current_func_name: String,
+    /// Parameter variables (for self-tail-call → loop conversion).
+    param_vars: Vec<Variable>,
+    /// Loop header block for tail-recursive functions.
+    loop_header: Option<cranelift_codegen::ir::Block>,
 }
 
 impl<'a, 'b> FnCompileCtx<'a, 'b> {
@@ -334,6 +374,110 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
         let var = self.builder.declare_var(types::I64);
         self.next_var += 1;
         var
+    }
+
+    /// Base-case speculation: for functions with pattern `if cond then simple_base else ...`,
+    /// inline the guard check at call sites to avoid function calls for base cases.
+    /// Returns Some(value) if speculation was emitted, None if not applicable.
+    fn try_speculate_call(
+        &mut self,
+        name: &str,
+        ir_args: &[Expr],
+    ) -> Result<Option<cranelift_codegen::ir::Value>, String> {
+        let func_idx = match self.func_names.get(name) {
+            Some(&idx) => idx,
+            None => return Ok(None),
+        };
+        if self.func_ids[func_idx].is_none() {
+            return Ok(None);
+        }
+        let func = &self.ir_functions[func_idx];
+
+        // Extract base case: body must be If { cond, then: simple_val, else: ... }
+        let (cond_expr, base_expr) = match &func.body {
+            Expr::If {
+                condition,
+                then_branch,
+                ..
+            } => match then_branch.as_ref() {
+                Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit => {
+                    (condition.as_ref(), then_branch.as_ref())
+                }
+                _ => return Ok(None),
+            },
+            _ => return Ok(None),
+        };
+
+        // Guard and base value must only reference params (no locals)
+        if !expr_only_refs_params(cond_expr, &func.params) {
+            return Ok(None);
+        }
+        if !expr_only_refs_params(base_expr, &func.params) {
+            return Ok(None);
+        }
+
+        // Compile the IR arguments
+        let arg_vals: Vec<cranelift_codegen::ir::Value> = ir_args
+            .iter()
+            .map(|a| self.compile_expr(a))
+            .collect::<Result<_, _>>()?;
+
+        // Temporarily bind param names to arg values
+        let mut saved_vars = HashMap::new();
+        for (i, param_name) in func.params.iter().enumerate() {
+            let var = self.new_var();
+            self.builder.def_var(var, arg_vals[i]);
+            if let Some(old) = self.vars.insert(param_name.clone(), var) {
+                saved_vars.insert(param_name.clone(), old);
+            }
+        }
+
+        // Compile condition and base value with params bound to args
+        let cond_val = self.compile_expr(cond_expr)?;
+        let base_val = self.compile_expr(base_expr)?;
+
+        // Restore vars
+        for param_name in &func.params {
+            self.vars.remove(param_name);
+        }
+        for (name, old_var) in saved_vars {
+            self.vars.insert(name, old_var);
+        }
+
+        // Emit: if cond then base_val else call func(arg_vals)
+        let call_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let cmp = self.builder.ins().icmp(
+            cranelift_codegen::ir::condcodes::IntCC::NotEqual,
+            cond_val,
+            zero,
+        );
+        self.builder.ins().brif(
+            cmp,
+            merge_block,
+            &[BlockArg::Value(base_val)],
+            call_block,
+            &[],
+        );
+
+        // Call block: fall back to actual function call
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+        let func_id = self.func_ids[func_idx].unwrap();
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        let call = self.builder.ins().call(func_ref, &arg_vals);
+        let call_result = self.builder.inst_results(call)[0];
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(call_result)]);
+
+        // Merge
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(Some(self.builder.block_params(merge_block)[0]))
     }
 
     fn compile_expr(&mut self, expr: &Expr) -> Result<cranelift_codegen::ir::Value, String> {
@@ -582,6 +726,12 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
             }
 
             Expr::CallDirect { name, args, .. } => {
+                // Try base-case speculation: inline the guard check to avoid
+                // function calls for base cases (e.g., tak's y >= x → z)
+                if let Some(val) = self.try_speculate_call(name, args)? {
+                    return Ok(val);
+                }
+
                 if let Some(&func_idx) = self.func_names.get(name) {
                     if let Some(func_id) = self.func_ids[func_idx] {
                         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
@@ -603,8 +753,35 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
             }
 
             Expr::TailCall { name, args, .. } => {
-                // For JIT, we compile tail calls as regular calls.
-                // Cranelift's optimizer may turn these into actual tail calls.
+                // Self-tail-call → loop: update params and jump to loop header
+                if name == &self.current_func_name
+                    && let Some(loop_header) = self.loop_header
+                {
+                    // Evaluate all new argument values first (before updating any vars)
+                    let arg_vals: Vec<cranelift_codegen::ir::Value> = args
+                        .iter()
+                        .map(|a| self.compile_expr(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    // Update param variables with new values
+                    for (var, val) in self.param_vars.iter().zip(arg_vals.iter()) {
+                        self.builder.def_var(*var, *val);
+                    }
+
+                    // Jump back to loop header (next iteration)
+                    self.builder.ins().jump(loop_header, &[]);
+
+                    // Switch to unreachable block so subsequent code has
+                    // somewhere to emit into (Cranelift requires it)
+                    let dead_block = self.builder.create_block();
+                    self.builder.switch_to_block(dead_block);
+                    self.builder.seal_block(dead_block);
+
+                    // Return dummy value (this path is unreachable at runtime)
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+
+                // Non-self tail call: compile as regular call
                 if let Some(&func_idx) = self.func_names.get(name) {
                     if let Some(func_id) = self.func_ids[func_idx] {
                         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
@@ -732,7 +909,6 @@ mod tests {
 
     fn compile_and_run(module: &IrModule) -> i64 {
         let program = compile(module, false).expect("JIT compilation failed");
-        reset_call_depth();
         program.run_entry().expect("Entry function not compiled")
     }
 
