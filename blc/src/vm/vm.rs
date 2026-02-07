@@ -32,8 +32,9 @@ struct CallFrame {
     ip: usize,
     /// Where this frame's locals start on the value stack.
     base_slot: usize,
-    /// Captured upvalues (for closures). Shared via Rc for O(1) clone.
-    upvalues: Rc<Vec<Value>>,
+    /// Captured upvalues (for closures). None for plain functions — avoids
+    /// Rc refcount overhead on every Call/Return in the common case.
+    upvalues: Option<Rc<Vec<Value>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -68,7 +69,7 @@ impl Vm {
             chunk_idx: 0,
             ip: 0,
             base_slot: 0,
-            upvalues: Rc::new(Vec::new()),
+            upvalues: None,
         });
         self.run(std::slice::from_ref(chunk))
     }
@@ -81,7 +82,7 @@ impl Vm {
             chunk_idx: program.entry,
             ip: 0,
             base_slot: 0,
-            upvalues: Rc::new(Vec::new()),
+            upvalues: None,
         });
         self.run(&program.chunks)
     }
@@ -95,7 +96,7 @@ impl Vm {
             chunk_idx,
             ip: 0,
             base_slot: 0,
-            upvalues: Rc::new(Vec::new()),
+            upvalues: None,
         });
         self.run(chunks)
     }
@@ -107,178 +108,220 @@ impl Vm {
 
     /// Dispatch loop that stops when frame count drops to `base_depth`.
     /// Used by call_value to run a single function call without consuming outer frames.
+    ///
+    /// Performance: This is the hottest code in the VM. Key optimizations:
+    /// - Frame state (chunk_idx, ip, base_slot) kept in local variables to avoid
+    ///   repeated Vec lookups via frames.last().unwrap()
+    /// - Source map only consulted in error paths (not on every instruction)
+    /// - Empty upvalue Rc cached to avoid allocation on plain function calls
     fn run_frames(&mut self, chunks: &[Chunk], base_depth: usize) -> Result<Value, VmError> {
-        loop {
-            let frame = self.frames.last().unwrap();
-            let chunk = &chunks[frame.chunk_idx];
-            let ip = frame.ip;
+        // Hoist frame state into locals — avoids frames.last().unwrap() on every instruction.
+        // Synced back to self.frames only when switching frames (Call/Return).
+        let frame = self.frames.last().unwrap();
+        let mut ip = frame.ip;
+        let mut chunk_idx = frame.chunk_idx;
+        let mut base_slot = frame.base_slot;
+        let mut chunk = &chunks[chunk_idx];
 
+        loop {
             if ip >= chunk.code.len() {
                 return Ok(self.stack.pop().unwrap_or(Value::Unit));
             }
 
-            let (line, col) = chunk.source_map[ip];
             let op = chunk.code[ip];
-
-            // Advance IP
-            self.frames.last_mut().unwrap().ip += 1;
+            ip += 1;
 
             match op {
                 Op::LoadConst(idx) => {
-                    let chunk_idx = self.frames.last().unwrap().chunk_idx;
-                    self.stack.push(chunks[chunk_idx].constants[idx as usize].clone());
+                    self.stack.push(chunk.constants[idx as usize].clone());
                 }
 
                 Op::Add => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x + y),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(*y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
                         (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 + y),
                         (Value::Float(x), Value::Int(y)) => Value::Float(x + *y as f64),
-                        _ => return Err(self.error(
-                            format!("Cannot add {} and {}", a, b), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot add {} and {}", a, b), line, col,
+                            ));
+                        }
                     };
                     self.stack.push(result);
                 }
 
                 Op::Sub => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x - y),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_sub(*y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
                         (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 - y),
                         (Value::Float(x), Value::Int(y)) => Value::Float(x - *y as f64),
-                        _ => return Err(self.error(
-                            format!("Cannot subtract {} from {}", b, a), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot subtract {} from {}", b, a), line, col,
+                            ));
+                        }
                     };
                     self.stack.push(result);
                 }
 
                 Op::Mul => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x * y),
+                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_mul(*y)),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
                         (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 * y),
                         (Value::Float(x), Value::Int(y)) => Value::Float(x * *y as f64),
-                        _ => return Err(self.error(
-                            format!("Cannot multiply {} and {}", a, b), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot multiply {} and {}", a, b), line, col,
+                            ));
+                        }
                     };
                     self.stack.push(result);
                 }
 
                 Op::Div => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     let result = match (&a, &b) {
                         (Value::Int(_), Value::Int(0)) => {
+                            let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error("Division by zero".into(), line, col));
                         }
                         (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
                         (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
                         (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 / y),
                         (Value::Float(x), Value::Int(y)) => Value::Float(x / *y as f64),
-                        _ => return Err(self.error(
-                            format!("Cannot divide {} by {}", a, b), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot divide {} by {}", a, b), line, col,
+                            ));
+                        }
                     };
                     self.stack.push(result);
                 }
 
                 Op::Mod => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     let result = match (&a, &b) {
                         (Value::Int(_), Value::Int(0)) => {
+                            let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error("Modulo by zero".into(), line, col));
                         }
                         (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
-                        _ => return Err(self.error(
-                            format!("Cannot modulo {} by {}", a, b), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot modulo {} by {}", a, b), line, col,
+                            ));
+                        }
                     };
                     self.stack.push(result);
                 }
 
                 Op::Negate => {
-                    let v = self.pop(line, col)?;
+                    let v = self.pop_fast();
                     let result = match &v {
                         Value::Int(x) => Value::Int(-x),
                         Value::Float(x) => Value::Float(-x),
-                        _ => return Err(self.error(
-                            format!("Cannot negate {}", v), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot negate {}", v), line, col,
+                            ));
+                        }
                     };
                     self.stack.push(result);
                 }
 
                 Op::Not => {
-                    let v = self.pop(line, col)?;
+                    let v = self.pop_fast();
                     self.stack.push(Value::Bool(!v.is_truthy()));
                 }
 
                 Op::Eq => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     self.stack.push(Value::Bool(a == b));
                 }
 
                 Op::Ne => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     self.stack.push(Value::Bool(a != b));
                 }
 
                 Op::Lt => {
-                    let (b, a) = self.pop2(line, col)?;
-                    self.stack.push(Value::Bool(self.compare_lt(&a, &b, line, col)?));
+                    let (b, a) = self.pop2_fast();
+                    match self.compare_lt_fast(&a, &b) {
+                        Some(result) => self.stack.push(Value::Bool(result)),
+                        None => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot compare {} and {}", a, b), line, col,
+                            ));
+                        }
+                    }
                 }
 
                 Op::Gt => {
-                    let (b, a) = self.pop2(line, col)?;
-                    self.stack.push(Value::Bool(self.compare_lt(&b, &a, line, col)?));
+                    let (b, a) = self.pop2_fast();
+                    match self.compare_lt_fast(&b, &a) {
+                        Some(result) => self.stack.push(Value::Bool(result)),
+                        None => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot compare {} and {}", a, b), line, col,
+                            ));
+                        }
+                    }
                 }
 
                 Op::Le => {
-                    let (b, a) = self.pop2(line, col)?;
-                    let lt = self.compare_lt(&a, &b, line, col)?;
-                    self.stack.push(Value::Bool(lt || a == b));
+                    let (b, a) = self.pop2_fast();
+                    match self.compare_lt_fast(&a, &b) {
+                        Some(lt) => self.stack.push(Value::Bool(lt || a == b)),
+                        None => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot compare {} and {}", a, b), line, col,
+                            ));
+                        }
+                    }
                 }
 
                 Op::Ge => {
-                    let (b, a) = self.pop2(line, col)?;
-                    let lt = self.compare_lt(&b, &a, line, col)?;
-                    self.stack.push(Value::Bool(lt || a == b));
+                    let (b, a) = self.pop2_fast();
+                    match self.compare_lt_fast(&b, &a) {
+                        Some(lt) => self.stack.push(Value::Bool(lt || a == b)),
+                        None => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot compare {} and {}", a, b), line, col,
+                            ));
+                        }
+                    }
                 }
 
                 Op::Concat => {
-                    let (b, a) = self.pop2(line, col)?;
+                    let (b, a) = self.pop2_fast();
                     let result = Value::String(format!("{}{}", a, b).into());
                     self.stack.push(result);
                 }
 
                 Op::GetLocal(slot) => {
-                    let base = self.frames.last().unwrap().base_slot;
-                    let idx = base + slot as usize;
-                    if idx >= self.stack.len() {
-                        return Err(self.error(
-                            format!("Invalid local slot {}", slot), line, col,
-                        ));
-                    }
+                    let idx = base_slot + slot as usize;
                     self.stack.push(self.stack[idx].clone());
                 }
 
                 Op::SetLocal(slot) => {
-                    let base = self.frames.last().unwrap().base_slot;
-                    let idx = base + slot as usize;
-                    let val = self.stack.last().ok_or_else(|| {
-                        self.error("Stack underflow on SetLocal".into(), line, col)
-                    })?.clone();
-                    if idx >= self.stack.len() {
-                        return Err(self.error(
-                            format!("Invalid local slot {}", slot), line, col,
-                        ));
-                    }
+                    let idx = base_slot + slot as usize;
+                    let val = self.stack[self.stack.len() - 1].clone();
                     self.stack[idx] = val;
                 }
 
@@ -299,35 +342,34 @@ impl Vm {
                 }
 
                 Op::Pop => {
-                    self.pop(line, col)?;
+                    self.stack.pop();
                 }
 
                 Op::Jump(offset) => {
-                    self.frames.last_mut().unwrap().ip += offset as usize;
+                    ip += offset as usize;
                 }
 
                 Op::JumpIfFalse(offset) => {
-                    let v = self.pop(line, col)?;
+                    let v = self.pop_fast();
                     if !v.is_truthy() {
-                        self.frames.last_mut().unwrap().ip += offset as usize;
+                        ip += offset as usize;
                     }
                 }
 
                 Op::JumpIfTrue(offset) => {
-                    let v = self.stack.last().ok_or_else(|| {
-                        self.error("Stack underflow".into(), line, col)
-                    })?;
-                    if v.is_truthy() {
-                        self.frames.last_mut().unwrap().ip += offset as usize;
+                    if let Some(v) = self.stack.last() {
+                        if v.is_truthy() {
+                            ip += offset as usize;
+                        }
                     }
                 }
 
                 Op::JumpBack(offset) => {
-                    self.frames.last_mut().unwrap().ip -= offset as usize;
+                    ip -= offset as usize;
                 }
 
                 Op::MakeRange => {
-                    let (end_val, start_val) = self.pop2(line, col)?;
+                    let (end_val, start_val) = self.pop2_fast();
                     match (&start_val, &end_val) {
                         (Value::Int(start), Value::Int(end)) => {
                             let list: Vec<Value> = (*start..*end)
@@ -335,19 +377,23 @@ impl Vm {
                                 .collect();
                             self.stack.push(Value::List(Rc::new(list)));
                         }
-                        _ => return Err(self.error(
-                            format!("Range requires integers, got {} and {}", start_val, end_val),
-                            line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Range requires integers, got {} and {}", start_val, end_val),
+                                line, col,
+                            ));
+                        }
                     }
                 }
 
                 Op::ListGet => {
-                    let (idx_val, list_val) = self.pop2(line, col)?;
+                    let (idx_val, list_val) = self.pop2_fast();
                     match (&list_val, &idx_val) {
                         (Value::List(items), Value::Int(i)) => {
                             let idx = *i as usize;
                             if idx >= items.len() {
+                                let (line, col) = chunk.source_map[ip - 1];
                                 return Err(self.error(
                                     format!("Index {} out of bounds (len {})", idx, items.len()),
                                     line, col,
@@ -355,23 +401,29 @@ impl Vm {
                             }
                             self.stack.push(items[idx].clone());
                         }
-                        _ => return Err(self.error(
-                            format!("ListGet requires List and Int, got {} and {}", list_val, idx_val),
-                            line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("ListGet requires List and Int, got {} and {}", list_val, idx_val),
+                                line, col,
+                            ));
+                        }
                     }
                 }
 
                 Op::ListLen => {
-                    let list_val = self.pop(line, col)?;
+                    let list_val = self.pop_fast();
                     match &list_val {
                         Value::List(items) => {
                             self.stack.push(Value::Int(items.len() as i64));
                         }
-                        _ => return Err(self.error(
-                            format!("ListLen requires List, got {}", list_val),
-                            line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("ListLen requires List, got {}", list_val),
+                                line, col,
+                            ));
+                        }
                     }
                 }
 
@@ -391,6 +443,7 @@ impl Vm {
                         if let Value::String(key) = &pair[0] {
                             fields.push((key.clone(), pair[1].clone()));
                         } else {
+                            let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("Record key must be String, got {}", pair[0]),
                                 line, col,
@@ -401,26 +454,34 @@ impl Vm {
                 }
 
                 Op::GetField(name_idx) => {
-                    let chunk_idx = self.frames.last().unwrap().chunk_idx;
-                    let field_name = match &chunks[chunk_idx].constants[name_idx as usize] {
+                    let field_name = match &chunk.constants[name_idx as usize] {
                         Value::String(s) => s.clone(),
-                        _ => return Err(self.error("GetField constant must be String".into(), line, col)),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error("GetField constant must be String".into(), line, col));
+                        }
                     };
-                    let record = self.pop(line, col)?;
+                    let record = self.pop_fast();
                     match record {
                         Value::Record(fields) | Value::Struct(_, fields) => {
                             match fields.iter().find(|(k, _)| *k == field_name) {
                                 Some((_, v)) => self.stack.push(v.clone()),
-                                None => return Err(self.error(
-                                    format!("Record has no field '{}'", field_name),
-                                    line, col,
-                                )),
+                                None => {
+                                    let (line, col) = chunk.source_map[ip - 1];
+                                    return Err(self.error(
+                                        format!("Record has no field '{}'", field_name),
+                                        line, col,
+                                    ));
+                                }
                             }
                         }
-                        _ => return Err(self.error(
-                            format!("Cannot access field '{}' on {}", field_name, record),
-                            line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot access field '{}' on {}", field_name, record),
+                                line, col,
+                            ));
+                        }
                     }
                 }
 
@@ -432,11 +493,12 @@ impl Vm {
                 }
 
                 Op::TupleGet(idx) => {
-                    let tuple = self.pop(line, col)?;
+                    let tuple = self.pop_fast();
                     match tuple {
                         Value::Tuple(items) => {
                             let i = idx as usize;
                             if i >= items.len() {
+                                let (line, col) = chunk.source_map[ip - 1];
                                 return Err(self.error(
                                     format!("Tuple index {} out of bounds (len {})", i, items.len()),
                                     line, col,
@@ -444,66 +506,80 @@ impl Vm {
                             }
                             self.stack.push(items[i].clone());
                         }
-                        _ => return Err(self.error(
-                            format!("TupleGet requires Tuple, got {}", tuple), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("TupleGet requires Tuple, got {}", tuple), line, col,
+                            ));
+                        }
                     }
                 }
 
                 Op::MakeEnum(tag_idx) => {
-                    let chunk_idx = self.frames.last().unwrap().chunk_idx;
-                    let tag = match &chunks[chunk_idx].constants[tag_idx as usize] {
+                    let tag = match &chunk.constants[tag_idx as usize] {
                         Value::String(s) => s.clone(),
-                        _ => return Err(self.error("MakeEnum constant must be String".into(), line, col)),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error("MakeEnum constant must be String".into(), line, col));
+                        }
                     };
-                    let payload = self.pop(line, col)?;
+                    let payload = self.pop_fast();
                     self.stack.push(Value::Enum(tag, Rc::new(payload)));
                 }
 
                 Op::MakeStruct(tag_idx) => {
-                    let chunk_idx = self.frames.last().unwrap().chunk_idx;
-                    let tag = match &chunks[chunk_idx].constants[tag_idx as usize] {
+                    let tag = match &chunk.constants[tag_idx as usize] {
                         Value::String(s) => s.clone(),
-                        _ => return Err(self.error("MakeStruct constant must be String".into(), line, col)),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error("MakeStruct constant must be String".into(), line, col));
+                        }
                     };
-                    let record = self.pop(line, col)?;
+                    let record = self.pop_fast();
                     match record {
                         Value::Record(fields) => {
                             self.stack.push(Value::Struct(tag, fields));
                         }
-                        _ => return Err(self.error(
-                            format!("MakeStruct requires Record, got {}", record), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("MakeStruct requires Record, got {}", record), line, col,
+                            ));
+                        }
                     }
                 }
 
                 Op::EnumTag => {
-                    let val = self.pop(line, col)?;
+                    let val = self.pop_fast();
                     match val {
                         Value::Enum(tag, _) => self.stack.push(Value::String(tag)),
-                        _ => return Err(self.error(
-                            format!("EnumTag requires Enum, got {}", val), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("EnumTag requires Enum, got {}", val), line, col,
+                            ));
+                        }
                     }
                 }
 
                 Op::EnumPayload => {
-                    let val = self.pop(line, col)?;
+                    let val = self.pop_fast();
                     match val {
                         Value::Enum(_, payload) => self.stack.push((*payload).clone()),
-                        _ => return Err(self.error(
-                            format!("EnumPayload requires Enum, got {}", val), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("EnumPayload requires Enum, got {}", val), line, col,
+                            ));
+                        }
                     }
                 }
 
                 Op::UpdateRecord(n) => {
                     let count = n as usize;
-                    // Pop N key-value pairs
                     let start = self.stack.len() - count * 2;
                     let updates: Vec<Value> = self.stack.drain(start..).collect();
-                    // Pop base record
-                    let base = self.pop(line, col)?;
+                    let base = self.pop_fast();
                     match base {
                         Value::Record(fields_rc) => {
                             let mut fields = Rc::try_unwrap(fields_rc)
@@ -513,6 +589,7 @@ impl Vm {
                                     if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == *key) {
                                         existing.1 = pair[1].clone();
                                     } else {
+                                        let (line, col) = chunk.source_map[ip - 1];
                                         return Err(self.error(
                                             format!("Record has no field '{}'", key), line, col,
                                         ));
@@ -529,6 +606,7 @@ impl Vm {
                                     if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == *key) {
                                         existing.1 = pair[1].clone();
                                     } else {
+                                        let (line, col) = chunk.source_map[ip - 1];
                                         return Err(self.error(
                                             format!("Record has no field '{}'", key), line, col,
                                         ));
@@ -537,9 +615,12 @@ impl Vm {
                             }
                             self.stack.push(Value::Struct(name, Rc::new(fields)));
                         }
-                        _ => return Err(self.error(
-                            format!("UpdateRecord requires Record, got {}", base), line, col,
-                        )),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("UpdateRecord requires Record, got {}", base), line, col,
+                            ));
+                        }
                     }
                 }
 
@@ -547,6 +628,7 @@ impl Vm {
 
                 Op::Call(arg_count) => {
                     if self.frames.len() >= MAX_CALL_DEPTH {
+                        let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
                             "Stack overflow: maximum call depth exceeded".into(),
                             line, col,
@@ -554,43 +636,49 @@ impl Vm {
                     }
                     let n = arg_count as usize;
                     let func_pos = self.stack.len() - n - 1;
-                    let func_val = self.stack[func_pos].clone();
 
-                    match func_val {
-                        Value::Function(chunk_idx) => {
-                            self.frames.push(CallFrame {
-                                chunk_idx,
-                                ip: 0,
-                                base_slot: func_pos + 1,
-                                upvalues: Rc::new(Vec::new()),
-                            });
+                    // Extract chunk_idx + upvalues without cloning the full Value enum.
+                    let (new_chunk_idx, new_upvalues) = match &self.stack[func_pos] {
+                        Value::Function(idx) => (*idx, None),
+                        Value::Closure { chunk_idx: idx, upvalues } => (*idx, Some(upvalues.clone())),
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Cannot call {}", self.stack[func_pos]), line, col,
+                            ));
                         }
-                        Value::Closure { chunk_idx, upvalues } => {
-                            self.frames.push(CallFrame {
-                                chunk_idx,
-                                ip: 0,
-                                base_slot: func_pos + 1,
-                                upvalues,
-                            });
-                        }
-                        _ => return Err(self.error(
-                            format!("Cannot call {}", func_val), line, col,
-                        )),
-                    }
+                    };
+
+                    // Save current frame state before pushing new frame
+                    let fi = self.frames.len() - 1;
+                    self.frames[fi].ip = ip;
+                    self.frames[fi].chunk_idx = chunk_idx;
+                    self.frames[fi].base_slot = base_slot;
+
+                    self.frames.push(CallFrame {
+                        chunk_idx: new_chunk_idx,
+                        ip: 0,
+                        base_slot: func_pos + 1,
+                        upvalues: new_upvalues,
+                    });
+                    ip = 0;
+                    chunk_idx = new_chunk_idx;
+                    base_slot = func_pos + 1;
+                    chunk = &chunks[chunk_idx];
                 }
 
                 Op::GetUpvalue(idx) => {
                     let frame = self.frames.last().unwrap();
-                    let val = frame.upvalues[idx as usize].clone();
+                    let val = frame.upvalues.as_ref().unwrap()[idx as usize].clone();
                     self.stack.push(val);
                 }
 
-                Op::MakeClosure(chunk_idx, upvalue_count) => {
+                Op::MakeClosure(new_chunk_idx, upvalue_count) => {
                     let n = upvalue_count as usize;
                     let start = self.stack.len() - n;
                     let upvalues: Vec<Value> = self.stack.drain(start..).collect();
                     self.stack.push(Value::Closure {
-                        chunk_idx: chunk_idx as usize,
+                        chunk_idx: new_chunk_idx as usize,
                         upvalues: Rc::new(upvalues),
                     });
                 }
@@ -598,11 +686,18 @@ impl Vm {
                 Op::CallNative(fn_id, arg_count) => {
                     let n = arg_count as usize;
                     if self.natives.is_hof(fn_id) {
+                        // Save frame state before HOF dispatch (it may re-enter run_frames)
+                        let fi = self.frames.len() - 1;
+                        self.frames[fi].ip = ip;
+                        self.frames[fi].chunk_idx = chunk_idx;
+                        self.frames[fi].base_slot = base_slot;
+                        let (line, col) = chunk.source_map[ip - 1];
                         self.dispatch_hof(fn_id, n, chunks, line, col)?;
                     } else {
                         let start = self.stack.len() - n;
                         let args: Vec<Value> = self.stack.drain(start..).collect();
                         let result = self.natives.call(fn_id, &args).map_err(|e| {
+                            let (line, col) = chunk.source_map[ip - 1];
                             self.error(format!("{}: {}", self.natives.name(fn_id), e.0), line, col)
                         })?;
                         self.stack.push(result);
@@ -614,14 +709,19 @@ impl Vm {
                     let frame = self.frames.pop().unwrap();
 
                     if self.frames.len() <= base_depth {
-                        // Returned to base depth — nested call complete (or program done)
                         return Ok(result);
                     }
 
                     // Remove callee's locals + args + the function value
-                    // base_slot points to first arg; func_value is at base_slot - 1
                     self.stack.truncate(frame.base_slot - 1);
                     self.stack.push(result);
+
+                    // Restore caller's frame state from the frames vec
+                    let caller = self.frames.last().unwrap();
+                    ip = caller.ip;
+                    chunk_idx = caller.chunk_idx;
+                    base_slot = caller.base_slot;
+                    chunk = &chunks[chunk_idx];
                 }
             }
         }
@@ -629,27 +729,36 @@ impl Vm {
 
     // -- Helpers --
 
+    /// Pop without error checking — used in the hot dispatch loop where the
+    /// compiler guarantees the stack is non-empty.
+    #[inline(always)]
+    fn pop_fast(&mut self) -> Value {
+        self.stack.pop().unwrap()
+    }
+
+    /// Pop two values without error checking — used in the hot dispatch loop.
+    #[inline(always)]
+    fn pop2_fast(&mut self) -> (Value, Value) {
+        let b = self.stack.pop().unwrap();
+        let a = self.stack.pop().unwrap();
+        (b, a)
+    }
+
+    /// Compare without Result overhead — returns None on type error.
+    #[inline(always)]
+    fn compare_lt_fast(&self, a: &Value, b: &Value) -> Option<bool> {
+        match (a, b) {
+            (Value::Int(x), Value::Int(y)) => Some(x < y),
+            (Value::Float(x), Value::Float(y)) => Some(x < y),
+            (Value::Int(x), Value::Float(y)) => Some((*x as f64) < *y),
+            (Value::Float(x), Value::Int(y)) => Some(*x < (*y as f64)),
+            (Value::String(x), Value::String(y)) => Some(x < y),
+            _ => None,
+        }
+    }
+
     fn pop(&mut self, line: usize, col: usize) -> Result<Value, VmError> {
         self.stack.pop().ok_or_else(|| self.error("Stack underflow".into(), line, col))
-    }
-
-    fn pop2(&mut self, line: usize, col: usize) -> Result<(Value, Value), VmError> {
-        let b = self.pop(line, col)?;
-        let a = self.pop(line, col)?;
-        Ok((b, a))
-    }
-
-    fn compare_lt(&self, a: &Value, b: &Value, line: usize, col: usize) -> Result<bool, VmError> {
-        match (a, b) {
-            (Value::Int(x), Value::Int(y)) => Ok(x < y),
-            (Value::Float(x), Value::Float(y)) => Ok(x < y),
-            (Value::Int(x), Value::Float(y)) => Ok((*x as f64) < *y),
-            (Value::Float(x), Value::Int(y)) => Ok(*x < (*y as f64)),
-            (Value::String(x), Value::String(y)) => Ok(x < y),
-            _ => Err(self.error(
-                format!("Cannot compare {} and {}", a, b), line, col,
-            )),
-        }
     }
 
     /// Execute a HOF native function (List.map, List.filter, etc.) by calling
@@ -665,7 +774,6 @@ impl Vm {
         let name = self.natives.name(fn_id);
         match name {
             "List.map" => {
-                // args: list, func
                 if arg_count != 2 {
                     return Err(self.error("List.map: expected 2 arguments".into(), line, col));
                 }
@@ -702,7 +810,6 @@ impl Vm {
                 self.stack.push(Value::List(Rc::new(results)));
             }
             "List.fold" => {
-                // args: list, initial, func
                 if arg_count != 3 {
                     return Err(self.error("List.fold: expected 3 arguments".into(), line, col));
                 }
@@ -800,9 +907,9 @@ impl Vm {
         let base_depth = self.frames.len();
         let stack_base = self.stack.len();
 
-        let (chunk_idx, upvals) = match func {
-            Value::Function(idx) => (*idx, Rc::new(Vec::new())),
-            Value::Closure { chunk_idx, upvalues } => (*chunk_idx, upvalues.clone()),
+        let (ci, upvals) = match func {
+            Value::Function(idx) => (*idx, None),
+            Value::Closure { chunk_idx, upvalues } => (*chunk_idx, Some(upvalues.clone())),
             _ => return Err(self.error(format!("Cannot call {}", func), line, col)),
         };
 
@@ -810,11 +917,11 @@ impl Vm {
         for arg in args {
             self.stack.push(arg.clone());
         }
-        let base_slot = self.stack.len() - args.len();
+        let bs = self.stack.len() - args.len();
         self.frames.push(CallFrame {
-            chunk_idx,
+            chunk_idx: ci,
             ip: 0,
-            base_slot,
+            base_slot: bs,
             upvalues: upvals,
         });
 
@@ -1041,7 +1148,7 @@ mod tests {
         let a = c.add_constant(Value::Int(1));
         let b = c.add_constant(Value::Int(2));
         c.emit(Op::LoadConst(f), 1, 0);
-        c.emit(Op::JumpIfFalse(1), 1, 0);   // condition false → jump
+        c.emit(Op::JumpIfFalse(1), 1, 0);   // condition false -> jump
         c.emit(Op::LoadConst(a), 1, 0);      // skipped
         c.emit(Op::LoadConst(b), 1, 0);      // executed
         c.emit(Op::Return, 1, 0);
@@ -1054,7 +1161,7 @@ mod tests {
         let t = c.add_constant(Value::Bool(true));
         let a = c.add_constant(Value::Int(1));
         c.emit(Op::LoadConst(t), 1, 0);
-        c.emit(Op::JumpIfFalse(1), 1, 0);   // condition true → no jump
+        c.emit(Op::JumpIfFalse(1), 1, 0);   // condition true -> no jump
         c.emit(Op::LoadConst(a), 1, 0);      // executed
         c.emit(Op::Return, 1, 0);
         assert_eq!(run_chunk(c), Value::Int(1));
