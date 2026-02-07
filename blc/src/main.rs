@@ -98,8 +98,8 @@ fn main() {
             }
         }
         Commands::Lsp => {
-            eprintln!("LSP server not yet implemented");
-            std::process::exit(1);
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(blc::lsp::run_server());
         }
     }
 }
