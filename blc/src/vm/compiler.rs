@@ -107,8 +107,12 @@ impl<'a> Compiler<'a> {
                 let val: i64 = text.parse().map_err(|_| {
                     self.error(format!("Invalid integer: {}", text), node)
                 })?;
-                let idx = self.chunk.add_constant(Value::Int(val));
-                self.emit(Op::LoadConst(idx), node);
+                if val >= i16::MIN as i64 && val <= i16::MAX as i64 {
+                    self.emit(Op::LoadSmallInt(val as i16), node);
+                } else {
+                    let idx = self.chunk.add_constant(Value::Int(val));
+                    self.emit(Op::LoadConst(idx), node);
+                }
             }
             "float_literal" => {
                 let text = self.node_text(node);
@@ -779,6 +783,30 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    /// Check if a node is known to produce an integer value at compile time.
+    fn is_int_expr(&self, node: &Node) -> bool {
+        match node.kind() {
+            "integer_literal" => true,
+            "unary_expression" => {
+                // -integer_literal is still int
+                node.named_child(0).map_or(false, |c| c.kind() == "integer_literal")
+            }
+            "binary_expression" => {
+                // int +/-/*/%// int is still int
+                if let Some(op) = node.child(1) {
+                    let op_text = self.node_text(&op);
+                    matches!(op_text.as_str(), "+" | "-" | "*" | "/" | "%")
+                        && node.named_child(0).map_or(false, |c| self.is_int_expr(&c))
+                        && node.named_child(1).map_or(false, |c| self.is_int_expr(&c))
+                } else {
+                    false
+                }
+            }
+            // Variables could be int too, but we'd need type info for that
+            _ => false,
+        }
+    }
+
     fn compile_binary(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         let lhs = node.child_by_field_name("left")
             .or_else(|| node.named_child(0))
@@ -801,16 +829,23 @@ impl<'a> Compiler<'a> {
         self.compile_expression(&lhs)?;
         self.compile_expression(&rhs)?;
 
+        // Use specialized int opcodes when both operands are statically known integers
+        let both_int = self.is_int_expr(&lhs) && self.is_int_expr(&rhs);
+
         let op = match op_text.as_str() {
+            "+" if both_int => Op::AddInt,
             "+" => Op::Add,
+            "-" if both_int => Op::SubInt,
             "-" => Op::Sub,
             "*" => Op::Mul,
             "/" => Op::Div,
             "%" => Op::Mod,
             "==" => Op::Eq,
             "!=" => Op::Ne,
+            "<" if both_int => Op::LtInt,
             "<" => Op::Lt,
             ">" => Op::Gt,
+            "<=" if both_int => Op::LeInt,
             "<=" => Op::Le,
             ">=" => Op::Ge,
             _ => return Err(self.error(
@@ -1677,15 +1712,7 @@ impl<'a> Compiler<'a> {
     /// Finalize the current chunk (append Return if needed) without consuming self.
     fn finish_chunk(&mut self) -> Chunk {
         let mut chunk = std::mem::replace(&mut self.chunk, Chunk::new());
-        if chunk.code.last() != Some(&Op::Return) {
-            let len = chunk.code.len();
-            let (line, col) = if len > 0 {
-                chunk.source_map[len - 1]
-            } else {
-                (0, 0)
-            };
-            chunk.emit(Op::Return, line, col);
-        }
+        chunk.ensure_return();
         chunk
     }
 
@@ -1694,15 +1721,7 @@ impl<'a> Compiler<'a> {
     // -----------------------------------------------------------------------
 
     pub fn finish(mut self) -> Chunk {
-        if self.chunk.code.last() != Some(&Op::Return) {
-            let len = self.chunk.code.len();
-            let (line, col) = if len > 0 {
-                self.chunk.source_map[len - 1]
-            } else {
-                (0, 0)
-            };
-            self.chunk.emit(Op::Return, line, col);
-        }
+        self.chunk.ensure_return();
         self.chunk
     }
 

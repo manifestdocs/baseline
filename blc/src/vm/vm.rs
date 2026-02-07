@@ -2,7 +2,12 @@ use std::rc::Rc;
 
 use super::chunk::{Chunk, Op, Program};
 use super::natives::NativeRegistry;
+use super::nvalue::{HeapObject, NValue};
 use super::value::Value;
+
+// SAFETY note: The unsafe stack operations below (pop_unchecked, pop2_unchecked,
+// get_unchecked) are sound because the compiler guarantees stack invariants:
+// every pop has a matching push, and local slot indices are always valid.
 
 const MAX_CALL_DEPTH: usize = 1024;
 
@@ -34,7 +39,7 @@ struct CallFrame {
     base_slot: usize,
     /// Captured upvalues (for closures). None for plain functions — avoids
     /// Rc refcount overhead on every Call/Return in the common case.
-    upvalues: Option<Rc<Vec<Value>>>,
+    upvalues: Option<Rc<Vec<NValue>>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -42,7 +47,7 @@ struct CallFrame {
 // ---------------------------------------------------------------------------
 
 pub struct Vm {
-    stack: Vec<Value>,
+    stack: Vec<NValue>,
     frames: Vec<CallFrame>,
     natives: NativeRegistry,
 }
@@ -71,7 +76,8 @@ impl Vm {
             base_slot: 0,
             upvalues: None,
         });
-        self.run(std::slice::from_ref(chunk))
+        let result = self.run(std::slice::from_ref(chunk))?;
+        Ok(result.to_value())
     }
 
     /// Execute a multi-chunk program starting at the entry point.
@@ -84,7 +90,8 @@ impl Vm {
             base_slot: 0,
             upvalues: None,
         });
-        self.run(&program.chunks)
+        let result = self.run(&program.chunks)?;
+        Ok(result.to_value())
     }
 
     /// Execute a specific chunk within a multi-chunk program.
@@ -98,168 +105,170 @@ impl Vm {
             base_slot: 0,
             upvalues: None,
         });
-        self.run(chunks)
+        let result = self.run(chunks)?;
+        Ok(result.to_value())
     }
 
     /// Main dispatch loop — shared by execute and execute_program.
-    fn run(&mut self, chunks: &[Chunk]) -> Result<Value, VmError> {
+    fn run(&mut self, chunks: &[Chunk]) -> Result<NValue, VmError> {
         self.run_frames(chunks, 0)
     }
 
     /// Dispatch loop that stops when frame count drops to `base_depth`.
-    /// Used by call_value to run a single function call without consuming outer frames.
     ///
     /// Performance: This is the hottest code in the VM. Key optimizations:
-    /// - Frame state (chunk_idx, ip, base_slot) kept in local variables to avoid
-    ///   repeated Vec lookups via frames.last().unwrap()
-    /// - Source map only consulted in error paths (not on every instruction)
-    /// - Empty upvalue Rc cached to avoid allocation on plain function calls
-    fn run_frames(&mut self, chunks: &[Chunk], base_depth: usize) -> Result<Value, VmError> {
-        // Hoist frame state into locals — avoids frames.last().unwrap() on every instruction.
-        // Synced back to self.frames only when switching frames (Call/Return).
+    /// - NaN-boxed values (8 bytes) instead of enum (24 bytes) for fast stack ops
+    /// - Frame state (chunk_idx, ip, base_slot) kept in local variables
+    /// - Source map only consulted in error paths
+    /// - Unsafe stack access eliminates bounds checks
+    fn run_frames(&mut self, chunks: &[Chunk], base_depth: usize) -> Result<NValue, VmError> {
         let frame = self.frames.last().unwrap();
         let mut ip = frame.ip;
         let mut chunk_idx = frame.chunk_idx;
         let mut base_slot = frame.base_slot;
         let mut chunk = &chunks[chunk_idx];
 
-        loop {
-            if ip >= chunk.code.len() {
-                return Ok(self.stack.pop().unwrap_or(Value::Unit));
-            }
+        // SAFETY: Every chunk is guaranteed to end with Op::Return (see
+        // Chunk::ensure_return). The Return handler exits the loop, so we
+        // never read past the end of the code vector.
+        debug_assert!(
+            chunk.code.last() == Some(&Op::Return),
+            "chunk must end with Return (sentinel)"
+        );
 
-            let op = chunk.code[ip];
+        loop {
+            let op = unsafe { *chunk.code.get_unchecked(ip) };
             ip += 1;
 
             match op {
                 Op::LoadConst(idx) => {
-                    self.stack.push(chunk.constants[idx as usize].clone());
+                    let val = NValue::from_value(&chunk.constants[idx as usize]);
+                    self.stack.push(val);
+                }
+
+                Op::LoadSmallInt(n) => {
+                    self.stack.push(NValue::int(n as i64));
                 }
 
                 Op::Add => {
                     let (b, a) = self.pop2_fast();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_add(*y)),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x + y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 + y),
-                        (Value::Float(x), Value::Int(y)) => Value::Float(x + *y as f64),
-                        _ => {
-                            let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Cannot add {} and {}", a, b), line, col,
-                            ));
-                        }
-                    };
-                    self.stack.push(result);
+                    if a.is_int() && b.is_int() {
+                        self.stack.push(NValue::int(a.as_int().wrapping_add(b.as_int())));
+                    } else if a.is_number() && b.is_number() {
+                        self.stack.push(NValue::float(a.as_f64() + b.as_f64()));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot add {} and {}", a, b), line, col,
+                        ));
+                    }
                 }
 
                 Op::Sub => {
                     let (b, a) = self.pop2_fast();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_sub(*y)),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x - y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 - y),
-                        (Value::Float(x), Value::Int(y)) => Value::Float(x - *y as f64),
-                        _ => {
-                            let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Cannot subtract {} from {}", b, a), line, col,
-                            ));
-                        }
-                    };
-                    self.stack.push(result);
+                    if a.is_int() && b.is_int() {
+                        self.stack.push(NValue::int(a.as_int().wrapping_sub(b.as_int())));
+                    } else if a.is_number() && b.is_number() {
+                        self.stack.push(NValue::float(a.as_f64() - b.as_f64()));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot subtract {} from {}", b, a), line, col,
+                        ));
+                    }
                 }
 
                 Op::Mul => {
                     let (b, a) = self.pop2_fast();
-                    let result = match (&a, &b) {
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x.wrapping_mul(*y)),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x * y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 * y),
-                        (Value::Float(x), Value::Int(y)) => Value::Float(x * *y as f64),
-                        _ => {
-                            let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Cannot multiply {} and {}", a, b), line, col,
-                            ));
-                        }
-                    };
-                    self.stack.push(result);
+                    if a.is_int() && b.is_int() {
+                        self.stack.push(NValue::int(a.as_int().wrapping_mul(b.as_int())));
+                    } else if a.is_number() && b.is_number() {
+                        self.stack.push(NValue::float(a.as_f64() * b.as_f64()));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot multiply {} and {}", a, b), line, col,
+                        ));
+                    }
                 }
 
                 Op::Div => {
                     let (b, a) = self.pop2_fast();
-                    let result = match (&a, &b) {
-                        (Value::Int(_), Value::Int(0)) => {
+                    if a.is_int() && b.is_int() {
+                        if b.as_int() == 0 {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error("Division by zero".into(), line, col));
                         }
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x / y),
-                        (Value::Float(x), Value::Float(y)) => Value::Float(x / y),
-                        (Value::Int(x), Value::Float(y)) => Value::Float(*x as f64 / y),
-                        (Value::Float(x), Value::Int(y)) => Value::Float(x / *y as f64),
-                        _ => {
-                            let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Cannot divide {} by {}", a, b), line, col,
-                            ));
-                        }
-                    };
-                    self.stack.push(result);
+                        self.stack.push(NValue::int(a.as_int() / b.as_int()));
+                    } else if a.is_number() && b.is_number() {
+                        self.stack.push(NValue::float(a.as_f64() / b.as_f64()));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot divide {} by {}", a, b), line, col,
+                        ));
+                    }
                 }
 
                 Op::Mod => {
                     let (b, a) = self.pop2_fast();
-                    let result = match (&a, &b) {
-                        (Value::Int(_), Value::Int(0)) => {
+                    if a.is_int() && b.is_int() {
+                        if b.as_int() == 0 {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error("Modulo by zero".into(), line, col));
                         }
-                        (Value::Int(x), Value::Int(y)) => Value::Int(x % y),
-                        _ => {
-                            let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Cannot modulo {} by {}", a, b), line, col,
-                            ));
-                        }
-                    };
-                    self.stack.push(result);
+                        self.stack.push(NValue::int(a.as_int() % b.as_int()));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot modulo {} by {}", a, b), line, col,
+                        ));
+                    }
                 }
 
                 Op::Negate => {
                     let v = self.pop_fast();
-                    let result = match &v {
-                        Value::Int(x) => Value::Int(-x),
-                        Value::Float(x) => Value::Float(-x),
-                        _ => {
-                            let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Cannot negate {}", v), line, col,
-                            ));
-                        }
-                    };
-                    self.stack.push(result);
+                    if v.is_int() {
+                        self.stack.push(NValue::int(-v.as_int()));
+                    } else if v.is_float() {
+                        self.stack.push(NValue::float(-v.as_float()));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot negate {}", v), line, col,
+                        ));
+                    }
+                }
+
+                Op::AddInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::int(a.as_int().wrapping_add(b.as_int())));
+                }
+
+                Op::SubInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::int(a.as_int().wrapping_sub(b.as_int())));
                 }
 
                 Op::Not => {
                     let v = self.pop_fast();
-                    self.stack.push(Value::Bool(!v.is_truthy()));
+                    self.stack.push(NValue::bool(!v.is_truthy()));
                 }
 
                 Op::Eq => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(Value::Bool(a == b));
+                    self.stack.push(NValue::bool(a == b));
                 }
 
                 Op::Ne => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(Value::Bool(a != b));
+                    self.stack.push(NValue::bool(a != b));
                 }
 
                 Op::Lt => {
                     let (b, a) = self.pop2_fast();
-                    match self.compare_lt_fast(&a, &b) {
-                        Some(result) => self.stack.push(Value::Bool(result)),
+                    match self.compare_lt(&a, &b) {
+                        Some(result) => self.stack.push(NValue::bool(result)),
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
@@ -271,8 +280,8 @@ impl Vm {
 
                 Op::Gt => {
                     let (b, a) = self.pop2_fast();
-                    match self.compare_lt_fast(&b, &a) {
-                        Some(result) => self.stack.push(Value::Bool(result)),
+                    match self.compare_lt(&b, &a) {
+                        Some(result) => self.stack.push(NValue::bool(result)),
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
@@ -284,8 +293,8 @@ impl Vm {
 
                 Op::Le => {
                     let (b, a) = self.pop2_fast();
-                    match self.compare_lt_fast(&a, &b) {
-                        Some(lt) => self.stack.push(Value::Bool(lt || a == b)),
+                    match self.compare_lt(&a, &b) {
+                        Some(lt) => self.stack.push(NValue::bool(lt || a == b)),
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
@@ -297,8 +306,8 @@ impl Vm {
 
                 Op::Ge => {
                     let (b, a) = self.pop2_fast();
-                    match self.compare_lt_fast(&b, &a) {
-                        Some(lt) => self.stack.push(Value::Bool(lt || a == b)),
+                    match self.compare_lt(&b, &a) {
+                        Some(lt) => self.stack.push(NValue::bool(lt || a == b)),
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
@@ -308,21 +317,34 @@ impl Vm {
                     }
                 }
 
+                Op::LtInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_int() < b.as_int()));
+                }
+
+                Op::LeInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_int() <= b.as_int()));
+                }
+
                 Op::Concat => {
                     let (b, a) = self.pop2_fast();
-                    let result = Value::String(format!("{}{}", a, b).into());
+                    let result = NValue::string(format!("{}{}", a, b).into());
                     self.stack.push(result);
                 }
 
                 Op::GetLocal(slot) => {
                     let idx = base_slot + slot as usize;
-                    self.stack.push(self.stack[idx].clone());
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(idx) }.clone();
+                    self.stack.push(val);
                 }
 
                 Op::SetLocal(slot) => {
                     let idx = base_slot + slot as usize;
-                    let val = self.stack[self.stack.len() - 1].clone();
-                    self.stack[idx] = val;
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(self.stack.len() - 1) }.clone();
+                    unsafe { *self.stack.get_unchecked_mut(idx) = val; }
                 }
 
                 Op::PopN(n) => {
@@ -334,7 +356,7 @@ impl Vm {
                 Op::CloseScope(n) => {
                     let count = n as usize;
                     if count > 0 && !self.stack.is_empty() {
-                        let top = self.stack.pop().unwrap();
+                        let top = self.pop_fast();
                         let new_len = self.stack.len().saturating_sub(count);
                         self.stack.truncate(new_len);
                         self.stack.push(top);
@@ -370,28 +392,25 @@ impl Vm {
 
                 Op::MakeRange => {
                     let (end_val, start_val) = self.pop2_fast();
-                    match (&start_val, &end_val) {
-                        (Value::Int(start), Value::Int(end)) => {
-                            let list: Vec<Value> = (*start..*end)
-                                .map(Value::Int)
-                                .collect();
-                            self.stack.push(Value::List(Rc::new(list)));
-                        }
-                        _ => {
-                            let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Range requires integers, got {} and {}", start_val, end_val),
-                                line, col,
-                            ));
-                        }
+                    if start_val.is_any_int() && end_val.is_any_int() {
+                        let start = start_val.as_any_int();
+                        let end = end_val.as_any_int();
+                        let list: Vec<NValue> = (start..end).map(NValue::int).collect();
+                        self.stack.push(NValue::list(list));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Range requires integers, got {} and {}", start_val, end_val),
+                            line, col,
+                        ));
                     }
                 }
 
                 Op::ListGet => {
                     let (idx_val, list_val) = self.pop2_fast();
-                    match (&list_val, &idx_val) {
-                        (Value::List(items), Value::Int(i)) => {
-                            let idx = *i as usize;
+                    if list_val.is_heap() && idx_val.is_any_int() {
+                        if let HeapObject::List(items) = list_val.as_heap_ref() {
+                            let idx = idx_val.as_any_int() as usize;
                             if idx >= items.len() {
                                 let (line, col) = chunk.source_map[ip - 1];
                                 return Err(self.error(
@@ -400,48 +419,66 @@ impl Vm {
                                 ));
                             }
                             self.stack.push(items[idx].clone());
-                        }
-                        _ => {
+                        } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("ListGet requires List and Int, got {} and {}", list_val, idx_val),
                                 line, col,
                             ));
                         }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("ListGet requires List and Int, got {} and {}", list_val, idx_val),
+                            line, col,
+                        ));
                     }
                 }
 
                 Op::ListLen => {
                     let list_val = self.pop_fast();
-                    match &list_val {
-                        Value::List(items) => {
-                            self.stack.push(Value::Int(items.len() as i64));
-                        }
-                        _ => {
+                    if list_val.is_heap() {
+                        if let HeapObject::List(items) = list_val.as_heap_ref() {
+                            self.stack.push(NValue::int(items.len() as i64));
+                        } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("ListLen requires List, got {}", list_val),
                                 line, col,
                             ));
                         }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("ListLen requires List, got {}", list_val),
+                            line, col,
+                        ));
                     }
                 }
 
                 Op::MakeList(n) => {
                     let count = n as usize;
                     let start = self.stack.len() - count;
-                    let items: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(Value::List(Rc::new(items)));
+                    let items: Vec<NValue> = self.stack.drain(start..).collect();
+                    self.stack.push(NValue::list(items));
                 }
 
                 Op::MakeRecord(n) => {
                     let count = n as usize;
                     let start = self.stack.len() - count * 2;
-                    let pairs: Vec<Value> = self.stack.drain(start..).collect();
+                    let pairs: Vec<NValue> = self.stack.drain(start..).collect();
                     let mut fields = Vec::with_capacity(count);
                     for pair in pairs.chunks(2) {
-                        if let Value::String(key) = &pair[0] {
-                            fields.push((key.clone(), pair[1].clone()));
+                        if pair[0].is_heap() {
+                            if let HeapObject::String(key) = pair[0].as_heap_ref() {
+                                fields.push((key.clone(), pair[1].clone()));
+                            } else {
+                                let (line, col) = chunk.source_map[ip - 1];
+                                return Err(self.error(
+                                    format!("Record key must be String, got {}", pair[0]),
+                                    line, col,
+                                ));
+                            }
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
@@ -450,7 +487,7 @@ impl Vm {
                             ));
                         }
                     }
-                    self.stack.push(Value::Record(Rc::new(fields)));
+                    self.stack.push(NValue::record(fields));
                 }
 
                 Op::GetField(name_idx) => {
@@ -462,8 +499,15 @@ impl Vm {
                         }
                     };
                     let record = self.pop_fast();
-                    match record {
-                        Value::Record(fields) | Value::Struct(_, fields) => {
+                    if !record.is_heap() {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot access field '{}' on {}", field_name, record),
+                            line, col,
+                        ));
+                    }
+                    match record.as_heap_ref() {
+                        HeapObject::Record(fields) | HeapObject::Struct { fields, .. } => {
                             match fields.iter().find(|(k, _)| *k == field_name) {
                                 Some((_, v)) => self.stack.push(v.clone()),
                                 None => {
@@ -488,14 +532,14 @@ impl Vm {
                 Op::MakeTuple(n) => {
                     let count = n as usize;
                     let start = self.stack.len() - count;
-                    let items: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(Value::Tuple(Rc::new(items)));
+                    let items: Vec<NValue> = self.stack.drain(start..).collect();
+                    self.stack.push(NValue::tuple(items));
                 }
 
                 Op::TupleGet(idx) => {
                     let tuple = self.pop_fast();
-                    match tuple {
-                        Value::Tuple(items) => {
+                    if tuple.is_heap() {
+                        if let HeapObject::Tuple(items) = tuple.as_heap_ref() {
                             let i = idx as usize;
                             if i >= items.len() {
                                 let (line, col) = chunk.source_map[ip - 1];
@@ -505,13 +549,17 @@ impl Vm {
                                 ));
                             }
                             self.stack.push(items[i].clone());
-                        }
-                        _ => {
+                        } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("TupleGet requires Tuple, got {}", tuple), line, col,
                             ));
                         }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("TupleGet requires Tuple, got {}", tuple), line, col,
+                        ));
                     }
                 }
 
@@ -524,7 +572,7 @@ impl Vm {
                         }
                     };
                     let payload = self.pop_fast();
-                    self.stack.push(Value::Enum(tag, Rc::new(payload)));
+                    self.stack.push(NValue::enum_val(tag, payload));
                 }
 
                 Op::MakeStruct(tag_idx) => {
@@ -536,84 +584,108 @@ impl Vm {
                         }
                     };
                     let record = self.pop_fast();
-                    match record {
-                        Value::Record(fields) => {
-                            self.stack.push(Value::Struct(tag, fields));
-                        }
-                        _ => {
+                    if record.is_heap() {
+                        if let HeapObject::Record(fields) = record.as_heap_ref() {
+                            self.stack.push(NValue::struct_val(tag, fields.clone()));
+                        } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("MakeStruct requires Record, got {}", record), line, col,
                             ));
                         }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("MakeStruct requires Record, got {}", record), line, col,
+                        ));
                     }
                 }
 
                 Op::EnumTag => {
                     let val = self.pop_fast();
-                    match val {
-                        Value::Enum(tag, _) => self.stack.push(Value::String(tag)),
-                        _ => {
+                    if val.is_heap() {
+                        if let HeapObject::Enum { tag, .. } = val.as_heap_ref() {
+                            self.stack.push(NValue::string(tag.clone()));
+                        } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("EnumTag requires Enum, got {}", val), line, col,
                             ));
                         }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("EnumTag requires Enum, got {}", val), line, col,
+                        ));
                     }
                 }
 
                 Op::EnumPayload => {
                     let val = self.pop_fast();
-                    match val {
-                        Value::Enum(_, payload) => self.stack.push((*payload).clone()),
-                        _ => {
+                    if val.is_heap() {
+                        if let HeapObject::Enum { payload, .. } = val.as_heap_ref() {
+                            self.stack.push(payload.clone());
+                        } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("EnumPayload requires Enum, got {}", val), line, col,
                             ));
                         }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("EnumPayload requires Enum, got {}", val), line, col,
+                        ));
                     }
                 }
 
                 Op::UpdateRecord(n) => {
                     let count = n as usize;
                     let start = self.stack.len() - count * 2;
-                    let updates: Vec<Value> = self.stack.drain(start..).collect();
+                    let updates: Vec<NValue> = self.stack.drain(start..).collect();
                     let base = self.pop_fast();
-                    match base {
-                        Value::Record(fields_rc) => {
-                            let mut fields = Rc::try_unwrap(fields_rc)
-                                .unwrap_or_else(|rc| (*rc).clone());
+                    if !base.is_heap() {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("UpdateRecord requires Record, got {}", base), line, col,
+                        ));
+                    }
+                    match base.as_heap_ref() {
+                        HeapObject::Record(fields) => {
+                            let mut new_fields = fields.clone();
                             for pair in updates.chunks(2) {
-                                if let Value::String(key) = &pair[0] {
-                                    if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == *key) {
-                                        existing.1 = pair[1].clone();
-                                    } else {
-                                        let (line, col) = chunk.source_map[ip - 1];
-                                        return Err(self.error(
-                                            format!("Record has no field '{}'", key), line, col,
-                                        ));
+                                if pair[0].is_heap() {
+                                    if let HeapObject::String(key) = pair[0].as_heap_ref() {
+                                        if let Some(existing) = new_fields.iter_mut().find(|(k, _)| *k == *key) {
+                                            existing.1 = pair[1].clone();
+                                        } else {
+                                            let (line, col) = chunk.source_map[ip - 1];
+                                            return Err(self.error(
+                                                format!("Record has no field '{}'", key), line, col,
+                                            ));
+                                        }
                                     }
                                 }
                             }
-                            self.stack.push(Value::Record(Rc::new(fields)));
+                            self.stack.push(NValue::record(new_fields));
                         }
-                        Value::Struct(name, fields_rc) => {
-                            let mut fields = Rc::try_unwrap(fields_rc)
-                                .unwrap_or_else(|rc| (*rc).clone());
+                        HeapObject::Struct { name, fields } => {
+                            let mut new_fields = fields.clone();
                             for pair in updates.chunks(2) {
-                                if let Value::String(key) = &pair[0] {
-                                    if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == *key) {
-                                        existing.1 = pair[1].clone();
-                                    } else {
-                                        let (line, col) = chunk.source_map[ip - 1];
-                                        return Err(self.error(
-                                            format!("Record has no field '{}'", key), line, col,
-                                        ));
+                                if pair[0].is_heap() {
+                                    if let HeapObject::String(key) = pair[0].as_heap_ref() {
+                                        if let Some(existing) = new_fields.iter_mut().find(|(k, _)| *k == *key) {
+                                            existing.1 = pair[1].clone();
+                                        } else {
+                                            let (line, col) = chunk.source_map[ip - 1];
+                                            return Err(self.error(
+                                                format!("Record has no field '{}'", key), line, col,
+                                            ));
+                                        }
                                     }
                                 }
                             }
-                            self.stack.push(Value::Struct(name, Rc::new(fields)));
+                            self.stack.push(NValue::struct_val(name.clone(), new_fields));
                         }
                         _ => {
                             let (line, col) = chunk.source_map[ip - 1];
@@ -636,17 +708,24 @@ impl Vm {
                     }
                     let n = arg_count as usize;
                     let func_pos = self.stack.len() - n - 1;
+                    let func = unsafe { self.stack.get_unchecked(func_pos) };
 
-                    // Extract chunk_idx + upvalues without cloning the full Value enum.
-                    let (new_chunk_idx, new_upvalues) = match &self.stack[func_pos] {
-                        Value::Function(idx) => (*idx, None),
-                        Value::Closure { chunk_idx: idx, upvalues } => (*idx, Some(upvalues.clone())),
-                        _ => {
+                    let (new_chunk_idx, new_upvalues) = if func.is_function() {
+                        (func.as_function(), None)
+                    } else if func.is_heap() {
+                        if let HeapObject::Closure { chunk_idx: idx, upvalues } = func.as_heap_ref() {
+                            (*idx, Some(Rc::new(upvalues.clone())))
+                        } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("Cannot call {}", self.stack[func_pos]), line, col,
+                                format!("Cannot call {}", func), line, col,
                             ));
                         }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot call {}", func), line, col,
+                        ));
                     };
 
                     // Save current frame state before pushing new frame
@@ -665,6 +744,7 @@ impl Vm {
                     chunk_idx = new_chunk_idx;
                     base_slot = func_pos + 1;
                     chunk = &chunks[chunk_idx];
+                    debug_assert!(chunk.code.last() == Some(&Op::Return));
                 }
 
                 Op::GetUpvalue(idx) => {
@@ -676,17 +756,13 @@ impl Vm {
                 Op::MakeClosure(new_chunk_idx, upvalue_count) => {
                     let n = upvalue_count as usize;
                     let start = self.stack.len() - n;
-                    let upvalues: Vec<Value> = self.stack.drain(start..).collect();
-                    self.stack.push(Value::Closure {
-                        chunk_idx: new_chunk_idx as usize,
-                        upvalues: Rc::new(upvalues),
-                    });
+                    let upvalues: Vec<NValue> = self.stack.drain(start..).collect();
+                    self.stack.push(NValue::closure(new_chunk_idx as usize, upvalues));
                 }
 
                 Op::CallNative(fn_id, arg_count) => {
                     let n = arg_count as usize;
                     if self.natives.is_hof(fn_id) {
-                        // Save frame state before HOF dispatch (it may re-enter run_frames)
                         let fi = self.frames.len() - 1;
                         self.frames[fi].ip = ip;
                         self.frames[fi].chunk_idx = chunk_idx;
@@ -694,18 +770,21 @@ impl Vm {
                         let (line, col) = chunk.source_map[ip - 1];
                         self.dispatch_hof(fn_id, n, chunks, line, col)?;
                     } else {
+                        // Convert NValue args to Value for native function call
                         let start = self.stack.len() - n;
-                        let args: Vec<Value> = self.stack.drain(start..).collect();
+                        let args: Vec<Value> = self.stack[start..].iter()
+                            .map(|nv| nv.to_value()).collect();
+                        self.stack.truncate(start);
                         let result = self.natives.call(fn_id, &args).map_err(|e| {
                             let (line, col) = chunk.source_map[ip - 1];
                             self.error(format!("{}: {}", self.natives.name(fn_id), e.0), line, col)
                         })?;
-                        self.stack.push(result);
+                        self.stack.push(NValue::from_value(&result));
                     }
                 }
 
                 Op::Return => {
-                    let result = self.stack.pop().unwrap_or(Value::Unit);
+                    let result = self.stack.pop().unwrap_or_else(NValue::unit);
                     let frame = self.frames.pop().unwrap();
 
                     if self.frames.len() <= base_depth {
@@ -716,7 +795,7 @@ impl Vm {
                     self.stack.truncate(frame.base_slot - 1);
                     self.stack.push(result);
 
-                    // Restore caller's frame state from the frames vec
+                    // Restore caller's frame state
                     let caller = self.frames.last().unwrap();
                     ip = caller.ip;
                     chunk_idx = caller.chunk_idx;
@@ -729,40 +808,50 @@ impl Vm {
 
     // -- Helpers --
 
-    /// Pop without error checking — used in the hot dispatch loop where the
-    /// compiler guarantees the stack is non-empty.
     #[inline(always)]
-    fn pop_fast(&mut self) -> Value {
-        self.stack.pop().unwrap()
-    }
-
-    /// Pop two values without error checking — used in the hot dispatch loop.
-    #[inline(always)]
-    fn pop2_fast(&mut self) -> (Value, Value) {
-        let b = self.stack.pop().unwrap();
-        let a = self.stack.pop().unwrap();
-        (b, a)
-    }
-
-    /// Compare without Result overhead — returns None on type error.
-    #[inline(always)]
-    fn compare_lt_fast(&self, a: &Value, b: &Value) -> Option<bool> {
-        match (a, b) {
-            (Value::Int(x), Value::Int(y)) => Some(x < y),
-            (Value::Float(x), Value::Float(y)) => Some(x < y),
-            (Value::Int(x), Value::Float(y)) => Some((*x as f64) < *y),
-            (Value::Float(x), Value::Int(y)) => Some(*x < (*y as f64)),
-            (Value::String(x), Value::String(y)) => Some(x < y),
-            _ => None,
+    fn pop_fast(&mut self) -> NValue {
+        debug_assert!(!self.stack.is_empty());
+        unsafe {
+            let new_len = self.stack.len() - 1;
+            self.stack.set_len(new_len);
+            std::ptr::read(self.stack.as_ptr().add(new_len))
         }
     }
 
-    fn pop(&mut self, line: usize, col: usize) -> Result<Value, VmError> {
+    #[inline(always)]
+    fn pop2_fast(&mut self) -> (NValue, NValue) {
+        debug_assert!(self.stack.len() >= 2);
+        unsafe {
+            let new_len = self.stack.len() - 2;
+            let ptr = self.stack.as_ptr();
+            let b = std::ptr::read(ptr.add(new_len + 1));
+            let a = std::ptr::read(ptr.add(new_len));
+            self.stack.set_len(new_len);
+            (b, a)
+        }
+    }
+
+    #[inline(always)]
+    fn compare_lt(&self, a: &NValue, b: &NValue) -> Option<bool> {
+        if a.is_int() && b.is_int() {
+            Some(a.as_int() < b.as_int())
+        } else if a.is_number() && b.is_number() {
+            Some(a.as_f64() < b.as_f64())
+        } else if a.is_heap() && b.is_heap() {
+            match (a.as_heap_ref(), b.as_heap_ref()) {
+                (HeapObject::String(x), HeapObject::String(y)) => Some(x < y),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+
+    fn pop(&mut self, line: usize, col: usize) -> Result<NValue, VmError> {
         self.stack.pop().ok_or_else(|| self.error("Stack underflow".into(), line, col))
     }
 
-    /// Execute a HOF native function (List.map, List.filter, etc.) by calling
-    /// bytecode closures from within the VM loop.
+    /// Execute a HOF native function by calling bytecode closures from within the VM loop.
     fn dispatch_hof(
         &mut self,
         fn_id: u16,
@@ -779,16 +868,19 @@ impl Vm {
                 }
                 let func = self.pop(line, col)?;
                 let list = self.pop(line, col)?;
-                let items = match list {
-                    Value::List(v) => v,
+                if !list.is_heap() {
+                    return Err(self.error("List.map: first arg must be List".into(), line, col));
+                }
+                let items = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.clone(),
                     _ => return Err(self.error("List.map: first arg must be List".into(), line, col)),
                 };
                 let mut results = Vec::with_capacity(items.len());
-                for item in items.iter() {
-                    let result = self.call_value(&func, &[item.clone()], chunks, line, col)?;
+                for item in &items {
+                    let result = self.call_nvalue(&func, &[item.clone()], chunks, line, col)?;
                     results.push(result);
                 }
-                self.stack.push(Value::List(Rc::new(results)));
+                self.stack.push(NValue::list(results));
             }
             "List.filter" => {
                 if arg_count != 2 {
@@ -796,18 +888,21 @@ impl Vm {
                 }
                 let func = self.pop(line, col)?;
                 let list = self.pop(line, col)?;
-                let items = match list {
-                    Value::List(v) => v,
+                if !list.is_heap() {
+                    return Err(self.error("List.filter: first arg must be List".into(), line, col));
+                }
+                let items = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.clone(),
                     _ => return Err(self.error("List.filter: first arg must be List".into(), line, col)),
                 };
                 let mut results = Vec::new();
-                for item in items.iter() {
-                    let result = self.call_value(&func, &[item.clone()], chunks, line, col)?;
+                for item in &items {
+                    let result = self.call_nvalue(&func, &[item.clone()], chunks, line, col)?;
                     if result.is_truthy() {
                         results.push(item.clone());
                     }
                 }
-                self.stack.push(Value::List(Rc::new(results)));
+                self.stack.push(NValue::list(results));
             }
             "List.fold" => {
                 if arg_count != 3 {
@@ -816,13 +911,16 @@ impl Vm {
                 let func = self.pop(line, col)?;
                 let initial = self.pop(line, col)?;
                 let list = self.pop(line, col)?;
-                let items = match list {
-                    Value::List(v) => v,
+                if !list.is_heap() {
+                    return Err(self.error("List.fold: first arg must be List".into(), line, col));
+                }
+                let items = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.clone(),
                     _ => return Err(self.error("List.fold: first arg must be List".into(), line, col)),
                 };
                 let mut acc = initial;
-                for item in items.iter() {
-                    acc = self.call_value(&func, &[acc, item.clone()], chunks, line, col)?;
+                for item in &items {
+                    acc = self.call_nvalue(&func, &[acc, item.clone()], chunks, line, col)?;
                 }
                 self.stack.push(acc);
             }
@@ -832,15 +930,18 @@ impl Vm {
                 }
                 let func = self.pop(line, col)?;
                 let list = self.pop(line, col)?;
-                let items = match list {
-                    Value::List(v) => v,
+                if !list.is_heap() {
+                    return Err(self.error("List.find: first arg must be List".into(), line, col));
+                }
+                let items = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.clone(),
                     _ => return Err(self.error("List.find: first arg must be List".into(), line, col)),
                 };
-                let mut found = Value::Enum("None".into(), Rc::new(Value::Unit));
-                for item in items.iter() {
-                    let result = self.call_value(&func, &[item.clone()], chunks, line, col)?;
+                let mut found = NValue::enum_val("None".into(), NValue::unit());
+                for item in &items {
+                    let result = self.call_nvalue(&func, &[item.clone()], chunks, line, col)?;
                     if result.is_truthy() {
-                        found = Value::Enum("Some".into(), Rc::new(item.clone()));
+                        found = NValue::enum_val("Some".into(), item.clone());
                         break;
                     }
                 }
@@ -852,13 +953,16 @@ impl Vm {
                 }
                 let func = self.pop(line, col)?;
                 let opt = self.pop(line, col)?;
-                match opt {
-                    Value::Enum(tag, payload) if *tag == *"Some" => {
-                        let result = self.call_value(&func, &[(*payload).clone()], chunks, line, col)?;
-                        self.stack.push(Value::Enum("Some".into(), Rc::new(result)));
+                if !opt.is_heap() {
+                    return Err(self.error("Option.map: first arg must be Option".into(), line, col));
+                }
+                match opt.as_heap_ref() {
+                    HeapObject::Enum { tag, payload } if &**tag == "Some" => {
+                        let result = self.call_nvalue(&func, &[payload.clone()], chunks, line, col)?;
+                        self.stack.push(NValue::enum_val("Some".into(), result));
                     }
-                    Value::Enum(tag, _) if *tag == *"None" => {
-                        self.stack.push(Value::Enum("None".into(), Rc::new(Value::Unit)));
+                    HeapObject::Enum { tag, .. } if &**tag == "None" => {
+                        self.stack.push(NValue::enum_val("None".into(), NValue::unit()));
                     }
                     _ => return Err(self.error("Option.map: first arg must be Option".into(), line, col)),
                 }
@@ -869,13 +973,16 @@ impl Vm {
                 }
                 let func = self.pop(line, col)?;
                 let res = self.pop(line, col)?;
-                match res {
-                    Value::Enum(tag, payload) if *tag == *"Ok" => {
-                        let result = self.call_value(&func, &[(*payload).clone()], chunks, line, col)?;
-                        self.stack.push(Value::Enum("Ok".into(), Rc::new(result)));
+                if !res.is_heap() {
+                    return Err(self.error("Result.map: first arg must be Result".into(), line, col));
+                }
+                match res.as_heap_ref() {
+                    HeapObject::Enum { tag, payload } if &**tag == "Ok" => {
+                        let result = self.call_nvalue(&func, &[payload.clone()], chunks, line, col)?;
+                        self.stack.push(NValue::enum_val("Ok".into(), result));
                     }
-                    Value::Enum(tag, payload) if *tag == *"Err" => {
-                        self.stack.push(Value::Enum("Err".into(), payload));
+                    HeapObject::Enum { tag, payload } if &**tag == "Err" => {
+                        self.stack.push(NValue::enum_val("Err".into(), payload.clone()));
                     }
                     _ => return Err(self.error("Result.map: first arg must be Result".into(), line, col)),
                 }
@@ -887,17 +994,15 @@ impl Vm {
         Ok(())
     }
 
-    /// Call a bytecode function/closure with the given arguments.
-    /// Uses run_frames with base_depth to only execute the callee without
-    /// consuming outer frames. Cleans up the stack after execution.
-    fn call_value(
+    /// Call a bytecode function/closure with given arguments (NValue version).
+    fn call_nvalue(
         &mut self,
-        func: &Value,
-        args: &[Value],
+        func: &NValue,
+        args: &[NValue],
         chunks: &[Chunk],
         line: usize,
         col: usize,
-    ) -> Result<Value, VmError> {
+    ) -> Result<NValue, VmError> {
         if self.frames.len() >= MAX_CALL_DEPTH {
             return Err(self.error(
                 "Stack overflow: maximum call depth exceeded".into(),
@@ -907,10 +1012,16 @@ impl Vm {
         let base_depth = self.frames.len();
         let stack_base = self.stack.len();
 
-        let (ci, upvals) = match func {
-            Value::Function(idx) => (*idx, None),
-            Value::Closure { chunk_idx, upvalues } => (*chunk_idx, Some(upvalues.clone())),
-            _ => return Err(self.error(format!("Cannot call {}", func), line, col)),
+        let (ci, upvals) = if func.is_function() {
+            (func.as_function(), None)
+        } else if func.is_heap() {
+            if let HeapObject::Closure { chunk_idx, upvalues } = func.as_heap_ref() {
+                (*chunk_idx, Some(Rc::new(upvalues.clone())))
+            } else {
+                return Err(self.error(format!("Cannot call {}", func), line, col));
+            }
+        } else {
+            return Err(self.error(format!("Cannot call {}", func), line, col));
         };
 
         self.stack.push(func.clone());
@@ -926,11 +1037,7 @@ impl Vm {
         });
 
         let result = self.run_frames(chunks, base_depth)?;
-
-        // Clean up: run_frames returns early at base_depth without stack cleanup,
-        // so we restore the stack to its state before we pushed func+args.
         self.stack.truncate(stack_base);
-
         Ok(result)
     }
 
@@ -1015,6 +1122,7 @@ mod tests {
         c.emit(Op::LoadConst(a), 1, 0);
         c.emit(Op::LoadConst(b), 1, 0);
         c.emit(Op::Div, 1, 0);
+        c.emit(Op::Return, 1, 0);
         let err = run_chunk_err(c);
         assert!(err.message.contains("Division by zero"));
     }
@@ -1134,9 +1242,9 @@ mod tests {
         let mut c = Chunk::new();
         let a = c.add_constant(Value::Int(1));
         let b = c.add_constant(Value::Int(99));
-        c.emit(Op::Jump(1), 1, 0);         // skip LoadConst(a)
-        c.emit(Op::LoadConst(a), 1, 0);     // skipped
-        c.emit(Op::LoadConst(b), 1, 0);     // executed
+        c.emit(Op::Jump(1), 1, 0);
+        c.emit(Op::LoadConst(a), 1, 0);
+        c.emit(Op::LoadConst(b), 1, 0);
         c.emit(Op::Return, 1, 0);
         assert_eq!(run_chunk(c), Value::Int(99));
     }
@@ -1148,9 +1256,9 @@ mod tests {
         let a = c.add_constant(Value::Int(1));
         let b = c.add_constant(Value::Int(2));
         c.emit(Op::LoadConst(f), 1, 0);
-        c.emit(Op::JumpIfFalse(1), 1, 0);   // condition false -> jump
-        c.emit(Op::LoadConst(a), 1, 0);      // skipped
-        c.emit(Op::LoadConst(b), 1, 0);      // executed
+        c.emit(Op::JumpIfFalse(1), 1, 0);
+        c.emit(Op::LoadConst(a), 1, 0);
+        c.emit(Op::LoadConst(b), 1, 0);
         c.emit(Op::Return, 1, 0);
         assert_eq!(run_chunk(c), Value::Int(2));
     }
@@ -1161,8 +1269,8 @@ mod tests {
         let t = c.add_constant(Value::Bool(true));
         let a = c.add_constant(Value::Int(1));
         c.emit(Op::LoadConst(t), 1, 0);
-        c.emit(Op::JumpIfFalse(1), 1, 0);   // condition true -> no jump
-        c.emit(Op::LoadConst(a), 1, 0);      // executed
+        c.emit(Op::JumpIfFalse(1), 1, 0);
+        c.emit(Op::LoadConst(a), 1, 0);
         c.emit(Op::Return, 1, 0);
         assert_eq!(run_chunk(c), Value::Int(1));
     }
@@ -1178,8 +1286,8 @@ mod tests {
         c.emit(Op::LoadConst(one), 1, 0);
         c.emit(Op::LoadConst(two), 1, 0);
         c.emit(Op::LoadConst(three), 1, 0);
-        c.emit(Op::Mul, 1, 0);  // 2 * 3 = 6
-        c.emit(Op::Add, 1, 0);  // 1 + 6 = 7
+        c.emit(Op::Mul, 1, 0);
+        c.emit(Op::Add, 1, 0);
         c.emit(Op::Return, 1, 0);
         assert_eq!(run_chunk(c), Value::Int(7));
     }
@@ -1188,7 +1296,6 @@ mod tests {
 
     #[test]
     fn call_simple_function() {
-        // Chunk 0 (caller): push Function(1), push 5, Call(1)
         let mut caller = Chunk::new();
         let func = caller.add_constant(Value::Function(1));
         let arg = caller.add_constant(Value::Int(5));
@@ -1197,10 +1304,9 @@ mod tests {
         caller.emit(Op::Call(1), 1, 0);
         caller.emit(Op::Return, 1, 0);
 
-        // Chunk 1 (callee): GetLocal(0) * 2
         let mut callee = Chunk::new();
         let two = callee.add_constant(Value::Int(2));
-        callee.emit(Op::GetLocal(0), 1, 0); // param x
+        callee.emit(Op::GetLocal(0), 1, 0);
         callee.emit(Op::LoadConst(two), 1, 0);
         callee.emit(Op::Mul, 1, 0);
         callee.emit(Op::Return, 1, 0);
@@ -1215,7 +1321,6 @@ mod tests {
 
     #[test]
     fn call_two_arg_function() {
-        // Chunk 0: push Function(1), push 3, push 4, Call(2)
         let mut caller = Chunk::new();
         let func = caller.add_constant(Value::Function(1));
         let a = caller.add_constant(Value::Int(3));
@@ -1226,7 +1331,6 @@ mod tests {
         caller.emit(Op::Call(2), 1, 0);
         caller.emit(Op::Return, 1, 0);
 
-        // Chunk 1: GetLocal(0) + GetLocal(1)
         let mut callee = Chunk::new();
         callee.emit(Op::GetLocal(0), 1, 0);
         callee.emit(Op::GetLocal(1), 1, 0);
@@ -1243,29 +1347,25 @@ mod tests {
 
     #[test]
     fn nested_calls() {
-        // Chunk 0 (entry): call add(double(3), 4)
-        //   push add, push double, push 3, Call(1), push 4, Call(2)
         let mut entry = Chunk::new();
         let add_fn = entry.add_constant(Value::Function(1));
         let dbl_fn = entry.add_constant(Value::Function(2));
         let three = entry.add_constant(Value::Int(3));
         let four = entry.add_constant(Value::Int(4));
-        entry.emit(Op::LoadConst(add_fn), 1, 0);  // push add
-        entry.emit(Op::LoadConst(dbl_fn), 1, 0);  // push double
-        entry.emit(Op::LoadConst(three), 1, 0);    // push 3
-        entry.emit(Op::Call(1), 1, 0);              // double(3) = 6
-        entry.emit(Op::LoadConst(four), 1, 0);     // push 4
-        entry.emit(Op::Call(2), 1, 0);              // add(6, 4) = 10
+        entry.emit(Op::LoadConst(add_fn), 1, 0);
+        entry.emit(Op::LoadConst(dbl_fn), 1, 0);
+        entry.emit(Op::LoadConst(three), 1, 0);
+        entry.emit(Op::Call(1), 1, 0);
+        entry.emit(Op::LoadConst(four), 1, 0);
+        entry.emit(Op::Call(2), 1, 0);
         entry.emit(Op::Return, 1, 0);
 
-        // Chunk 1 (add): a + b
         let mut add = Chunk::new();
         add.emit(Op::GetLocal(0), 1, 0);
         add.emit(Op::GetLocal(1), 1, 0);
         add.emit(Op::Add, 1, 0);
         add.emit(Op::Return, 1, 0);
 
-        // Chunk 2 (double): x * 2
         let mut dbl = Chunk::new();
         let two = dbl.add_constant(Value::Int(2));
         dbl.emit(Op::GetLocal(0), 1, 0);
@@ -1298,14 +1398,12 @@ mod tests {
 
     #[test]
     fn stack_overflow_detected() {
-        // Chunk 0 (entry): call chunk 1
         let mut entry = Chunk::new();
         let func = entry.add_constant(Value::Function(1));
         entry.emit(Op::LoadConst(func), 1, 0);
         entry.emit(Op::Call(0), 1, 0);
         entry.emit(Op::Return, 1, 0);
 
-        // Chunk 1: calls itself unconditionally (infinite recursion)
         let mut recurse = Chunk::new();
         let self_func = recurse.add_constant(Value::Function(1));
         recurse.emit(Op::LoadConst(self_func), 1, 0);

@@ -104,6 +104,9 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         }
     };
 
+    let mut test_program = test_program;
+    test_program.program.optimize();
+
     if test_program.tests.is_empty() {
         return TestSuiteResult {
             status: "pass".to_string(),

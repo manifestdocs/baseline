@@ -168,13 +168,14 @@ fn run_file_vm(file: &PathBuf) {
         vm::module_compiler::compile_with_imports(&source, &root, file.as_path(), vm.natives())
     };
 
-    let program = match program {
+    let mut program = match program {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Compile Error: {}", e);
             std::process::exit(1);
         }
     };
+    program.optimize();
     match vm.execute_program(&program) {
         Ok(val) => {
             if !matches!(val, vm::value::Value::Unit) {
