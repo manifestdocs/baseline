@@ -46,7 +46,7 @@ fn discover_files(dir: &Path) -> Vec<PathBuf> {
         let path = entry.path();
         if path.is_dir() {
             files.extend(discover_files(&path));
-        } else if path.extension().map_or(false, |e| e == "bl") {
+        } else if path.extension().is_some_and(|e| e == "bl") {
             files.push(path);
         }
     }

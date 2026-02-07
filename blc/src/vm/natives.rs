@@ -23,6 +23,12 @@ pub struct NativeRegistry {
     entries: Vec<NativeEntry>,
 }
 
+impl Default for NativeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NativeRegistry {
     pub fn new() -> Self {
         let mut registry = NativeRegistry {
@@ -916,7 +922,7 @@ mod tests {
     fn string_contains() {
         let result = native_string_contains(&[NValue::string("hello world".into()), NValue::string("world".into())]).unwrap();
         assert!(result.is_bool());
-        assert_eq!(result.as_bool(), true);
+        assert!(result.as_bool());
     }
 
     #[test]
@@ -963,7 +969,7 @@ mod tests {
     fn result_is_ok() {
         let ok = NValue::enum_val("Ok".into(), NValue::int(1));
         let err = NValue::enum_val("Err".into(), NValue::string("bad".into()));
-        assert_eq!(native_result_is_ok(&[ok]).unwrap().as_bool(), true);
-        assert_eq!(native_result_is_ok(&[err]).unwrap().as_bool(), false);
+        assert!(native_result_is_ok(&[ok]).unwrap().as_bool());
+        assert!(!native_result_is_ok(&[err]).unwrap().as_bool());
     }
 }

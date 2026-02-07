@@ -52,11 +52,10 @@ pub fn add_route<'a>(
 ) -> Result<RuntimeValue<'a>, String> {
     let mut routes = extract_routes(router)?;
 
-    let path_str = match path {
+    match path {
         RuntimeValue::String(_) => {}
         _ => return Err(format!("Route path must be a String, got {}", path)),
     };
-    let _ = path_str;
 
     let mut route_fields = HashMap::new();
     route_fields.insert(
@@ -147,6 +146,12 @@ impl<'a> RadixNode<'a> {
     }
 }
 
+impl<'a> Default for RadixTree<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> RadixTree<'a> {
     pub fn new() -> Self {
         RadixTree {
@@ -211,11 +216,10 @@ fn find_in_node<'a>(
     let rest = &segments[1..];
 
     // Try exact match first (more specific)
-    if let Some(child) = node.children.get(seg) {
-        if let result @ Some(_) = find_in_node(child, rest, method, params) {
+    if let Some(child) = node.children.get(seg)
+        && let result @ Some(_) = find_in_node(child, rest, method, params) {
             return result;
         }
-    }
 
     // Try parameter match
     if let Some((name, child)) = &node.param {

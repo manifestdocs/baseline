@@ -858,15 +858,15 @@ impl<'a> Compiler<'a> {
             "integer_literal" => true,
             "unary_expression" => {
                 // -integer_literal is still int
-                node.named_child(0).map_or(false, |c| c.kind() == "integer_literal")
+                node.named_child(0).is_some_and(|c| c.kind() == "integer_literal")
             }
             "binary_expression" => {
                 // int +/-/*/%// int is still int
                 if let Some(op) = node.child(1) {
                     let op_text = self.node_text(&op);
                     matches!(op_text.as_str(), "+" | "-" | "*" | "/" | "%")
-                        && node.named_child(0).map_or(false, |c| self.is_int_expr(&c))
-                        && node.named_child(1).map_or(false, |c| self.is_int_expr(&c))
+                        && node.named_child(0).is_some_and(|c| self.is_int_expr(&c))
+                        && node.named_child(1).is_some_and(|c| self.is_int_expr(&c))
                 } else {
                     false
                 }
@@ -920,12 +920,11 @@ impl<'a> Compiler<'a> {
 
     /// Emit a single load instruction for a constant value.
     fn emit_const_value(&mut self, val: Value, node: &Node<'a>) {
-        if let Value::Int(n) = val {
-            if n >= i16::MIN as i64 && n <= i16::MAX as i64 {
+        if let Value::Int(n) = val
+            && n >= i16::MIN as i64 && n <= i16::MAX as i64 {
                 self.emit(Op::LoadSmallInt(n as i16), node);
                 return;
             }
-        }
         let idx = self.chunk.add_constant(val);
         self.emit(Op::LoadConst(idx), node);
     }
@@ -965,7 +964,7 @@ impl<'a> Compiler<'a> {
         // Use specialized int opcodes when both operands are statically known integers.
         // First check the type map from the static type checker (covers variables, calls, etc.),
         // then fall back to the syntactic is_int_expr heuristic for literal-only cases.
-        let both_int = self.type_map.as_ref().map_or(false, |tm| {
+        let both_int = self.type_map.as_ref().is_some_and(|tm| {
             matches!(
                 (tm.get(&lhs.start_byte()), tm.get(&rhs.start_byte())),
                 (Some(Type::Int), Some(Type::Int))
@@ -1317,11 +1316,10 @@ impl<'a> Compiler<'a> {
                         if fc.kind() == "where_block" {
                             let mut wb_cursor = fc.walk();
                             for test_node in fc.children(&mut wb_cursor) {
-                                if test_node.kind() == "inline_test" {
-                                    if let Some(ct) = self.compile_inline_test(&test_node, &func_name)? {
+                                if test_node.kind() == "inline_test"
+                                    && let Some(ct) = self.compile_inline_test(&test_node, &func_name)? {
                                         compiled_tests.push(ct);
                                     }
-                                }
                             }
                         }
                     }
@@ -1467,11 +1465,11 @@ impl<'a> Compiler<'a> {
         // TCO: detect self-recursive tail calls.
         // Conditions: callee is an identifier, matches current function name,
         // we're in tail position, and not inside a nested function/lambda.
-        if self.tail_position && self.enclosing.is_empty() {
-            if callee.kind() == "identifier" {
+        if self.tail_position && self.enclosing.is_empty()
+            && callee.kind() == "identifier" {
                 let callee_name = self.node_text(callee);
-                if let Some(ref fn_name) = self.current_fn_name {
-                    if callee_name == *fn_name {
+                if let Some(ref fn_name) = self.current_fn_name
+                    && callee_name == *fn_name {
                         // Emit args (no function value), then TailCall
                         // Args are NOT in tail position themselves
                         let was_tail = self.tail_position;
@@ -1483,17 +1481,15 @@ impl<'a> Compiler<'a> {
                         self.emit(Op::TailCall(args.len() as u8), node);
                         return Ok(());
                     }
-                }
             }
-        }
 
         // Arguments are never in tail position
         let was_tail = self.tail_position;
         self.tail_position = false;
 
         // Check if callee is Module.method (field_expression with type_identifier object)
-        if callee.kind() == "field_expression" {
-            if let Some(qualified) = self.try_resolve_native(callee) {
+        if callee.kind() == "field_expression"
+            && let Some(qualified) = self.try_resolve_native(callee) {
                 if let Some(fn_id) = self.natives.lookup(&qualified) {
                     // Emit args, then CallNative
                     for arg in args {
@@ -1515,7 +1511,6 @@ impl<'a> Compiler<'a> {
                     return Ok(());
                 }
             }
-        }
 
         // Regular function call
         self.compile_expression(callee)?;
@@ -1621,8 +1616,8 @@ impl<'a> Compiler<'a> {
             let callee = &rhs_children[0];
 
             // Check for native module call: x |> Module.method(a, b) → CallNative(x, a, b)
-            if callee.kind() == "field_expression" {
-                if let Some(qualified) = self.try_resolve_native(callee) {
+            if callee.kind() == "field_expression"
+                && let Some(qualified) = self.try_resolve_native(callee) {
                     if let Some(fn_id) = self.natives.lookup(&qualified) {
                         self.compile_expression(&lhs)?;    // pipe value as first arg
                         for arg in &rhs_children[1..] {
@@ -1645,7 +1640,6 @@ impl<'a> Compiler<'a> {
                         return Ok(());
                     }
                 }
-            }
 
             self.compile_expression(callee)?;  // push function
             self.compile_expression(&lhs)?;    // push pipe value as first arg
@@ -2114,7 +2108,7 @@ mod tests {
 
     #[test]
     fn compile_float_literal() {
-        assert_eq!(eval_expr("3.14"), Value::Float(3.14));
+        assert_eq!(eval_expr("3.125"), Value::Float(3.125));
     }
 
     #[test]

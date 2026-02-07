@@ -73,7 +73,7 @@ pub fn compile_with_imports(
         let short_name = import
             .module_name
             .split('.')
-            .last()
+            .next_back()
             .unwrap_or(&import.module_name);
 
         // Build merged function map based on import kind

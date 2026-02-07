@@ -61,7 +61,7 @@ impl NValue {
         // 48-bit signed range: -(1<<47) to (1<<47)-1
         const MIN_INLINE: i64 = -(1i64 << 47);
         const MAX_INLINE: i64 = (1i64 << 47) - 1;
-        if i >= MIN_INLINE && i <= MAX_INLINE {
+        if (MIN_INLINE..=MAX_INLINE).contains(&i) {
             NValue(TAG_INT | (i as u64 & PAYLOAD_MASK))
         } else {
             Self::from_heap(HeapObject::BigInt(i))
@@ -515,7 +515,7 @@ mod tests {
 
     #[test]
     fn float_roundtrip() {
-        for f in [0.0, 1.0, -1.0, 3.14, f64::INFINITY, f64::NEG_INFINITY] {
+        for f in [0.0, 1.0, -1.0, 3.125, f64::INFINITY, f64::NEG_INFINITY] {
             let v = NValue::float(f);
             assert!(v.is_float());
             assert_eq!(v.as_float(), f);
@@ -531,8 +531,8 @@ mod tests {
 
     #[test]
     fn bool_roundtrip() {
-        assert_eq!(NValue::bool(true).as_bool(), true);
-        assert_eq!(NValue::bool(false).as_bool(), false);
+        assert!(NValue::bool(true).as_bool());
+        assert!(!NValue::bool(false).as_bool());
         assert!(NValue::bool(true).is_truthy());
         assert!(!NValue::bool(false).is_truthy());
     }
@@ -589,7 +589,7 @@ mod tests {
     fn value_conversion_roundtrip() {
         let values = vec![
             Value::Int(42),
-            Value::Float(3.14),
+            Value::Float(3.125),
             Value::Bool(true),
             Value::Unit,
             Value::Function(5),

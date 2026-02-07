@@ -110,16 +110,16 @@ proptest! {
     #[test]
     fn diagnostic_codes_valid(input in "\\PC{0,200}") {
         let (_rc, json) = blc_check_json(&input);
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) {
-            if let Some(diagnostics) = parsed["diagnostics"].as_array() {
-                let valid_prefixes = ["TYP_", "CAP_", "REF_", "SYN_", "IO_", "IMP_", "PRE_", "STY_"];
-                for diag in diagnostics {
-                    if let Some(code) = diag["code"].as_str() {
-                        prop_assert!(
-                            valid_prefixes.iter().any(|p| code.starts_with(p)),
-                            "Invalid error code prefix: {code}"
-                        );
-                    }
+        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json)
+            && let Some(diagnostics) = parsed["diagnostics"].as_array()
+        {
+            let valid_prefixes = ["TYP_", "CAP_", "REF_", "SYN_", "IO_", "IMP_", "PRE_", "STY_"];
+            for diag in diagnostics {
+                if let Some(code) = diag["code"].as_str() {
+                    prop_assert!(
+                        valid_prefixes.iter().any(|p| code.starts_with(p)),
+                        "Invalid error code prefix: {code}"
+                    );
                 }
             }
         }

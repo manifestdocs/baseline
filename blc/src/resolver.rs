@@ -46,6 +46,12 @@ pub struct ModuleLoader {
     base_dir: Option<PathBuf>,
 }
 
+impl Default for ModuleLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ModuleLoader {
     pub fn new() -> Self {
         Self {
@@ -154,6 +160,7 @@ impl ModuleLoader {
     }
 
     /// Resolve a module name to a file path.
+    #[allow(clippy::result_large_err)]
     pub fn resolve_path(
         &self,
         module_name: &str,
@@ -224,6 +231,7 @@ impl ModuleLoader {
 
     /// Load and parse a module file. Returns index into internal storage.
     /// Performs cycle detection and caching.
+    #[allow(clippy::result_large_err)]
     pub fn load_module(
         &mut self,
         path: &Path,

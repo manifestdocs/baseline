@@ -72,13 +72,12 @@ fn collect_tests<'a>(root: &Node<'a>, source: &str, file: &str) -> Vec<Collected
                     if fc.kind() == "where_block" {
                         let mut wb_cursor = fc.walk();
                         for test_node in fc.children(&mut wb_cursor) {
-                            if test_node.kind() == "inline_test" {
-                                if let Some(ct) =
+                            if test_node.kind() == "inline_test"
+                                && let Some(ct) =
                                     parse_inline_test(&test_node, source, file, &func_name)
                                 {
                                     tests.push(ct);
                                 }
-                            }
                         }
                     }
                 }
@@ -302,9 +301,9 @@ fn inject_imports_for_test<'a>(
     // Phase 1: resolve and load all modules (needs &mut loader)
     let mut resolved: Vec<(resolver::ResolvedImport, usize)> = Vec::new();
     for (import, import_node) in &imports {
-        let file_path = loader.resolve_path(&import.module_name, &import_node, &file_str)
+        let file_path = loader.resolve_path(&import.module_name, import_node, &file_str)
             .map_err(|d| d.message.clone())?;
-        let module_idx = loader.load_module(&file_path, &import_node, &file_str)
+        let module_idx = loader.load_module(&file_path, import_node, &file_str)
             .map_err(|d| d.message.clone())?;
         resolved.push((import.clone(), module_idx));
     }
@@ -338,7 +337,7 @@ fn inject_imports_for_test<'a>(
             }
         }
 
-        let short_name = import.module_name.split('.').last()
+        let short_name = import.module_name.split('.').next_back()
             .unwrap_or(&import.module_name);
 
         context.set(

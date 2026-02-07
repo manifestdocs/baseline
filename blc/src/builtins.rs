@@ -16,6 +16,12 @@ pub struct BuiltinRegistry {
     builtins: HashMap<String, BuiltinFn>,
 }
 
+impl Default for BuiltinRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BuiltinRegistry {
     /// Create a registry with ALL builtins (backwards compat for tests).
     pub fn new() -> Self {
@@ -229,7 +235,7 @@ fn random_int(args: &[String]) -> Result<String, String> {
 
 fn random_bool(args: &[String]) -> Result<String, String> {
     expect_args("Random.bool!", args, 0)?;
-    let value = simple_random_u64() % 2 == 0;
+    let value = simple_random_u64().is_multiple_of(2);
     Ok(value.to_string())
 }
 
@@ -446,12 +452,12 @@ mod tests {
         // Write
         fs_write(&[path.clone(), content.clone()]).unwrap();
         // Exists
-        assert_eq!(fs_exists(&[path.clone()]).unwrap(), "true");
+        assert_eq!(fs_exists(std::slice::from_ref(&path)).unwrap(), "true");
         // Read
-        assert_eq!(fs_read(&[path.clone()]).unwrap(), content);
+        assert_eq!(fs_read(std::slice::from_ref(&path)).unwrap(), content);
         // Delete
-        fs_delete(&[path.clone()]).unwrap();
-        assert_eq!(fs_exists(&[path.clone()]).unwrap(), "false");
+        fs_delete(std::slice::from_ref(&path)).unwrap();
+        assert_eq!(fs_exists(std::slice::from_ref(&path)).unwrap(), "false");
     }
 
     #[test]

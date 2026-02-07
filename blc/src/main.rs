@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use blc::diagnostics::{self, CheckResult};
 use blc::interpreter;
@@ -270,7 +270,7 @@ fn run_file(file: &PathBuf) {
 fn inject_imports<'a>(
     root: &tree_sitter::Node<'a>,
     source: &str,
-    file: &PathBuf,
+    file: &Path,
     loader: &'a mut ModuleLoader,
     context: &mut interpreter::Context<'a>,
 ) -> Result<(), String> {
@@ -321,8 +321,8 @@ fn inject_imports<'a>(
 
         let short_name = import
             .module_name
-            .split('.')
-            .last()
+            .rsplit('.')
+            .next()
             .unwrap_or(&import.module_name);
 
         context.set(
@@ -377,7 +377,7 @@ fn run_main<'a>(
     }
 }
 
-fn check_file(path: &PathBuf) -> CheckResult {
+fn check_file(path: &Path) -> CheckResult {
     match parse::parse_file(path) {
         Ok(result) => result,
         Err(e) => CheckResult {

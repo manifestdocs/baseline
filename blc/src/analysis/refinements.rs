@@ -62,11 +62,10 @@ pub fn check_refinements(tree: &Tree, source: &str, file: &str) -> Vec<Diagnosti
     let mut refined_types = HashMap::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() == "type_def" {
-            if let Some((name, interval)) = parse_refined_type(child, source) {
+        if child.kind() == "type_def"
+            && let Some((name, interval)) = parse_refined_type(child, source) {
                 refined_types.insert(name, interval);
             }
-        }
     }
 
     // 2. Check usages
@@ -174,8 +173,8 @@ fn update_interval_from_expr(expr: Node, source: &str, interval: &mut Interval) 
         let left_text = left.utf8_text(source.as_bytes()).unwrap_or("");
         let right_text = right.utf8_text(source.as_bytes()).unwrap_or("");
         
-        if left_text == "self" {
-            if let Ok(val) = right_text.parse::<i64>() {
+        if left_text == "self"
+            && let Ok(val) = right_text.parse::<i64>() {
                 match op_str {
                     ">" => interval.min = std::cmp::max(interval.min, val + 1),
                     ">=" => interval.min = std::cmp::max(interval.min, val),
@@ -188,7 +187,6 @@ fn update_interval_from_expr(expr: Node, source: &str, interval: &mut Interval) 
                     _ => {}
                 }
             }
-        }
     }
 }
 
@@ -262,9 +260,9 @@ fn check_let_binding(
     }
 
     // 3. Verify refinement
-    if let (Some(t_name), Some(int_val)) = (type_name, resolved_value) {
-        if let Some(interval) = refined_types.get(&t_name) {
-             if !interval.contains(int_val) {
+    if let (Some(t_name), Some(int_val)) = (type_name, resolved_value)
+        && let Some(interval) = refined_types.get(&t_name)
+             && !interval.contains(int_val) {
                  let vn = value_node.unwrap();
                  let start = vn.start_position();
                  let end = vn.end_position();
@@ -291,6 +289,4 @@ fn check_let_binding(
                      suggestions: vec![],
                  });
              }
-        }
-    }
 }

@@ -51,7 +51,7 @@ impl BaselineLanguageServer {
         let lsp_diagnostics: Vec<tower_lsp::lsp_types::Diagnostic> = result
             .diagnostics
             .iter()
-            .map(|d| convert_diagnostic(d))
+            .map(convert_diagnostic)
             .collect();
 
         self.client
@@ -394,7 +394,7 @@ pub async fn run_server() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
 
-    let (service, socket) = LspService::new(|client| BaselineLanguageServer::new(client));
+    let (service, socket) = LspService::new(BaselineLanguageServer::new);
     Server::new(stdin, stdout, socket).serve(service).await;
 }
 

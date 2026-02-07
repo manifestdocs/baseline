@@ -19,6 +19,12 @@ pub struct NativeRegistry {
     fns: HashMap<String, NativeFn>,
 }
 
+impl Default for NativeRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl NativeRegistry {
     /// Create a registry with ALL native modules (backwards compat for tests).
     pub fn new() -> Self {

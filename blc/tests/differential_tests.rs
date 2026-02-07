@@ -60,7 +60,7 @@ fn discover_files(dir: &Path) -> Vec<PathBuf> {
         let path = entry.path();
         if path.is_dir() {
             files.extend(discover_files(&path));
-        } else if path.extension().map_or(false, |e| e == "bl") {
+        } else if path.extension().is_some_and(|e| e == "bl") {
             files.push(path);
         }
     }
@@ -122,21 +122,19 @@ fn differential_inline_tests() {
         }
 
         // If JSON output, compare test results
-        if interp_rc == 0 {
-            if let (Ok(interp_json), Ok(vm_json)) = (
-                serde_json::from_str::<serde_json::Value>(&interp_out),
-                serde_json::from_str::<serde_json::Value>(&vm_out),
-            ) {
-                let interp_summary = &interp_json["summary"];
-                let vm_summary = &vm_json["summary"];
-                if interp_summary["passed"] != vm_summary["passed"]
-                    || interp_summary["failed"] != vm_summary["failed"]
-                {
-                    failed.push(format!(
-                        "{relative}: test counts differ\n  interp: {interp_summary}\n  vm: {vm_summary}"
-                    ));
-                    continue;
-                }
+        if interp_rc == 0 && let (Ok(interp_json), Ok(vm_json)) = (
+            serde_json::from_str::<serde_json::Value>(&interp_out),
+            serde_json::from_str::<serde_json::Value>(&vm_out),
+        ) {
+            let interp_summary = &interp_json["summary"];
+            let vm_summary = &vm_json["summary"];
+            if interp_summary["passed"] != vm_summary["passed"]
+                || interp_summary["failed"] != vm_summary["failed"]
+            {
+                failed.push(format!(
+                    "{relative}: test counts differ\n  interp: {interp_summary}\n  vm: {vm_summary}"
+                ));
+                continue;
             }
         }
 

@@ -62,23 +62,20 @@ impl std::fmt::Display for Type {
                 // Show type parameters for Option<T> and Result<T, E>
                 match name.as_str() {
                     "Option" => {
-                        if let Some((_, payload)) = variants.first() {
-                            if let Some(inner) = payload.first() {
-                                if *inner != Type::Unknown {
+                        if let Some((_, payload)) = variants.first()
+                            && let Some(inner) = payload.first()
+                                && *inner != Type::Unknown {
                                     return write!(f, "Option<{}>", inner);
                                 }
-                            }
-                        }
                         write!(f, "Option")
                     }
                     "Result" => {
                         let ok_t = variants.first().and_then(|(_, p)| p.first());
                         let err_t = variants.get(1).and_then(|(_, p)| p.first());
-                        if let (Some(ok), Some(err)) = (ok_t, err_t) {
-                            if *ok != Type::Unknown || *err != Type::Unknown {
+                        if let (Some(ok), Some(err)) = (ok_t, err_t)
+                            && (*ok != Type::Unknown || *err != Type::Unknown) {
                                 return write!(f, "Result<{}, {}>", ok, err);
                             }
-                        }
                         write!(f, "Result")
                     }
                     _ => write!(f, "{}", name),
@@ -587,7 +584,7 @@ fn process_imports(
         let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
 
         // Get the short module name (last segment for dotted paths)
-        let short_name = import.module_name.split('.').last().unwrap_or(&import.module_name);
+        let short_name = import.module_name.split('.').next_back().unwrap_or(&import.module_name);
 
         // Build a temporary SymbolTable for the imported module to parse types
         let mod_prelude = prelude::extract_prelude(&mod_root, mod_source).unwrap_or(Prelude::Core);
@@ -773,14 +770,13 @@ fn check_node_inner(
                         let vcount = child.child_count();
                         for vi in 0..vcount {
                             let vc = child.child(vi).unwrap();
-                            if vc.kind() != "type_identifier" || vc.id() != vname_node.id() {
-                                if vc.kind() != "|" && vc.kind() != "(" && vc.kind() != ")" && vc.kind() != "," {
+                            if (vc.kind() != "type_identifier" || vc.id() != vname_node.id())
+                                && vc.kind() != "|" && vc.kind() != "(" && vc.kind() != ")" && vc.kind() != "," {
                                     let pt = parse_type(&vc, source, symbols);
                                     if pt != Type::Unknown {
                                         payload_types.push(pt);
                                     }
                                 }
-                            }
                         }
 
                         variants.push((vname, payload_types));
@@ -847,11 +843,11 @@ fn check_node_inner(
                          });
                      }
 
-                     for i in 0..std::cmp::min(arg_count, arg_types.len()) {
+                     for (i, arg_type) in arg_types.iter().enumerate().take(std::cmp::min(arg_count, arg_types.len())) {
                          let arg_node = body_node.named_child(i).unwrap();
                          if arg_node.kind() == "identifier" {
                              let arg_name = arg_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                             symbols.insert(arg_name, arg_types[i].clone());
+                             symbols.insert(arg_name, arg_type.clone());
                          }
                      }
                      
@@ -910,7 +906,7 @@ fn check_node_inner(
                 if let Some(ann_node) = node.child_by_field_name("type") {
                     // type_annotation is `: Type`, the type_expr is its named child
                     if let Some(type_node) = ann_node.named_child(0) {
-                        let declared_type = parse_type(&type_node, source, &symbols);
+                        let declared_type = parse_type(&type_node, source, symbols);
                         if !types_compatible(&expr_type, &declared_type) {
                             diagnostics.push(Diagnostic {
                                 code: "TYP_021".to_string(),
@@ -937,14 +933,14 @@ fn check_node_inner(
 
             // STY_001: suggest pipe for nested single-arg calls like f(g(x))
             let total_children = node.named_child_count();
-            let params_provided = if total_children > 1 { total_children - 1 } else { 0 };
+            let params_provided = total_children.saturating_sub(1);
             if params_provided == 1 {
                 let single_arg = node.named_child(1).unwrap();
                 if single_arg.kind() == "call_expression" {
                     diagnostics.push(Diagnostic {
                         code: "STY_001".to_string(),
                         severity: Severity::Warning,
-                        location: loc(file, &node),
+                        location: loc(file, node),
                         message: "Nested call could use pipe syntax".to_string(),
                         context: "Consider rewriting f(g(x)) as x |> g |> f for readability.".to_string(),
                         suggestions: vec![Suggestion {
@@ -966,8 +962,8 @@ fn check_node_inner(
                         None
                     }
                 });
-            if let Some(ref qname) = schema_name {
-                if let Some(schema) = symbols.lookup_generic_schema(qname) {
+            if let Some(ref qname) = schema_name
+                && let Some(schema) = symbols.lookup_generic_schema(qname) {
                     let mut ctx = InferCtx::new();
                     let instantiated = (schema.build)(&mut ctx);
                     if let Type::Function(schema_params, schema_ret) = instantiated {
@@ -976,7 +972,7 @@ fn check_node_inner(
                             diagnostics.push(Diagnostic {
                                 code: "TYP_007".to_string(),
                                 severity: Severity::Error,
-                                location: loc(file, &node),
+                                location: loc(file, node),
                                 message: format!("Function call expects {} arguments, found {}", schema_params.len(), params_provided),
                                 context: "Argument count mismatch.".to_string(),
                                 suggestions: vec![],
@@ -984,13 +980,13 @@ fn check_node_inner(
                         }
 
                         // Unify each arg with the schema param, using lambda inference for HOFs
-                        for i in 0..std::cmp::min(params_provided, schema_params.len()) {
+                        for (i, schema_param) in schema_params.iter().enumerate().take(std::cmp::min(params_provided, schema_params.len())) {
                             let arg_expr = node.named_child(i + 1).unwrap();
 
                             // For lambda args with a Function-typed schema param, use
                             // check_lambda_with_expected with the resolved param types
                             let arg_type = if arg_expr.kind() == "lambda" {
-                                let resolved_param = ctx.apply(&schema_params[i]);
+                                let resolved_param = ctx.apply(schema_param);
                                 if let Type::Function(ref expected_params, ref expected_ret) = resolved_param {
                                     check_lambda_with_expected(&arg_expr, expected_params, expected_ret, source, file, symbols, diagnostics)
                                 } else {
@@ -1000,13 +996,12 @@ fn check_node_inner(
                                 check_node(&arg_expr, source, file, symbols, diagnostics)
                             };
 
-                            let _ = ctx.unify(&arg_type, &schema_params[i]);
+                            let _ = ctx.unify(&arg_type, schema_param);
                         }
 
                         return ctx.apply(&schema_ret);
                     }
                 }
-            }
 
             if let Type::Function(arg_types, ret_type) = func_type {
                 if params_provided != arg_types.len() {
@@ -1022,20 +1017,20 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_007".to_string(),
                         severity: Severity::Error,
-                        location: loc(file, &node),
+                        location: loc(file, node),
                         message: format!("Function call expects {} arguments, found {}", arg_types.len(), params_provided),
                         context: "Argument count mismatch.".to_string(),
                         suggestions: vec![],
                     });
                 }
 
-                for i in 0..std::cmp::min(params_provided, arg_types.len()) {
+                for (i, expected_arg_type) in arg_types.iter().enumerate().take(std::cmp::min(params_provided, arg_types.len())) {
                     let arg_expr = node.named_child(i + 1).unwrap();
 
                     // Lambda argument inference: if expected type is Function and arg is
                     // a lambda, check the lambda body with expected param types injected.
                     let arg_type = if arg_expr.kind() == "lambda" {
-                        if let Type::Function(ref expected_params, ref expected_ret) = arg_types[i] {
+                        if let Type::Function(ref expected_params, ref expected_ret) = *expected_arg_type {
                             check_lambda_with_expected(&arg_expr, expected_params, expected_ret, source, file, symbols, diagnostics)
                         } else {
                             check_node(&arg_expr, source, file, symbols, diagnostics)
@@ -1044,12 +1039,12 @@ fn check_node_inner(
                         check_node(&arg_expr, source, file, symbols, diagnostics)
                     };
 
-                    if !types_compatible(&arg_type, &arg_types[i]) {
+                    if !types_compatible(&arg_type, expected_arg_type) {
                          diagnostics.push(Diagnostic {
                             code: "TYP_008".to_string(),
                             severity: Severity::Error,
                             location: loc(file, &arg_expr),
-                            message: format!("Argument {} mismatch: expected {}, found {}", i+1, arg_types[i], arg_type),
+                            message: format!("Argument {} mismatch: expected {}, found {}", i+1, expected_arg_type, arg_type),
                             context: "Argument type must match function signature.".to_string(),
                             suggestions: vec![],
                         });
@@ -1123,7 +1118,7 @@ fn check_node_inner(
                           diagnostics.push(Diagnostic {
                             code: "TYP_012".to_string(),
                             severity: Severity::Error,
-                            location: loc(file, &node),
+                            location: loc(file, node),
                             message: format!("Missing field `{}`", required_field),
                             context: "All struct fields must be initialized.".to_string(),
                             suggestions: vec![],
@@ -1315,7 +1310,7 @@ fn check_node_inner(
                  diagnostics.push(Diagnostic {
                     code: "TYP_002".to_string(),
                     severity: Severity::Error,
-                    location: loc(file, &node),
+                    location: loc(file, node),
                     message: format!("Undefined variable `{}`", name),
                     context: "Variable must be defined before use.".to_string(),
                     suggestions: vec![],
@@ -1342,11 +1337,10 @@ fn check_node_inner(
             let named_count = node.named_child_count();
             for i in 0..named_count {
                 let child = node.named_child(i).unwrap();
-                if child.kind() == "interpolation" {
-                    if let Some(expr) = child.named_child(0) {
+                if child.kind() == "interpolation"
+                    && let Some(expr) = child.named_child(0) {
                         check_node(&expr, source, file, symbols, diagnostics);
                     }
-                }
             }
             Type::String
         }
@@ -1371,7 +1365,7 @@ fn check_node_inner(
                             diagnostics.push(Diagnostic {
                                 code: "TYP_001".to_string(),
                                 severity: Severity::Error,
-                                location: loc(file, &node),
+                                location: loc(file, node),
                                 message: format!("Binary operator `{}` requires matching Int or Float operands, found {} and {}", op_str, left_type, right_type),
                                 context: "Arithmetic operations require matching numeric types.".to_string(),
                                 suggestions: vec![],
@@ -1905,6 +1899,7 @@ fn bind_pattern(node: &Node, ty: Type, source: &str, symbols: &mut SymbolTable) 
     }
 }
 
+#[allow(clippy::only_used_in_recursion)]
 fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut SymbolTable, diagnostics: &mut Vec<Diagnostic>) {
     match node.kind() {
         "wildcard_pattern" => {},
@@ -1942,12 +1937,11 @@ fn check_pattern(node: &Node, expected_type: &Type, source: &str, symbols: &mut 
             let child_count = node.child_count();
             for ci in 0..child_count {
                 let child = node.child(ci).unwrap();
-                if child.kind() != "type_identifier" && child.kind() != "(" && child.kind() != ")" && child.kind() != "," {
-                    if pattern_idx < payload_types.len() {
+                if child.kind() != "type_identifier" && child.kind() != "(" && child.kind() != ")" && child.kind() != ","
+                    && pattern_idx < payload_types.len() {
                         check_pattern(&child, &payload_types[pattern_idx], source, symbols, diagnostics);
                         pattern_idx += 1;
                     }
-                }
             }
         },
         "literal" => {
@@ -2079,7 +2073,7 @@ fn check_match_exhaustiveness(
     diagnostics.push(Diagnostic {
         code: "TYP_022".to_string(),
         severity: Severity::Error,
-        location: loc(file, &node),
+        location: loc(file, node),
         message: format!(
             "Non-exhaustive match on '{}': missing variant(s) {}",
             type_name, missing_str

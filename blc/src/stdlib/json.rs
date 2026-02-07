@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn parse_float() {
-        let input = RuntimeValue::String("3.14".into());
-        assert_eq!(json_parse(&[input]).unwrap(), RuntimeValue::Float(3.14));
+        let input = RuntimeValue::String("3.125".into());
+        assert_eq!(json_parse(&[input]).unwrap(), RuntimeValue::Float(3.125));
     }
 
     #[test]
