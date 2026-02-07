@@ -242,12 +242,12 @@ impl Vm {
 
                 Op::AddInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_int().wrapping_add(b.as_int())));
+                    self.stack.push(NValue::int(a.as_any_int().wrapping_add(b.as_any_int())));
                 }
 
                 Op::SubInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_int().wrapping_sub(b.as_int())));
+                    self.stack.push(NValue::int(a.as_any_int().wrapping_sub(b.as_any_int())));
                 }
 
                 Op::Not => {
@@ -319,12 +319,12 @@ impl Vm {
 
                 Op::LtInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_int() < b.as_int()));
+                    self.stack.push(NValue::bool(a.as_any_int() < b.as_any_int()));
                 }
 
                 Op::LeInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_int() <= b.as_int()));
+                    self.stack.push(NValue::bool(a.as_any_int() <= b.as_any_int()));
                 }
 
                 Op::Concat => {
