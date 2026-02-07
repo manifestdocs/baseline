@@ -107,6 +107,9 @@ pub enum Op {
     // -- Functions --
     /// Call a function with N arguments. Stack: [func, arg0, ..., argN-1] → [result]
     Call(u8),
+    /// Direct call to a known function by chunk index. No function value on stack.
+    /// Stack: [arg0, ..., argN-1] → [result]
+    CallDirect(u16, u8),
     /// Tail call: reuse current frame for self-recursive calls.
     /// Overwrites args in-place and resets IP to 0. Stack: [arg0, ..., argN-1]
     TailCall(u8),
@@ -127,6 +130,19 @@ pub enum Op {
     /// Fused GetLocal(slot) + LoadSmallInt(k) + LeInt.
     /// Pushes (local[slot] <= k) as bool onto the stack.
     GetLocalLeInt(u16, i16),
+    /// Fused GetLocal(slot) + LoadSmallInt(k) + AddInt.
+    /// Pushes (local[slot] + k) onto the stack.
+    GetLocalAddInt(u16, i16),
+    /// Fused GetLocal(slot) + LoadSmallInt(k) + LtInt.
+    /// Pushes (local[slot] < k) as bool onto the stack.
+    GetLocalLtInt(u16, i16),
+
+    /// Fused GetLocalLeInt(slot, k) + JumpIfFalse(offset).
+    /// Tests local[slot] <= k and jumps if false, without pushing/popping a bool.
+    GetLocalLeIntJumpIfFalse(u16, i16, u16),
+    /// Fused GetLocalLtInt(slot, k) + JumpIfFalse(offset).
+    /// Tests local[slot] < k and jumps if false, without pushing/popping a bool.
+    GetLocalLtIntJumpIfFalse(u16, i16, u16),
 
     // -- Termination --
     Return,
@@ -178,8 +194,11 @@ impl Chunk {
             }
         }
         for op in &mut self.code {
-            if let Op::MakeClosure(idx, _) = op {
-                *idx += offset as u16;
+            match op {
+                Op::MakeClosure(idx, _) | Op::CallDirect(idx, _) => {
+                    *idx += offset as u16;
+                }
+                _ => {}
             }
         }
     }
@@ -229,6 +248,8 @@ impl Program {
         for chunk in &mut self.chunks {
             chunk.specialize_int_ops();
             chunk.fuse_superinstructions();
+            chunk.compact_nops();
+            chunk.peephole_cleanup();
         }
     }
 }
@@ -330,7 +351,9 @@ impl Chunk {
                 | Op::UpdateRecord(_)
                 | Op::MakeClosure(_, _)
                 | Op::GetLocalSubInt(_, _)
-                | Op::GetLocalLeInt(_, _) => {
+                | Op::GetLocalLeInt(_, _)
+                | Op::GetLocalAddInt(_, _)
+                | Op::GetLocalLtInt(_, _) => {
                     pushes_found += 1;
                 }
                 // Control flow or Call/CallNative — stop scanning
@@ -353,15 +376,17 @@ impl Chunk {
         if len < 3 {
             return;
         }
+        // Pass 1: fuse 3-instruction patterns (GetLocal + LoadSmallInt + Op)
         for i in 0..len - 2 {
             if let (Op::GetLocal(slot), Op::LoadSmallInt(k)) = (self.code[i], self.code[i + 1]) {
                 let fused = match self.code[i + 2] {
                     Op::SubInt => Some(Op::GetLocalSubInt(slot, k)),
                     Op::LeInt => Some(Op::GetLocalLeInt(slot, k)),
+                    Op::AddInt => Some(Op::GetLocalAddInt(slot, k)),
+                    Op::LtInt => Some(Op::GetLocalLtInt(slot, k)),
                     _ => None,
                 };
                 if let Some(super_op) = fused {
-                    // Use source location of the last opcode in the sequence
                     let source_loc = self.source_map[i + 2];
                     self.code[i] = Op::Jump(0); // no-op
                     self.code[i + 1] = Op::Jump(0); // no-op
@@ -370,6 +395,246 @@ impl Chunk {
                 }
             }
         }
+        // Pass 2: fuse 2-instruction patterns (compare-and-jump)
+        // Must run after pass 1 since pass 1 creates the GetLocalLeInt/GetLocalLtInt instructions
+        let len = self.code.len();
+        if len < 2 {
+            return;
+        }
+        for i in 0..len - 1 {
+            match (self.code[i], self.code[i + 1]) {
+                (Op::GetLocalLeInt(slot, k), Op::JumpIfFalse(offset)) => {
+                    let source_loc = self.source_map[i + 1];
+                    self.code[i] = Op::Jump(0); // no-op
+                    self.code[i + 1] = Op::GetLocalLeIntJumpIfFalse(slot, k, offset);
+                    self.source_map[i + 1] = source_loc;
+                }
+                (Op::GetLocalLtInt(slot, k), Op::JumpIfFalse(offset)) => {
+                    let source_loc = self.source_map[i + 1];
+                    self.code[i] = Op::Jump(0); // no-op
+                    self.code[i + 1] = Op::GetLocalLtIntJumpIfFalse(slot, k, offset);
+                    self.source_map[i + 1] = source_loc;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Remove `Jump(0)` no-ops left by superinstruction fusion and adjust all
+    /// jump offsets accordingly. Also updates `source_map`.
+    pub fn compact_nops(&mut self) {
+        if self.code.is_empty() {
+            return;
+        }
+
+        // Build old-index → new-index mapping
+        let mut old_to_new: Vec<usize> = Vec::with_capacity(self.code.len());
+        let mut new_idx = 0usize;
+        for op in &self.code {
+            old_to_new.push(new_idx);
+            if *op != Op::Jump(0) {
+                new_idx += 1;
+            }
+        }
+        let new_len = new_idx;
+        if new_len == self.code.len() {
+            return; // nothing to compact
+        }
+
+        // Adjust jump offsets: a forward jump at old position `i` targeting
+        // old position `i + 1 + offset` needs to become new_offset such that
+        // new_pos + 1 + new_offset = old_to_new[old_target].
+        // Similarly for JumpBack.
+        let old_len = self.code.len();
+        for i in 0..old_len {
+            if self.code[i] == Op::Jump(0) {
+                continue;
+            }
+            match &mut self.code[i] {
+                Op::Jump(offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < old_len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::JumpIfFalse(offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < old_len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::JumpIfTrue(offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < old_len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::JumpBack(offset) => {
+                    let old_target = i + 1 - *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = old_to_new[old_target];
+                    *offset = (new_src + 1 - new_target) as u16;
+                }
+                Op::GetLocalLeIntJumpIfFalse(_, _, offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < old_len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::GetLocalLtIntJumpIfFalse(_, _, offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < old_len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                _ => {}
+            }
+        }
+
+        // Compact: remove Jump(0) entries from code and source_map
+        let mut write = 0;
+        for read in 0..old_len {
+            if self.code[read] != Op::Jump(0) {
+                self.code[write] = self.code[read];
+                self.source_map[write] = self.source_map[read];
+                write += 1;
+            }
+        }
+        self.code.truncate(new_len);
+        self.source_map.truncate(new_len);
+    }
+
+    /// Remove dead instruction pairs (e.g. `LoadConst + Pop`, `CloseScope(0)`).
+    pub fn peephole_cleanup(&mut self) {
+        let len = self.code.len();
+        if len < 2 {
+            return;
+        }
+        // Mark instructions for removal
+        let mut remove = vec![false; len];
+        for i in 0..len - 1 {
+            // LoadConst immediately followed by Pop → dead pair
+            if matches!(self.code[i], Op::LoadConst(_)) && self.code[i + 1] == Op::Pop {
+                remove[i] = true;
+                remove[i + 1] = true;
+            }
+        }
+        for (i, r) in remove.iter_mut().enumerate() {
+            if self.code[i] == Op::CloseScope(0) {
+                *r = true;
+            }
+        }
+        if !remove.iter().any(|&r| r) {
+            return;
+        }
+        // Build mapping and compact (reuse same logic as compact_nops)
+        let mut old_to_new: Vec<usize> = Vec::with_capacity(len);
+        let mut new_idx = 0usize;
+        for r in &remove {
+            old_to_new.push(new_idx);
+            if !r {
+                new_idx += 1;
+            }
+        }
+        let new_len = new_idx;
+
+        // Adjust jump offsets
+        for i in 0..len {
+            if remove[i] {
+                continue;
+            }
+            match &mut self.code[i] {
+                Op::Jump(offset) if *offset > 0 => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::JumpIfFalse(offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::JumpIfTrue(offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::JumpBack(offset) => {
+                    let old_target = i + 1 - *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = old_to_new[old_target];
+                    *offset = (new_src + 1 - new_target) as u16;
+                }
+                Op::GetLocalLeIntJumpIfFalse(_, _, offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::GetLocalLtIntJumpIfFalse(_, _, offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                _ => {}
+            }
+        }
+
+        // Compact
+        let mut write = 0;
+        for (read, &should_remove) in remove.iter().enumerate() {
+            if !should_remove {
+                self.code[write] = self.code[read];
+                self.source_map[write] = self.source_map[read];
+                write += 1;
+            }
+        }
+        self.code.truncate(new_len);
+        self.source_map.truncate(new_len);
     }
 }
 
@@ -519,11 +784,43 @@ mod tests {
     }
 
     #[test]
+    fn fuse_get_local_add_int() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::LoadSmallInt(1), 1, 5);
+        chunk.emit(Op::AddInt, 1, 10);
+        chunk.emit(Op::Return, 1, 15);
+
+        chunk.fuse_superinstructions();
+
+        assert_eq!(chunk.code[0], Op::Jump(0));
+        assert_eq!(chunk.code[1], Op::Jump(0));
+        assert_eq!(chunk.code[2], Op::GetLocalAddInt(0, 1));
+        assert_eq!(chunk.code[3], Op::Return);
+    }
+
+    #[test]
+    fn fuse_get_local_lt_int() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(3), 1, 0);
+        chunk.emit(Op::LoadSmallInt(10), 1, 5);
+        chunk.emit(Op::LtInt, 1, 10);
+        chunk.emit(Op::Return, 1, 15);
+
+        chunk.fuse_superinstructions();
+
+        assert_eq!(chunk.code[0], Op::Jump(0));
+        assert_eq!(chunk.code[1], Op::Jump(0));
+        assert_eq!(chunk.code[2], Op::GetLocalLtInt(3, 10));
+        assert_eq!(chunk.code[3], Op::Return);
+    }
+
+    #[test]
     fn fuse_does_not_match_non_pattern() {
         let mut chunk = Chunk::new();
         chunk.emit(Op::GetLocal(0), 1, 0);
         chunk.emit(Op::LoadSmallInt(1), 1, 5);
-        chunk.emit(Op::AddInt, 1, 10); // AddInt, not SubInt or LeInt
+        chunk.emit(Op::MulInt, 1, 10); // MulInt, not a fusable op
         chunk.emit(Op::Return, 1, 15);
 
         chunk.fuse_superinstructions();
@@ -531,7 +828,7 @@ mod tests {
         // Should remain unfused
         assert_eq!(chunk.code[0], Op::GetLocal(0));
         assert_eq!(chunk.code[1], Op::LoadSmallInt(1));
-        assert_eq!(chunk.code[2], Op::AddInt);
+        assert_eq!(chunk.code[2], Op::MulInt);
     }
 
     #[test]
@@ -551,7 +848,9 @@ mod tests {
 
         chunk.fuse_superinstructions();
 
-        assert_eq!(chunk.code[2], Op::GetLocalLeInt(0, 1));
+        // Pass 1 fuses LeInt -> GetLocalLeInt and SubInt -> GetLocalSubInt
+        // Pass 2 fuses GetLocalLeInt + JumpIfFalse -> GetLocalLeIntJumpIfFalse
+        assert_eq!(chunk.code[3], Op::GetLocalLeIntJumpIfFalse(0, 1, 3));
         assert_eq!(chunk.code[6], Op::GetLocalSubInt(0, 1));
     }
 
@@ -565,5 +864,181 @@ mod tests {
         chunk2.emit(Op::GetLocal(0), 1, 0);
         chunk2.emit(Op::Return, 1, 0);
         chunk2.fuse_superinstructions(); // should not panic
+    }
+
+    // -- Compact NOP tests (AC-5.13) --
+
+    #[test]
+    fn compact_nops_middle() {
+        // [Jump(0), Jump(0), GetLocalSubInt(0,1), Return]
+        // After compaction: [GetLocalSubInt(0,1), Return]
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::Jump(0), 1, 0);
+        chunk.emit(Op::Jump(0), 1, 0);
+        chunk.emit(Op::GetLocalSubInt(0, 1), 1, 5);
+        chunk.emit(Op::Return, 1, 10);
+
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code.len(), 2);
+        assert_eq!(chunk.code[0], Op::GetLocalSubInt(0, 1));
+        assert_eq!(chunk.code[1], Op::Return);
+        assert_eq!(chunk.source_map[0], (1, 5));
+        assert_eq!(chunk.source_map[1], (1, 10));
+    }
+
+    #[test]
+    fn compact_nops_start() {
+        // [Jump(0), LoadSmallInt(5), Return]
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::Jump(0), 1, 0);
+        chunk.emit(Op::LoadSmallInt(5), 1, 5);
+        chunk.emit(Op::Return, 1, 10);
+
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code.len(), 2);
+        assert_eq!(chunk.code[0], Op::LoadSmallInt(5));
+        assert_eq!(chunk.code[1], Op::Return);
+    }
+
+    #[test]
+    fn compact_nops_adjusts_forward_jump() {
+        // [Jump(0), Jump(0), GetLocalLeInt(0,1), JumpIfFalse(2), LoadSmallInt(1), Jump(0), GetLocal(0), Return]
+        // The JumpIfFalse originally targets index 6 (4 + 1 + offset=2 - 1 = 6, wait let me recalc)
+        // JumpIfFalse(2) at old index 3: target = 3 + 1 + 2 = 6 (GetLocal)
+        // After removing 3 Jump(0)s (indices 0, 1, 5):
+        // new code: [GetLocalLeInt, JumpIfFalse(?), LoadSmallInt, GetLocal, Return]
+        // new index of JumpIfFalse = 1, target GetLocal at old 6 -> new 3
+        // new offset = 3 - 1 - 1 = 1
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::Jump(0), 1, 0);
+        chunk.emit(Op::Jump(0), 1, 0);
+        chunk.emit(Op::GetLocalLeInt(0, 1), 1, 0);
+        chunk.emit(Op::JumpIfFalse(2), 1, 0); // target: old idx 6
+        chunk.emit(Op::LoadSmallInt(1), 1, 0);
+        chunk.emit(Op::Jump(0), 1, 0);
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::Return, 1, 0);
+
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code.len(), 5);
+        assert_eq!(chunk.code[0], Op::GetLocalLeInt(0, 1));
+        assert_eq!(chunk.code[1], Op::JumpIfFalse(1)); // adjusted offset
+        assert_eq!(chunk.code[3], Op::GetLocal(0));
+    }
+
+    #[test]
+    fn compact_nops_adjusts_backward_jump() {
+        // [GetLocal(0), Jump(0), JumpBack(3)]
+        // JumpBack(3) at old index 2: target = 2 + 1 - 3 = 0 (GetLocal)
+        // After removing Jump(0) at index 1:
+        // new code: [GetLocal(0), JumpBack(?)]
+        // JumpBack at new index 1: target GetLocal at new 0
+        // new offset = 1 + 1 - 0 = 2
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::Jump(0), 1, 0);
+        chunk.emit(Op::JumpBack(3), 1, 0);
+
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code.len(), 2);
+        assert_eq!(chunk.code[0], Op::GetLocal(0));
+        assert_eq!(chunk.code[1], Op::JumpBack(2));
+    }
+
+    #[test]
+    fn compact_nops_empty_chunk() {
+        let mut chunk = Chunk::new();
+        chunk.compact_nops(); // should not panic
+        assert_eq!(chunk.code.len(), 0);
+    }
+
+    #[test]
+    fn compact_nops_no_ops_to_remove() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::LoadSmallInt(1), 1, 0);
+        chunk.emit(Op::Return, 1, 0);
+
+        let original_len = chunk.code.len();
+        chunk.compact_nops();
+        assert_eq!(chunk.code.len(), original_len); // unchanged
+    }
+
+    #[test]
+    fn compact_nops_preserves_non_zero_jumps() {
+        // Jump(1) should NOT be removed (only Jump(0) is a no-op)
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::Jump(1), 1, 0); // skip next
+        chunk.emit(Op::LoadSmallInt(1), 1, 0);
+        chunk.emit(Op::LoadSmallInt(2), 1, 0);
+        chunk.emit(Op::Return, 1, 0);
+
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code.len(), 4); // nothing removed
+        assert_eq!(chunk.code[0], Op::Jump(1));
+    }
+
+    // -- Fused compare-and-jump tests --
+
+    #[test]
+    fn fuse_le_int_jump_if_false() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::LoadSmallInt(1), 1, 0);
+        chunk.emit(Op::LeInt, 1, 0);
+        chunk.emit(Op::JumpIfFalse(5), 1, 0);
+        chunk.emit(Op::Return, 1, 0);
+
+        chunk.fuse_superinstructions();
+
+        // Pass 1: indices 0,1,2 -> Jump(0), Jump(0), GetLocalLeInt(0,1)
+        // Pass 2: indices 2,3 -> Jump(0), GetLocalLeIntJumpIfFalse(0,1,5)
+        assert_eq!(chunk.code[3], Op::GetLocalLeIntJumpIfFalse(0, 1, 5));
+    }
+
+    #[test]
+    fn fuse_lt_int_jump_if_false() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::LoadSmallInt(5), 1, 0);
+        chunk.emit(Op::LtInt, 1, 0);
+        chunk.emit(Op::JumpIfFalse(3), 1, 0);
+        chunk.emit(Op::Return, 1, 0);
+
+        chunk.fuse_superinstructions();
+
+        assert_eq!(chunk.code[3], Op::GetLocalLtIntJumpIfFalse(0, 5, 3));
+    }
+
+    #[test]
+    fn fuse_does_not_fuse_jump_if_true() {
+        // AC-5.6: should NOT fuse with JumpIfTrue
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::LoadSmallInt(1), 1, 0);
+        chunk.emit(Op::LeInt, 1, 0);
+        chunk.emit(Op::JumpIfTrue(5), 1, 0);
+        chunk.emit(Op::Return, 1, 0);
+
+        chunk.fuse_superinstructions();
+
+        // Pass 1 fuses GetLocal+LoadSmallInt+LeInt into GetLocalLeInt
+        // Pass 2 should NOT fuse GetLocalLeInt + JumpIfTrue
+        assert_eq!(chunk.code[2], Op::GetLocalLeInt(0, 1));
+        assert_eq!(chunk.code[3], Op::JumpIfTrue(5));
+    }
+
+    #[test]
+    fn op_size_at_most_8_bytes() {
+        // AC-5.14: Op enum must be at most 8 bytes
+        assert!(
+            std::mem::size_of::<Op>() <= 8,
+            "Op is {} bytes, must be <= 8",
+            std::mem::size_of::<Op>()
+        );
     }
 }

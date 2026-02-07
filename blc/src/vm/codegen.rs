@@ -493,12 +493,11 @@ impl<'a> Codegen<'a> {
         span: &Span,
     ) -> Result<(), CodegenError> {
         if let Some(&chunk_idx) = self.functions.get(name) {
-            let idx = self.chunk.add_constant(Value::Function(chunk_idx));
-            self.emit(Op::LoadConst(idx), span);
+            // Emit args first, then CallDirect — no function value pushed
             for arg in args {
                 self.gen_expr(arg, span)?;
             }
-            self.emit(Op::Call(args.len() as u8), span);
+            self.emit(Op::CallDirect(chunk_idx as u16, args.len() as u8), span);
             Ok(())
         } else {
             // Fall back to variable lookup (might be a local/upvalue holding a function)

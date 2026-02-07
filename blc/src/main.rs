@@ -45,6 +45,10 @@ enum Commands {
         /// Use the bytecode VM (default, kept for backward compatibility)
         #[arg(long, hide = true)]
         vm: bool,
+
+        /// Use the Cranelift JIT compiler (requires --features jit)
+        #[arg(long)]
+        jit: bool,
     },
 
     /// Run inline tests in a Baseline source file
@@ -94,9 +98,13 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Run { file, interp, .. } => {
+        Commands::Run {
+            file, interp, jit, ..
+        } => {
             if interp {
                 run_file(&file);
+            } else if jit {
+                run_file_jit(&file);
             } else {
                 run_file_vm(&file);
             }
@@ -186,7 +194,8 @@ fn run_file_vm(file: &PathBuf) {
                 line: e.line,
                 col: e.col,
             });
-        ir_module.and_then(|module| {
+        ir_module.and_then(|mut module| {
+            vm::optimize_ir::optimize(&mut module);
             let codegen = vm::codegen::Codegen::new(vm_instance.natives());
             codegen
                 .generate_program(&module)
@@ -230,6 +239,70 @@ fn run_file_vm(file: &PathBuf) {
             std::process::exit(1);
         }
     }
+}
+
+#[cfg(feature = "jit")]
+fn run_file_jit(file: &PathBuf) {
+    use tree_sitter::Parser;
+    use tree_sitter_baseline::LANGUAGE;
+
+    let source = std::fs::read_to_string(file).expect("Failed to read file");
+    let file_str = file.display().to_string();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load language");
+    let tree = parser.parse(&source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let has_type_errors = type_diags
+        .iter()
+        .any(|d| d.severity == diagnostics::Severity::Error);
+    let type_map = if has_type_errors {
+        None
+    } else {
+        Some(type_map)
+    };
+
+    let vm_instance = vm::vm::Vm::new();
+    let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
+    let ir_module = match lowerer.lower_module(&root) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Compile Error: {}", e.message);
+            std::process::exit(1);
+        }
+    };
+
+    let mut optimized = ir_module;
+    vm::optimize_ir::optimize(&mut optimized);
+
+    let jit_program = match vm::jit::compile(&optimized, false) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("JIT Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    vm::jit::reset_call_depth();
+    match jit_program.run_entry() {
+        Some(val) => {
+            println!("{}", val);
+        }
+        None => {
+            eprintln!("JIT Error: entry function was not compiled");
+            std::process::exit(1);
+        }
+    }
+}
+
+#[cfg(not(feature = "jit"))]
+fn run_file_jit(_file: &PathBuf) {
+    eprintln!("Error: JIT support requires building with --features jit");
+    eprintln!("  cargo build --features jit --release");
+    std::process::exit(1);
 }
 
 fn run_file(file: &PathBuf) {

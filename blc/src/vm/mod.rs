@@ -2,10 +2,13 @@ pub mod chunk;
 pub mod codegen;
 pub mod compiler;
 pub mod ir;
+#[cfg(feature = "jit")]
+pub mod jit;
 pub mod lower;
 pub mod module_compiler;
 pub mod natives;
 pub mod nvalue;
+pub mod optimize_ir;
 pub mod test_runner;
 pub mod value;
 #[allow(clippy::module_inception)]

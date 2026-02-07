@@ -36,11 +36,97 @@ impl std::fmt::Display for VmError {
 /// Compact call frame — 16 bytes instead of 32.
 /// Upvalues are stored in a separate side-stack (`Vm::upvalue_stack`)
 /// indexed by `upvalue_idx`. `u32::MAX` means no upvalues (plain function).
+///
+/// `base_slot` encoding: bit 31 indicates whether a function value sits below
+/// the args on the stack (set for `Call`, clear for `CallDirect`). The actual
+/// slot index is `base_slot & 0x7FFF_FFFF`.
+#[derive(Copy, Clone)]
 struct CallFrame {
     chunk_idx: u32,
     ip: u32,
     base_slot: u32,
     upvalue_idx: u32,
+}
+
+impl Default for CallFrame {
+    fn default() -> Self {
+        Self {
+            chunk_idx: 0,
+            ip: 0,
+            base_slot: 0,
+            upvalue_idx: u32::MAX,
+        }
+    }
+}
+
+/// Bit flag in `base_slot` indicating the frame was created by `Call` (has a
+/// function value slot below args). Clear for `CallDirect` frames.
+const FRAME_HAS_FUNC: u32 = 0x8000_0000;
+
+// ---------------------------------------------------------------------------
+// Frame Stack
+// ---------------------------------------------------------------------------
+
+/// Fixed-capacity frame stack. Avoids `Vec` capacity checks on every push/pop.
+/// 16 KB total (1024 × 16 bytes), allocated once.
+struct FrameStack {
+    frames: Box<[CallFrame; MAX_CALL_DEPTH]>,
+    len: usize,
+}
+
+impl FrameStack {
+    fn new() -> Self {
+        // SAFETY: CallFrame is Copy and all-zeros is a valid (default-like) state.
+        // We only ever read indices < self.len, so uninit values are never observed.
+        let frames = unsafe {
+            let layout = std::alloc::Layout::new::<[CallFrame; MAX_CALL_DEPTH]>();
+            let ptr = std::alloc::alloc_zeroed(layout) as *mut [CallFrame; MAX_CALL_DEPTH];
+            Box::from_raw(ptr)
+        };
+        Self { frames, len: 0 }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, frame: CallFrame) {
+        // SAFETY: Caller must ensure len < MAX_CALL_DEPTH (checked in Call/CallDirect).
+        debug_assert!(self.len < MAX_CALL_DEPTH);
+        unsafe {
+            *self.frames.get_unchecked_mut(self.len) = frame;
+        }
+        self.len += 1;
+    }
+
+    #[inline(always)]
+    fn pop(&mut self) -> CallFrame {
+        debug_assert!(self.len > 0);
+        self.len -= 1;
+        // SAFETY: We just decremented len; the frame at that index was previously written.
+        unsafe { *self.frames.get_unchecked(self.len) }
+    }
+
+    #[inline(always)]
+    fn last(&self) -> &CallFrame {
+        debug_assert!(self.len > 0);
+        // SAFETY: len > 0, so len - 1 is in bounds.
+        unsafe { self.frames.get_unchecked(self.len - 1) }
+    }
+
+    #[inline(always)]
+    fn last_mut(&mut self) -> &mut CallFrame {
+        debug_assert!(self.len > 0);
+        let idx = self.len - 1;
+        // SAFETY: len > 0, so idx is in bounds.
+        unsafe { self.frames.get_unchecked_mut(idx) }
+    }
+
+    #[inline(always)]
+    fn len(&self) -> usize {
+        self.len
+    }
+
+    fn clear(&mut self) {
+        self.len = 0;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -49,7 +135,7 @@ struct CallFrame {
 
 pub struct Vm {
     stack: Vec<NValue>,
-    frames: Vec<CallFrame>,
+    frames: FrameStack,
     upvalue_stack: Vec<Rc<Vec<NValue>>>,
     natives: NativeRegistry,
 }
@@ -64,7 +150,7 @@ impl Vm {
     pub fn new() -> Self {
         Vm {
             stack: Vec::with_capacity(256),
-            frames: Vec::with_capacity(MAX_CALL_DEPTH),
+            frames: FrameStack::new(),
             upvalue_stack: Vec::new(),
             natives: NativeRegistry::new(),
         }
@@ -138,10 +224,10 @@ impl Vm {
     /// - Source map only consulted in error paths
     /// - Unsafe stack access eliminates bounds checks
     fn run_frames(&mut self, chunks: &[Chunk], base_depth: usize) -> Result<NValue, VmError> {
-        let frame = self.frames.last().unwrap();
+        let frame = self.frames.last();
         let mut ip = frame.ip as usize;
         let mut chunk_idx = frame.chunk_idx as usize;
-        let mut base_slot = frame.base_slot as usize;
+        let mut base_slot = (frame.base_slot & !FRAME_HAS_FUNC) as usize;
         let mut chunk = &chunks[chunk_idx];
 
         // SAFETY: Every chunk is guaranteed to end with Op::Return (see
@@ -885,27 +971,59 @@ impl Vm {
                         return Err(self.error(format!("Cannot call {}", func), line, col));
                     };
 
-                    // Save current frame state before pushing new frame
-                    let fi = self.frames.len() - 1;
-                    self.frames[fi].ip = ip as u32;
-                    self.frames[fi].chunk_idx = chunk_idx as u32;
-                    self.frames[fi].base_slot = base_slot as u32;
+                    // Save current frame's ip and chunk_idx (base_slot is already saved)
+                    let caller = self.frames.last_mut();
+                    caller.ip = ip as u32;
+                    caller.chunk_idx = chunk_idx as u32;
 
+                    let new_base = (func_pos + 1) as u32;
                     self.frames.push(CallFrame {
                         chunk_idx: new_chunk_idx as u32,
                         ip: 0,
-                        base_slot: (func_pos + 1) as u32,
+                        // Bit 31 set: this frame has a function value at base_slot - 1
+                        base_slot: new_base | FRAME_HAS_FUNC,
                         upvalue_idx: new_upvalue_idx,
                     });
                     ip = 0;
                     chunk_idx = new_chunk_idx;
-                    base_slot = func_pos + 1;
+                    base_slot = new_base as usize;
+                    chunk = &chunks[chunk_idx];
+                    debug_assert!(chunk.code.last() == Some(&Op::Return));
+                }
+
+                Op::CallDirect(target_chunk, arg_count) => {
+                    if self.frames.len() >= MAX_CALL_DEPTH {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            "Stack overflow: maximum call depth exceeded".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                    let n = arg_count as usize;
+                    let new_base = (self.stack.len() - n) as u32;
+
+                    // Save current frame's ip and chunk_idx (base_slot is already saved)
+                    let caller = self.frames.last_mut();
+                    caller.ip = ip as u32;
+                    caller.chunk_idx = chunk_idx as u32;
+
+                    self.frames.push(CallFrame {
+                        chunk_idx: target_chunk as u32,
+                        ip: 0,
+                        // Bit 31 clear: no function value slot
+                        base_slot: new_base,
+                        upvalue_idx: u32::MAX,
+                    });
+                    ip = 0;
+                    chunk_idx = target_chunk as usize;
+                    base_slot = new_base as usize;
                     chunk = &chunks[chunk_idx];
                     debug_assert!(chunk.code.last() == Some(&Op::Return));
                 }
 
                 Op::GetUpvalue(idx) => {
-                    let frame = self.frames.last().unwrap();
+                    let frame = self.frames.last();
                     let uv_idx = frame.upvalue_idx as usize;
                     let val = self.upvalue_stack[uv_idx][idx as usize].clone();
                     self.stack.push(val);
@@ -922,10 +1040,9 @@ impl Vm {
                 Op::CallNative(fn_id, arg_count) => {
                     let n = arg_count as usize;
                     if self.natives.is_hof(fn_id) {
-                        let fi = self.frames.len() - 1;
-                        self.frames[fi].ip = ip as u32;
-                        self.frames[fi].chunk_idx = chunk_idx as u32;
-                        self.frames[fi].base_slot = base_slot as u32;
+                        let caller = self.frames.last_mut();
+                        caller.ip = ip as u32;
+                        caller.chunk_idx = chunk_idx as u32;
                         let (line, col) = chunk.source_map[ip - 1];
                         self.dispatch_hof(fn_id, n, chunks, line, col)?;
                     } else {
@@ -955,6 +1072,38 @@ impl Vm {
                     self.stack.push(NValue::bool(val <= k as i64));
                 }
 
+                Op::GetLocalAddInt(slot, k) => {
+                    let idx = base_slot + slot as usize;
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                    self.stack.push(NValue::int(val.wrapping_add(k as i64)));
+                }
+
+                Op::GetLocalLtInt(slot, k) => {
+                    let idx = base_slot + slot as usize;
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                    self.stack.push(NValue::bool(val < k as i64));
+                }
+
+                Op::GetLocalLeIntJumpIfFalse(slot, k, offset) => {
+                    let idx = base_slot + slot as usize;
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                    if val > k as i64 {
+                        ip += offset as usize;
+                    }
+                }
+
+                Op::GetLocalLtIntJumpIfFalse(slot, k, offset) => {
+                    let idx = base_slot + slot as usize;
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                    if val >= k as i64 {
+                        ip += offset as usize;
+                    }
+                }
+
                 Op::TailCall(arg_count) => {
                     let n = arg_count as usize;
                     // Copy new args from the top of the stack over the current
@@ -976,7 +1125,7 @@ impl Vm {
 
                 Op::Return => {
                     let result = self.stack.pop().unwrap_or_else(NValue::unit);
-                    let frame = self.frames.pop().unwrap();
+                    let frame = self.frames.pop();
 
                     // Clean up upvalue_stack entry if this was a closure frame
                     if frame.upvalue_idx != u32::MAX {
@@ -991,15 +1140,22 @@ impl Vm {
                         return Ok(result);
                     }
 
-                    // Remove callee's locals + args + the function value
-                    self.stack.truncate(frame.base_slot as usize - 1);
+                    // Remove callee's locals + args (+ function value if Call frame)
+                    let raw_base = frame.base_slot;
+                    let has_func = raw_base & FRAME_HAS_FUNC != 0;
+                    let frame_base = (raw_base & !FRAME_HAS_FUNC) as usize;
+                    if has_func {
+                        self.stack.truncate(frame_base - 1);
+                    } else {
+                        self.stack.truncate(frame_base);
+                    }
                     self.stack.push(result);
 
                     // Restore caller's frame state
-                    let caller = self.frames.last().unwrap();
+                    let caller = self.frames.last();
                     ip = caller.ip as usize;
                     chunk_idx = caller.chunk_idx as usize;
-                    base_slot = caller.base_slot as usize;
+                    base_slot = (caller.base_slot & !FRAME_HAS_FUNC) as usize;
                     chunk = &chunks[chunk_idx];
                 }
             }
@@ -1306,7 +1462,8 @@ impl Vm {
         self.frames.push(CallFrame {
             chunk_idx: ci as u32,
             ip: 0,
-            base_slot: bs as u32,
+            // Bit 31 set: function value sits at base_slot - 1
+            base_slot: bs as u32 | FRAME_HAS_FUNC,
             upvalue_idx: uv_idx,
         });
 
@@ -1833,8 +1990,8 @@ mod tests {
         };
         program.optimize();
 
-        // After optimization, callee chunk should have fused instruction
-        assert_eq!(program.chunks[1].code[2], Op::GetLocalSubInt(0, 3));
+        // After optimization + compaction, callee chunk is [GetLocalSubInt, Return]
+        assert_eq!(program.chunks[1].code[0], Op::GetLocalSubInt(0, 3));
 
         let mut vm = Vm::new();
         assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(4));
@@ -1932,6 +2089,74 @@ mod tests {
     }
 
     #[test]
+    fn superinstruction_get_local_add_int() {
+        // Test that GetLocalAddInt produces same result as unfused sequence
+        let mut c_unfused = Chunk::new();
+        let arg = c_unfused.add_constant(Value::Int(10));
+        c_unfused.emit(Op::LoadConst(arg), 1, 0);
+        c_unfused.emit(Op::GetLocal(0), 1, 0);
+        c_unfused.emit(Op::LoadSmallInt(3), 1, 0);
+        c_unfused.emit(Op::AddInt, 1, 0);
+        c_unfused.emit(Op::Return, 1, 0);
+        let unfused = run_chunk(c_unfused);
+
+        let mut c_fused = Chunk::new();
+        let arg = c_fused.add_constant(Value::Int(10));
+        c_fused.emit(Op::LoadConst(arg), 1, 0);
+        c_fused.emit(Op::GetLocalAddInt(0, 3), 1, 0);
+        c_fused.emit(Op::Return, 1, 0);
+        let fused = run_chunk(c_fused);
+
+        assert_eq!(unfused, Value::Int(13));
+        assert_eq!(fused, Value::Int(13));
+    }
+
+    #[test]
+    fn superinstruction_get_local_lt_int() {
+        // Test that GetLocalLtInt produces same result as unfused sequence
+        let mut c_unfused = Chunk::new();
+        let arg = c_unfused.add_constant(Value::Int(3));
+        c_unfused.emit(Op::LoadConst(arg), 1, 0);
+        c_unfused.emit(Op::GetLocal(0), 1, 0);
+        c_unfused.emit(Op::LoadSmallInt(5), 1, 0);
+        c_unfused.emit(Op::LtInt, 1, 0);
+        c_unfused.emit(Op::Return, 1, 0);
+        let unfused = run_chunk(c_unfused);
+
+        let mut c_fused = Chunk::new();
+        let arg = c_fused.add_constant(Value::Int(3));
+        c_fused.emit(Op::LoadConst(arg), 1, 0);
+        c_fused.emit(Op::GetLocalLtInt(0, 5), 1, 0);
+        c_fused.emit(Op::Return, 1, 0);
+        let fused = run_chunk(c_fused);
+
+        assert_eq!(unfused, Value::Bool(true));
+        assert_eq!(fused, Value::Bool(true));
+    }
+
+    #[test]
+    fn superinstruction_lt_int_false() {
+        // 7 < 5 → false
+        let mut c = Chunk::new();
+        let arg = c.add_constant(Value::Int(7));
+        c.emit(Op::LoadConst(arg), 1, 0);
+        c.emit(Op::GetLocalLtInt(0, 5), 1, 0);
+        c.emit(Op::Return, 1, 0);
+        assert_eq!(run_chunk(c), Value::Bool(false));
+    }
+
+    #[test]
+    fn superinstruction_lt_int_equal() {
+        // 5 < 5 → false (strictly less than)
+        let mut c = Chunk::new();
+        let arg = c.add_constant(Value::Int(5));
+        c.emit(Op::LoadConst(arg), 1, 0);
+        c.emit(Op::GetLocalLtInt(0, 5), 1, 0);
+        c.emit(Op::Return, 1, 0);
+        assert_eq!(run_chunk(c), Value::Bool(false));
+    }
+
+    #[test]
     fn tail_call_sum_accumulator() {
         // sum(n, acc) = if n <= 0 then acc else sum(n-1, acc+n)
         // sum(100, 0) = 5050
@@ -1975,5 +2200,174 @@ mod tests {
         };
         let mut vm = Vm::new();
         assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(5050));
+    }
+
+    // -- CallDirect tests --
+
+    #[test]
+    fn call_direct_simple() {
+        // Entry calls callee via CallDirect (no function value on stack)
+        let mut caller = Chunk::new();
+        let arg = caller.add_constant(Value::Int(5));
+        caller.emit(Op::LoadConst(arg), 1, 0);
+        caller.emit(Op::CallDirect(1, 1), 1, 0);
+        caller.emit(Op::Return, 1, 0);
+
+        let mut callee = Chunk::new();
+        let two = callee.add_constant(Value::Int(2));
+        callee.emit(Op::GetLocal(0), 1, 0);
+        callee.emit(Op::LoadConst(two), 1, 0);
+        callee.emit(Op::Mul, 1, 0);
+        callee.emit(Op::Return, 1, 0);
+
+        let program = Program {
+            chunks: vec![caller, callee],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(10));
+    }
+
+    #[test]
+    fn call_direct_two_args() {
+        let mut caller = Chunk::new();
+        let a = caller.add_constant(Value::Int(3));
+        let b = caller.add_constant(Value::Int(4));
+        caller.emit(Op::LoadConst(a), 1, 0);
+        caller.emit(Op::LoadConst(b), 1, 0);
+        caller.emit(Op::CallDirect(1, 2), 1, 0);
+        caller.emit(Op::Return, 1, 0);
+
+        let mut callee = Chunk::new();
+        callee.emit(Op::GetLocal(0), 1, 0);
+        callee.emit(Op::GetLocal(1), 1, 0);
+        callee.emit(Op::Add, 1, 0);
+        callee.emit(Op::Return, 1, 0);
+
+        let program = Program {
+            chunks: vec![caller, callee],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(7));
+    }
+
+    #[test]
+    fn call_direct_recursive_fib() {
+        // fib(n) = if n <= 1 then n else fib(n-1) + fib(n-2)
+        // Entry: CallDirect fib(10)
+        let mut entry = Chunk::new();
+        let arg = entry.add_constant(Value::Int(10));
+        entry.emit(Op::LoadConst(arg), 1, 0);
+        entry.emit(Op::CallDirect(1, 1), 1, 0);
+        entry.emit(Op::Return, 1, 0);
+
+        // fib: slot 0 = n
+        let mut fib = Chunk::new();
+        let one = fib.add_constant(Value::Int(1));
+        let two = fib.add_constant(Value::Int(2));
+        // n <= 1
+        fib.emit(Op::GetLocal(0), 1, 0);
+        fib.emit(Op::LoadConst(one), 1, 0);
+        fib.emit(Op::Le, 1, 0);
+        let then_jump = fib.emit(Op::JumpIfFalse(0), 1, 0);
+        // then: return n
+        fib.emit(Op::GetLocal(0), 1, 0);
+        let else_jump = fib.emit(Op::Jump(0), 1, 0);
+        // else: fib(n-1) + fib(n-2)
+        fib.patch_jump(then_jump);
+        fib.emit(Op::GetLocal(0), 1, 0);
+        fib.emit(Op::LoadConst(one), 1, 0);
+        fib.emit(Op::Sub, 1, 0); // n - 1
+        fib.emit(Op::CallDirect(1, 1), 1, 0); // fib(n-1)
+        fib.emit(Op::GetLocal(0), 1, 0);
+        fib.emit(Op::LoadConst(two), 1, 0);
+        fib.emit(Op::Sub, 1, 0); // n - 2
+        fib.emit(Op::CallDirect(1, 1), 1, 0); // fib(n-2)
+        fib.emit(Op::Add, 1, 0);
+        fib.patch_jump(else_jump);
+        fib.emit(Op::Return, 1, 0);
+
+        let program = Program {
+            chunks: vec![entry, fib],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(55));
+    }
+
+    #[test]
+    fn call_direct_mixed_with_call() {
+        // Test mixing CallDirect (known function) and Call (closure/indirect)
+        let mut entry = Chunk::new();
+        let func = entry.add_constant(Value::Function(2)); // indirect reference
+        let arg = entry.add_constant(Value::Int(5));
+        // Direct call to chunk 1
+        entry.emit(Op::LoadConst(arg), 1, 0);
+        entry.emit(Op::CallDirect(1, 1), 1, 0);
+        // Indirect call to chunk 2 via Call
+        entry.emit(Op::LoadConst(func), 1, 0);
+        entry.emit(Op::Call(0), 1, 0); // Call with result from CallDirect as arg? No, Call(0) pops func, pushes result
+        // Add both results  -- actually let's push result of direct call, then indirect call, then add
+        entry.emit(Op::Add, 1, 0);
+        entry.emit(Op::Return, 1, 0);
+
+        // Chunk 1: double(n) = n * 2
+        let mut double = Chunk::new();
+        let two = double.add_constant(Value::Int(2));
+        double.emit(Op::GetLocal(0), 1, 0);
+        double.emit(Op::LoadConst(two), 1, 0);
+        double.emit(Op::Mul, 1, 0);
+        double.emit(Op::Return, 1, 0);
+
+        // Chunk 2: returns 100
+        let mut hundred = Chunk::new();
+        let val = hundred.add_constant(Value::Int(100));
+        hundred.emit(Op::LoadConst(val), 1, 0);
+        hundred.emit(Op::Return, 1, 0);
+
+        let program = Program {
+            chunks: vec![entry, double, hundred],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        // double(5) = 10, hundred() = 100, 10 + 100 = 110
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(110));
+    }
+
+    #[test]
+    fn call_direct_stack_overflow() {
+        // Ensure CallDirect still detects stack overflow
+        let mut entry = Chunk::new();
+        entry.emit(Op::CallDirect(1, 0), 1, 0);
+        entry.emit(Op::Return, 1, 0);
+
+        let mut recurse = Chunk::new();
+        recurse.emit(Op::CallDirect(1, 0), 1, 0);
+        recurse.emit(Op::Return, 1, 0);
+
+        let program = Program {
+            chunks: vec![entry, recurse],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        let err = vm
+            .execute_program(&program)
+            .expect_err("Expected stack overflow");
+        assert!(
+            err.message.contains("Stack overflow"),
+            "got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn call_frame_size() {
+        // AC-4.8: CallFrame must remain 16 bytes or smaller
+        assert!(
+            std::mem::size_of::<CallFrame>() <= 16,
+            "CallFrame is {} bytes, must be <= 16",
+            std::mem::size_of::<CallFrame>()
+        );
     }
 }

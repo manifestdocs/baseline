@@ -14,6 +14,17 @@ path = "src/lib.rs"
 name = "blc"
 path = "src/main.rs"
 
+[features]
+default = []
+jit = [
+    "dep:cranelift-codegen",
+    "dep:cranelift-frontend",
+    "dep:cranelift-module",
+    "dep:cranelift-jit",
+    "dep:cranelift-native",
+    "dep:target-lexicon",
+]
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 tree-sitter.workspace = true
@@ -24,6 +35,14 @@ ureq = "3"
 tiny_http = "0.12"
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["full"] }
+
+# JIT dependencies (behind feature flag)
+cranelift-codegen = { version = "0.128", optional = true }
+cranelift-frontend = { version = "0.128", optional = true }
+cranelift-module = { version = "0.128", optional = true }
+cranelift-jit = { version = "0.128", optional = true }
+cranelift-native = { version = "0.128", optional = true }
+target-lexicon = { version = "0.13", optional = true }
 
 [dev-dependencies]
 tempfile = "3"
