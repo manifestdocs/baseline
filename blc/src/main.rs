@@ -56,6 +56,17 @@ enum Commands {
         #[arg(long)]
         vm: bool,
     },
+
+    /// Format a Baseline source file
+    #[command(name = "fmt")]
+    Format {
+        /// The file to format
+        file: PathBuf,
+
+        /// Check formatting without modifying the file (exit 1 if changes needed)
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 fn main() {
@@ -100,6 +111,29 @@ fn main() {
         Commands::Lsp => {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             rt.block_on(blc::lsp::run_server());
+        }
+        Commands::Format { file, check } => {
+            let source = std::fs::read_to_string(&file).unwrap_or_else(|e| {
+                eprintln!("Failed to read {}: {}", file.display(), e);
+                std::process::exit(1);
+            });
+
+            let formatted = blc::format::format_source(&source).unwrap_or_else(|e| {
+                eprintln!("Format error: {}", e);
+                std::process::exit(1);
+            });
+
+            if check {
+                if source != formatted {
+                    eprintln!("{} needs formatting", file.display());
+                    std::process::exit(1);
+                }
+            } else {
+                std::fs::write(&file, &formatted).unwrap_or_else(|e| {
+                    eprintln!("Failed to write {}: {}", file.display(), e);
+                    std::process::exit(1);
+                });
+            }
         }
     }
 }

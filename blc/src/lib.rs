@@ -1,6 +1,7 @@
 pub mod analysis;
 pub mod builtins;
 pub mod diagnostics;
+pub mod format;
 pub mod interpreter;
 pub mod lsp;
 pub mod parse;
