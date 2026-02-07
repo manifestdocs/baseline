@@ -23,6 +23,9 @@ pub enum Op {
     // -- Type-specialized arithmetic (skip runtime type checks) --
     AddInt,
     SubInt,
+    MulInt,
+    DivInt,
+    ModInt,
 
     // -- Comparison --
     Eq,
@@ -35,6 +38,8 @@ pub enum Op {
     // -- Type-specialized comparison --
     LtInt,
     LeInt,
+    GtInt,
+    GeInt,
 
     // -- Logic --
     Not,
@@ -224,13 +229,19 @@ impl Chunk {
         let len = self.code.len();
         for i in 0..len {
             match self.code[i] {
-                Op::Add | Op::Sub | Op::Lt | Op::Le => {
+                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
+                | Op::Lt | Op::Le | Op::Gt | Op::Ge => {
                     if self.has_int_operand(i) {
                         self.code[i] = match self.code[i] {
                             Op::Add => Op::AddInt,
                             Op::Sub => Op::SubInt,
+                            Op::Mul => Op::MulInt,
+                            Op::Div => Op::DivInt,
+                            Op::Mod => Op::ModInt,
                             Op::Lt => Op::LtInt,
                             Op::Le => Op::LeInt,
+                            Op::Gt => Op::GtInt,
+                            Op::Ge => Op::GeInt,
                             _ => unreachable!(),
                         };
                     }
@@ -250,7 +261,8 @@ impl Chunk {
         while i > 0 && pushes_found < 2 {
             i -= 1;
             match self.code[i] {
-                Op::LoadSmallInt(_) | Op::AddInt | Op::SubInt => {
+                Op::LoadSmallInt(_) | Op::AddInt | Op::SubInt
+                | Op::MulInt | Op::DivInt | Op::ModInt => {
                     has_int = true;
                     pushes_found += 1;
                 }
@@ -263,7 +275,8 @@ impl Chunk {
                 Op::GetLocal(_) | Op::GetUpvalue(_) | Op::Negate
                 | Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
                 | Op::Not | Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge
-                | Op::LtInt | Op::LeInt | Op::ListLen | Op::EnumTag | Op::EnumPayload
+                | Op::LtInt | Op::LeInt | Op::GtInt | Op::GeInt
+                | Op::ListLen | Op::EnumTag | Op::EnumPayload
                 | Op::Concat | Op::TupleGet(_) | Op::GetField(_) | Op::ListGet
                 | Op::MakeRange | Op::MakeList(_) | Op::MakeRecord(_) | Op::MakeTuple(_)
                 | Op::MakeEnum(_) | Op::MakeStruct(_) | Op::UpdateRecord(_)

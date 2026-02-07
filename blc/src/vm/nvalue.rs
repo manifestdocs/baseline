@@ -256,6 +256,46 @@ impl NValue {
         let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
         unsafe { &*ptr }
     }
+
+    /// Extract string reference from a heap String.
+    #[inline]
+    pub fn as_string(&self) -> Option<&RcStr> {
+        if !self.is_heap() { return None; }
+        match self.as_heap_ref() {
+            HeapObject::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Extract list reference from a heap List.
+    #[inline]
+    pub fn as_list(&self) -> Option<&Vec<NValue>> {
+        if !self.is_heap() { return None; }
+        match self.as_heap_ref() {
+            HeapObject::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// Extract record fields reference from a heap Record.
+    #[inline]
+    pub fn as_record(&self) -> Option<&Vec<(RcStr, NValue)>> {
+        if !self.is_heap() { return None; }
+        match self.as_heap_ref() {
+            HeapObject::Record(fields) => Some(fields),
+            _ => None,
+        }
+    }
+
+    /// Extract enum tag and payload from a heap Enum.
+    #[inline]
+    pub fn as_enum(&self) -> Option<(&RcStr, &NValue)> {
+        if !self.is_heap() { return None; }
+        match self.as_heap_ref() {
+            HeapObject::Enum { tag, payload } => Some((tag, payload)),
+            _ => None,
+        }
+    }
 }
 
 // -- Clone: bump Rc for heap, copy bits for inline --

@@ -1,6 +1,5 @@
-use std::rc::Rc;
-
-use super::value::{RcStr, Value};
+use super::nvalue::{HeapObject, NValue};
+use super::value::RcStr;
 
 // ---------------------------------------------------------------------------
 // Native Function Registry
@@ -10,8 +9,8 @@ use super::value::{RcStr, Value};
 #[derive(Debug, Clone)]
 pub struct NativeError(pub String);
 
-/// A native function: takes args, returns a value.
-type SimpleFn = fn(&[Value]) -> Result<Value, NativeError>;
+/// A native function: takes NValue args, returns an NValue.
+type SimpleFn = fn(&[NValue]) -> Result<NValue, NativeError>;
 
 /// A native function entry.
 struct NativeEntry {
@@ -39,7 +38,7 @@ impl NativeRegistry {
     }
 
     /// Call a native function by ID.
-    pub fn call(&self, id: u16, args: &[Value]) -> Result<Value, NativeError> {
+    pub fn call(&self, id: u16, args: &[NValue]) -> Result<NValue, NativeError> {
         let entry = &self.entries[id as usize];
         (entry.func)(args)
     }
@@ -167,7 +166,7 @@ impl NativeRegistry {
 // HOF placeholder — actual execution is in the VM
 // ---------------------------------------------------------------------------
 
-fn native_hof_placeholder(_args: &[Value]) -> Result<Value, NativeError> {
+fn native_hof_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
     Err(NativeError("HOF must be executed by VM, not called directly".into()))
 }
 
@@ -175,98 +174,112 @@ fn native_hof_placeholder(_args: &[Value]) -> Result<Value, NativeError> {
 // Console
 // ---------------------------------------------------------------------------
 
-fn native_console_println(args: &[Value]) -> Result<Value, NativeError> {
+fn native_console_println(args: &[NValue]) -> Result<NValue, NativeError> {
     if args.is_empty() {
         println!();
     } else {
         println!("{}", args[0]);
     }
-    Ok(Value::Unit)
+    Ok(NValue::unit())
 }
 
-fn native_console_print(args: &[Value]) -> Result<Value, NativeError> {
+fn native_console_print(args: &[NValue]) -> Result<NValue, NativeError> {
     if !args.is_empty() {
         print!("{}", args[0]);
     }
-    Ok(Value::Unit)
+    Ok(NValue::unit())
 }
 
-fn native_console_error(args: &[Value]) -> Result<Value, NativeError> {
+fn native_console_error(args: &[NValue]) -> Result<NValue, NativeError> {
     if !args.is_empty() {
         eprintln!("{}", args[0]);
     }
-    Ok(Value::Unit)
+    Ok(NValue::unit())
 }
 
 // ---------------------------------------------------------------------------
 // Log
 // ---------------------------------------------------------------------------
 
-fn native_log_info(args: &[Value]) -> Result<Value, NativeError> {
+fn native_log_info(args: &[NValue]) -> Result<NValue, NativeError> {
     if !args.is_empty() { eprintln!("[INFO] {}", args[0]); }
-    Ok(Value::Unit)
+    Ok(NValue::unit())
 }
 
-fn native_log_warn(args: &[Value]) -> Result<Value, NativeError> {
+fn native_log_warn(args: &[NValue]) -> Result<NValue, NativeError> {
     if !args.is_empty() { eprintln!("[WARN] {}", args[0]); }
-    Ok(Value::Unit)
+    Ok(NValue::unit())
 }
 
-fn native_log_error(args: &[Value]) -> Result<Value, NativeError> {
+fn native_log_error(args: &[NValue]) -> Result<NValue, NativeError> {
     if !args.is_empty() { eprintln!("[ERROR] {}", args[0]); }
-    Ok(Value::Unit)
+    Ok(NValue::unit())
 }
 
-fn native_log_debug(args: &[Value]) -> Result<Value, NativeError> {
+fn native_log_debug(args: &[NValue]) -> Result<NValue, NativeError> {
     if !args.is_empty() { eprintln!("[DEBUG] {}", args[0]); }
-    Ok(Value::Unit)
+    Ok(NValue::unit())
 }
 
 // ---------------------------------------------------------------------------
 // Math
 // ---------------------------------------------------------------------------
 
-fn native_math_abs(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Int(n) => Ok(Value::Int(n.abs())),
-        Value::Float(n) => Ok(Value::Float(n.abs())),
-        v => Err(NativeError(format!("Math.abs: expected number, got {}", v))),
+fn native_math_abs(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_any_int() {
+        Ok(NValue::int(args[0].as_any_int().abs()))
+    } else if args[0].is_float() {
+        Ok(NValue::float(args[0].as_float().abs()))
+    } else {
+        Err(NativeError(format!("Math.abs: expected number, got {}", args[0])))
     }
 }
 
-fn native_math_min(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(*a.min(b))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.min(*b))),
-        _ => Err(NativeError("Math.min: expected two numbers".into())),
+fn native_math_min(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_any_int() && args[1].is_any_int() {
+        Ok(NValue::int(args[0].as_any_int().min(args[1].as_any_int())))
+    } else if args[0].is_number() && args[1].is_number() {
+        Ok(NValue::float(args[0].as_f64().min(args[1].as_f64())))
+    } else {
+        Err(NativeError("Math.min: expected two numbers".into()))
     }
 }
 
-fn native_math_max(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::Int(a), Value::Int(b)) => Ok(Value::Int(*a.max(b))),
-        (Value::Float(a), Value::Float(b)) => Ok(Value::Float(a.max(*b))),
-        _ => Err(NativeError("Math.max: expected two numbers".into())),
+fn native_math_max(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_any_int() && args[1].is_any_int() {
+        Ok(NValue::int(args[0].as_any_int().max(args[1].as_any_int())))
+    } else if args[0].is_number() && args[1].is_number() {
+        Ok(NValue::float(args[0].as_f64().max(args[1].as_f64())))
+    } else {
+        Err(NativeError("Math.max: expected two numbers".into()))
     }
 }
 
-fn native_math_clamp(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1], &args[2]) {
-        (Value::Int(x), Value::Int(lo), Value::Int(hi)) => Ok(Value::Int(*x.max(lo).min(hi))),
-        (Value::Float(x), Value::Float(lo), Value::Float(hi)) => Ok(Value::Float(x.max(*lo).min(*hi))),
-        _ => Err(NativeError("Math.clamp: expected three numbers".into())),
+fn native_math_clamp(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_any_int() && args[1].is_any_int() && args[2].is_any_int() {
+        let x = args[0].as_any_int();
+        let lo = args[1].as_any_int();
+        let hi = args[2].as_any_int();
+        Ok(NValue::int(x.max(lo).min(hi)))
+    } else if args[0].is_number() && args[1].is_number() && args[2].is_number() {
+        let x = args[0].as_f64();
+        let lo = args[1].as_f64();
+        let hi = args[2].as_f64();
+        Ok(NValue::float(x.max(lo).min(hi)))
+    } else {
+        Err(NativeError("Math.clamp: expected three numbers".into()))
     }
 }
 
-fn native_math_pow(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::Int(base), Value::Int(exp)) => {
-            Ok(Value::Int((*base as f64).powi(*exp as i32) as i64))
-        }
-        (Value::Float(base), Value::Float(exp)) => Ok(Value::Float(base.powf(*exp))),
-        (Value::Int(base), Value::Float(exp)) => Ok(Value::Float((*base as f64).powf(*exp))),
-        (Value::Float(base), Value::Int(exp)) => Ok(Value::Float(base.powi(*exp as i32))),
-        _ => Err(NativeError("Math.pow: expected two numbers".into())),
+fn native_math_pow(args: &[NValue]) -> Result<NValue, NativeError> {
+    let a = &args[0];
+    let b = &args[1];
+    if a.is_any_int() && b.is_any_int() {
+        Ok(NValue::int((a.as_any_int() as f64).powi(b.as_any_int() as i32) as i64))
+    } else if a.is_number() && b.is_number() {
+        Ok(NValue::float(a.as_f64().powf(b.as_f64())))
+    } else {
+        Err(NativeError("Math.pow: expected two numbers".into()))
     }
 }
 
@@ -274,77 +287,77 @@ fn native_math_pow(args: &[Value]) -> Result<Value, NativeError> {
 // String
 // ---------------------------------------------------------------------------
 
-fn native_string_length(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::String(s) => Ok(Value::Int(s.len() as i64)),
-        v => Err(NativeError(format!("String.length: expected String, got {}", v))),
+fn native_string_length(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => Ok(NValue::int(s.len() as i64)),
+        None => Err(NativeError(format!("String.length: expected String, got {}", args[0]))),
     }
 }
 
-fn native_string_to_upper(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::String(s) => Ok(Value::String(s.to_uppercase().into())),
-        v => Err(NativeError(format!("String.to_upper: expected String, got {}", v))),
+fn native_string_to_upper(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => Ok(NValue::string(s.to_uppercase().into())),
+        None => Err(NativeError(format!("String.to_upper: expected String, got {}", args[0]))),
     }
 }
 
-fn native_string_to_lower(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::String(s) => Ok(Value::String(s.to_lowercase().into())),
-        v => Err(NativeError(format!("String.to_lower: expected String, got {}", v))),
+fn native_string_to_lower(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => Ok(NValue::string(s.to_lowercase().into())),
+        None => Err(NativeError(format!("String.to_lower: expected String, got {}", args[0]))),
     }
 }
 
-fn native_string_trim(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::String(s) => Ok(Value::String(s.trim().into())),
-        v => Err(NativeError(format!("String.trim: expected String, got {}", v))),
+fn native_string_trim(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => Ok(NValue::string(s.trim().into())),
+        None => Err(NativeError(format!("String.trim: expected String, got {}", args[0]))),
     }
 }
 
-fn native_string_contains(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::String(s), Value::String(sub)) => Ok(Value::Bool(s.contains(&**sub))),
+fn native_string_contains(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string()) {
+        (Some(s), Some(sub)) => Ok(NValue::bool(s.contains(&**sub))),
         _ => Err(NativeError("String.contains: expected (String, String)".into())),
     }
 }
 
-fn native_string_starts_with(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::String(s), Value::String(prefix)) => Ok(Value::Bool(s.starts_with(&**prefix))),
+fn native_string_starts_with(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string()) {
+        (Some(s), Some(prefix)) => Ok(NValue::bool(s.starts_with(&**prefix))),
         _ => Err(NativeError("String.starts_with: expected (String, String)".into())),
     }
 }
 
-fn native_string_split(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::String(s), Value::String(delim)) => {
-            let parts: Vec<Value> = s.split(&**delim)
-                .map(|p| Value::String(p.into()))
+fn native_string_split(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string()) {
+        (Some(s), Some(delim)) => {
+            let parts: Vec<NValue> = s.split(&**delim)
+                .map(|p| NValue::string(p.into()))
                 .collect();
-            Ok(Value::List(Rc::new(parts)))
+            Ok(NValue::list(parts))
         }
         _ => Err(NativeError("String.split: expected (String, String)".into())),
     }
 }
 
-fn native_string_join(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::List(items), Value::String(sep)) => {
+fn native_string_join(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_list(), args[1].as_string()) {
+        (Some(items), Some(sep)) => {
             let strs: Vec<String> = items.iter().map(|v| v.to_string()).collect();
-            Ok(Value::String(strs.join(&**sep).into()))
+            Ok(NValue::string(strs.join(&**sep).into()))
         }
         _ => Err(NativeError("String.join: expected (List, String)".into())),
     }
 }
 
-fn native_string_slice(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1], &args[2]) {
-        (Value::String(s), Value::Int(start), Value::Int(len)) => {
-            let start = *start as usize;
-            let len = *len as usize;
+fn native_string_slice(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].is_any_int(), args[2].is_any_int()) {
+        (Some(s), true, true) => {
+            let start = args[1].as_any_int() as usize;
+            let len = args[2].as_any_int() as usize;
             let result: String = s.chars().skip(start).take(len).collect();
-            Ok(Value::String(result.into()))
+            Ok(NValue::string(result.into()))
         }
         _ => Err(NativeError("String.slice: expected (String, Int, Int)".into())),
     }
@@ -354,74 +367,77 @@ fn native_string_slice(args: &[Value]) -> Result<Value, NativeError> {
 // List (non-HOF)
 // ---------------------------------------------------------------------------
 
-fn native_list_length(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::List(items) => Ok(Value::Int(items.len() as i64)),
-        v => Err(NativeError(format!("List.length: expected List, got {}", v))),
+fn native_list_length(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => Ok(NValue::int(items.len() as i64)),
+        None => Err(NativeError(format!("List.length: expected List, got {}", args[0]))),
     }
 }
 
-fn native_list_head(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::List(items) => {
+fn native_list_head(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
             if let Some(first) = items.first() {
-                Ok(Value::Enum("Some".into(), Rc::new(first.clone())))
+                Ok(NValue::enum_val("Some".into(), first.clone()))
             } else {
-                Ok(Value::Enum("None".into(), Rc::new(Value::Unit)))
+                Ok(NValue::enum_val("None".into(), NValue::unit()))
             }
         }
-        v => Err(NativeError(format!("List.head: expected List, got {}", v))),
+        None => Err(NativeError(format!("List.head: expected List, got {}", args[0]))),
     }
 }
 
-fn native_list_tail(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::List(items) => {
+fn native_list_tail(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
             if items.is_empty() {
-                Ok(Value::List(Rc::new(Vec::new())))
+                Ok(NValue::list(Vec::new()))
             } else {
-                Ok(Value::List(Rc::new(items[1..].to_vec())))
+                Ok(NValue::list(items[1..].to_vec()))
             }
         }
-        v => Err(NativeError(format!("List.tail: expected List, got {}", v))),
+        None => Err(NativeError(format!("List.tail: expected List, got {}", args[0]))),
     }
 }
 
-fn native_list_reverse(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::List(items) => {
-            let mut reversed = (**items).clone();
+fn native_list_reverse(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let mut reversed = items.clone();
             reversed.reverse();
-            Ok(Value::List(Rc::new(reversed)))
+            Ok(NValue::list(reversed))
         }
-        v => Err(NativeError(format!("List.reverse: expected List, got {}", v))),
+        None => Err(NativeError(format!("List.reverse: expected List, got {}", args[0]))),
     }
 }
 
-fn native_list_sort(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::List(items) => {
-            let mut sorted = (**items).clone();
+fn native_list_sort(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let mut sorted = items.clone();
             sorted.sort_by(|a, b| {
-                match (a, b) {
-                    (Value::Int(x), Value::Int(y)) => x.cmp(y),
-                    (Value::Float(x), Value::Float(y)) => x.partial_cmp(y).unwrap_or(std::cmp::Ordering::Equal),
-                    (Value::String(x), Value::String(y)) => x.cmp(y),
-                    _ => std::cmp::Ordering::Equal,
+                if a.is_any_int() && b.is_any_int() {
+                    a.as_any_int().cmp(&b.as_any_int())
+                } else if a.is_float() && b.is_float() {
+                    a.as_float().partial_cmp(&b.as_float()).unwrap_or(std::cmp::Ordering::Equal)
+                } else if let (Some(x), Some(y)) = (a.as_string(), b.as_string()) {
+                    x.cmp(y)
+                } else {
+                    std::cmp::Ordering::Equal
                 }
             });
-            Ok(Value::List(Rc::new(sorted)))
+            Ok(NValue::list(sorted))
         }
-        v => Err(NativeError(format!("List.sort: expected List, got {}", v))),
+        None => Err(NativeError(format!("List.sort: expected List, got {}", args[0]))),
     }
 }
 
-fn native_list_concat(args: &[Value]) -> Result<Value, NativeError> {
-    match (&args[0], &args[1]) {
-        (Value::List(a), Value::List(b)) => {
-            let mut result = (**a).clone();
+fn native_list_concat(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_list(), args[1].as_list()) {
+        (Some(a), Some(b)) => {
+            let mut result = a.clone();
             result.extend(b.iter().cloned());
-            Ok(Value::List(Rc::new(result)))
+            Ok(NValue::list(result))
         }
         _ => Err(NativeError("List.concat: expected (List, List)".into())),
     }
@@ -431,35 +447,35 @@ fn native_list_concat(args: &[Value]) -> Result<Value, NativeError> {
 // Option
 // ---------------------------------------------------------------------------
 
-fn native_option_unwrap(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, payload) if **tag == *"Some" => Ok((**payload).clone()),
-        Value::Enum(tag, _) if **tag == *"None" => {
+fn native_option_unwrap(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, payload)) if &**tag == "Some" => Ok(payload.clone()),
+        Some((tag, _)) if &**tag == "None" => {
             Err(NativeError("Option.unwrap: called on None".into()))
         }
-        v => Err(NativeError(format!("Option.unwrap: expected Option, got {}", v))),
+        _ => Err(NativeError(format!("Option.unwrap: expected Option, got {}", args[0]))),
     }
 }
 
-fn native_option_unwrap_or(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, payload) if **tag == *"Some" => Ok((**payload).clone()),
-        Value::Enum(tag, _) if **tag == *"None" => Ok(args[1].clone()),
-        v => Err(NativeError(format!("Option.unwrap_or: expected Option, got {}", v))),
+fn native_option_unwrap_or(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, payload)) if &**tag == "Some" => Ok(payload.clone()),
+        Some((tag, _)) if &**tag == "None" => Ok(args[1].clone()),
+        _ => Err(NativeError(format!("Option.unwrap_or: expected Option, got {}", args[0]))),
     }
 }
 
-fn native_option_is_some(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, _) => Ok(Value::Bool(**tag == *"Some")),
-        v => Err(NativeError(format!("Option.is_some: expected Option, got {}", v))),
+fn native_option_is_some(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, _)) => Ok(NValue::bool(&**tag == "Some")),
+        None => Err(NativeError(format!("Option.is_some: expected Option, got {}", args[0]))),
     }
 }
 
-fn native_option_is_none(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, _) => Ok(Value::Bool(**tag == *"None")),
-        v => Err(NativeError(format!("Option.is_none: expected Option, got {}", v))),
+fn native_option_is_none(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, _)) => Ok(NValue::bool(&**tag == "None")),
+        None => Err(NativeError(format!("Option.is_none: expected Option, got {}", args[0]))),
     }
 }
 
@@ -467,35 +483,35 @@ fn native_option_is_none(args: &[Value]) -> Result<Value, NativeError> {
 // Result
 // ---------------------------------------------------------------------------
 
-fn native_result_unwrap(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, payload) if **tag == *"Ok" => Ok((**payload).clone()),
-        Value::Enum(tag, payload) if **tag == *"Err" => {
+fn native_result_unwrap(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, payload)) if &**tag == "Ok" => Ok(payload.clone()),
+        Some((tag, payload)) if &**tag == "Err" => {
             Err(NativeError(format!("Result.unwrap: called on Err({})", payload)))
         }
-        v => Err(NativeError(format!("Result.unwrap: expected Result, got {}", v))),
+        _ => Err(NativeError(format!("Result.unwrap: expected Result, got {}", args[0]))),
     }
 }
 
-fn native_result_unwrap_or(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, payload) if **tag == *"Ok" => Ok((**payload).clone()),
-        Value::Enum(tag, _) if **tag == *"Err" => Ok(args[1].clone()),
-        v => Err(NativeError(format!("Result.unwrap_or: expected Result, got {}", v))),
+fn native_result_unwrap_or(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, payload)) if &**tag == "Ok" => Ok(payload.clone()),
+        Some((tag, _)) if &**tag == "Err" => Ok(args[1].clone()),
+        _ => Err(NativeError(format!("Result.unwrap_or: expected Result, got {}", args[0]))),
     }
 }
 
-fn native_result_is_ok(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, _) => Ok(Value::Bool(**tag == *"Ok")),
-        v => Err(NativeError(format!("Result.is_ok: expected Result, got {}", v))),
+fn native_result_is_ok(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, _)) => Ok(NValue::bool(&**tag == "Ok")),
+        None => Err(NativeError(format!("Result.is_ok: expected Result, got {}", args[0]))),
     }
 }
 
-fn native_result_is_err(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Enum(tag, _) => Ok(Value::Bool(**tag == *"Err")),
-        v => Err(NativeError(format!("Result.is_err: expected Result, got {}", v))),
+fn native_result_is_err(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, _)) => Ok(NValue::bool(&**tag == "Err")),
+        None => Err(NativeError(format!("Result.is_err: expected Result, got {}", args[0]))),
     }
 }
 
@@ -503,30 +519,30 @@ fn native_result_is_err(args: &[Value]) -> Result<Value, NativeError> {
 // Time
 // ---------------------------------------------------------------------------
 
-fn native_time_now(_args: &[Value]) -> Result<Value, NativeError> {
+fn native_time_now(_args: &[NValue]) -> Result<NValue, NativeError> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
-    Ok(Value::Int(ms))
+    Ok(NValue::int(ms))
 }
 
 // ---------------------------------------------------------------------------
 // Int
 // ---------------------------------------------------------------------------
 
-fn native_int_to_string(args: &[Value]) -> Result<Value, NativeError> {
-    Ok(Value::String(args[0].to_string().into()))
+fn native_int_to_string(args: &[NValue]) -> Result<NValue, NativeError> {
+    Ok(NValue::string(args[0].to_string().into()))
 }
 
-fn native_int_parse(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::String(s) => match s.parse::<i64>() {
-            Ok(n) => Ok(Value::Enum("Ok".into(), Rc::new(Value::Int(n)))),
-            Err(_) => Ok(Value::Enum("Err".into(), Rc::new(Value::String(format!("Cannot parse '{}' as Int", s).into())))),
+fn native_int_parse(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => match s.parse::<i64>() {
+            Ok(n) => Ok(NValue::enum_val("Ok".into(), NValue::int(n))),
+            Err(_) => Ok(NValue::enum_val("Err".into(), NValue::string(format!("Cannot parse '{}' as Int", s).into()))),
         },
-        v => Err(NativeError(format!("Int.parse: expected String, got {}", v))),
+        None => Err(NativeError(format!("Int.parse: expected String, got {}", args[0]))),
     }
 }
 
@@ -534,229 +550,246 @@ fn native_int_parse(args: &[Value]) -> Result<Value, NativeError> {
 // Json
 // ---------------------------------------------------------------------------
 
-fn serde_to_vm(value: serde_json::Value) -> Value {
+fn serde_to_nvalue(value: serde_json::Value) -> NValue {
     match value {
-        serde_json::Value::Null => Value::Enum("Null".into(), Rc::new(Value::Unit)),
-        serde_json::Value::Bool(b) => Value::Bool(b),
+        serde_json::Value::Null => NValue::enum_val("Null".into(), NValue::unit()),
+        serde_json::Value::Bool(b) => NValue::bool(b),
         serde_json::Value::Number(n) => {
             if let Some(i) = n.as_i64() {
-                Value::Int(i)
+                NValue::int(i)
             } else if let Some(f) = n.as_f64() {
-                Value::Float(f)
+                NValue::float(f)
             } else {
-                Value::Float(f64::NAN)
+                NValue::float(f64::NAN)
             }
         }
-        serde_json::Value::String(s) => Value::String(s.into()),
+        serde_json::Value::String(s) => NValue::string(s.into()),
         serde_json::Value::Array(arr) => {
-            Value::List(Rc::new(arr.into_iter().map(serde_to_vm).collect()))
+            NValue::list(arr.into_iter().map(serde_to_nvalue).collect())
         }
         serde_json::Value::Object(obj) => {
-            let fields: Vec<(RcStr, Value)> = obj
+            let fields: Vec<(RcStr, NValue)> = obj
                 .into_iter()
-                .map(|(k, v)| (RcStr::from(k.as_str()), serde_to_vm(v)))
+                .map(|(k, v)| (RcStr::from(k.as_str()), serde_to_nvalue(v)))
                 .collect();
-            Value::Record(Rc::new(fields))
+            NValue::record(fields)
         }
     }
 }
 
-fn vm_to_serde(value: &Value) -> Result<serde_json::Value, NativeError> {
-    match value {
-        Value::Enum(tag, payload) if &**tag == "Null" && **payload == Value::Unit => {
-            Ok(serde_json::Value::Null)
-        }
-        Value::Enum(tag, _) if &**tag == "None" => Ok(serde_json::Value::Null),
-        Value::Bool(b) => Ok(serde_json::Value::Bool(*b)),
-        Value::Int(i) => Ok(serde_json::json!(*i)),
-        Value::Float(f) => serde_json::Number::from_f64(*f)
+fn nvalue_to_serde(value: &NValue) -> Result<serde_json::Value, NativeError> {
+    if value.is_any_int() {
+        return Ok(serde_json::json!(value.as_any_int()));
+    }
+    if value.is_float() {
+        return serde_json::Number::from_f64(value.as_float())
             .map(serde_json::Value::Number)
-            .ok_or_else(|| NativeError(format!("Json.to_string: cannot serialize float {}", f))),
-        Value::String(s) => Ok(serde_json::Value::String(s.to_string())),
-        Value::List(items) => {
-            let arr: Result<Vec<_>, _> = items.iter().map(vm_to_serde).collect();
-            Ok(serde_json::Value::Array(arr?))
-        }
-        Value::Record(fields) => {
-            let mut map = serde_json::Map::new();
-            for (k, v) in fields.iter() {
-                map.insert(k.to_string(), vm_to_serde(v)?);
-            }
-            Ok(serde_json::Value::Object(map))
-        }
-        Value::Struct(name, fields) => {
-            let mut map = serde_json::Map::new();
-            map.insert("_type".to_string(), serde_json::Value::String(name.to_string()));
-            for (k, v) in fields.iter() {
-                map.insert(k.to_string(), vm_to_serde(v)?);
-            }
-            Ok(serde_json::Value::Object(map))
-        }
-        Value::Tuple(items) => {
-            let arr: Result<Vec<_>, _> = items.iter().map(vm_to_serde).collect();
-            Ok(serde_json::Value::Array(arr?))
-        }
-        Value::Unit => Ok(serde_json::Value::Null),
-        Value::Enum(tag, payload) if &**tag == "Some" => vm_to_serde(payload),
-        Value::Enum(tag, payload) if &**tag == "Ok" => vm_to_serde(payload),
-        other => Err(NativeError(format!("Json.to_string: cannot serialize {}", other))),
+            .ok_or_else(|| NativeError(format!("Json.to_string: cannot serialize float {}", value.as_float())));
     }
+    if value.is_bool() {
+        return Ok(serde_json::Value::Bool(value.as_bool()));
+    }
+    if value.is_unit() {
+        return Ok(serde_json::Value::Null);
+    }
+    if value.is_heap() {
+        match value.as_heap_ref() {
+            HeapObject::String(s) => return Ok(serde_json::Value::String(s.to_string())),
+            HeapObject::List(items) => {
+                let arr: Result<Vec<_>, _> = items.iter().map(nvalue_to_serde).collect();
+                return Ok(serde_json::Value::Array(arr?));
+            }
+            HeapObject::Record(fields) => {
+                let mut map = serde_json::Map::new();
+                for (k, v) in fields.iter() {
+                    map.insert(k.to_string(), nvalue_to_serde(v)?);
+                }
+                return Ok(serde_json::Value::Object(map));
+            }
+            HeapObject::Struct { name, fields } => {
+                let mut map = serde_json::Map::new();
+                map.insert("_type".to_string(), serde_json::Value::String(name.to_string()));
+                for (k, v) in fields.iter() {
+                    map.insert(k.to_string(), nvalue_to_serde(v)?);
+                }
+                return Ok(serde_json::Value::Object(map));
+            }
+            HeapObject::Tuple(items) => {
+                let arr: Result<Vec<_>, _> = items.iter().map(nvalue_to_serde).collect();
+                return Ok(serde_json::Value::Array(arr?));
+            }
+            HeapObject::Enum { tag, payload } if &**tag == "Null" && payload.is_unit() => {
+                return Ok(serde_json::Value::Null);
+            }
+            HeapObject::Enum { tag, .. } if &**tag == "None" => {
+                return Ok(serde_json::Value::Null);
+            }
+            HeapObject::Enum { tag, payload } if &**tag == "Some" => {
+                return nvalue_to_serde(payload);
+            }
+            HeapObject::Enum { tag, payload } if &**tag == "Ok" => {
+                return nvalue_to_serde(payload);
+            }
+            _ => {}
+        }
+    }
+    Err(NativeError(format!("Json.to_string: cannot serialize {}", value)))
 }
 
-fn native_json_parse(args: &[Value]) -> Result<Value, NativeError> {
-    let s = match &args[0] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Json.parse expects String, got {}", other))),
+fn native_json_parse(args: &[NValue]) -> Result<NValue, NativeError> {
+    let s = match args[0].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Json.parse expects String, got {}", args[0]))),
     };
     let value: serde_json::Value = serde_json::from_str(s)
         .map_err(|e| NativeError(format!("Json.parse: {}", e)))?;
-    Ok(serde_to_vm(value))
+    Ok(serde_to_nvalue(value))
 }
 
-fn native_json_to_string(args: &[Value]) -> Result<Value, NativeError> {
-    let serde_val = vm_to_serde(&args[0])?;
+fn native_json_to_string(args: &[NValue]) -> Result<NValue, NativeError> {
+    let serde_val = nvalue_to_serde(&args[0])?;
     let json_str = serde_json::to_string(&serde_val)
         .map_err(|e| NativeError(format!("Json.to_string: {}", e)))?;
-    Ok(Value::String(json_str.into()))
+    Ok(NValue::string(json_str.into()))
 }
 
-fn native_json_to_string_pretty(args: &[Value]) -> Result<Value, NativeError> {
-    let serde_val = vm_to_serde(&args[0])?;
+fn native_json_to_string_pretty(args: &[NValue]) -> Result<NValue, NativeError> {
+    let serde_val = nvalue_to_serde(&args[0])?;
     let json_str = serde_json::to_string_pretty(&serde_val)
         .map_err(|e| NativeError(format!("Json.to_string_pretty: {}", e)))?;
-    Ok(Value::String(json_str.into()))
+    Ok(NValue::string(json_str.into()))
 }
 
 // ---------------------------------------------------------------------------
 // Response
 // ---------------------------------------------------------------------------
 
-fn make_response(status: i64, headers: Vec<Value>, body: &str) -> Value {
-    Value::Record(Rc::new(vec![
-        ("body".into(), Value::String(body.into())),
-        ("headers".into(), Value::List(Rc::new(headers))),
-        ("status".into(), Value::Int(status)),
-    ]))
+fn make_response(status: i64, headers: Vec<NValue>, body: &str) -> NValue {
+    NValue::record(vec![
+        ("body".into(), NValue::string(body.into())),
+        ("headers".into(), NValue::list(headers)),
+        ("status".into(), NValue::int(status)),
+    ])
 }
 
-fn native_response_ok(args: &[Value]) -> Result<Value, NativeError> {
-    let body = match &args[0] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Response.ok expects String body, got {}", other))),
+fn native_response_ok(args: &[NValue]) -> Result<NValue, NativeError> {
+    let body = match args[0].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Response.ok expects String body, got {}", args[0]))),
     };
     Ok(make_response(200, Vec::new(), body))
 }
 
-fn native_response_json(args: &[Value]) -> Result<Value, NativeError> {
-    let body = match &args[0] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Response.json expects String body, got {}", other))),
+fn native_response_json(args: &[NValue]) -> Result<NValue, NativeError> {
+    let body = match args[0].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Response.json expects String body, got {}", args[0]))),
     };
-    let headers = vec![Value::Tuple(Rc::new(vec![
-        Value::String("Content-Type".into()),
-        Value::String("application/json".into()),
-    ]))];
+    let headers = vec![NValue::tuple(vec![
+        NValue::string("Content-Type".into()),
+        NValue::string("application/json".into()),
+    ])];
     Ok(make_response(200, headers, body))
 }
 
-fn native_response_created(args: &[Value]) -> Result<Value, NativeError> {
-    let body = match &args[0] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Response.created expects String body, got {}", other))),
+fn native_response_created(args: &[NValue]) -> Result<NValue, NativeError> {
+    let body = match args[0].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Response.created expects String body, got {}", args[0]))),
     };
     Ok(make_response(201, Vec::new(), body))
 }
 
-fn native_response_no_content(_args: &[Value]) -> Result<Value, NativeError> {
+fn native_response_no_content(_args: &[NValue]) -> Result<NValue, NativeError> {
     Ok(make_response(204, Vec::new(), ""))
 }
 
-fn native_response_bad_request(args: &[Value]) -> Result<Value, NativeError> {
-    let body = match &args[0] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Response.bad_request expects String body, got {}", other))),
+fn native_response_bad_request(args: &[NValue]) -> Result<NValue, NativeError> {
+    let body = match args[0].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Response.bad_request expects String body, got {}", args[0]))),
     };
     Ok(make_response(400, Vec::new(), body))
 }
 
-fn native_response_not_found(args: &[Value]) -> Result<Value, NativeError> {
-    let body = match &args[0] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Response.not_found expects String body, got {}", other))),
+fn native_response_not_found(args: &[NValue]) -> Result<NValue, NativeError> {
+    let body = match args[0].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Response.not_found expects String body, got {}", args[0]))),
     };
     Ok(make_response(404, Vec::new(), body))
 }
 
-fn native_response_error(args: &[Value]) -> Result<Value, NativeError> {
-    let body = match &args[0] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Response.error expects String body, got {}", other))),
+fn native_response_error(args: &[NValue]) -> Result<NValue, NativeError> {
+    let body = match args[0].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Response.error expects String body, got {}", args[0]))),
     };
     Ok(make_response(500, Vec::new(), body))
 }
 
-fn native_response_status(args: &[Value]) -> Result<Value, NativeError> {
-    let code = match &args[0] {
-        Value::Int(i) => *i,
-        other => return Err(NativeError(format!("Response.status expects Int, got {}", other))),
-    };
-    let body = match &args[1] {
-        Value::String(s) => s,
-        other => return Err(NativeError(format!("Response.status expects String body, got {}", other))),
+fn native_response_status(args: &[NValue]) -> Result<NValue, NativeError> {
+    if !args[0].is_any_int() {
+        return Err(NativeError(format!("Response.status expects Int, got {}", args[0])));
+    }
+    let code = args[0].as_any_int();
+    let body = match args[1].as_string() {
+        Some(s) => s,
+        None => return Err(NativeError(format!("Response.status expects String body, got {}", args[1]))),
     };
     Ok(make_response(code, Vec::new(), body))
 }
 
-fn native_response_with_header(args: &[Value]) -> Result<Value, NativeError> {
-    let fields = match &args[0] {
-        Value::Record(f) => f,
-        other => return Err(NativeError(format!("Response.with_header expects Response record, got {}", other))),
+fn native_response_with_header(args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => return Err(NativeError(format!("Response.with_header expects Response record, got {}", args[0]))),
     };
-    let name = match &args[1] {
-        Value::String(s) => s.clone(),
-        other => return Err(NativeError(format!("Response.with_header expects String header name, got {}", other))),
+    let name = match args[1].as_string() {
+        Some(s) => s.clone(),
+        None => return Err(NativeError(format!("Response.with_header expects String header name, got {}", args[1]))),
     };
-    let val = match &args[2] {
-        Value::String(s) => s.clone(),
-        other => return Err(NativeError(format!("Response.with_header expects String header value, got {}", other))),
+    let val = match args[2].as_string() {
+        Some(s) => s.clone(),
+        None => return Err(NativeError(format!("Response.with_header expects String header value, got {}", args[2]))),
     };
 
-    let mut new_fields: Vec<(RcStr, Value)> = (**fields).clone();
+    let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
     for (k, v) in &mut new_fields {
         if &**k == "headers" {
-            let mut headers = match v {
-                Value::List(list) => (**list).clone(),
-                _ => Vec::new(),
+            let mut headers = match v.as_list() {
+                Some(list) => list.clone(),
+                None => Vec::new(),
             };
-            headers.push(Value::Tuple(Rc::new(vec![
-                Value::String(name),
-                Value::String(val),
-            ])));
-            *v = Value::List(Rc::new(headers));
-            return Ok(Value::Record(Rc::new(new_fields)));
+            headers.push(NValue::tuple(vec![
+                NValue::string(name),
+                NValue::string(val),
+            ]));
+            *v = NValue::list(headers);
+            return Ok(NValue::record(new_fields));
         }
     }
     // No headers field; add one
-    new_fields.push(("headers".into(), Value::List(Rc::new(vec![
-        Value::Tuple(Rc::new(vec![Value::String(name), Value::String(val)])),
-    ]))));
-    Ok(Value::Record(Rc::new(new_fields)))
+    new_fields.push(("headers".into(), NValue::list(vec![
+        NValue::tuple(vec![NValue::string(name), NValue::string(val)]),
+    ])));
+    Ok(NValue::record(new_fields))
 }
 
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
-fn native_router_new(_args: &[Value]) -> Result<Value, NativeError> {
-    Ok(Value::Record(Rc::new(vec![
-        ("middleware".into(), Value::List(Rc::new(Vec::new()))),
-        ("routes".into(), Value::List(Rc::new(Vec::new()))),
-    ])))
+fn native_router_new(_args: &[NValue]) -> Result<NValue, NativeError> {
+    Ok(NValue::record(vec![
+        ("middleware".into(), NValue::list(Vec::new())),
+        ("routes".into(), NValue::list(Vec::new())),
+    ]))
 }
 
-fn native_router_routes(args: &[Value]) -> Result<Value, NativeError> {
-    match &args[0] {
-        Value::Record(fields) => {
+fn native_router_routes(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_record() {
+        Some(fields) => {
             for (k, v) in fields.iter() {
                 if &**k == "routes" {
                     return Ok(v.clone());
@@ -764,77 +797,76 @@ fn native_router_routes(args: &[Value]) -> Result<Value, NativeError> {
             }
             Err(NativeError("Router.routes: no routes field".into()))
         }
-        other => Err(NativeError(format!("Router.routes: expected Router, got {}", other))),
+        None => Err(NativeError(format!("Router.routes: expected Router, got {}", args[0]))),
     }
 }
 
-fn router_add_route(method: &str, args: &[Value]) -> Result<Value, NativeError> {
-    let fields = match &args[0] {
-        Value::Record(f) => f,
-        other => return Err(NativeError(format!("Router.{}: expected Router, got {}", method.to_lowercase(), other))),
+fn router_add_route(method: &str, args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => return Err(NativeError(format!("Router.{}: expected Router, got {}", method.to_lowercase(), args[0]))),
     };
-    match &args[1] {
-        Value::String(_) => {}
-        other => return Err(NativeError(format!("Router.{}: expected String path, got {}", method.to_lowercase(), other))),
-    };
+    if args[1].as_string().is_none() {
+        return Err(NativeError(format!("Router.{}: expected String path, got {}", method.to_lowercase(), args[1])));
+    }
 
-    let route = Value::Record(Rc::new(vec![
+    let route = NValue::record(vec![
         ("handler".into(), args[2].clone()),
-        ("method".into(), Value::String(method.into())),
+        ("method".into(), NValue::string(method.into())),
         ("path".into(), args[1].clone()),
-    ]));
+    ]);
 
     let mut new_fields = Vec::new();
     for (k, v) in fields.iter() {
         if &**k == "routes" {
-            let mut routes = match v {
-                Value::List(list) => (**list).clone(),
-                _ => Vec::new(),
+            let mut routes = match v.as_list() {
+                Some(list) => list.clone(),
+                None => Vec::new(),
             };
             routes.push(route.clone());
-            new_fields.push((k.clone(), Value::List(Rc::new(routes))));
+            new_fields.push((k.clone(), NValue::list(routes)));
         } else {
             new_fields.push((k.clone(), v.clone()));
         }
     }
-    Ok(Value::Record(Rc::new(new_fields)))
+    Ok(NValue::record(new_fields))
 }
 
-fn native_router_get(args: &[Value]) -> Result<Value, NativeError> {
+fn native_router_get(args: &[NValue]) -> Result<NValue, NativeError> {
     router_add_route("GET", args)
 }
 
-fn native_router_post(args: &[Value]) -> Result<Value, NativeError> {
+fn native_router_post(args: &[NValue]) -> Result<NValue, NativeError> {
     router_add_route("POST", args)
 }
 
-fn native_router_put(args: &[Value]) -> Result<Value, NativeError> {
+fn native_router_put(args: &[NValue]) -> Result<NValue, NativeError> {
     router_add_route("PUT", args)
 }
 
-fn native_router_delete(args: &[Value]) -> Result<Value, NativeError> {
+fn native_router_delete(args: &[NValue]) -> Result<NValue, NativeError> {
     router_add_route("DELETE", args)
 }
 
-fn native_router_use(args: &[Value]) -> Result<Value, NativeError> {
-    let fields = match &args[0] {
-        Value::Record(f) => f,
-        other => return Err(NativeError(format!("Router.use: expected Router, got {}", other))),
+fn native_router_use(args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => return Err(NativeError(format!("Router.use: expected Router, got {}", args[0]))),
     };
     let mut new_fields = Vec::new();
     for (k, v) in fields.iter() {
         if &**k == "middleware" {
-            let mut mw = match v {
-                Value::List(list) => (**list).clone(),
-                _ => Vec::new(),
+            let mut mw = match v.as_list() {
+                Some(list) => list.clone(),
+                None => Vec::new(),
             };
             mw.push(args[1].clone());
-            new_fields.push((k.clone(), Value::List(Rc::new(mw))));
+            new_fields.push((k.clone(), NValue::list(mw)));
         } else {
             new_fields.push((k.clone(), v.clone()));
         }
     }
-    Ok(Value::Record(Rc::new(new_fields)))
+    Ok(NValue::record(new_fields))
 }
 
 // ---------------------------------------------------------------------------
@@ -855,82 +887,83 @@ mod tests {
 
     #[test]
     fn console_println_returns_unit() {
-        let result = native_console_println(&[Value::String("test".into())]).unwrap();
-        assert_eq!(result, Value::Unit);
+        let result = native_console_println(&[NValue::string("test".into())]).unwrap();
+        assert!(result.is_unit());
     }
 
     #[test]
     fn math_abs_int() {
-        assert_eq!(native_math_abs(&[Value::Int(-5)]).unwrap(), Value::Int(5));
+        let result = native_math_abs(&[NValue::int(-5)]).unwrap();
+        assert!(result.is_any_int());
+        assert_eq!(result.as_any_int(), 5);
     }
 
     #[test]
     fn math_min_max() {
-        assert_eq!(native_math_min(&[Value::Int(3), Value::Int(7)]).unwrap(), Value::Int(3));
-        assert_eq!(native_math_max(&[Value::Int(3), Value::Int(7)]).unwrap(), Value::Int(7));
+        let min = native_math_min(&[NValue::int(3), NValue::int(7)]).unwrap();
+        assert_eq!(min.as_any_int(), 3);
+        let max = native_math_max(&[NValue::int(3), NValue::int(7)]).unwrap();
+        assert_eq!(max.as_any_int(), 7);
     }
 
     #[test]
     fn string_length() {
-        assert_eq!(
-            native_string_length(&[Value::String("hello".into())]).unwrap(),
-            Value::Int(5)
-        );
+        let result = native_string_length(&[NValue::string("hello".into())]).unwrap();
+        assert_eq!(result.as_any_int(), 5);
     }
 
     #[test]
     fn string_contains() {
-        assert_eq!(
-            native_string_contains(&[Value::String("hello world".into()), Value::String("world".into())]).unwrap(),
-            Value::Bool(true)
-        );
+        let result = native_string_contains(&[NValue::string("hello world".into()), NValue::string("world".into())]).unwrap();
+        assert!(result.is_bool());
+        assert_eq!(result.as_bool(), true);
     }
 
     #[test]
     fn string_split() {
-        assert_eq!(
-            native_string_split(&[Value::String("a,b,c".into()), Value::String(",".into())]).unwrap(),
-            Value::List(Rc::new(vec![
-                Value::String("a".into()),
-                Value::String("b".into()),
-                Value::String("c".into()),
-            ]))
-        );
+        let result = native_string_split(&[NValue::string("a,b,c".into()), NValue::string(",".into())]).unwrap();
+        let items = result.as_list().unwrap();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].as_string().unwrap().as_ref(), "a");
+        assert_eq!(items[1].as_string().unwrap().as_ref(), "b");
+        assert_eq!(items[2].as_string().unwrap().as_ref(), "c");
     }
 
     #[test]
     fn list_head_some() {
-        assert_eq!(
-            native_list_head(&[Value::List(Rc::new(vec![Value::Int(1), Value::Int(2)]))]).unwrap(),
-            Value::Enum("Some".into(), Rc::new(Value::Int(1)))
-        );
+        let list = NValue::list(vec![NValue::int(1), NValue::int(2)]);
+        let result = native_list_head(&[list]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Some");
+        assert_eq!(payload.as_any_int(), 1);
     }
 
     #[test]
     fn list_head_empty() {
-        assert_eq!(
-            native_list_head(&[Value::List(Rc::new(vec![]))]).unwrap(),
-            Value::Enum("None".into(), Rc::new(Value::Unit))
-        );
+        let list = NValue::list(vec![]);
+        let result = native_list_head(&[list]).unwrap();
+        let (tag, _) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "None");
     }
 
     #[test]
     fn option_unwrap_some() {
-        let some = Value::Enum("Some".into(), Rc::new(Value::Int(42)));
-        assert_eq!(native_option_unwrap(&[some]).unwrap(), Value::Int(42));
+        let some = NValue::enum_val("Some".into(), NValue::int(42));
+        let result = native_option_unwrap(&[some]).unwrap();
+        assert_eq!(result.as_any_int(), 42);
     }
 
     #[test]
     fn option_unwrap_none_fails() {
-        let none = Value::Enum("None".into(), Rc::new(Value::Unit));
+        let none = NValue::enum_val("None".into(), NValue::unit());
         assert!(native_option_unwrap(&[none]).is_err());
     }
 
     #[test]
     fn result_is_ok() {
-        let ok = Value::Enum("Ok".into(), Rc::new(Value::Int(1)));
-        let err = Value::Enum("Err".into(), Rc::new(Value::String("bad".into())));
-        assert_eq!(native_result_is_ok(&[ok]).unwrap(), Value::Bool(true));
-        assert_eq!(native_result_is_ok(&[err]).unwrap(), Value::Bool(false));
+        let ok = NValue::enum_val("Ok".into(), NValue::int(1));
+        let err = NValue::enum_val("Err".into(), NValue::string("bad".into()));
+        assert_eq!(native_result_is_ok(&[ok]).unwrap().as_bool(), true);
+        assert_eq!(native_result_is_ok(&[err]).unwrap().as_bool(), false);
     }
 }

@@ -151,6 +151,7 @@ fn run_file_vm(file: &PathBuf) {
     use tree_sitter_baseline::LANGUAGE;
 
     let source = std::fs::read_to_string(file).expect("Failed to read file");
+    let file_str = file.display().to_string();
     let mut parser = Parser::new();
     parser
         .set_language(&LANGUAGE.into())
@@ -158,11 +159,20 @@ fn run_file_vm(file: &PathBuf) {
     let tree = parser.parse(&source, None).expect("Failed to parse");
     let root = tree.root_node();
 
+    // Run the type checker to build a TypeMap for opcode specialization.
+    // If analysis produces errors, degrade gracefully (compile without TypeMap).
+    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let has_type_errors = type_diags.iter().any(|d| d.severity == diagnostics::Severity::Error);
+    let type_map = if has_type_errors { None } else { Some(type_map) };
+
     let mut vm = vm::vm::Vm::new();
 
     let imports = resolver::ModuleLoader::parse_imports(&root, &source);
     let program = if imports.is_empty() {
-        let compiler = vm::compiler::Compiler::new(&source, vm.natives());
+        let compiler = match type_map {
+            Some(tm) => vm::compiler::Compiler::new_with_type_map(&source, vm.natives(), tm),
+            None => vm::compiler::Compiler::new(&source, vm.natives()),
+        };
         compiler.compile_program(&root)
     } else {
         vm::module_compiler::compile_with_imports(&source, &root, file.as_path(), vm.natives())

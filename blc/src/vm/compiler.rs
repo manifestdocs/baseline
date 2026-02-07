@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use tree_sitter::Node;
 
+use crate::analysis::types::TypeMap;
+use crate::analysis::types::Type;
+
 use super::chunk::{Chunk, Op, Program};
 use super::natives::NativeRegistry;
 use super::value::Value;
@@ -74,6 +77,9 @@ pub struct Compiler<'a> {
     upvalues: Vec<Upvalue>,
     /// Native function registry for resolving Module.method calls.
     natives: &'a NativeRegistry,
+    /// Optional type map from the static type checker.
+    /// When present, enables type-directed opcode specialization.
+    type_map: Option<TypeMap>,
 }
 
 impl<'a> Compiler<'a> {
@@ -88,7 +94,16 @@ impl<'a> Compiler<'a> {
             enclosing: Vec::new(),
             upvalues: Vec::new(),
             natives,
+            type_map: None,
         }
+    }
+
+    /// Create a compiler with type information from the static type checker.
+    /// Enables type-directed opcode specialization.
+    pub fn new_with_type_map(source: &'a str, natives: &'a NativeRegistry, type_map: TypeMap) -> Self {
+        let mut compiler = Self::new(source, natives);
+        compiler.type_map = Some(type_map);
+        compiler
     }
 
     /// Pre-populate the compiler with already-compiled chunks and function mappings.
@@ -829,24 +844,36 @@ impl<'a> Compiler<'a> {
         self.compile_expression(&lhs)?;
         self.compile_expression(&rhs)?;
 
-        // Use specialized int opcodes when both operands are statically known integers
-        let both_int = self.is_int_expr(&lhs) && self.is_int_expr(&rhs);
+        // Use specialized int opcodes when both operands are statically known integers.
+        // First check the type map from the static type checker (covers variables, calls, etc.),
+        // then fall back to the syntactic is_int_expr heuristic for literal-only cases.
+        let both_int = self.type_map.as_ref().map_or(false, |tm| {
+            matches!(
+                (tm.get(&lhs.start_byte()), tm.get(&rhs.start_byte())),
+                (Some(Type::Int), Some(Type::Int))
+            )
+        }) || (self.is_int_expr(&lhs) && self.is_int_expr(&rhs));
 
         let op = match op_text.as_str() {
             "+" if both_int => Op::AddInt,
             "+" => Op::Add,
             "-" if both_int => Op::SubInt,
             "-" => Op::Sub,
+            "*" if both_int => Op::MulInt,
             "*" => Op::Mul,
+            "/" if both_int => Op::DivInt,
             "/" => Op::Div,
+            "%" if both_int => Op::ModInt,
             "%" => Op::Mod,
             "==" => Op::Eq,
             "!=" => Op::Ne,
             "<" if both_int => Op::LtInt,
             "<" => Op::Lt,
+            ">" if both_int => Op::GtInt,
             ">" => Op::Gt,
             "<=" if both_int => Op::LeInt,
             "<=" => Op::Le,
+            ">=" if both_int => Op::GeInt,
             ">=" => Op::Ge,
             _ => return Err(self.error(
                 format!("Unknown binary operator: {}", op_text), node,

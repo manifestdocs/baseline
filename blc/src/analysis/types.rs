@@ -5,6 +5,10 @@ use crate::prelude::{self, Prelude};
 use crate::resolver::{ModuleLoader, ImportKind};
 use super::infer::{InferCtx, GenericSchema, builtin_generic_schemas};
 
+/// Maps CST node `start_byte()` to the resolved Type for that expression.
+/// Used by the VM compiler for type-directed opcode specialization.
+pub type TypeMap = HashMap<usize, Type>;
+
 /// Classification of what a single match arm pattern covers.
 enum PatternCoverage {
     CatchAll,
@@ -154,6 +158,9 @@ pub struct SymbolTable {
     types: HashMap<String, Type>,           // Registry for named types (structs)
     module_methods: HashMap<String, Type>,  // "Module.method" -> Function type
     generic_schemas: HashMap<String, GenericSchema>, // "Module.method" -> generic schema
+    /// Accumulated type map: CST node start_byte → resolved Type.
+    /// Populated during type checking for use by the VM compiler.
+    pub type_map: TypeMap,
 }
 
 impl SymbolTable {
@@ -163,6 +170,7 @@ impl SymbolTable {
             types: HashMap::new(),
             module_methods: builtin_type_signatures(&prelude),
             generic_schemas: builtin_generic_schemas(),
+            type_map: TypeMap::new(),
         };
 
         // Option/Result types and constructors are language primitives — always registered.
@@ -475,6 +483,44 @@ pub fn check_types_with_loader(
     diagnostics
 }
 
+/// Run the type checker and return both diagnostics and a TypeMap.
+/// The TypeMap maps CST node start_byte to resolved Type, enabling
+/// the VM compiler to emit specialized opcodes.
+pub fn check_types_with_map(
+    root: &Node,
+    source: &str,
+    file: &str,
+) -> (Vec<Diagnostic>, TypeMap) {
+    let mut diagnostics = Vec::new();
+
+    let prelude = match prelude::extract_prelude(root, source) {
+        Ok(p) => p,
+        Err(msg) => {
+            diagnostics.push(Diagnostic {
+                code: "PRE_001".to_string(),
+                severity: Severity::Error,
+                location: Location {
+                    file: file.to_string(),
+                    line: 1,
+                    col: 1,
+                    end_line: None,
+                    end_col: None,
+                },
+                message: msg,
+                context: "Valid prelude variants are: core, script.".to_string(),
+                suggestions: vec![],
+            });
+            return (diagnostics, TypeMap::new());
+        }
+    };
+
+    let mut symbols = SymbolTable::with_prelude(prelude);
+    collect_signatures(root, source, &mut symbols);
+    check_node(root, source, file, &mut symbols, &mut diagnostics);
+    let type_map = symbols.type_map;
+    (diagnostics, type_map)
+}
+
 /// Process import declarations: resolve each import, type-check the imported module,
 /// and register its exports into the current symbol table.
 fn process_imports(
@@ -635,6 +681,19 @@ fn extract_qualified_name(node: &Node, source: &str) -> Option<String> {
 }
 
 fn check_node(
+    node: &Node,
+    source: &str,
+    file: &str,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Type {
+    let ty = check_node_inner(node, source, file, symbols, diagnostics);
+    // Record the resolved type for this node (used by the VM compiler for specialization).
+    symbols.type_map.insert(node.start_byte(), ty.clone());
+    ty
+}
+
+fn check_node_inner(
     node: &Node,
     source: &str,
     file: &str,

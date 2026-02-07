@@ -10,6 +10,7 @@ use super::value::Value;
 // every pop has a matching push, and local slot indices are always valid.
 
 const MAX_CALL_DEPTH: usize = 1024;
+const MAX_RANGE_SIZE: i64 = 1_000_000;
 
 // ---------------------------------------------------------------------------
 // VM Error
@@ -32,14 +33,14 @@ impl std::fmt::Display for VmError {
 // Call Frame
 // ---------------------------------------------------------------------------
 
+/// Compact call frame — 16 bytes instead of 32.
+/// Upvalues are stored in a separate side-stack (`Vm::upvalue_stack`)
+/// indexed by `upvalue_idx`. `u32::MAX` means no upvalues (plain function).
 struct CallFrame {
-    chunk_idx: usize,
-    ip: usize,
-    /// Where this frame's locals start on the value stack.
-    base_slot: usize,
-    /// Captured upvalues (for closures). None for plain functions — avoids
-    /// Rc refcount overhead on every Call/Return in the common case.
-    upvalues: Option<Rc<Vec<NValue>>>,
+    chunk_idx: u32,
+    ip: u32,
+    base_slot: u32,
+    upvalue_idx: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -49,6 +50,7 @@ struct CallFrame {
 pub struct Vm {
     stack: Vec<NValue>,
     frames: Vec<CallFrame>,
+    upvalue_stack: Vec<Rc<Vec<NValue>>>,
     natives: NativeRegistry,
 }
 
@@ -56,7 +58,8 @@ impl Vm {
     pub fn new() -> Self {
         Vm {
             stack: Vec::with_capacity(256),
-            frames: Vec::with_capacity(16),
+            frames: Vec::with_capacity(MAX_CALL_DEPTH),
+            upvalue_stack: Vec::new(),
             natives: NativeRegistry::new(),
         }
     }
@@ -70,11 +73,12 @@ impl Vm {
     pub fn execute(&mut self, chunk: &Chunk) -> Result<Value, VmError> {
         self.stack.clear();
         self.frames.clear();
+        self.upvalue_stack.clear();
         self.frames.push(CallFrame {
             chunk_idx: 0,
             ip: 0,
             base_slot: 0,
-            upvalues: None,
+            upvalue_idx: u32::MAX,
         });
         let result = self.run(std::slice::from_ref(chunk))?;
         Ok(result.to_value())
@@ -84,11 +88,12 @@ impl Vm {
     pub fn execute_program(&mut self, program: &Program) -> Result<Value, VmError> {
         self.stack.clear();
         self.frames.clear();
+        self.upvalue_stack.clear();
         self.frames.push(CallFrame {
-            chunk_idx: program.entry,
+            chunk_idx: program.entry as u32,
             ip: 0,
             base_slot: 0,
-            upvalues: None,
+            upvalue_idx: u32::MAX,
         });
         let result = self.run(&program.chunks)?;
         Ok(result.to_value())
@@ -99,11 +104,12 @@ impl Vm {
     pub fn execute_chunk_at(&mut self, chunks: &[Chunk], chunk_idx: usize) -> Result<Value, VmError> {
         self.stack.clear();
         self.frames.clear();
+        self.upvalue_stack.clear();
         self.frames.push(CallFrame {
-            chunk_idx,
+            chunk_idx: chunk_idx as u32,
             ip: 0,
             base_slot: 0,
-            upvalues: None,
+            upvalue_idx: u32::MAX,
         });
         let result = self.run(chunks)?;
         Ok(result.to_value())
@@ -123,9 +129,9 @@ impl Vm {
     /// - Unsafe stack access eliminates bounds checks
     fn run_frames(&mut self, chunks: &[Chunk], base_depth: usize) -> Result<NValue, VmError> {
         let frame = self.frames.last().unwrap();
-        let mut ip = frame.ip;
-        let mut chunk_idx = frame.chunk_idx;
-        let mut base_slot = frame.base_slot;
+        let mut ip = frame.ip as usize;
+        let mut chunk_idx = frame.chunk_idx as usize;
+        let mut base_slot = frame.base_slot as usize;
         let mut chunk = &chunks[chunk_idx];
 
         // SAFETY: Every chunk is guaranteed to end with Op::Return (see
@@ -327,8 +333,54 @@ impl Vm {
                     self.stack.push(NValue::bool(a.as_any_int() <= b.as_any_int()));
                 }
 
+                Op::MulInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::int(a.as_any_int().wrapping_mul(b.as_any_int())));
+                }
+
+                Op::DivInt => {
+                    let (b, a) = self.pop2_fast();
+                    let bi = b.as_any_int();
+                    if bi == 0 {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error("Division by zero".into(), line, col));
+                    }
+                    self.stack.push(NValue::int(a.as_any_int() / bi));
+                }
+
+                Op::ModInt => {
+                    let (b, a) = self.pop2_fast();
+                    let bi = b.as_any_int();
+                    if bi == 0 {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error("Modulo by zero".into(), line, col));
+                    }
+                    self.stack.push(NValue::int(a.as_any_int() % bi));
+                }
+
+                Op::GtInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_any_int() > b.as_any_int()));
+                }
+
+                Op::GeInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_any_int() >= b.as_any_int()));
+                }
+
                 Op::Concat => {
                     let (b, a) = self.pop2_fast();
+                    // Fast path: both strings — avoid Display overhead
+                    if a.is_heap() && b.is_heap() {
+                        if let (HeapObject::String(sa), HeapObject::String(sb)) = (a.as_heap_ref(), b.as_heap_ref()) {
+                            let mut s = String::with_capacity(sa.len() + sb.len());
+                            s.push_str(sa);
+                            s.push_str(sb);
+                            self.stack.push(NValue::string(s.into()));
+                            continue;
+                        }
+                    }
+                    // Slow path: mixed types via Display
                     let result = NValue::string(format!("{}{}", a, b).into());
                     self.stack.push(result);
                 }
@@ -395,6 +447,14 @@ impl Vm {
                     if start_val.is_any_int() && end_val.is_any_int() {
                         let start = start_val.as_any_int();
                         let end = end_val.as_any_int();
+                        let size = end - start;
+                        if size > MAX_RANGE_SIZE {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("Range too large ({} elements, max {})", size, MAX_RANGE_SIZE),
+                                line, col,
+                            ));
+                        }
                         let list: Vec<NValue> = (start..end).map(NValue::int).collect();
                         self.stack.push(NValue::list(list));
                     } else {
@@ -710,11 +770,13 @@ impl Vm {
                     let func_pos = self.stack.len() - n - 1;
                     let func = unsafe { self.stack.get_unchecked(func_pos) };
 
-                    let (new_chunk_idx, new_upvalues) = if func.is_function() {
-                        (func.as_function(), None)
+                    let (new_chunk_idx, new_upvalue_idx) = if func.is_function() {
+                        (func.as_function(), u32::MAX)
                     } else if func.is_heap() {
                         if let HeapObject::Closure { chunk_idx: idx, upvalues } = func.as_heap_ref() {
-                            (*idx, Some(Rc::new(upvalues.clone())))
+                            let uv_idx = self.upvalue_stack.len() as u32;
+                            self.upvalue_stack.push(Rc::new(upvalues.clone()));
+                            (*idx, uv_idx)
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
@@ -730,15 +792,15 @@ impl Vm {
 
                     // Save current frame state before pushing new frame
                     let fi = self.frames.len() - 1;
-                    self.frames[fi].ip = ip;
-                    self.frames[fi].chunk_idx = chunk_idx;
-                    self.frames[fi].base_slot = base_slot;
+                    self.frames[fi].ip = ip as u32;
+                    self.frames[fi].chunk_idx = chunk_idx as u32;
+                    self.frames[fi].base_slot = base_slot as u32;
 
                     self.frames.push(CallFrame {
-                        chunk_idx: new_chunk_idx,
+                        chunk_idx: new_chunk_idx as u32,
                         ip: 0,
-                        base_slot: func_pos + 1,
-                        upvalues: new_upvalues,
+                        base_slot: (func_pos + 1) as u32,
+                        upvalue_idx: new_upvalue_idx,
                     });
                     ip = 0;
                     chunk_idx = new_chunk_idx;
@@ -749,7 +811,8 @@ impl Vm {
 
                 Op::GetUpvalue(idx) => {
                     let frame = self.frames.last().unwrap();
-                    let val = frame.upvalues.as_ref().unwrap()[idx as usize].clone();
+                    let uv_idx = frame.upvalue_idx as usize;
+                    let val = self.upvalue_stack[uv_idx][idx as usize].clone();
                     self.stack.push(val);
                 }
 
@@ -764,22 +827,20 @@ impl Vm {
                     let n = arg_count as usize;
                     if self.natives.is_hof(fn_id) {
                         let fi = self.frames.len() - 1;
-                        self.frames[fi].ip = ip;
-                        self.frames[fi].chunk_idx = chunk_idx;
-                        self.frames[fi].base_slot = base_slot;
+                        self.frames[fi].ip = ip as u32;
+                        self.frames[fi].chunk_idx = chunk_idx as u32;
+                        self.frames[fi].base_slot = base_slot as u32;
                         let (line, col) = chunk.source_map[ip - 1];
                         self.dispatch_hof(fn_id, n, chunks, line, col)?;
                     } else {
-                        // Convert NValue args to Value for native function call
                         let start = self.stack.len() - n;
-                        let args: Vec<Value> = self.stack[start..].iter()
-                            .map(|nv| nv.to_value()).collect();
-                        self.stack.truncate(start);
-                        let result = self.natives.call(fn_id, &args).map_err(|e| {
+                        let result = self.natives.call(fn_id, &self.stack[start..]);
+                        let result = result.map_err(|e| {
                             let (line, col) = chunk.source_map[ip - 1];
                             self.error(format!("{}: {}", self.natives.name(fn_id), e.0), line, col)
                         })?;
-                        self.stack.push(NValue::from_value(&result));
+                        self.stack.truncate(start);
+                        self.stack.push(result);
                     }
                 }
 
@@ -787,19 +848,28 @@ impl Vm {
                     let result = self.stack.pop().unwrap_or_else(NValue::unit);
                     let frame = self.frames.pop().unwrap();
 
+                    // Clean up upvalue_stack entry if this was a closure frame
+                    if frame.upvalue_idx != u32::MAX {
+                        // Pop from upvalue_stack if this was the last pushed entry
+                        // (closures are always pushed/popped in stack order)
+                        if frame.upvalue_idx as usize == self.upvalue_stack.len() - 1 {
+                            self.upvalue_stack.pop();
+                        }
+                    }
+
                     if self.frames.len() <= base_depth {
                         return Ok(result);
                     }
 
                     // Remove callee's locals + args + the function value
-                    self.stack.truncate(frame.base_slot - 1);
+                    self.stack.truncate(frame.base_slot as usize - 1);
                     self.stack.push(result);
 
                     // Restore caller's frame state
                     let caller = self.frames.last().unwrap();
-                    ip = caller.ip;
-                    chunk_idx = caller.chunk_idx;
-                    base_slot = caller.base_slot;
+                    ip = caller.ip as usize;
+                    chunk_idx = caller.chunk_idx as usize;
+                    base_slot = caller.base_slot as usize;
                     chunk = &chunks[chunk_idx];
                 }
             }
@@ -1012,11 +1082,13 @@ impl Vm {
         let base_depth = self.frames.len();
         let stack_base = self.stack.len();
 
-        let (ci, upvals) = if func.is_function() {
-            (func.as_function(), None)
+        let (ci, uv_idx) = if func.is_function() {
+            (func.as_function(), u32::MAX)
         } else if func.is_heap() {
             if let HeapObject::Closure { chunk_idx, upvalues } = func.as_heap_ref() {
-                (*chunk_idx, Some(Rc::new(upvalues.clone())))
+                let idx = self.upvalue_stack.len() as u32;
+                self.upvalue_stack.push(Rc::new(upvalues.clone()));
+                (*chunk_idx, idx)
             } else {
                 return Err(self.error(format!("Cannot call {}", func), line, col));
             }
@@ -1030,10 +1102,10 @@ impl Vm {
         }
         let bs = self.stack.len() - args.len();
         self.frames.push(CallFrame {
-            chunk_idx: ci,
+            chunk_idx: ci as u32,
             ip: 0,
-            base_slot: bs,
-            upvalues: upvals,
+            base_slot: bs as u32,
+            upvalue_idx: uv_idx,
         });
 
         let result = self.run_frames(chunks, base_depth)?;
