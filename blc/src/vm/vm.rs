@@ -844,6 +844,39 @@ impl Vm {
                     }
                 }
 
+                // -- Superinstructions --
+
+                Op::GetLocalSubInt(slot, k) => {
+                    let idx = base_slot + slot as usize;
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                    self.stack.push(NValue::int(val.wrapping_sub(k as i64)));
+                }
+
+                Op::GetLocalLeInt(slot, k) => {
+                    let idx = base_slot + slot as usize;
+                    debug_assert!(idx < self.stack.len());
+                    let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                    self.stack.push(NValue::bool(val <= k as i64));
+                }
+
+                Op::TailCall(arg_count) => {
+                    let n = arg_count as usize;
+                    // Copy new args from the top of the stack over the current
+                    // frame's argument slots. base_slot points to arg0 (slot 0).
+                    // The function value sits at base_slot - 1 (caller's slot).
+                    let args_start = self.stack.len() - n;
+                    for i in 0..n {
+                        let val = unsafe { self.stack.get_unchecked(args_start + i) }.clone();
+                        unsafe { *self.stack.get_unchecked_mut(base_slot + i) = val; }
+                    }
+                    // Truncate the stack: keep only base_slot + n (the args)
+                    self.stack.truncate(base_slot + n);
+                    // Reset instruction pointer to beginning of current chunk
+                    ip = 0;
+                    continue;
+                }
+
                 Op::Return => {
                     let result = self.stack.pop().unwrap_or_else(NValue::unit);
                     let frame = self.frames.pop().unwrap();
@@ -1489,5 +1522,283 @@ mod tests {
         let mut vm = Vm::new();
         let err = vm.execute_program(&program).expect_err("Expected stack overflow");
         assert!(err.message.contains("Stack overflow"), "got: {}", err.message);
+    }
+
+    // -- Superinstruction tests --
+
+    #[test]
+    fn superinstruction_get_local_sub_int() {
+        // Test that GetLocalSubInt produces the same result as the unfused sequence:
+        // GetLocal(0) + LoadSmallInt(1) + SubInt
+        let mut c_unfused = Chunk::new();
+        let arg = c_unfused.add_constant(Value::Int(10));
+        c_unfused.emit(Op::LoadConst(arg), 1, 0);    // push 10 as local slot 0
+        c_unfused.emit(Op::GetLocal(0), 1, 0);
+        c_unfused.emit(Op::LoadSmallInt(1), 1, 0);
+        c_unfused.emit(Op::SubInt, 1, 0);
+        c_unfused.emit(Op::Return, 1, 0);
+        let unfused_result = run_chunk(c_unfused);
+
+        let mut c_fused = Chunk::new();
+        let arg = c_fused.add_constant(Value::Int(10));
+        c_fused.emit(Op::LoadConst(arg), 1, 0);       // push 10 as local slot 0
+        c_fused.emit(Op::GetLocalSubInt(0, 1), 1, 0);
+        c_fused.emit(Op::Return, 1, 0);
+        let fused_result = run_chunk(c_fused);
+
+        assert_eq!(unfused_result, Value::Int(9));
+        assert_eq!(fused_result, Value::Int(9));
+        assert_eq!(unfused_result, fused_result);
+    }
+
+    #[test]
+    fn superinstruction_get_local_sub_int_negative() {
+        // Test subtraction with a negative small int (e.g., n - (-3) = n + 3)
+        let mut c = Chunk::new();
+        let arg = c.add_constant(Value::Int(5));
+        c.emit(Op::LoadConst(arg), 1, 0);
+        c.emit(Op::GetLocalSubInt(0, -3), 1, 0);
+        c.emit(Op::Return, 1, 0);
+        assert_eq!(run_chunk(c), Value::Int(8));
+    }
+
+    #[test]
+    fn superinstruction_get_local_le_int() {
+        // Test that GetLocalLeInt produces the same result as the unfused sequence:
+        // GetLocal(0) + LoadSmallInt(1) + LeInt
+        let mut c_unfused = Chunk::new();
+        let arg = c_unfused.add_constant(Value::Int(0));
+        c_unfused.emit(Op::LoadConst(arg), 1, 0);
+        c_unfused.emit(Op::GetLocal(0), 1, 0);
+        c_unfused.emit(Op::LoadSmallInt(1), 1, 0);
+        c_unfused.emit(Op::LeInt, 1, 0);
+        c_unfused.emit(Op::Return, 1, 0);
+        let unfused_result = run_chunk(c_unfused);
+
+        let mut c_fused = Chunk::new();
+        let arg = c_fused.add_constant(Value::Int(0));
+        c_fused.emit(Op::LoadConst(arg), 1, 0);
+        c_fused.emit(Op::GetLocalLeInt(0, 1), 1, 0);
+        c_fused.emit(Op::Return, 1, 0);
+        let fused_result = run_chunk(c_fused);
+
+        assert_eq!(unfused_result, Value::Bool(true));
+        assert_eq!(fused_result, Value::Bool(true));
+        assert_eq!(unfused_result, fused_result);
+    }
+
+    #[test]
+    fn superinstruction_le_int_false_case() {
+        // n = 5, check 5 <= 1 = false
+        let mut c = Chunk::new();
+        let arg = c.add_constant(Value::Int(5));
+        c.emit(Op::LoadConst(arg), 1, 0);
+        c.emit(Op::GetLocalLeInt(0, 1), 1, 0);
+        c.emit(Op::Return, 1, 0);
+        assert_eq!(run_chunk(c), Value::Bool(false));
+    }
+
+    #[test]
+    fn superinstruction_le_int_equal_case() {
+        // n = 1, check 1 <= 1 = true
+        let mut c = Chunk::new();
+        let arg = c.add_constant(Value::Int(1));
+        c.emit(Op::LoadConst(arg), 1, 0);
+        c.emit(Op::GetLocalLeInt(0, 1), 1, 0);
+        c.emit(Op::Return, 1, 0);
+        assert_eq!(run_chunk(c), Value::Bool(true));
+    }
+
+    #[test]
+    fn superinstruction_in_function_call() {
+        // Simulate fibonacci-like pattern: function with arg n,
+        // compute n <= 1 and n - 1 using superinstructions
+        let mut caller = Chunk::new();
+        let func = caller.add_constant(Value::Function(1));
+        let arg = caller.add_constant(Value::Int(5));
+        caller.emit(Op::LoadConst(func), 1, 0);
+        caller.emit(Op::LoadConst(arg), 1, 0);
+        caller.emit(Op::Call(1), 1, 0);
+        caller.emit(Op::Return, 1, 0);
+
+        // Callee: takes n (slot 0), returns n - 2
+        let mut callee = Chunk::new();
+        callee.emit(Op::GetLocalSubInt(0, 2), 1, 0);
+        callee.emit(Op::Return, 1, 0);
+
+        let program = Program {
+            chunks: vec![caller, callee],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(3));
+    }
+
+    #[test]
+    fn superinstruction_fusion_produces_correct_result() {
+        // Build a chunk with the unfused pattern, run fusion, verify same result
+        let mut caller = Chunk::new();
+        let func = caller.add_constant(Value::Function(1));
+        let arg = caller.add_constant(Value::Int(7));
+        caller.emit(Op::LoadConst(func), 1, 0);
+        caller.emit(Op::LoadConst(arg), 1, 0);
+        caller.emit(Op::Call(1), 1, 0);
+        caller.emit(Op::Return, 1, 0);
+
+        // Callee: GetLocal(0) + LoadSmallInt(3) + SubInt => should fuse
+        let mut callee = Chunk::new();
+        callee.emit(Op::GetLocal(0), 1, 0);
+        callee.emit(Op::LoadSmallInt(3), 1, 0);
+        callee.emit(Op::SubInt, 1, 0);
+        callee.emit(Op::Return, 1, 0);
+
+        let mut program = Program {
+            chunks: vec![caller, callee],
+            entry: 0,
+        };
+        program.optimize();
+
+        // After optimization, callee chunk should have fused instruction
+        assert_eq!(program.chunks[1].code[2], Op::GetLocalSubInt(0, 3));
+
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(4));
+    }
+
+    // -- Tail call optimization tests --
+
+    #[test]
+    fn tail_call_factorial() {
+        // fact(n, acc) = if n <= 1 then acc else fact(n-1, n*acc)
+        // Entry: call fact(10, 1)
+        let mut entry = Chunk::new();
+        let func = entry.add_constant(Value::Function(1));
+        let n = entry.add_constant(Value::Int(10));
+        let acc = entry.add_constant(Value::Int(1));
+        entry.emit(Op::LoadConst(func), 1, 0);   // push function
+        entry.emit(Op::LoadConst(n), 1, 0);       // push 10
+        entry.emit(Op::LoadConst(acc), 1, 0);     // push 1
+        entry.emit(Op::Call(2), 1, 0);             // call fact(10, 1)
+        entry.emit(Op::Return, 1, 0);
+
+        // fact: slot 0 = n, slot 1 = acc
+        // if n <= 1 then acc else TailCall(n-1, n*acc)
+        let mut fact = Chunk::new();
+        let one = fact.add_constant(Value::Int(1));
+        // Check n <= 1
+        fact.emit(Op::GetLocal(0), 2, 0);         // push n
+        fact.emit(Op::LoadConst(one), 2, 0);       // push 1
+        fact.emit(Op::Le, 2, 0);                   // n <= 1
+        let then_jump = fact.emit(Op::JumpIfFalse(0), 2, 0);
+        // Then: return acc
+        fact.emit(Op::GetLocal(1), 3, 0);          // push acc
+        let else_jump = fact.emit(Op::Jump(0), 3, 0);
+        // Else: TailCall(n-1, n*acc)
+        fact.patch_jump(then_jump);
+        fact.emit(Op::GetLocal(0), 4, 0);          // push n
+        fact.emit(Op::LoadConst(one), 4, 0);       // push 1
+        fact.emit(Op::Sub, 4, 0);                  // n - 1  (first arg)
+        fact.emit(Op::GetLocal(0), 4, 0);          // push n
+        fact.emit(Op::GetLocal(1), 4, 0);          // push acc
+        fact.emit(Op::Mul, 4, 0);                  // n * acc  (second arg)
+        fact.emit(Op::TailCall(2), 4, 0);          // tail call with 2 args
+        fact.patch_jump(else_jump);
+        fact.emit(Op::Return, 5, 0);
+
+        let program = Program {
+            chunks: vec![entry, fact],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(3628800));
+    }
+
+    #[test]
+    fn tail_call_deep_recursion() {
+        // countdown(n) = if n <= 0 then 0 else countdown(n-1)
+        // Tests that 100,000 iterations don't overflow the call stack
+        let mut entry = Chunk::new();
+        let func = entry.add_constant(Value::Function(1));
+        let n = entry.add_constant(Value::Int(100_000));
+        entry.emit(Op::LoadConst(func), 1, 0);
+        entry.emit(Op::LoadConst(n), 1, 0);
+        entry.emit(Op::Call(1), 1, 0);
+        entry.emit(Op::Return, 1, 0);
+
+        // countdown: slot 0 = n
+        // if n <= 0 then 0 else TailCall(n-1)
+        let mut countdown = Chunk::new();
+        let zero = countdown.add_constant(Value::Int(0));
+        let one_const = countdown.add_constant(Value::Int(1));
+        // Check n <= 0
+        countdown.emit(Op::GetLocal(0), 2, 0);
+        countdown.emit(Op::LoadConst(zero), 2, 0);
+        countdown.emit(Op::Le, 2, 0);
+        let then_jump = countdown.emit(Op::JumpIfFalse(0), 2, 0);
+        // Then: return 0
+        countdown.emit(Op::LoadConst(zero), 3, 0);
+        let else_jump = countdown.emit(Op::Jump(0), 3, 0);
+        // Else: TailCall(n-1)
+        countdown.patch_jump(then_jump);
+        countdown.emit(Op::GetLocal(0), 4, 0);
+        countdown.emit(Op::LoadConst(one_const), 4, 0);
+        countdown.emit(Op::Sub, 4, 0);
+        countdown.emit(Op::TailCall(1), 4, 0);
+        countdown.patch_jump(else_jump);
+        countdown.emit(Op::Return, 5, 0);
+
+        let program = Program {
+            chunks: vec![entry, countdown],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        // Without TCO, 100,000 recursive calls would hit MAX_CALL_DEPTH (1024)
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(0));
+    }
+
+    #[test]
+    fn tail_call_sum_accumulator() {
+        // sum(n, acc) = if n <= 0 then acc else sum(n-1, acc+n)
+        // sum(100, 0) = 5050
+        let mut entry = Chunk::new();
+        let func = entry.add_constant(Value::Function(1));
+        let n = entry.add_constant(Value::Int(100));
+        let zero = entry.add_constant(Value::Int(0));
+        entry.emit(Op::LoadConst(func), 1, 0);
+        entry.emit(Op::LoadConst(n), 1, 0);
+        entry.emit(Op::LoadConst(zero), 1, 0);
+        entry.emit(Op::Call(2), 1, 0);
+        entry.emit(Op::Return, 1, 0);
+
+        // sum: slot 0 = n, slot 1 = acc
+        let mut sum = Chunk::new();
+        let zero_c = sum.add_constant(Value::Int(0));
+        let one_c = sum.add_constant(Value::Int(1));
+        // if n <= 0
+        sum.emit(Op::GetLocal(0), 2, 0);
+        sum.emit(Op::LoadConst(zero_c), 2, 0);
+        sum.emit(Op::Le, 2, 0);
+        let then_jump = sum.emit(Op::JumpIfFalse(0), 2, 0);
+        // then acc
+        sum.emit(Op::GetLocal(1), 3, 0);
+        let else_jump = sum.emit(Op::Jump(0), 3, 0);
+        // else TailCall(n-1, acc+n)
+        sum.patch_jump(then_jump);
+        sum.emit(Op::GetLocal(0), 4, 0);
+        sum.emit(Op::LoadConst(one_c), 4, 0);
+        sum.emit(Op::Sub, 4, 0);                  // n - 1
+        sum.emit(Op::GetLocal(1), 4, 0);
+        sum.emit(Op::GetLocal(0), 4, 0);
+        sum.emit(Op::Add, 4, 0);                  // acc + n
+        sum.emit(Op::TailCall(2), 4, 0);
+        sum.patch_jump(else_jump);
+        sum.emit(Op::Return, 5, 0);
+
+        let program = Program {
+            chunks: vec![entry, sum],
+            entry: 0,
+        };
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(5050));
     }
 }

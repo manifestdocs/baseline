@@ -80,6 +80,10 @@ pub struct Compiler<'a> {
     /// Optional type map from the static type checker.
     /// When present, enables type-directed opcode specialization.
     type_map: Option<TypeMap>,
+    /// Name of the current top-level function being compiled (for TCO detection).
+    current_fn_name: Option<String>,
+    /// Whether the current expression is in tail position (last expr before Return).
+    tail_position: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -95,6 +99,8 @@ impl<'a> Compiler<'a> {
             upvalues: Vec::new(),
             natives,
             type_map: None,
+            current_fn_name: None,
+            tail_position: false,
         }
     }
 
@@ -114,8 +120,52 @@ impl<'a> Compiler<'a> {
     }
 
     /// Compile a tree-sitter expression node into bytecode.
+    ///
+    /// Tail position propagation: only `call_expression`, `if_expression`,
+    /// `match_expression`, `block`, `parenthesized_expression`, and `literal`
+    /// propagate tail position. All other expression types clear it.
     pub fn compile_expression(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         let kind = node.kind();
+        match kind {
+            // --- Tail-position propagating types ---
+            "call_expression" => {
+                self.compile_call_expression(node)?;
+            }
+            "if_expression" => {
+                self.compile_if(node)?;
+            }
+            "match_expression" => {
+                self.compile_match(node)?;
+            }
+            "block" => {
+                self.compile_block(node)?;
+            }
+            "parenthesized_expression" => {
+                let inner = node.named_child(0).ok_or_else(|| {
+                    self.error("Empty parenthesized expression".into(), node)
+                })?;
+                self.compile_expression(&inner)?;
+            }
+            "literal" => {
+                let child = node.named_child(0).ok_or_else(|| {
+                    self.error("Empty literal".into(), node)
+                })?;
+                self.compile_expression(&child)?;
+            }
+            // --- Non-tail types: clear tail_position ---
+            other => {
+                let was_tail = self.tail_position;
+                self.tail_position = false;
+                let result = self.compile_expression_leaf(node, other);
+                self.tail_position = was_tail;
+                result?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile leaf expression types that never propagate tail position.
+    fn compile_expression_leaf(&mut self, node: &Node<'a>, kind: &str) -> Result<(), CompileError> {
         match kind {
             "integer_literal" => {
                 let text = self.node_text(node);
@@ -146,12 +196,6 @@ impl<'a> Compiler<'a> {
             "string_literal" => {
                 self.compile_string_literal(node)?;
             }
-            "parenthesized_expression" => {
-                let inner = node.named_child(0).ok_or_else(|| {
-                    self.error("Empty parenthesized expression".into(), node)
-                })?;
-                self.compile_expression(&inner)?;
-            }
             "tuple_expression" => {
                 self.compile_tuple(node)?;
             }
@@ -161,32 +205,14 @@ impl<'a> Compiler<'a> {
             "binary_expression" => {
                 self.compile_binary(node)?;
             }
-            "literal" => {
-                let child = node.named_child(0).ok_or_else(|| {
-                    self.error("Empty literal".into(), node)
-                })?;
-                self.compile_expression(&child)?;
-            }
             "identifier" => {
                 self.compile_identifier(node)?;
-            }
-            "block" => {
-                self.compile_block(node)?;
-            }
-            "if_expression" => {
-                self.compile_if(node)?;
-            }
-            "match_expression" => {
-                self.compile_match(node)?;
             }
             "for_expression" => {
                 self.compile_for(node)?;
             }
             "range_expression" => {
                 self.compile_range(node)?;
-            }
-            "call_expression" => {
-                self.compile_call_expression(node)?;
             }
             "lambda" => {
                 self.compile_lambda(node)?;
@@ -329,31 +355,42 @@ impl<'a> Compiler<'a> {
         self.begin_scope();
         let mut last_was_expr = false;
 
+        // Collect non-comment children to determine which is last
+        let mut children: Vec<Node<'a>> = Vec::new();
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
-
-            // Skip comments — they produce no values and shouldn't affect stack
-            if child.kind() == "line_comment" || child.kind() == "block_comment" {
-                continue;
+            if child.kind() != "line_comment" && child.kind() != "block_comment" {
+                children.push(child);
             }
+        }
 
+        let was_tail = self.tail_position;
+        let last_idx = children.len().saturating_sub(1);
+
+        for (idx, child) in children.iter().enumerate() {
             // If the previous statement was an expression (not a let),
             // pop its value — only the last expression's value is kept.
             if last_was_expr {
-                self.emit(Op::Pop, &child);
+                self.emit(Op::Pop, child);
             }
+
+            // Only the last expression in a block is in tail position
+            let is_last = idx == last_idx;
+            self.tail_position = if is_last { was_tail } else { false };
 
             match child.kind() {
                 "let_binding" => {
-                    self.compile_let(&child)?;
+                    self.compile_let(child)?;
                     last_was_expr = false;
                 }
                 _ => {
-                    self.compile_expression(&child)?;
+                    self.compile_expression(child)?;
                     last_was_expr = true;
                 }
             }
         }
+
+        self.tail_position = was_tail;
 
         // If block is empty or ends with let, push Unit
         if !last_was_expr {
@@ -447,13 +484,16 @@ impl<'a> Compiler<'a> {
         let condition = &children[0];
         let then_block = &children[1];
 
-        // Compile condition
+        // Condition is never in tail position
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         self.compile_expression(condition)?;
+        self.tail_position = was_tail;
 
         // Jump over then-branch if false
         let then_jump = self.emit(Op::JumpIfFalse(0), node);
 
-        // Compile then-branch
+        // Both branches inherit tail position from the if expression
         self.compile_expression(then_block)?;
 
         if children.len() > 2 {
@@ -492,7 +532,11 @@ impl<'a> Compiler<'a> {
         }
 
         let subject = &children[0];
+        // Subject is not in tail position; arm bodies inherit tail position
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         self.compile_expression(subject)?;
+        self.tail_position = was_tail;
         // Subject is on stack — declare it as a temporary local so GetLocal works
         self.declare_local("__match_subject");
 
@@ -779,6 +823,12 @@ impl<'a> Compiler<'a> {
     // -----------------------------------------------------------------------
 
     fn compile_unary(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
+        // Constant folding: evaluate at compile time if possible
+        if let Some(val) = self.try_eval_const(node) {
+            self.emit_const_value(val, node);
+            return Ok(());
+        }
+
         let op_text = node.child(0)
             .map(|c| self.node_text(&c))
             .unwrap_or_default();
@@ -786,7 +836,11 @@ impl<'a> Compiler<'a> {
             self.error("Unary missing operand".into(), node)
         })?;
 
+        // Operand of a unary op is not in tail position (the op still applies)
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         self.compile_expression(&operand)?;
+        self.tail_position = was_tail;
 
         match op_text.as_str() {
             "-" => self.emit(Op::Negate, node),
@@ -822,7 +876,67 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// Try to evaluate a CST node as a compile-time constant.
+    /// Returns None if the expression contains variables, calls, interpolation, etc.
+    ///
+    /// Uses [`eval_const_binary`] for binary sub-expressions.
+    fn try_eval_const(&self, node: &Node) -> Option<Value> {
+        match node.kind() {
+            "integer_literal" => {
+                self.node_text(node).parse::<i64>().ok().map(Value::Int)
+            }
+            "float_literal" => {
+                self.node_text(node).parse::<f64>().ok().map(Value::Float)
+            }
+            "boolean_literal" => {
+                Some(Value::Bool(self.node_text(node) == "true"))
+            }
+            "string_literal" if node.named_child_count() == 0 => {
+                let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
+                Some(Value::String(text.into()))
+            }
+            "parenthesized_expression" | "literal" => {
+                node.named_child(0).and_then(|c| self.try_eval_const(&c))
+            }
+            "unary_expression" => {
+                let op = node.child(0).map(|c| self.node_text(&c))?;
+                let val = node.named_child(0).and_then(|c| self.try_eval_const(&c))?;
+                match (op.as_str(), &val) {
+                    ("-", Value::Int(n)) => Some(Value::Int(n.wrapping_neg())),
+                    ("-", Value::Float(n)) => Some(Value::Float(-n)),
+                    ("not", Value::Bool(b)) => Some(Value::Bool(!b)),
+                    _ => None,
+                }
+            }
+            "binary_expression" => {
+                let a = node.named_child(0).and_then(|c| self.try_eval_const(&c))?;
+                let op = self.node_text(&node.child(1)?);
+                let b = node.named_child(1).and_then(|c| self.try_eval_const(&c))?;
+                eval_const_binary(op.as_str(), &a, &b)
+            }
+            _ => None,
+        }
+    }
+
+    /// Emit a single load instruction for a constant value.
+    fn emit_const_value(&mut self, val: Value, node: &Node<'a>) {
+        if let Value::Int(n) = val {
+            if n >= i16::MIN as i64 && n <= i16::MAX as i64 {
+                self.emit(Op::LoadSmallInt(n as i16), node);
+                return;
+            }
+        }
+        let idx = self.chunk.add_constant(val);
+        self.emit(Op::LoadConst(idx), node);
+    }
+
     fn compile_binary(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
+        // Constant folding: evaluate at compile time if possible
+        if let Some(val) = self.try_eval_const(node) {
+            self.emit_const_value(val, node);
+            return Ok(());
+        }
+
         let lhs = node.child_by_field_name("left")
             .or_else(|| node.named_child(0))
             .ok_or_else(|| self.error("Binary missing lhs".into(), node))?;
@@ -841,8 +955,12 @@ impl<'a> Compiler<'a> {
             _ => {}
         }
 
+        // Operands of a binary op are never in tail position
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         self.compile_expression(&lhs)?;
         self.compile_expression(&rhs)?;
+        self.tail_position = was_tail;
 
         // Use specialized int opcodes when both operands are statically known integers.
         // First check the type map from the static type checker (covers variables, calls, etc.),
@@ -1038,14 +1156,21 @@ impl<'a> Compiler<'a> {
             self.locals.clear();
             self.scope_depth = 0;
 
+            // Set current function name for TCO detection
+            let name_node = func_node.child_by_field_name("name").unwrap();
+            self.current_fn_name = Some(self.node_text(&name_node));
+
             // If body is a lambda, extract params and compile the inner body.
             // Otherwise it's a zero-arg function — compile body directly.
             if body.kind() == "lambda" {
                 self.compile_lambda_body(&body)?;
             } else {
+                self.tail_position = true;
                 self.compile_expression(&body)?;
+                self.tail_position = false;
             }
 
+            self.current_fn_name = None;
             let chunk = self.finish_chunk();
             self.compiled_chunks[chunk_offset + i] = chunk;
         }
@@ -1097,12 +1222,19 @@ impl<'a> Compiler<'a> {
             self.locals.clear();
             self.scope_depth = 0;
 
+            // Set current function name for TCO detection
+            let name_node = func_node.child_by_field_name("name").unwrap();
+            self.current_fn_name = Some(self.node_text(&name_node));
+
             if body.kind() == "lambda" {
                 self.compile_lambda_body(&body)?;
             } else {
+                self.tail_position = true;
                 self.compile_expression(&body)?;
+                self.tail_position = false;
             }
 
+            self.current_fn_name = None;
             let chunk = self.finish_chunk();
             self.compiled_chunks[i] = chunk;
         }
@@ -1144,12 +1276,19 @@ impl<'a> Compiler<'a> {
                 self.locals.clear();
                 self.scope_depth = 0;
 
+                // Set current function name for TCO detection
+                let name_node = func_node.child_by_field_name("name").unwrap();
+                self.current_fn_name = Some(self.node_text(&name_node));
+
                 if body.kind() == "lambda" {
                     self.compile_lambda_body(&body)?;
                 } else {
+                    self.tail_position = true;
                     self.compile_expression(&body)?;
+                    self.tail_position = false;
                 }
 
+                self.current_fn_name = None;
                 let chunk = self.finish_chunk();
                 self.compiled_chunks[chunk_offset + i] = chunk;
             }
@@ -1279,7 +1418,14 @@ impl<'a> Compiler<'a> {
             self.declare_local(&name);
         }
 
-        self.compile_expression(body)
+        // The body of a named function is in tail position (for TCO)
+        let was_tail = self.tail_position;
+        if self.current_fn_name.is_some() {
+            self.tail_position = true;
+        }
+        let result = self.compile_expression(body);
+        self.tail_position = was_tail;
+        result
     }
 
     // -----------------------------------------------------------------------
@@ -1318,6 +1464,33 @@ impl<'a> Compiler<'a> {
             return Ok(());
         }
 
+        // TCO: detect self-recursive tail calls.
+        // Conditions: callee is an identifier, matches current function name,
+        // we're in tail position, and not inside a nested function/lambda.
+        if self.tail_position && self.enclosing.is_empty() {
+            if callee.kind() == "identifier" {
+                let callee_name = self.node_text(callee);
+                if let Some(ref fn_name) = self.current_fn_name {
+                    if callee_name == *fn_name {
+                        // Emit args (no function value), then TailCall
+                        // Args are NOT in tail position themselves
+                        let was_tail = self.tail_position;
+                        self.tail_position = false;
+                        for arg in args {
+                            self.compile_expression(arg)?;
+                        }
+                        self.tail_position = was_tail;
+                        self.emit(Op::TailCall(args.len() as u8), node);
+                        return Ok(());
+                    }
+                }
+            }
+        }
+
+        // Arguments are never in tail position
+        let was_tail = self.tail_position;
+        self.tail_position = false;
+
         // Check if callee is Module.method (field_expression with type_identifier object)
         if callee.kind() == "field_expression" {
             if let Some(qualified) = self.try_resolve_native(callee) {
@@ -1326,6 +1499,7 @@ impl<'a> Compiler<'a> {
                     for arg in args {
                         self.compile_expression(arg)?;
                     }
+                    self.tail_position = was_tail;
                     self.emit(Op::CallNative(fn_id, args.len() as u8), node);
                     return Ok(());
                 }
@@ -1336,6 +1510,7 @@ impl<'a> Compiler<'a> {
                     for arg in args {
                         self.compile_expression(arg)?;
                     }
+                    self.tail_position = was_tail;
                     self.emit(Op::Call(args.len() as u8), node);
                     return Ok(());
                 }
@@ -1347,6 +1522,7 @@ impl<'a> Compiler<'a> {
         for arg in args {
             self.compile_expression(arg)?;
         }
+        self.tail_position = was_tail;
         self.emit(Op::Call(args.len() as u8), node);
         Ok(())
     }
@@ -1777,6 +1953,54 @@ impl<'a> Compiler<'a> {
         node.utf8_text(self.source.as_bytes()).unwrap_or("").to_string()
     }
 
+}
+
+// ---------------------------------------------------------------------------
+// Constant folding
+// ---------------------------------------------------------------------------
+
+/// Evaluate a binary operation on two constant values at compile time.
+fn eval_const_binary(op: &str, a: &Value, b: &Value) -> Option<Value> {
+    match (a, b) {
+        (Value::Int(a), Value::Int(b)) => match op {
+            "+" => Some(Value::Int(a.wrapping_add(*b))),
+            "-" => Some(Value::Int(a.wrapping_sub(*b))),
+            "*" => Some(Value::Int(a.wrapping_mul(*b))),
+            "/" if *b != 0 => Some(Value::Int(a.wrapping_div(*b))),
+            "%" if *b != 0 => Some(Value::Int(a.wrapping_rem(*b))),
+            "==" => Some(Value::Bool(a == b)),
+            "!=" => Some(Value::Bool(a != b)),
+            "<" => Some(Value::Bool(a < b)),
+            ">" => Some(Value::Bool(a > b)),
+            "<=" => Some(Value::Bool(a <= b)),
+            ">=" => Some(Value::Bool(a >= b)),
+            _ => None,
+        },
+        (Value::Float(a), Value::Float(b)) => match op {
+            "+" => Some(Value::Float(a + b)),
+            "-" => Some(Value::Float(a - b)),
+            "*" => Some(Value::Float(a * b)),
+            "/" if *b != 0.0 => Some(Value::Float(a / b)),
+            _ => None,
+        },
+        (Value::Bool(a), Value::Bool(b)) => match op {
+            "==" => Some(Value::Bool(a == b)),
+            "!=" => Some(Value::Bool(a != b)),
+            _ => None,
+        },
+        (Value::String(a), Value::String(b)) => match op {
+            "+" => {
+                let mut r = String::with_capacity(a.len() + b.len());
+                r.push_str(a);
+                r.push_str(b);
+                Some(Value::String(r.into()))
+            }
+            "==" => Some(Value::Bool(a == b)),
+            "!=" => Some(Value::Bool(a != b)),
+            _ => None,
+        },
+        _ => None,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2694,5 +2918,169 @@ mod tests {
             eval_expr("{\n  let offset = 100\n  List.map([1, 2, 3], |x| x + offset)\n}"),
             Value::List(Rc::new(vec![Value::Int(101), Value::Int(102), Value::Int(103)])),
         );
+    }
+
+    // ===== Constant folding tests =====
+
+    #[test]
+    fn fold_int_addition() {
+        assert_eq!(eval_expr("1 + 2"), Value::Int(3));
+    }
+
+    #[test]
+    fn fold_chained_arithmetic() {
+        assert_eq!(eval_expr("1 + 2 + 3"), Value::Int(6));
+    }
+
+    #[test]
+    fn fold_int_multiplication() {
+        assert_eq!(eval_expr("6 * 7"), Value::Int(42));
+    }
+
+    #[test]
+    fn fold_int_comparison() {
+        assert_eq!(eval_expr("5 < 10"), Value::Bool(true));
+        assert_eq!(eval_expr("10 <= 10"), Value::Bool(true));
+        assert_eq!(eval_expr("10 > 5"), Value::Bool(true));
+    }
+
+    #[test]
+    fn fold_negation() {
+        assert_eq!(eval_expr("-42"), Value::Int(-42));
+    }
+
+    #[test]
+    fn fold_not() {
+        assert_eq!(eval_expr("not true"), Value::Bool(false));
+        assert_eq!(eval_expr("not false"), Value::Bool(true));
+    }
+
+    #[test]
+    fn fold_div_by_zero_not_folded() {
+        // Division by zero should NOT be folded — it will be a runtime error
+        // but the compilation should succeed (the error happens at runtime)
+        let source = "x : () -> Int\nx = 10 / 0";
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&tree_sitter_baseline::LANGUAGE.into()).unwrap();
+        let tree = parser.parse(source, None).unwrap();
+        let root = tree.root_node();
+        let func_def = root.named_child(0).unwrap();
+        let body = func_def.child_by_field_name("body").unwrap();
+        let natives = NativeRegistry::new();
+        let mut compiler = Compiler::new(source, &natives);
+        // Should compile without error (folding skips div-by-zero)
+        compiler.compile_expression(&body).unwrap();
+    }
+
+    #[test]
+    fn fold_nested_expression() {
+        // (2 + 3) * (4 - 1) = 5 * 3 = 15
+        assert_eq!(eval_expr("(2 + 3) * (4 - 1)"), Value::Int(15));
+    }
+
+    // ===== Tail Call Optimization tests =====
+
+    #[test]
+    fn tco_factorial_accumulator() {
+        // Tail-recursive factorial with accumulator
+        let source = r#"
+fact : (Int, Int) -> Int
+fact = |n, acc| if n <= 1 then acc else fact(n - 1, n * acc)
+
+main : () -> Int
+main = fact(10, 1)
+"#;
+        assert_eq!(eval_program(source), Value::Int(3628800));
+    }
+
+    #[test]
+    fn tco_emits_tail_call_opcode() {
+        // Verify the compiler actually emits TailCall for a self-recursive call
+        let source = r#"
+countdown : (Int) -> Int
+countdown = |n| if n <= 0 then 0 else countdown(n - 1)
+
+main : () -> Int
+main = countdown(5)
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_baseline::LANGUAGE.into())
+            .expect("Error loading Baseline grammar");
+        let tree = parser.parse(source, None).expect("Parse failed");
+        let root = tree.root_node();
+
+        let natives = NativeRegistry::new();
+        let compiler = Compiler::new(source, &natives);
+        let program = compiler
+            .compile_program(&root)
+            .unwrap_or_else(|e| panic!("Compile error: {}", e));
+
+        // Find the countdown function's chunk and check it contains TailCall
+        let countdown_chunk = &program.chunks[0]; // first function defined
+        let has_tail_call = countdown_chunk.code.iter().any(|op| matches!(op, Op::TailCall(_)));
+        assert!(has_tail_call, "Expected TailCall opcode in countdown chunk, got: {:?}", countdown_chunk.code);
+    }
+
+    #[test]
+    fn tco_deep_recursion_no_overflow() {
+        // Without TCO, 50,000 iterations would blow the 1024-frame call stack
+        let source = r#"
+countdown : (Int) -> Int
+countdown = |n| if n <= 0 then 0 else countdown(n - 1)
+
+main : () -> Int
+main = countdown(50000)
+"#;
+        assert_eq!(eval_program(source), Value::Int(0));
+    }
+
+    #[test]
+    fn tco_non_tail_call_not_optimized() {
+        // fib(n) = fib(n-1) + fib(n-2) is NOT tail recursive
+        // (the + happens after the calls)
+        let source = r#"
+fib : (Int) -> Int
+fib = |n| if n <= 1 then n else fib(n - 1) + fib(n - 2)
+
+main : () -> Int
+main = fib(10)
+"#;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_baseline::LANGUAGE.into())
+            .expect("Error loading Baseline grammar");
+        let tree = parser.parse(source, None).expect("Parse failed");
+        let root = tree.root_node();
+
+        let natives = NativeRegistry::new();
+        let compiler = Compiler::new(source, &natives);
+        let program = compiler
+            .compile_program(&root)
+            .unwrap_or_else(|e| panic!("Compile error: {}", e));
+
+        // fib's calls are NOT in tail position, so no TailCall should be emitted
+        let fib_chunk = &program.chunks[0];
+        let has_tail_call = fib_chunk.code.iter().any(|op| matches!(op, Op::TailCall(_)));
+        assert!(!has_tail_call, "fib should NOT have TailCall opcode, got: {:?}", fib_chunk.code);
+
+        // But it should still produce correct results
+        let mut vm = Vm::new();
+        assert_eq!(vm.execute_program(&program).unwrap(), Value::Int(55));
+    }
+
+    #[test]
+    fn tco_match_tail_position() {
+        // Tail calls in match arms should be optimized
+        let source = r#"
+count : (Int, Int) -> Int
+count = |n, acc| match n
+  0 -> acc
+  _ -> count(n - 1, acc + 1)
+
+main : () -> Int
+main = count(100, 0)
+"#;
+        assert_eq!(eval_program(source), Value::Int(100));
     }
 }

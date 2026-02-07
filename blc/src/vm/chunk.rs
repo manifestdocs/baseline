@@ -107,20 +107,26 @@ pub enum Op {
     // -- Functions --
     /// Call a function with N arguments. Stack: [func, arg0, ..., argN-1] → [result]
     Call(u8),
+    /// Tail call: reuse current frame for self-recursive calls.
+    /// Overwrites args in-place and resets IP to 0. Stack: [arg0, ..., argN-1]
+    TailCall(u8),
     /// Get a captured upvalue by index (for closures).
     GetUpvalue(u8),
     /// Create a closure: pop N upvalues, bundle with chunk index.
     MakeClosure(u16, u8),
 
-    /// Call a statically-known function by chunk index with N arguments.
-    /// Skips function-value lookup — the compiler knows the target at compile time.
-    /// Stack: [arg0, ..., argN-1] → [result]
-    CallDirect(u16, u8),
-
     // -- Native functions --
     /// Call a native function by ID with N arguments.
     /// Stack: [arg0, ..., argN-1] → [result]
     CallNative(u16, u8),
+
+    // -- Superinstructions (fused opcode sequences) --
+    /// Fused GetLocal(slot) + LoadSmallInt(k) + SubInt.
+    /// Pushes (local[slot] - k) onto the stack.
+    GetLocalSubInt(u16, i16),
+    /// Fused GetLocal(slot) + LoadSmallInt(k) + LeInt.
+    /// Pushes (local[slot] <= k) as bool onto the stack.
+    GetLocalLeInt(u16, i16),
 
     // -- Termination --
     Return,
@@ -172,11 +178,8 @@ impl Chunk {
             }
         }
         for op in &mut self.code {
-            match op {
-                Op::MakeClosure(idx, _) | Op::CallDirect(idx, _) => {
-                    *idx += offset as u16;
-                }
-                _ => {}
+            if let Op::MakeClosure(idx, _) = op {
+                *idx += offset as u16;
             }
         }
     }
@@ -225,7 +228,7 @@ impl Program {
     pub fn optimize(&mut self) {
         for chunk in &mut self.chunks {
             chunk.specialize_int_ops();
-            chunk.fold_constants();
+            chunk.fuse_superinstructions();
         }
     }
 }
@@ -289,7 +292,8 @@ impl Chunk {
                 | Op::Concat | Op::TupleGet(_) | Op::GetField(_) | Op::ListGet
                 | Op::MakeRange | Op::MakeList(_) | Op::MakeRecord(_) | Op::MakeTuple(_)
                 | Op::MakeEnum(_) | Op::MakeStruct(_) | Op::UpdateRecord(_)
-                | Op::MakeClosure(_, _) => {
+                | Op::MakeClosure(_, _)
+                | Op::GetLocalSubInt(_, _) | Op::GetLocalLeInt(_, _) => {
                     pushes_found += 1;
                 }
                 // Control flow or Call/CallNative — stop scanning
@@ -299,145 +303,34 @@ impl Chunk {
         has_int && pushes_found >= 2
     }
 
-    /// Evaluate constant expressions at compile time, replacing runtime
-    /// computation with precomputed results.
+    /// Fuse common opcode triples into single superinstructions.
     ///
-    /// Patterns folded:
-    /// - `LoadSmallInt(a), LoadSmallInt(b), <ArithInt>` -> result load
-    /// - `LoadConst(Int(a)), LoadConst(Int(b)), <ArithInt>` -> result load
-    /// - Mixed LoadSmallInt/LoadConst(Int) combinations
-    /// - `LoadSmallInt(a), LoadSmallInt(b), <CmpInt>` -> `LoadConst(bool)`
-    /// - `LoadConst(bool), Not` -> `LoadConst(!bool)`
+    /// Runs AFTER specialize_int_ops (operates on already-specialized opcodes).
+    /// Patterns fused:
+    ///   GetLocal(s) + LoadSmallInt(k) + SubInt  →  GetLocalSubInt(s, k)
+    ///   GetLocal(s) + LoadSmallInt(k) + LeInt   →  GetLocalLeInt(s, k)
     ///
-    /// Folded sequences are replaced in-place: the operator position gets the
-    /// result opcode, and the dead load positions become `Jump(0)` (no-ops).
-    pub fn fold_constants(&mut self) {
+    /// Replaced opcodes become Jump(0) (no-op) to preserve indices and source map.
+    pub fn fuse_superinstructions(&mut self) {
         let len = self.code.len();
-        if len < 2 {
-            return;
-        }
-
-        // Boolean negation: LoadConst(bool), Not -> LoadConst(!bool)
-        for i in 1..len {
-            if self.code[i] != Op::Not {
-                continue;
-            }
-            if let Op::LoadConst(ci) = self.code[i - 1] {
-                match self.constants.get(ci as usize) {
-                    Some(Value::Bool(b)) => {
-                        let result_idx = self.add_constant(Value::Bool(!b));
-                        let source_loc = self.source_map[i];
-                        self.code[i - 1] = Op::Jump(0);
-                        self.source_map[i - 1] = source_loc;
-                        self.code[i] = Op::LoadConst(result_idx);
-                    }
-                    _ => {}
-                }
-            }
-        }
-
         if len < 3 {
             return;
         }
-
-        // Integer arithmetic and comparison folding
-        for i in 2..len {
-            let op = self.code[i];
-            let is_arith = matches!(
-                op,
-                Op::AddInt | Op::SubInt | Op::MulInt | Op::DivInt | Op::ModInt
-            );
-            let is_cmp = matches!(
-                op,
-                Op::LtInt | Op::LeInt | Op::GtInt | Op::GeInt
-            );
-
-            if !is_arith && !is_cmp {
-                continue;
-            }
-
-            // Extract the two integer operands from the preceding loads
-            let (a_val, b_val) = match (self.code[i - 2], self.code[i - 1]) {
-                (Op::LoadSmallInt(a), Op::LoadSmallInt(b)) => {
-                    (a as i64, b as i64)
-                }
-                (Op::LoadSmallInt(a), Op::LoadConst(ci)) => {
-                    match self.constants.get(ci as usize) {
-                        Some(Value::Int(b)) => (a as i64, *b),
-                        _ => continue,
-                    }
-                }
-                (Op::LoadConst(ci), Op::LoadSmallInt(b)) => {
-                    match self.constants.get(ci as usize) {
-                        Some(Value::Int(a)) => (*a, b as i64),
-                        _ => continue,
-                    }
-                }
-                (Op::LoadConst(ci_a), Op::LoadConst(ci_b)) => {
-                    match (
-                        self.constants.get(ci_a as usize),
-                        self.constants.get(ci_b as usize),
-                    ) {
-                        (Some(Value::Int(a)), Some(Value::Int(b))) => (*a, *b),
-                        _ => continue,
-                    }
-                }
-                _ => continue,
-            };
-
-            let source_loc = self.source_map[i];
-
-            if is_arith {
-                let result = match op {
-                    Op::AddInt => a_val.wrapping_add(b_val),
-                    Op::SubInt => a_val.wrapping_sub(b_val),
-                    Op::MulInt => a_val.wrapping_mul(b_val),
-                    Op::DivInt => {
-                        if b_val == 0 {
-                            continue; // preserve runtime division-by-zero error
-                        }
-                        a_val / b_val
-                    }
-                    Op::ModInt => {
-                        if b_val == 0 {
-                            continue; // preserve runtime modulo-by-zero error
-                        }
-                        a_val % b_val
-                    }
-                    _ => unreachable!(),
+        for i in 0..len - 2 {
+            if let (Op::GetLocal(slot), Op::LoadSmallInt(k)) = (self.code[i], self.code[i + 1]) {
+                let fused = match self.code[i + 2] {
+                    Op::SubInt => Some(Op::GetLocalSubInt(slot, k)),
+                    Op::LeInt => Some(Op::GetLocalLeInt(slot, k)),
+                    _ => None,
                 };
-
-                // Replace the two loads with no-ops, put result at the op position
-                self.code[i - 2] = Op::Jump(0);
-                self.source_map[i - 2] = source_loc;
-                self.code[i - 1] = Op::Jump(0);
-                self.source_map[i - 1] = source_loc;
-
-                // If result fits in i16, use LoadSmallInt; otherwise add to constant pool
-                if result >= i16::MIN as i64 && result <= i16::MAX as i64 {
-                    self.code[i] = Op::LoadSmallInt(result as i16);
-                } else {
-                    let ci = self.add_constant(Value::Int(result));
-                    self.code[i] = Op::LoadConst(ci);
+                if let Some(super_op) = fused {
+                    // Use source location of the last opcode in the sequence
+                    let source_loc = self.source_map[i + 2];
+                    self.code[i] = Op::Jump(0); // no-op
+                    self.code[i + 1] = Op::Jump(0); // no-op
+                    self.code[i + 2] = super_op;
+                    self.source_map[i + 2] = source_loc;
                 }
-                self.source_map[i] = source_loc;
-            } else {
-                // Comparison
-                let result = match op {
-                    Op::LtInt => a_val < b_val,
-                    Op::LeInt => a_val <= b_val,
-                    Op::GtInt => a_val > b_val,
-                    Op::GeInt => a_val >= b_val,
-                    _ => unreachable!(),
-                };
-
-                let result_idx = self.add_constant(Value::Bool(result));
-                self.code[i - 2] = Op::Jump(0);
-                self.source_map[i - 2] = source_loc;
-                self.code[i - 1] = Op::Jump(0);
-                self.source_map[i - 1] = source_loc;
-                self.code[i] = Op::LoadConst(result_idx);
-                self.source_map[i] = source_loc;
             }
         }
     }
@@ -540,183 +433,100 @@ mod tests {
         assert_eq!(chunk.code[0], Op::Return);
     }
 
-    // -- Constant folding --
+    // -- Superinstruction fusion tests --
 
     #[test]
-    fn fold_small_int_add() {
-        // LoadSmallInt(2), LoadSmallInt(3), AddInt -> LoadSmallInt(5)
+    fn fuse_get_local_sub_int() {
         let mut chunk = Chunk::new();
-        chunk.emit(Op::LoadSmallInt(2), 1, 0);
-        chunk.emit(Op::LoadSmallInt(3), 1, 5);
-        chunk.emit(Op::AddInt, 1, 10);
-        chunk.emit(Op::Return, 1, 15);
-
-        chunk.fold_constants();
-
-        assert_eq!(chunk.code[0], Op::Jump(0)); // nop (dead load)
-        assert_eq!(chunk.code[1], Op::Jump(0)); // nop (dead load)
-        assert_eq!(chunk.code[2], Op::LoadSmallInt(5)); // folded result
-        assert_eq!(chunk.code[3], Op::Return);
-        // Source location should be from the operator opcode
-        assert_eq!(chunk.source_map[2], (1, 10));
-    }
-
-    #[test]
-    fn fold_small_int_le_comparison() {
-        // LoadSmallInt(1), LoadSmallInt(1), LeInt -> LoadConst(true)
-        let mut chunk = Chunk::new();
-        chunk.emit(Op::LoadSmallInt(1), 1, 0);
+        chunk.emit(Op::GetLocal(0), 1, 0);
         chunk.emit(Op::LoadSmallInt(1), 1, 5);
-        chunk.emit(Op::LeInt, 1, 10);
-        chunk.emit(Op::Return, 1, 15);
-
-        chunk.fold_constants();
-
-        assert_eq!(chunk.code[0], Op::Jump(0));
-        assert_eq!(chunk.code[1], Op::Jump(0));
-        if let Op::LoadConst(ci) = chunk.code[2] {
-            assert_eq!(chunk.constants[ci as usize], Value::Bool(true));
-        } else {
-            panic!("Expected LoadConst, got {:?}", chunk.code[2]);
-        }
-    }
-
-    #[test]
-    fn fold_small_int_lt_false() {
-        // LoadSmallInt(5), LoadSmallInt(3), LtInt -> LoadConst(false)
-        let mut chunk = Chunk::new();
-        chunk.emit(Op::LoadSmallInt(5), 1, 0);
-        chunk.emit(Op::LoadSmallInt(3), 1, 5);
-        chunk.emit(Op::LtInt, 1, 10);
-        chunk.emit(Op::Return, 1, 15);
-
-        chunk.fold_constants();
-
-        if let Op::LoadConst(ci) = chunk.code[2] {
-            assert_eq!(chunk.constants[ci as usize], Value::Bool(false));
-        } else {
-            panic!("Expected LoadConst, got {:?}", chunk.code[2]);
-        }
-    }
-
-    #[test]
-    fn fold_const_pool_int_mul() {
-        // LoadConst(Int(6)), LoadConst(Int(7)), MulInt -> LoadSmallInt(42)
-        let mut chunk = Chunk::new();
-        let a = chunk.add_constant(Value::Int(6));
-        let b = chunk.add_constant(Value::Int(7));
-        chunk.emit(Op::LoadConst(a), 1, 0);
-        chunk.emit(Op::LoadConst(b), 1, 5);
-        chunk.emit(Op::MulInt, 1, 10);
-        chunk.emit(Op::Return, 1, 15);
-
-        chunk.fold_constants();
-
-        assert_eq!(chunk.code[2], Op::LoadSmallInt(42));
-    }
-
-    #[test]
-    fn fold_mixed_small_and_const() {
-        // LoadSmallInt(10), LoadConst(Int(3)), SubInt -> LoadSmallInt(7)
-        let mut chunk = Chunk::new();
-        let b = chunk.add_constant(Value::Int(3));
-        chunk.emit(Op::LoadSmallInt(10), 1, 0);
-        chunk.emit(Op::LoadConst(b), 1, 5);
         chunk.emit(Op::SubInt, 1, 10);
         chunk.emit(Op::Return, 1, 15);
 
-        chunk.fold_constants();
+        chunk.fuse_superinstructions();
 
-        assert_eq!(chunk.code[2], Op::LoadSmallInt(7));
+        assert_eq!(chunk.code[0], Op::Jump(0)); // no-op
+        assert_eq!(chunk.code[1], Op::Jump(0)); // no-op
+        assert_eq!(chunk.code[2], Op::GetLocalSubInt(0, 1));
+        assert_eq!(chunk.code[3], Op::Return);
     }
 
     #[test]
-    fn fold_not_true() {
-        // LoadConst(true), Not -> LoadConst(false)
+    fn fuse_get_local_le_int() {
         let mut chunk = Chunk::new();
-        let t = chunk.add_constant(Value::Bool(true));
-        chunk.emit(Op::LoadConst(t), 1, 0);
-        chunk.emit(Op::Not, 1, 5);
-        chunk.emit(Op::Return, 1, 10);
+        chunk.emit(Op::GetLocal(2), 1, 0);
+        chunk.emit(Op::LoadSmallInt(5), 1, 5);
+        chunk.emit(Op::LeInt, 1, 10);
+        chunk.emit(Op::Return, 1, 15);
 
-        chunk.fold_constants();
+        chunk.fuse_superinstructions();
 
         assert_eq!(chunk.code[0], Op::Jump(0));
-        if let Op::LoadConst(ci) = chunk.code[1] {
-            assert_eq!(chunk.constants[ci as usize], Value::Bool(false));
-        } else {
-            panic!("Expected LoadConst, got {:?}", chunk.code[1]);
-        }
+        assert_eq!(chunk.code[1], Op::Jump(0));
+        assert_eq!(chunk.code[2], Op::GetLocalLeInt(2, 5));
+        assert_eq!(chunk.code[3], Op::Return);
     }
 
     #[test]
-    fn fold_not_false() {
-        // LoadConst(false), Not -> LoadConst(true)
+    fn fuse_preserves_source_map() {
         let mut chunk = Chunk::new();
-        let f = chunk.add_constant(Value::Bool(false));
-        chunk.emit(Op::LoadConst(f), 1, 0);
-        chunk.emit(Op::Not, 1, 5);
-        chunk.emit(Op::Return, 1, 10);
+        chunk.emit(Op::GetLocal(0), 10, 0);
+        chunk.emit(Op::LoadSmallInt(2), 10, 5);
+        chunk.emit(Op::SubInt, 10, 10);
+        chunk.emit(Op::Return, 11, 0);
 
-        chunk.fold_constants();
+        chunk.fuse_superinstructions();
 
-        if let Op::LoadConst(ci) = chunk.code[1] {
-            assert_eq!(chunk.constants[ci as usize], Value::Bool(true));
-        } else {
-            panic!("Expected LoadConst, got {:?}", chunk.code[1]);
-        }
+        // The superinstruction should use the source location of SubInt (the last fused op)
+        assert_eq!(chunk.source_map[2], (10, 10));
     }
 
     #[test]
-    fn fold_div_by_zero_not_folded() {
-        // LoadSmallInt(10), LoadSmallInt(0), DivInt -> NOT folded (preserve runtime error)
+    fn fuse_does_not_match_non_pattern() {
         let mut chunk = Chunk::new();
-        chunk.emit(Op::LoadSmallInt(10), 1, 0);
-        chunk.emit(Op::LoadSmallInt(0), 1, 5);
-        chunk.emit(Op::DivInt, 1, 10);
-        chunk.emit(Op::Return, 1, 15);
-
-        chunk.fold_constants();
-
-        // Should remain unchanged
-        assert_eq!(chunk.code[0], Op::LoadSmallInt(10));
-        assert_eq!(chunk.code[1], Op::LoadSmallInt(0));
-        assert_eq!(chunk.code[2], Op::DivInt);
-    }
-
-    #[test]
-    fn fold_large_result_uses_const_pool() {
-        // LoadSmallInt(32000), LoadSmallInt(1000), AddInt -> result > i16::MAX, use LoadConst
-        let mut chunk = Chunk::new();
-        chunk.emit(Op::LoadSmallInt(32000), 1, 0);
-        chunk.emit(Op::LoadSmallInt(1000), 1, 5);
-        chunk.emit(Op::AddInt, 1, 10);
-        chunk.emit(Op::Return, 1, 15);
-
-        chunk.fold_constants();
-
-        if let Op::LoadConst(ci) = chunk.code[2] {
-            assert_eq!(chunk.constants[ci as usize], Value::Int(33000));
-        } else {
-            panic!("Expected LoadConst for large result, got {:?}", chunk.code[2]);
-        }
-    }
-
-    #[test]
-    fn fold_no_change_for_non_int_const() {
-        // LoadConst(String), LoadSmallInt(1), AddInt -> NOT folded (first operand is String)
-        let mut chunk = Chunk::new();
-        let s = chunk.add_constant(Value::String("hello".into()));
-        chunk.emit(Op::LoadConst(s), 1, 0);
+        chunk.emit(Op::GetLocal(0), 1, 0);
         chunk.emit(Op::LoadSmallInt(1), 1, 5);
-        chunk.emit(Op::AddInt, 1, 10);
+        chunk.emit(Op::AddInt, 1, 10); // AddInt, not SubInt or LeInt
         chunk.emit(Op::Return, 1, 15);
 
-        chunk.fold_constants();
+        chunk.fuse_superinstructions();
 
-        // Should remain unchanged
-        assert_eq!(chunk.code[0], Op::LoadConst(s));
+        // Should remain unfused
+        assert_eq!(chunk.code[0], Op::GetLocal(0));
         assert_eq!(chunk.code[1], Op::LoadSmallInt(1));
         assert_eq!(chunk.code[2], Op::AddInt);
+    }
+
+    #[test]
+    fn fuse_multiple_patterns_in_sequence() {
+        let mut chunk = Chunk::new();
+        // Pattern 1: n <= 1
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::LoadSmallInt(1), 1, 0);
+        chunk.emit(Op::LeInt, 1, 0);
+        // Some other op
+        chunk.emit(Op::JumpIfFalse(3), 1, 0);
+        // Pattern 2: n - 1
+        chunk.emit(Op::GetLocal(0), 2, 0);
+        chunk.emit(Op::LoadSmallInt(1), 2, 0);
+        chunk.emit(Op::SubInt, 2, 0);
+        chunk.emit(Op::Return, 2, 0);
+
+        chunk.fuse_superinstructions();
+
+        assert_eq!(chunk.code[2], Op::GetLocalLeInt(0, 1));
+        assert_eq!(chunk.code[6], Op::GetLocalSubInt(0, 1));
+    }
+
+    #[test]
+    fn fuse_short_chunk_no_panic() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::Return, 1, 0);
+        chunk.fuse_superinstructions(); // should not panic
+
+        let mut chunk2 = Chunk::new();
+        chunk2.emit(Op::GetLocal(0), 1, 0);
+        chunk2.emit(Op::Return, 1, 0);
+        chunk2.fuse_superinstructions(); // should not panic
     }
 }
