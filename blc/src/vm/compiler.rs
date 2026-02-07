@@ -3072,15 +3072,16 @@ main = fib(10)
     #[test]
     fn tco_match_tail_position() {
         // Tail calls in match arms should be optimized
-        let source = r#"
-count : (Int, Int) -> Int
-count = |n, acc| match n
-  0 -> acc
-  _ -> count(n - 1, acc + 1)
-
-main : () -> Int
-main = count(100, 0)
-"#;
+        let source = "\
+count : (Int, Int) -> Int\n\
+count = |n, acc| {\n\
+  match n\n\
+    0 -> acc\n\
+    _ -> count(n - 1, acc + 1)\n\
+}\n\
+\n\
+main : () -> Int\n\
+main = count(100, 0)";
         assert_eq!(eval_program(source), Value::Int(100));
     }
 }
