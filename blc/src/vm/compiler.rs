@@ -348,7 +348,6 @@ impl<'a> Compiler<'a> {
 
     fn compile_let(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         // Grammar: 'let' _pattern optional(type_annotation) '=' _expression
-        // For now, only support identifier patterns
         let pattern = node.named_child(0).ok_or_else(|| {
             self.error("Let binding missing pattern".into(), node)
         })?;
@@ -362,9 +361,30 @@ impl<'a> Compiler<'a> {
         // Compile the value — this pushes it onto the stack
         self.compile_expression(&value_node)?;
 
-        // Declare the local — its slot is the current stack position
-        let name = self.node_text(&pattern);
-        self.declare_local(&name);
+        if pattern.kind() == "tuple_pattern" {
+            // let (a, b) = expr — destructure using TupleGet
+            self.declare_local("__let_tuple");
+            let tuple_slot = (self.locals.len() - 1) as u16;
+
+            let mut pat_cursor = pattern.walk();
+            let bindings: Vec<Node<'a>> =
+                pattern.named_children(&mut pat_cursor).collect();
+
+            for (i, binding) in bindings.iter().enumerate() {
+                self.emit(Op::GetLocal(tuple_slot), node);
+                self.emit(Op::TupleGet(i as u16), node);
+                if binding.kind() == "identifier" {
+                    let name = self.node_text(binding);
+                    self.declare_local(&name);
+                } else if binding.kind() == "wildcard_pattern" {
+                    self.declare_local("_");
+                }
+            }
+        } else {
+            // Simple identifier pattern
+            let name = self.node_text(&pattern);
+            self.declare_local(&name);
+        }
 
         Ok(())
     }
@@ -581,6 +601,28 @@ impl<'a> Compiler<'a> {
                     end_jumps.push(self.emit(Op::Jump(0), arm));
 
                     self.chunk.patch_jump(skip_jump);
+                }
+                "tuple_pattern" => {
+                    // Tuple pattern: (a, b) -> body
+                    self.begin_scope();
+                    let mut pat_cursor = pattern.walk();
+                    let pat_children: Vec<Node<'a>> =
+                        pattern.named_children(&mut pat_cursor).collect();
+
+                    for (i, binding) in pat_children.iter().enumerate() {
+                        self.emit(Op::GetLocal(subject_slot), arm);
+                        self.emit(Op::TupleGet(i as u16), arm);
+                        if binding.kind() == "identifier" {
+                            let name = self.node_text(binding);
+                            self.declare_local(&name);
+                        } else if binding.kind() == "wildcard_pattern" {
+                            self.declare_local("_");
+                        }
+                    }
+
+                    self.compile_expression(body)?;
+                    self.end_scope(arm);
+                    end_jumps.push(self.emit(Op::Jump(0), arm));
                 }
                 _ => {
                     return Err(self.error(
