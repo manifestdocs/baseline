@@ -38,8 +38,12 @@ enum Commands {
         /// The file to run
         file: PathBuf,
 
-        /// Use the bytecode VM instead of the tree-walk interpreter
+        /// Use the tree-walk interpreter instead of the bytecode VM
         #[arg(long)]
+        interp: bool,
+
+        /// Use the bytecode VM (default, kept for backward compatibility)
+        #[arg(long, hide = true)]
         vm: bool,
     },
 
@@ -52,8 +56,12 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Use the bytecode VM instead of the tree-walk interpreter
+        /// Use the tree-walk interpreter instead of the bytecode VM
         #[arg(long)]
+        interp: bool,
+
+        /// Use the bytecode VM (default, kept for backward compatibility)
+        #[arg(long, hide = true)]
         vm: bool,
     },
 
@@ -86,18 +94,18 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Run { file, vm: use_vm } => {
-            if use_vm {
-                run_file_vm(&file);
-            } else {
+        Commands::Run { file, interp, .. } => {
+            if interp {
                 run_file(&file);
+            } else {
+                run_file_vm(&file);
             }
         }
-        Commands::Test { file, json, vm: use_vm } => {
-            let result = if use_vm {
-                vm::test_runner::run_test_file(&file)
-            } else {
+        Commands::Test { file, json, interp, .. } => {
+            let result = if interp {
                 test_runner::run_test_file(&file)
+            } else {
+                vm::test_runner::run_test_file(&file)
             };
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap());
