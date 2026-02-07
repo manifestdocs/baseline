@@ -448,3 +448,114 @@ fn check_import_missing_module() {
 
 // Note: circular import detection requires recursive import resolution,
 // which is deferred to a future version.
+
+// ---------------------------------------------------------------------------
+// VM cross-module imports — blc run --vm
+// ---------------------------------------------------------------------------
+
+fn blc_run_vm(file: &str) -> BlcOutput {
+    let blc = env!("CARGO_BIN_EXE_blc");
+    let examples = Path::new(env!("CARGO_MANIFEST_DIR")).join("../examples");
+    let output = Command::new(blc)
+        .arg("run")
+        .arg("--vm")
+        .arg(examples.join(file))
+        .output()
+        .expect("failed to execute blc");
+
+    BlcOutput {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+fn blc_run_vm_conformance(file: &str) -> BlcOutput {
+    let blc = env!("CARGO_BIN_EXE_blc");
+    let conformance = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/conformance");
+    let output = Command::new(blc)
+        .arg("run")
+        .arg("--vm")
+        .arg(conformance.join(file))
+        .output()
+        .expect("failed to execute blc");
+
+    BlcOutput {
+        exit_code: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    }
+}
+
+fn assert_vm_run_ok(file: &str, expected_stdout: &str) {
+    let out = blc_run_vm(file);
+    assert_eq!(
+        out.exit_code, 0,
+        "VM {file}: expected exit 0, got {}.\nstderr: {}",
+        out.exit_code, out.stderr,
+    );
+    assert_eq!(
+        out.stdout, expected_stdout,
+        "VM {file}: stdout mismatch",
+    );
+}
+
+#[test]
+fn vm_run_import_qualified() {
+    assert_vm_run_ok("imports/main.bl", "Result: 10\n");
+}
+
+#[test]
+fn vm_run_import_selective() {
+    assert_vm_run_ok("imports/selective.bl", "Result: 10\n");
+}
+
+#[test]
+fn vm_run_import_wildcard() {
+    assert_vm_run_ok("imports/wildcard.bl", "Result: 10\n");
+}
+
+#[test]
+fn vm_run_conformance_qualified_import() {
+    let out = blc_run_vm_conformance("09_modules/qualified_import.bl");
+    assert_eq!(out.exit_code, 0, "VM qualified_import: exit {}.\nstderr: {}", out.exit_code, out.stderr);
+    assert_eq!(out.stdout, "10\n", "VM qualified_import: stdout mismatch");
+}
+
+#[test]
+fn vm_run_conformance_selective_import() {
+    let out = blc_run_vm_conformance("09_modules/selective_import.bl");
+    assert_eq!(out.exit_code, 0, "VM selective_import: exit {}.\nstderr: {}", out.exit_code, out.stderr);
+    assert_eq!(out.stdout, "11\n", "VM selective_import: stdout mismatch");
+}
+
+#[test]
+fn vm_run_conformance_wildcard_import() {
+    let out = blc_run_vm_conformance("09_modules/wildcard_import.bl");
+    assert_eq!(out.exit_code, 0, "VM wildcard_import: exit {}.\nstderr: {}", out.exit_code, out.stderr);
+    assert_eq!(out.stdout, "11\n", "VM wildcard_import: stdout mismatch");
+}
+
+#[test]
+fn vm_run_import_matches_interpreter() {
+    // Verify VM and interpreter produce identical output for all module test files
+    let files = &[
+        "imports/main.bl",
+        "imports/selective.bl",
+        "imports/wildcard.bl",
+    ];
+    for file in files {
+        let interp = blc_run(file);
+        let vm = blc_run_vm(file);
+        assert_eq!(
+            interp.exit_code, vm.exit_code,
+            "{file}: exit code mismatch (interp={}, vm={})",
+            interp.exit_code, vm.exit_code,
+        );
+        assert_eq!(
+            interp.stdout, vm.stdout,
+            "{file}: stdout mismatch\n  interp: {}\n  vm: {}",
+            interp.stdout, vm.stdout,
+        );
+    }
+}
