@@ -151,8 +151,16 @@ fn run_file_vm(file: &PathBuf) {
     let root = tree.root_node();
 
     let mut vm = vm::vm::Vm::new();
-    let compiler = vm::compiler::Compiler::new(&source, vm.natives());
-    let program = match compiler.compile_program(&root) {
+
+    let imports = resolver::ModuleLoader::parse_imports(&root, &source);
+    let program = if imports.is_empty() {
+        let compiler = vm::compiler::Compiler::new(&source, vm.natives());
+        compiler.compile_program(&root)
+    } else {
+        vm::module_compiler::compile_with_imports(&source, &root, file.as_path(), vm.natives())
+    };
+
+    let program = match program {
         Ok(p) => p,
         Err(e) => {
             eprintln!("Compile Error: {}", e);

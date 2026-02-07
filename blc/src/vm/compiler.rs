@@ -91,6 +91,13 @@ impl<'a> Compiler<'a> {
         }
     }
 
+    /// Pre-populate the compiler with already-compiled chunks and function mappings.
+    /// Used by the module compiler to inject imported module functions.
+    pub fn set_pre_compiled(&mut self, chunks: Vec<Chunk>, functions: HashMap<String, usize>) {
+        self.compiled_chunks = chunks;
+        self.functions = functions;
+    }
+
     /// Compile a tree-sitter expression node into bytecode.
     pub fn compile_expression(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         let kind = node.kind();
@@ -848,6 +855,9 @@ impl<'a> Compiler<'a> {
     /// Compile a full source file into a multi-chunk Program.
     /// Each function_def becomes its own chunk. Entry point is the last function.
     pub fn compile_program(mut self, root: &Node<'a>) -> Result<Program, CompileError> {
+        // chunk_offset accounts for pre-compiled imported chunks
+        let chunk_offset = self.compiled_chunks.len();
+
         // First pass: register all function names with their chunk indices
         let mut func_defs: Vec<Node<'a>> = Vec::new();
         for i in 0..root.named_child_count() {
@@ -855,7 +865,7 @@ impl<'a> Compiler<'a> {
             if child.kind() == "function_def" {
                 let name_node = child.child_by_field_name("name").unwrap();
                 let name = self.node_text(&name_node);
-                self.functions.insert(name, func_defs.len());
+                self.functions.insert(name, chunk_offset + func_defs.len());
                 func_defs.push(child);
             }
         }
@@ -868,8 +878,8 @@ impl<'a> Compiler<'a> {
             });
         }
 
-        // Pre-allocate chunk slots so named functions get stable indices (0..N-1).
-        // Inner lambdas compiled during the second pass get indices N, N+1, etc.
+        // Pre-allocate chunk slots so named functions get stable indices.
+        // Inner lambdas compiled during the second pass get indices after these.
         let num_funcs = func_defs.len();
         for _ in 0..num_funcs {
             self.compiled_chunks.push(Chunk::new());
@@ -895,22 +905,24 @@ impl<'a> Compiler<'a> {
             }
 
             let chunk = self.finish_chunk();
-            self.compiled_chunks[i] = chunk;
+            self.compiled_chunks[chunk_offset + i] = chunk;
         }
 
         // Determine entry point: prefer main!/main, fall back to last function
         let entry = self.functions.get("main!")
             .or_else(|| self.functions.get("main"))
             .copied()
-            .unwrap_or(num_funcs - 1);
+            .unwrap_or(chunk_offset + num_funcs - 1);
         Ok(Program {
             chunks: self.compiled_chunks,
             entry,
         })
     }
 
-    /// Compile a full program plus all inline test expressions as additional chunks.
-    pub fn compile_program_with_tests(mut self, root: &Node<'a>) -> Result<TestProgram, CompileError> {
+    /// Compile a module (no entry point required). Returns chunks and name→index map.
+    pub fn compile_module(mut self, root: &Node<'a>)
+        -> Result<(Vec<Chunk>, HashMap<String, usize>), CompileError>
+    {
         // First pass: register all function names with their chunk indices
         let mut func_defs: Vec<Node<'a>> = Vec::new();
         for i in 0..root.named_child_count() {
@@ -919,6 +931,51 @@ impl<'a> Compiler<'a> {
                 let name_node = child.child_by_field_name("name").unwrap();
                 let name = self.node_text(&name_node);
                 self.functions.insert(name, func_defs.len());
+                func_defs.push(child);
+            }
+        }
+
+        // Pre-allocate chunk slots
+        let num_funcs = func_defs.len();
+        for _ in 0..num_funcs {
+            self.compiled_chunks.push(Chunk::new());
+        }
+
+        // Second pass: compile each function body
+        for (i, func_node) in func_defs.iter().enumerate() {
+            let body = func_node.child_by_field_name("body").ok_or_else(|| {
+                self.error("Function missing body".into(), func_node)
+            })?;
+
+            self.chunk = Chunk::new();
+            self.locals.clear();
+            self.scope_depth = 0;
+
+            if body.kind() == "lambda" {
+                self.compile_lambda_body(&body)?;
+            } else {
+                self.compile_expression(&body)?;
+            }
+
+            let chunk = self.finish_chunk();
+            self.compiled_chunks[i] = chunk;
+        }
+
+        Ok((self.compiled_chunks, self.functions))
+    }
+
+    /// Compile a full program plus all inline test expressions as additional chunks.
+    pub fn compile_program_with_tests(mut self, root: &Node<'a>) -> Result<TestProgram, CompileError> {
+        let chunk_offset = self.compiled_chunks.len();
+
+        // First pass: register all function names with their chunk indices
+        let mut func_defs: Vec<Node<'a>> = Vec::new();
+        for i in 0..root.named_child_count() {
+            let child = root.named_child(i).unwrap();
+            if child.kind() == "function_def" {
+                let name_node = child.child_by_field_name("name").unwrap();
+                let name = self.node_text(&name_node);
+                self.functions.insert(name, chunk_offset + func_defs.len());
                 func_defs.push(child);
             }
         }
@@ -954,7 +1011,7 @@ impl<'a> Compiler<'a> {
             }
 
             let chunk = self.finish_chunk();
-            self.compiled_chunks[i] = chunk;
+            self.compiled_chunks[chunk_offset + i] = chunk;
         }
 
         // Third pass: collect and compile inline tests
@@ -994,7 +1051,7 @@ impl<'a> Compiler<'a> {
         let entry = self.functions.get("main!")
             .or_else(|| self.functions.get("main"))
             .copied()
-            .unwrap_or(num_funcs - 1);
+            .unwrap_or(chunk_offset + num_funcs - 1);
 
         Ok(TestProgram {
             program: Program {
@@ -1124,6 +1181,16 @@ impl<'a> Compiler<'a> {
                     self.emit(Op::CallNative(fn_id, args.len() as u8), node);
                     return Ok(());
                 }
+                // Check imported module functions (e.g., Math.add)
+                if let Some(&chunk_idx) = self.functions.get(&qualified) {
+                    let idx = self.chunk.add_constant(Value::Function(chunk_idx));
+                    self.emit(Op::LoadConst(idx), node);
+                    for arg in args {
+                        self.compile_expression(arg)?;
+                    }
+                    self.emit(Op::Call(args.len() as u8), node);
+                    return Ok(());
+                }
             }
         }
 
@@ -1241,6 +1308,18 @@ impl<'a> Compiler<'a> {
                         self.emit(Op::CallNative(fn_id, arg_count as u8), node);
                         return Ok(());
                     }
+                    // Check imported module functions
+                    if let Some(&chunk_idx) = self.functions.get(&qualified) {
+                        let idx = self.chunk.add_constant(Value::Function(chunk_idx));
+                        self.emit(Op::LoadConst(idx), node);
+                        self.compile_expression(&lhs)?;
+                        for arg in &rhs_children[1..] {
+                            self.compile_expression(arg)?;
+                        }
+                        let arg_count = 1 + (rhs_children.len() - 1);
+                        self.emit(Op::Call(arg_count as u8), node);
+                        return Ok(());
+                    }
                 }
             }
 
@@ -1257,6 +1336,14 @@ impl<'a> Compiler<'a> {
                 if let Some(fn_id) = self.natives.lookup(&qualified) {
                     self.compile_expression(&lhs)?;
                     self.emit(Op::CallNative(fn_id, 1), node);
+                    return Ok(());
+                }
+                // Check imported module functions
+                if let Some(&chunk_idx) = self.functions.get(&qualified) {
+                    let idx = self.chunk.add_constant(Value::Function(chunk_idx));
+                    self.emit(Op::LoadConst(idx), node);
+                    self.compile_expression(&lhs)?;
+                    self.emit(Op::Call(1), node);
                     return Ok(());
                 }
             }

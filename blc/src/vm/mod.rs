@@ -1,5 +1,6 @@
 pub mod chunk;
 pub mod compiler;
+pub mod module_compiler;
 pub mod natives;
 pub mod test_runner;
 pub mod value;

@@ -134,6 +134,21 @@ impl Chunk {
         idx as u16
     }
 
+    /// Rewrite all chunk-index references by an offset.
+    /// Used when merging imported module chunks into a program.
+    pub fn offset_chunk_refs(&mut self, offset: usize) {
+        for constant in &mut self.constants {
+            if let Value::Function(idx) = constant {
+                *idx += offset;
+            }
+        }
+        for op in &mut self.code {
+            if let Op::MakeClosure(idx, _) = op {
+                *idx += offset as u16;
+            }
+        }
+    }
+
     /// Patch a jump instruction at `offset` with the correct jump distance.
     pub fn patch_jump(&mut self, offset: usize) {
         let jump_dist = (self.code.len() - offset - 1) as u16;
