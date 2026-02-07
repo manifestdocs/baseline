@@ -1,5 +1,8 @@
 pub mod chunk;
+pub mod codegen;
 pub mod compiler;
+pub mod ir;
+pub mod lower;
 pub mod module_compiler;
 pub mod natives;
 pub mod nvalue;
