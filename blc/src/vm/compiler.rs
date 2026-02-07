@@ -242,38 +242,57 @@ impl<'a> Compiler<'a> {
         Err(self.error(format!("Undefined variable: {}", name), node))
     }
 
-    /// Try to resolve a variable name as an upvalue from the enclosing scope.
-    /// Returns the upvalue index if found.
+    /// Try to resolve a variable name as an upvalue from enclosing scopes.
+    /// Walks the full enclosing stack and threads upvalues through intermediates.
     fn resolve_upvalue(&mut self, name: &str) -> Option<usize> {
         if self.enclosing.is_empty() {
             return None;
         }
-        let enclosing = self.enclosing.last().unwrap();
-        // Check enclosing frame's locals
-        for (slot, local) in enclosing.locals.iter().enumerate().rev() {
-            if local.name == name {
-                let uv_idx = self.upvalues.len();
-                self.upvalues.push(Upvalue {
-                    name: name.to_string(),
-                    is_local: true,
-                    index: slot as u16,
-                });
-                return Some(uv_idx);
+        let depth = self.enclosing.len();
+        let mut found_at: Option<(usize, u16, bool)> = None; // (depth, index, is_local)
+
+        // Walk from innermost enclosing frame outward
+        for d in (0..depth).rev() {
+            // Check locals at this depth
+            for (slot, local) in self.enclosing[d].locals.iter().enumerate().rev() {
+                if local.name == name {
+                    found_at = Some((d, slot as u16, true));
+                    break;
+                }
             }
-        }
-        // Check enclosing frame's upvalues (for nested closures)
-        for (i, uv) in enclosing.upvalues.iter().enumerate() {
-            if uv.name == name {
-                let uv_idx = self.upvalues.len();
-                self.upvalues.push(Upvalue {
-                    name: name.to_string(),
-                    is_local: false,
-                    index: i as u16,
-                });
-                return Some(uv_idx);
+            if found_at.is_some() { break; }
+            // Check upvalues at this depth
+            for (i, uv) in self.enclosing[d].upvalues.iter().enumerate() {
+                if uv.name == name {
+                    found_at = Some((d, i as u16, false));
+                    break;
+                }
             }
+            if found_at.is_some() { break; }
         }
-        None
+
+        let (found_depth, mut index, mut is_local) = found_at?;
+
+        // Thread upvalue through intermediate frames
+        for d in (found_depth + 1)..depth {
+            let uv_idx = self.enclosing[d].upvalues.len();
+            self.enclosing[d].upvalues.push(Upvalue {
+                name: name.to_string(),
+                is_local,
+                index,
+            });
+            index = uv_idx as u16;
+            is_local = false;
+        }
+
+        // Add to current function's upvalues
+        let uv_idx = self.upvalues.len();
+        self.upvalues.push(Upvalue {
+            name: name.to_string(),
+            is_local,
+            index,
+        });
+        Some(uv_idx)
     }
 
     fn declare_local(&mut self, name: &str) {
