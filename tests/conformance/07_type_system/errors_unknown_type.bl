@@ -1,0 +1,10 @@
+@prelude(core)
+
+// Negative test: unknown type in constructor
+// Expected errors: TYP_013
+
+bad_construct : () -> Int
+bad_construct = || {
+  let x = UnknownType { field: 123 }
+  0
+}

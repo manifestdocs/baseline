@@ -1,0 +1,19 @@
+@prelude(core)
+
+// Conformance: edge cases with empty collections
+
+test "empty list length" = List.length([]) == 0
+test "empty list head" = {
+  match List.head([])
+    Some(_) -> false
+    None -> true
+}
+test "empty list tail" = List.length(List.tail([])) == 0
+test "empty list reverse" = List.length(List.reverse([])) == 0
+test "empty list sort" = List.length(List.sort([])) == 0
+test "fold empty list" = List.fold([], 0, |acc, x| acc + x) == 0
+test "map empty list" = List.length(List.map([], |x| x * 2)) == 0
+test "filter empty list" = List.length(List.filter([], |x| x > 0)) == 0
+test "concat empty lists" = List.length(List.concat([], [])) == 0
+test "concat empty left" = List.length(List.concat([], [1, 2])) == 2
+test "concat empty right" = List.length(List.concat([1, 2], [])) == 2

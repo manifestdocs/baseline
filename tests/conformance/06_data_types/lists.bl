@@ -1,0 +1,64 @@
+@prelude(core)
+
+// Conformance: list types and operations
+
+test "empty list length" = List.length([]) == 0
+test "list literal" = List.length([1, 2, 3]) == 3
+
+test "list head some" = {
+  let h = List.head([10, 20, 30])
+  Option.unwrap_or(h, 0) == 10
+}
+
+test "list head empty" = {
+  let h = List.head([])
+  Option.is_none(h) == true
+}
+
+test "list tail" = {
+  let t = List.tail([1, 2, 3])
+  List.length(t) == 2
+}
+
+test "list map" = {
+  let doubled = List.map([1, 2, 3], |x| x * 2)
+  let h = List.head(doubled)
+  Option.unwrap_or(h, 0) == 2
+}
+
+test "list filter" = {
+  let evens = List.filter([1, 2, 3, 4, 5], |x| x % 2 == 0)
+  List.length(evens) == 2
+}
+
+test "list fold" = {
+  let sum = List.fold([1, 2, 3, 4], 0, |acc, x| acc + x)
+  sum == 10
+}
+
+test "list find some" = {
+  let found = List.find([1, 2, 3], |x| x == 2)
+  Option.unwrap_or(found, 0) == 2
+}
+
+test "list find none" = {
+  let found = List.find([1, 2, 3], |x| x == 99)
+  Option.is_none(found) == true
+}
+
+test "list concat" = {
+  let combined = List.concat([1, 2], [3, 4])
+  List.length(combined) == 4
+}
+
+test "list reverse" = {
+  let rev = List.reverse([1, 2, 3])
+  let h = List.head(rev)
+  Option.unwrap_or(h, 0) == 3
+}
+
+test "list sort" = {
+  let sorted = List.sort([3, 1, 2])
+  let h = List.head(sorted)
+  Option.unwrap_or(h, 0) == 1
+}

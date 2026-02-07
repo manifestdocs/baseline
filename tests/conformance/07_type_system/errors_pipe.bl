@@ -1,0 +1,18 @@
+@prelude(core)
+
+// Negative test: pipe operator errors
+// Expected errors: TYP_019, TYP_020
+
+double : Int -> Int
+double = |x| x * 2
+
+// TYP_019: pipe argument type mismatch
+bad_pipe_type : () -> Int
+bad_pipe_type = || "hello" |> double
+
+// TYP_020: pipe target is not a function
+bad_pipe_target : () -> Int
+bad_pipe_target = || {
+  let x = 42
+  5 |> x
+}

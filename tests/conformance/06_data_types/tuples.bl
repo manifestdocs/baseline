@@ -1,0 +1,8 @@
+@prelude(core)
+
+// Conformance: tuple creation is valid syntax
+
+test "tuple exists" = {
+  let t = (1, 2)
+  true
+}

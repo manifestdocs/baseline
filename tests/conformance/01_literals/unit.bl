@@ -1,0 +1,8 @@
+@prelude(core)
+
+// Conformance: unit type — unit functions return ()
+
+side_effect_free : () -> Int
+side_effect_free = || 42
+
+test "function returns value" = side_effect_free() == 42

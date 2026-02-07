@@ -1,0 +1,38 @@
+@prelude(core)
+
+// Conformance: sum types (enums)
+
+type Direction = | North | South | East | West
+
+type Shape =
+  | Circle(Int)
+  | Rectangle(Int, Int)
+
+is_north : Direction -> Bool
+is_north = |d| {
+  match d
+    North -> true
+    _ -> false
+}
+
+area : Shape -> Int
+area = |s| {
+  match s
+    Circle(r) -> r * r * 3
+    Rectangle(w, h) -> w * h
+}
+
+dir_to_int : Direction -> Int
+dir_to_int = |d| {
+  match d
+    North -> 0
+    South -> 1
+    East -> 2
+    West -> 3
+}
+
+test "nullary constructor" = is_north(North) == true
+test "nullary not match" = is_north(South) == false
+test "payload constructor circle" = area(Circle(5)) == 75
+test "payload constructor rect" = area(Rectangle(3, 4)) == 12
+test "match all arms" = dir_to_int(East) == 2

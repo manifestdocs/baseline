@@ -1,0 +1,26 @@
+@prelude(core)
+
+// Conformance: try (?) operator for error propagation
+
+safe_divide : (Int, Int) -> Result<Int, String>
+safe_divide = |a, b| {
+  if b == 0 then Err("division by zero")
+  else Ok(a / b)
+}
+
+chain_divide : (Int, Int, Int) -> Result<Int, String>
+chain_divide = |a, b, c| {
+  let x = safe_divide(a, b)?
+  let y = safe_divide(x, c)?
+  Ok(y)
+}
+
+test "try success" = {
+  let result = chain_divide(100, 10, 2)
+  Result.unwrap(result) == 5
+}
+
+test "try propagates error" = {
+  let result = chain_divide(100, 0, 2)
+  Result.is_err(result) == true
+}

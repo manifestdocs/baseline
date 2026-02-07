@@ -1,0 +1,14 @@
+@prelude(script)
+
+// Tier 1: GCD via Euclidean algorithm — recursion, modulo
+
+gcd : (Int, Int) -> Int
+gcd = |a, b| if b == 0 then a else gcd(b, a % b)
+
+main! : () -> {Console} ()
+main! = || {
+  Console.println!("gcd(12, 8) = ${gcd(12, 8)}")
+  Console.println!("gcd(100, 75) = ${gcd(100, 75)}")
+  Console.println!("gcd(17, 13) = ${gcd(17, 13)}")
+  Console.println!("gcd(0, 5) = ${gcd(0, 5)}")
+}

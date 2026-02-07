@@ -1,0 +1,29 @@
+@prelude(core)
+
+// Conformance: pipe operator
+
+double : Int -> Int
+double = |x| x * 2
+
+increment : Int -> Int
+increment = |x| x + 1
+
+negate : Int -> Int
+negate = |x| 0 - x
+
+test "simple pipe" = {
+  let r = 5 |> double
+  r == 10
+}
+test "chained pipes" = {
+  let r = 5 |> double |> increment
+  r == 11
+}
+test "pipe with negate" = {
+  let r = 3 |> negate
+  r == -3
+}
+test "pipe chain three" = {
+  let r = 1 |> increment |> double |> increment
+  r == 5
+}

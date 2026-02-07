@@ -1,0 +1,16 @@
+@prelude(core)
+
+// Conformance: refinement types (integer intervals)
+
+type Positive = Int where self > 0
+
+type Percentage = Int where 0 <= self && self <= 100
+
+make_positive : Int -> Positive
+make_positive = |n| n
+
+make_pct : Int -> Percentage
+make_pct = |n| n
+
+test "positive refinement passes" = make_positive(5) == 5
+test "percentage refinement passes" = make_pct(50) == 50

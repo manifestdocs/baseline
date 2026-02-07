@@ -1,0 +1,16 @@
+@prelude(core)
+
+// Conformance: basic arithmetic operations
+
+test "addition" = 2 + 3 == 5
+test "subtraction" = 10 - 4 == 6
+test "multiplication" = 3 * 7 == 21
+test "division" = 15 / 3 == 5
+test "modulo" = 17 % 5 == 2
+test "negative result" = 3 - 10 == -7
+test "multiply by zero" = 42 * 0 == 0
+test "precedence mul over add" = 2 + 3 * 4 == 14
+test "precedence with let" = {
+  let sum = 2 + 3
+  sum * 4 == 20
+}

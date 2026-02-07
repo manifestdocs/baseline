@@ -1,0 +1,9 @@
+@prelude(core)
+
+// Negative test: struct field errors
+// Expected errors: TYP_011
+
+type User = { id: Int, name: String }
+
+bad_field : () -> User
+bad_field = || User { id: 1, email: "test" }

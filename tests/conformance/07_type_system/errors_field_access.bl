@@ -1,0 +1,20 @@
+@prelude(core)
+
+// Negative test: field access errors
+// Expected errors: TYP_014, TYP_015
+
+type Point = { x: Int, y: Int }
+
+// TYP_014: field not found on struct
+bad_field : () -> Int
+bad_field = || {
+  let p = Point { x: 1, y: 2 }
+  p.z
+}
+
+// TYP_015: field access on non-struct
+bad_access : () -> Int
+bad_access = || {
+  let x = 42
+  x.field
+}

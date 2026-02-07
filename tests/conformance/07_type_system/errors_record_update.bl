@@ -1,0 +1,21 @@
+@prelude(core)
+
+// Negative test: record update errors
+// Expected errors: TYP_027, TYP_028, TYP_029
+
+type Point = { x: Int, y: Int }
+
+// TYP_027: record update on non-record
+bad_update_base : Int -> Int
+bad_update_base = |x| {
+  let r = { ..x, y: 1 }
+  0
+}
+
+// TYP_029: field not found in record update
+bad_update_field : Point -> Point
+bad_update_field = |p| { ..p, z: 3 }
+
+// TYP_028: type mismatch in record update
+bad_update_type : Point -> Point
+bad_update_type = |p| { ..p, x: "hello" }

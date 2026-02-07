@@ -1,0 +1,16 @@
+@prelude(core)
+
+// Conformance: string literals
+
+test "empty string" = "" == ""
+test "simple string" = "hello" == "hello"
+test "string with spaces" = "hello world" == "hello world"
+test "string interpolation" = {
+  let x = 42
+  "${x}" == "42"
+}
+test "nested interpolation" = {
+  let a = 1
+  let b = 2
+  "${a} + ${b} = ${a + b}" == "1 + 2 = 3"
+}

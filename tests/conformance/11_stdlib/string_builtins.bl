@@ -1,0 +1,19 @@
+@prelude(core)
+
+// Conformance: String module builtins
+
+test "length" = String.length("hello") == 5
+test "length empty" = String.length("") == 0
+test "trim" = String.trim("  hi  ") == "hi"
+test "contains true" = String.contains("hello world", "world") == true
+test "contains false" = String.contains("hello", "xyz") == false
+test "starts_with true" = String.starts_with("hello", "hel") == true
+test "starts_with false" = String.starts_with("hello", "xyz") == false
+test "to_upper" = String.to_upper("hello") == "HELLO"
+test "to_lower" = String.to_lower("HELLO") == "hello"
+test "split" = {
+  let parts = String.split("a,b,c", ",")
+  List.length(parts) == 3
+}
+test "join" = String.join(["a", "b", "c"], ",") == "a,b,c"
+test "slice" = String.slice("hello world", 0, 5) == "hello"

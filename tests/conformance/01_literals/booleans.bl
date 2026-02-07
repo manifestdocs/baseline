@@ -1,0 +1,17 @@
+@prelude(core)
+
+// Conformance: boolean literals and logical operators
+
+test "true literal" = true == true
+test "false literal" = false == false
+test "not true" = not true == false
+test "not false" = not false == true
+test "and tt" = true && true == true
+test "and tf" = true && false == false
+test "and ff" = {
+  let r = false && false
+  r == false
+}
+test "or tt" = true || true == true
+test "or tf" = true || false == true
+test "or ff" = false || false == false

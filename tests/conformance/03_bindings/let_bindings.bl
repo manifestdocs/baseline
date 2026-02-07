@@ -1,0 +1,35 @@
+@prelude(core)
+
+// Conformance: let bindings and scoping
+
+test "simple binding" = {
+  let x = 42
+  x == 42
+}
+
+test "multiple bindings" = {
+  let a = 1
+  let b = 2
+  a + b == 3
+}
+
+test "binding uses previous" = {
+  let x = 10
+  let y = x + 5
+  y == 15
+}
+
+test "shadowing" = {
+  let x = 1
+  let x = 2
+  x == 2
+}
+
+test "block scope" = {
+  let x = 10
+  let y = {
+    let z = 20
+    x + z
+  }
+  y == 30
+}

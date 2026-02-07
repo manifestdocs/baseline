@@ -1,0 +1,26 @@
+@prelude(script)
+
+// Tier 1: Insertion sort — lists, recursion, HOFs
+
+insert : (Int, List<Int>) -> List<Int>
+insert = |x, sorted| {
+  if List.length(sorted) == 0 then [x]
+  else {
+    let h = Option.unwrap(List.head(sorted))
+    if x <= h then List.concat([x], sorted)
+    else List.concat([h], insert(x, List.tail(sorted)))
+  }
+}
+
+insertion_sort : List<Int> -> List<Int>
+insertion_sort = |lst| {
+  List.fold(lst, [], |sorted, x| insert(x, sorted))
+}
+
+main! : () -> {Console} ()
+main! = || {
+  let nums = [5, 3, 8, 1, 9, 2, 7, 4, 6]
+  let sorted = insertion_sort(nums)
+  Console.println!("input:  ${nums}")
+  Console.println!("sorted: ${sorted}")
+}

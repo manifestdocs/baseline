@@ -1,0 +1,15 @@
+@prelude(core)
+
+// Negative test: type mismatches
+// Expected errors: TYP_006, TYP_008
+
+// TYP_008: argument type mismatch
+add : (Int, Int) -> Int
+add = |a, b| a + b
+
+bad_call : () -> Int
+bad_call = || add("hello", 1)
+
+// TYP_006: return type mismatch
+wrong_return : () -> Int
+wrong_return = || "not an int"

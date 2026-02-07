@@ -1,0 +1,16 @@
+@prelude(core)
+
+// Conformance: Math module builtins
+
+test "abs positive" = Math.abs(5) == 5
+test "abs negative" = Math.abs(-5) == 5
+test "abs zero" = Math.abs(0) == 0
+test "min" = Math.min(3, 7) == 3
+test "min reversed" = Math.min(7, 3) == 3
+test "max" = Math.max(3, 7) == 7
+test "max reversed" = Math.max(7, 3) == 7
+test "clamp below" = Math.clamp(-5, 0, 10) == 0
+test "clamp above" = Math.clamp(15, 0, 10) == 10
+test "clamp within" = Math.clamp(5, 0, 10) == 5
+test "pow" = Math.pow(2, 8) == 256
+test "pow zero" = Math.pow(5, 0) == 1

@@ -1,0 +1,45 @@
+@prelude(core)
+
+// Conformance: record types and field access
+
+type Point = { x: Int, y: Int }
+
+type User = {
+  name: String,
+  age: Int,
+}
+
+distance_sq : (Point, Point) -> Int
+distance_sq = |a, b| {
+  let dx = a.x - b.x
+  let dy = a.y - b.y
+  dx * dx + dy * dy
+}
+
+test "record creation" = {
+  let p = Point { x: 3, y: 4 }
+  p.x == 3
+}
+
+test "record field access" = {
+  let u = User { name: "Alice", age: 30 }
+  u.age == 30
+}
+
+test "record in function" = {
+  let a = Point { x: 0, y: 0 }
+  let b = Point { x: 3, y: 4 }
+  distance_sq(a, b) == 25
+}
+
+test "record update" = {
+  let p = Point { x: 1, y: 2 }
+  let q = { ..p, x: 10 }
+  q.x == 10
+}
+
+test "record update preserves" = {
+  let p = Point { x: 1, y: 2 }
+  let q = { ..p, x: 10 }
+  q.y == 2
+}

@@ -1,0 +1,14 @@
+@prelude(script)
+
+// Conformance: Console effect and annotation (check-pass only)
+// Files with effects and main! are tested as check-pass only
+
+// Pure function — no effect annotation needed
+double : Int -> Int
+double = |x| x * 2
+
+main! : () -> {Console} ()
+main! = || {
+  let n = double(21)
+  Console.println!("${n}")
+}

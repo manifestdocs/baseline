@@ -1,0 +1,19 @@
+@prelude(core)
+
+// Conformance: Result<T, E> type
+
+test "ok value" = {
+  let x = Ok(42)
+  Result.is_ok(x) == true
+}
+
+test "err is not ok" = Result.is_ok(Err("bad")) == false
+
+test "unwrap ok" = Result.unwrap(Ok(42)) == 42
+
+test "unwrap_or err" = Result.unwrap_or(Err("fail"), 0) == 0
+
+test "map ok" = {
+  let result = Result.map(Ok(5), |x| x * 2)
+  Result.unwrap(result) == 10
+}

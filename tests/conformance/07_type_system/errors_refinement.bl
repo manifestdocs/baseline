@@ -1,0 +1,11 @@
+@prelude(core)
+
+// Negative test: refinement violations
+// Expected errors: REF_001
+
+type ValidPort = Int where self > 0 && self < 65536
+
+check_refinements : () -> ()
+check_refinements = {
+  let p : ValidPort = 0
+}

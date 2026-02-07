@@ -1,0 +1,8 @@
+@prelude(core)
+
+// Conformance: integer literals and basic operations
+
+test "integer literal" = 42 == 42
+test "zero" = 0 == 0
+test "negative" = -1 == -1
+test "large integer" = 1000000 == 1000000

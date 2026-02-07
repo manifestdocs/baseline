@@ -1,0 +1,21 @@
+@prelude(core)
+
+// Conformance: Option<T> type
+
+test "some value" = {
+  let x = Some(42)
+  Option.is_some(x) == true
+}
+
+test "none is not some" = Option.is_some(None) == false
+
+test "unwrap some" = Option.unwrap(Some(42)) == 42
+
+test "unwrap_or none" = Option.unwrap_or(None, 99) == 99
+
+test "unwrap_or some" = Option.unwrap_or(Some(42), 99) == 42
+
+test "map some" = {
+  let result = Option.map(Some(5), |x| x * 2)
+  Option.unwrap(result) == 10
+}

@@ -1,0 +1,13 @@
+@prelude(core)
+
+// Negative test: match arm type mismatch
+// Expected errors: TYP_017
+
+type Color = | Red | Blue
+
+bad_match : Color -> String
+bad_match = |c| {
+  match c
+    Red -> "red"
+    Blue -> 42
+}

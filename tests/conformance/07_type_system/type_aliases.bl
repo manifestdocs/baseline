@@ -1,0 +1,23 @@
+@prelude(core)
+
+// Conformance: type aliases and struct types
+
+type Age = Int
+
+type Pair = { first: Int, second: Int }
+
+make_pair : (Int, Int) -> Pair
+make_pair = |a, b| Pair { first: a, second: b }
+
+sum_pair : Pair -> Int
+sum_pair = |p| p.first + p.second
+
+test "struct alias" = {
+  let p = make_pair(3, 7)
+  sum_pair(p) == 10
+}
+
+test "direct struct creation" = {
+  let p = Pair { first: 1, second: 2 }
+  p.first + p.second == 3
+}

@@ -1,0 +1,9 @@
+@prelude(script)
+
+import Util
+
+main! : () -> {Console} ()
+main! = {
+  let result = Util.add(3, 7)
+  Console.println!("${result}")
+}

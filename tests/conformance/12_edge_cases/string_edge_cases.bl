@@ -1,0 +1,18 @@
+@prelude(core)
+
+// Conformance: string edge cases
+
+test "empty string length" = String.length("") == 0
+test "single char" = String.length("x") == 1
+test "string comparison" = "abc" == "abc"
+test "string inequality" = "abc" != "def"
+test "trim empty" = String.trim("") == ""
+test "trim no whitespace" = String.trim("hello") == "hello"
+test "contains empty" = String.contains("hello", "") == true
+test "starts_with empty" = String.starts_with("hello", "") == true
+test "split no delimiter" = {
+  let parts = String.split("hello", ",")
+  List.length(parts) == 1
+}
+test "join empty list" = String.join([], ",") == ""
+test "join single" = String.join(["one"], ",") == "one"

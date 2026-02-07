@@ -1,0 +1,22 @@
+@prelude(core)
+
+// Conformance: comparison operators
+
+test "equal" = 1 == 1
+test "not equal" = 1 != 2
+test "less than" = 1 < 2
+test "less than false" = {
+  let r = 2 < 1
+  not r
+}
+test "greater than" = 3 > 2
+test "greater than false" = {
+  let r = 1 > 2
+  not r
+}
+test "less or equal" = 2 <= 2
+test "less or equal lt" = 1 <= 2
+test "greater or equal" = 3 >= 3
+test "greater or equal gt" = 4 >= 3
+test "string equality" = "hello" == "hello"
+test "string inequality" = "a" != "b"

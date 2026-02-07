@@ -1,0 +1,16 @@
+@prelude(core)
+
+// Conformance: function definitions and calls
+
+add : (Int, Int) -> Int
+add = |a, b| a + b
+
+identity : Int -> Int
+identity = |x| x
+
+constant : () -> Int
+constant = || 42
+
+test "two arg function" = add(1, 2) == 3
+test "identity function" = identity(7) == 7
+test "nullary function" = constant() == 42

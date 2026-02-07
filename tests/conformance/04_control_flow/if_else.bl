@@ -1,0 +1,32 @@
+@prelude(core)
+
+// Conformance: if/else expressions
+
+test "if true" = {
+  let r = if true then 1 else 0
+  r == 1
+}
+
+test "if false" = {
+  let r = if false then 1 else 0
+  r == 0
+}
+
+test "if with comparison" = {
+  let x = 10
+  let r = if x > 5 then "big" else "small"
+  r == "big"
+}
+
+test "nested if" = {
+  let x = 15
+  let label = if x > 20 then "huge"
+    else if x > 10 then "big"
+    else "small"
+  label == "big"
+}
+
+test "if as binding" = {
+  let result = if 1 + 1 == 2 then "yes" else "no"
+  result == "yes"
+}

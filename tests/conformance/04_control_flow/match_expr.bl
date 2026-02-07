@@ -1,0 +1,35 @@
+@prelude(core)
+
+// Conformance: match expressions
+
+type Color = | Red | Green | Blue
+
+describe : Color -> String
+describe = |c| {
+  match c
+    Red -> "red"
+    Green -> "green"
+    Blue -> "blue"
+}
+
+test "match enum red" = describe(Red) == "red"
+test "match enum green" = describe(Green) == "green"
+test "match enum blue" = describe(Blue) == "blue"
+
+unwrap_default : (Option<Int>, Int) -> Int
+unwrap_default = |opt, default| {
+  match opt
+    Some(x) -> x
+    None -> default
+}
+
+test "match option some" = unwrap_default(Some(42), 0) == 42
+test "match option none" = unwrap_default(None, -1) == -1
+
+to_string : Int -> String
+to_string = |x| {
+  match x
+    _ -> "anything"
+}
+
+test "match wildcard" = to_string(99) == "anything"

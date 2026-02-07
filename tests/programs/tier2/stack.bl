@@ -1,0 +1,34 @@
+@prelude(script)
+
+// Tier 2: Stack data structure — lists as stack, pattern matching
+
+// Stack is represented as a List<Int>
+// push: prepend to front, pop: take from front
+
+push : (List<Int>, Int) -> List<Int>
+push = |stack, val| List.concat([val], stack)
+
+pop : List<Int> -> (Int, List<Int>)
+pop = |stack| {
+  let top = Option.unwrap(List.head(stack))
+  let rest = List.tail(stack)
+  (top, rest)
+}
+
+peek : List<Int> -> Int
+peek = |stack| Option.unwrap(List.head(stack))
+
+is_empty : List<Int> -> Bool
+is_empty = |stack| List.length(stack) == 0
+
+main! : () -> {Console} ()
+main! = || {
+  let s0 = []
+  let s1 = push(s0, 10)
+  let s2 = push(s1, 20)
+  let s3 = push(s2, 30)
+  Console.println!("stack: ${s3}")
+  Console.println!("peek: ${peek(s3)}")
+  Console.println!("size: ${List.length(s3)}")
+  Console.println!("empty: ${is_empty(s0)}")
+}

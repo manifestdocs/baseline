@@ -1,0 +1,18 @@
+@prelude(core)
+
+// Conformance: recursive functions
+
+factorial : Int -> Int
+factorial = |n| if n <= 1 then 1 else n * factorial(n - 1)
+
+fibonacci : Int -> Int
+fibonacci = |n| if n <= 1 then n else fibonacci(n - 1) + fibonacci(n - 2)
+
+test "factorial 0" = factorial(0) == 1
+test "factorial 1" = factorial(1) == 1
+test "factorial 5" = factorial(5) == 120
+test "factorial 10" = factorial(10) == 3628800
+test "fibonacci 0" = fibonacci(0) == 0
+test "fibonacci 1" = fibonacci(1) == 1
+test "fibonacci 6" = fibonacci(6) == 8
+test "fibonacci 10" = fibonacci(10) == 55

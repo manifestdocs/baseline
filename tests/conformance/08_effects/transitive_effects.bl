@@ -1,0 +1,10 @@
+@prelude(script)
+
+// Conformance: transitive effect checking (check-pass only)
+// Ensures main! properly declares Console when calling Console.println!
+
+main! : () -> {Console} ()
+main! = || {
+  let x = 42
+  Console.println!("Value: ${x}")
+}

@@ -1,0 +1,21 @@
+@prelude(script)
+
+// Tier 1: Binary search — recursion, arithmetic, comparisons
+
+// Binary search on a sorted list (returns index or -1)
+// Uses linear search since list indexing isn't available
+contains_sorted : (List<Int>, Int) -> Bool
+contains_sorted = |lst, target| {
+  let found = List.find(lst, |x| x == target)
+  Option.is_some(found)
+}
+
+main! : () -> {Console} ()
+main! = || {
+  let sorted = [1, 3, 5, 7, 9, 11, 13, 15]
+  Console.println!("list: ${sorted}")
+  Console.println!("contains 7: ${contains_sorted(sorted, 7)}")
+  Console.println!("contains 4: ${contains_sorted(sorted, 4)}")
+  Console.println!("contains 1: ${contains_sorted(sorted, 1)}")
+  Console.println!("contains 15: ${contains_sorted(sorted, 15)}")
+}

@@ -1,0 +1,28 @@
+@prelude(core)
+
+// Conformance: closures and higher-order functions
+
+test "lambda inline" = {
+  let double = |x| x * 2
+  double(5) == 10
+}
+
+test "closure captures binding" = {
+  let multiplier = 3
+  let triple = |x| x * multiplier
+  triple(4) == 12
+}
+
+test "nested closures" = {
+  let a = 10
+  let f = |x| {
+    let g = |y| x + y + a
+    g(3)
+  }
+  f(5) == 18
+}
+
+test "lambda as list HOF" = {
+  let doubled = List.map([1, 2, 3], |x| x * 2)
+  List.fold(doubled, 0, |acc, x| acc + x) == 12
+}

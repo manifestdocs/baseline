@@ -1,0 +1,9 @@
+@prelude(script)
+
+import Util.{add, double}
+
+main! : () -> {Console} ()
+main! = {
+  let result = add(double(5), 1)
+  Console.println!("${result}")
+}

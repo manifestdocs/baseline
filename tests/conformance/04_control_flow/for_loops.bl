@@ -1,0 +1,20 @@
+@prelude(core)
+
+// Conformance: for loops and ranges
+
+test "range creates list" = {
+  let r = 1..4
+  List.length(r) == 3
+}
+
+test "for loop sum via fold" = {
+  let nums = [1, 2, 3, 4, 5]
+  let sum = List.fold(nums, 0, |acc, x| acc + x)
+  sum == 15
+}
+
+test "range values" = {
+  let r = 1..4
+  let h = List.head(r)
+  Option.unwrap_or(h, 0) == 1
+}
