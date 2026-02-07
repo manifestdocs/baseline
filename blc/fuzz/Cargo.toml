@@ -1,0 +1,24 @@
+[package]
+name = "blc-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+blc = { path = ".." }
+tree-sitter = "0.25"
+tree-sitter-baseline = { path = "../../tree-sitter-baseline" }
+
+[[bin]]
+name = "parse"
+path = "fuzz_targets/parse.rs"
+doc = false
+
+[[bin]]
+name = "interpret"
+path = "fuzz_targets/interpret.rs"
+doc = false
