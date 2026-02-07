@@ -1,6 +1,6 @@
-use std::collections::HashMap;
-use crate::interpreter::RuntimeValue;
 use super::NativeRegistry;
+use crate::interpreter::RuntimeValue;
+use std::collections::HashMap;
 
 pub fn register(registry: &mut NativeRegistry) {
     registry.register("Json.parse", json_parse);
@@ -59,11 +59,9 @@ fn runtime_to_serde(value: &RuntimeValue) -> Result<serde_json::Value, String> {
         }
         RuntimeValue::Bool(b) => Ok(serde_json::Value::Bool(*b)),
         RuntimeValue::Int(i) => Ok(serde_json::json!(*i)),
-        RuntimeValue::Float(f) => {
-            serde_json::Number::from_f64(*f)
-                .map(serde_json::Value::Number)
-                .ok_or_else(|| format!("Json.to_string: cannot serialize float {}", f))
-        }
+        RuntimeValue::Float(f) => serde_json::Number::from_f64(*f)
+            .map(serde_json::Value::Number)
+            .ok_or_else(|| format!("Json.to_string: cannot serialize float {}", f)),
         RuntimeValue::String(s) => Ok(serde_json::Value::String(s.clone())),
         RuntimeValue::List(items) => {
             let arr: Result<Vec<serde_json::Value>, String> =
@@ -113,24 +111,30 @@ fn json_parse<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String>
         RuntimeValue::String(s) => s,
         other => return Err(format!("Json.parse expects String, got {}", other)),
     };
-    let value: serde_json::Value = serde_json::from_str(s)
-        .map_err(|e| format!("Json.parse: {}", e))?;
+    let value: serde_json::Value =
+        serde_json::from_str(s).map_err(|e| format!("Json.parse: {}", e))?;
     Ok(serde_to_runtime(value))
 }
 
 fn json_to_string<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Json.to_string expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Json.to_string expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let serde_val = runtime_to_serde(&args[0])?;
-    let json_str = serde_json::to_string(&serde_val)
-        .map_err(|e| format!("Json.to_string: {}", e))?;
+    let json_str =
+        serde_json::to_string(&serde_val).map_err(|e| format!("Json.to_string: {}", e))?;
     Ok(RuntimeValue::String(json_str))
 }
 
 fn json_to_string_pretty<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
-        return Err(format!("Json.to_string_pretty expects 1 argument, got {}", args.len()));
+        return Err(format!(
+            "Json.to_string_pretty expects 1 argument, got {}",
+            args.len()
+        ));
     }
     let serde_val = runtime_to_serde(&args[0])?;
     let json_str = serde_json::to_string_pretty(&serde_val)
@@ -152,7 +156,10 @@ mod tests {
         let result = json_parse(&[input]).unwrap();
         match result {
             RuntimeValue::Record(fields) => {
-                assert_eq!(fields.get("name"), Some(&RuntimeValue::String("Alice".into())));
+                assert_eq!(
+                    fields.get("name"),
+                    Some(&RuntimeValue::String("Alice".into()))
+                );
                 assert_eq!(fields.get("age"), Some(&RuntimeValue::Int(30)));
             }
             other => panic!("Expected Record, got {:?}", other),
@@ -195,7 +202,10 @@ mod tests {
     #[test]
     fn parse_string() {
         let input = RuntimeValue::String(r#""hello""#.into());
-        assert_eq!(json_parse(&[input]).unwrap(), RuntimeValue::String("hello".into()));
+        assert_eq!(
+            json_parse(&[input]).unwrap(),
+            RuntimeValue::String("hello".into())
+        );
     }
 
     #[test]
@@ -236,7 +246,9 @@ mod tests {
         let input = RuntimeValue::List(vec![RuntimeValue::Int(1), RuntimeValue::Int(2)]);
         let result = json_to_string_pretty(&[input]).unwrap();
         match result {
-            RuntimeValue::String(s) => assert!(s.contains('\n'), "Expected newlines in pretty output"),
+            RuntimeValue::String(s) => {
+                assert!(s.contains('\n'), "Expected newlines in pretty output")
+            }
             other => panic!("Expected String, got {:?}", other),
         }
     }

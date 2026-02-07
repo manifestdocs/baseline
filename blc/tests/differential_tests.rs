@@ -91,7 +91,11 @@ fn differential_inline_tests() {
             continue;
         }
 
-        let relative = file.strip_prefix(&dir).unwrap_or(file).display().to_string();
+        let relative = file
+            .strip_prefix(&dir)
+            .unwrap_or(file)
+            .display()
+            .to_string();
 
         let (interp_rc, interp_out, _interp_err) = blc_test(file, false);
 
@@ -122,10 +126,12 @@ fn differential_inline_tests() {
         }
 
         // If JSON output, compare test results
-        if interp_rc == 0 && let (Ok(interp_json), Ok(vm_json)) = (
-            serde_json::from_str::<serde_json::Value>(&interp_out),
-            serde_json::from_str::<serde_json::Value>(&vm_out),
-        ) {
+        if interp_rc == 0
+            && let (Ok(interp_json), Ok(vm_json)) = (
+                serde_json::from_str::<serde_json::Value>(&interp_out),
+                serde_json::from_str::<serde_json::Value>(&vm_out),
+            )
+        {
             let interp_summary = &interp_json["summary"];
             let vm_summary = &vm_json["summary"];
             if interp_summary["passed"] != vm_summary["passed"]
@@ -167,7 +173,11 @@ fn differential_run_programs() {
     let mut failed = Vec::new();
 
     for file in &files {
-        let relative = file.strip_prefix(&dir).unwrap_or(file).display().to_string();
+        let relative = file
+            .strip_prefix(&dir)
+            .unwrap_or(file)
+            .display()
+            .to_string();
 
         let (interp_rc, interp_out, _interp_err) = blc_run(file, false);
         let (vm_rc, vm_out, vm_err) = blc_run(file, true);

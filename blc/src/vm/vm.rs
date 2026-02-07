@@ -107,7 +107,11 @@ impl Vm {
 
     /// Execute a specific chunk within a multi-chunk program.
     /// Used by the VM test runner to execute individual test expression chunks.
-    pub fn execute_chunk_at(&mut self, chunks: &[Chunk], chunk_idx: usize) -> Result<Value, VmError> {
+    pub fn execute_chunk_at(
+        &mut self,
+        chunks: &[Chunk],
+        chunk_idx: usize,
+    ) -> Result<Value, VmError> {
         self.stack.clear();
         self.frames.clear();
         self.upvalue_stack.clear();
@@ -165,27 +169,29 @@ impl Vm {
                 Op::Add => {
                     let (b, a) = self.pop2_fast();
                     if a.is_int() && b.is_int() {
-                        self.stack.push(NValue::int(a.as_int().wrapping_add(b.as_int())));
+                        self.stack
+                            .push(NValue::int(a.as_int().wrapping_add(b.as_int())));
                     } else if a.is_number() && b.is_number() {
                         self.stack.push(NValue::float(a.as_f64() + b.as_f64()));
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
-                        return Err(self.error(
-                            format!("Cannot add {} and {}", a, b), line, col,
-                        ));
+                        return Err(self.error(format!("Cannot add {} and {}", a, b), line, col));
                     }
                 }
 
                 Op::Sub => {
                     let (b, a) = self.pop2_fast();
                     if a.is_int() && b.is_int() {
-                        self.stack.push(NValue::int(a.as_int().wrapping_sub(b.as_int())));
+                        self.stack
+                            .push(NValue::int(a.as_int().wrapping_sub(b.as_int())));
                     } else if a.is_number() && b.is_number() {
                         self.stack.push(NValue::float(a.as_f64() - b.as_f64()));
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("Cannot subtract {} from {}", b, a), line, col,
+                            format!("Cannot subtract {} from {}", b, a),
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -193,13 +199,16 @@ impl Vm {
                 Op::Mul => {
                     let (b, a) = self.pop2_fast();
                     if a.is_int() && b.is_int() {
-                        self.stack.push(NValue::int(a.as_int().wrapping_mul(b.as_int())));
+                        self.stack
+                            .push(NValue::int(a.as_int().wrapping_mul(b.as_int())));
                     } else if a.is_number() && b.is_number() {
                         self.stack.push(NValue::float(a.as_f64() * b.as_f64()));
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("Cannot multiply {} and {}", a, b), line, col,
+                            format!("Cannot multiply {} and {}", a, b),
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -216,9 +225,7 @@ impl Vm {
                         self.stack.push(NValue::float(a.as_f64() / b.as_f64()));
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
-                        return Err(self.error(
-                            format!("Cannot divide {} by {}", a, b), line, col,
-                        ));
+                        return Err(self.error(format!("Cannot divide {} by {}", a, b), line, col));
                     }
                 }
 
@@ -232,9 +239,7 @@ impl Vm {
                         self.stack.push(NValue::int(a.as_int() % b.as_int()));
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
-                        return Err(self.error(
-                            format!("Cannot modulo {} by {}", a, b), line, col,
-                        ));
+                        return Err(self.error(format!("Cannot modulo {} by {}", a, b), line, col));
                     }
                 }
 
@@ -246,20 +251,20 @@ impl Vm {
                         self.stack.push(NValue::float(-v.as_float()));
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
-                        return Err(self.error(
-                            format!("Cannot negate {}", v), line, col,
-                        ));
+                        return Err(self.error(format!("Cannot negate {}", v), line, col));
                     }
                 }
 
                 Op::AddInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_any_int().wrapping_add(b.as_any_int())));
+                    self.stack
+                        .push(NValue::int(a.as_any_int().wrapping_add(b.as_any_int())));
                 }
 
                 Op::SubInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_any_int().wrapping_sub(b.as_any_int())));
+                    self.stack
+                        .push(NValue::int(a.as_any_int().wrapping_sub(b.as_any_int())));
                 }
 
                 Op::Not => {
@@ -284,7 +289,9 @@ impl Vm {
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("Cannot compare {} and {}", a, b), line, col,
+                                format!("Cannot compare {} and {}", a, b),
+                                line,
+                                col,
                             ));
                         }
                     }
@@ -297,7 +304,9 @@ impl Vm {
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("Cannot compare {} and {}", a, b), line, col,
+                                format!("Cannot compare {} and {}", a, b),
+                                line,
+                                col,
                             ));
                         }
                     }
@@ -310,7 +319,9 @@ impl Vm {
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("Cannot compare {} and {}", a, b), line, col,
+                                format!("Cannot compare {} and {}", a, b),
+                                line,
+                                col,
                             ));
                         }
                     }
@@ -323,7 +334,9 @@ impl Vm {
                         None => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("Cannot compare {} and {}", a, b), line, col,
+                                format!("Cannot compare {} and {}", a, b),
+                                line,
+                                col,
                             ));
                         }
                     }
@@ -331,17 +344,20 @@ impl Vm {
 
                 Op::LtInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() < b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() < b.as_any_int()));
                 }
 
                 Op::LeInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() <= b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() <= b.as_any_int()));
                 }
 
                 Op::MulInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_any_int().wrapping_mul(b.as_any_int())));
+                    self.stack
+                        .push(NValue::int(a.as_any_int().wrapping_mul(b.as_any_int())));
                 }
 
                 Op::DivInt => {
@@ -366,25 +382,30 @@ impl Vm {
 
                 Op::GtInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() > b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() > b.as_any_int()));
                 }
 
                 Op::GeInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() >= b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() >= b.as_any_int()));
                 }
 
                 Op::Concat => {
                     let (b, a) = self.pop2_fast();
                     // Fast path: both strings — avoid Display overhead
-                    if a.is_heap() && b.is_heap()
-                        && let (HeapObject::String(sa), HeapObject::String(sb)) = (a.as_heap_ref(), b.as_heap_ref()) {
-                            let mut s = String::with_capacity(sa.len() + sb.len());
-                            s.push_str(sa);
-                            s.push_str(sb);
-                            self.stack.push(NValue::string(s.into()));
-                            continue;
-                        }
+                    if a.is_heap()
+                        && b.is_heap()
+                        && let (HeapObject::String(sa), HeapObject::String(sb)) =
+                            (a.as_heap_ref(), b.as_heap_ref())
+                    {
+                        let mut s = String::with_capacity(sa.len() + sb.len());
+                        s.push_str(sa);
+                        s.push_str(sb);
+                        self.stack.push(NValue::string(s.into()));
+                        continue;
+                    }
                     // Slow path: mixed types via Display
                     let result = NValue::string(format!("{}{}", a, b).into());
                     self.stack.push(result);
@@ -401,7 +422,9 @@ impl Vm {
                     let idx = base_slot + slot as usize;
                     debug_assert!(idx < self.stack.len());
                     let val = unsafe { self.stack.get_unchecked(self.stack.len() - 1) }.clone();
-                    unsafe { *self.stack.get_unchecked_mut(idx) = val; }
+                    unsafe {
+                        *self.stack.get_unchecked_mut(idx) = val;
+                    }
                 }
 
                 Op::PopN(n) => {
@@ -437,9 +460,10 @@ impl Vm {
 
                 Op::JumpIfTrue(offset) => {
                     if let Some(v) = self.stack.last()
-                        && v.is_truthy() {
-                            ip += offset as usize;
-                        }
+                        && v.is_truthy()
+                    {
+                        ip += offset as usize;
+                    }
                 }
 
                 Op::JumpBack(offset) => {
@@ -455,8 +479,12 @@ impl Vm {
                         if size > MAX_RANGE_SIZE {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("Range too large ({} elements, max {})", size, MAX_RANGE_SIZE),
-                                line, col,
+                                format!(
+                                    "Range too large ({} elements, max {})",
+                                    size, MAX_RANGE_SIZE
+                                ),
+                                line,
+                                col,
                             ));
                         }
                         let list: Vec<NValue> = (start..end).map(NValue::int).collect();
@@ -465,7 +493,8 @@ impl Vm {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
                             format!("Range requires integers, got {} and {}", start_val, end_val),
-                            line, col,
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -479,22 +508,31 @@ impl Vm {
                                 let (line, col) = chunk.source_map[ip - 1];
                                 return Err(self.error(
                                     format!("Index {} out of bounds (len {})", idx, items.len()),
-                                    line, col,
+                                    line,
+                                    col,
                                 ));
                             }
                             self.stack.push(items[idx].clone());
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("ListGet requires List and Int, got {} and {}", list_val, idx_val),
-                                line, col,
+                                format!(
+                                    "ListGet requires List and Int, got {} and {}",
+                                    list_val, idx_val
+                                ),
+                                line,
+                                col,
                             ));
                         }
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("ListGet requires List and Int, got {} and {}", list_val, idx_val),
-                            line, col,
+                            format!(
+                                "ListGet requires List and Int, got {} and {}",
+                                list_val, idx_val
+                            ),
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -508,14 +546,16 @@ impl Vm {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("ListLen requires List, got {}", list_val),
-                                line, col,
+                                line,
+                                col,
                             ));
                         }
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
                             format!("ListLen requires List, got {}", list_val),
-                            line, col,
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -540,14 +580,16 @@ impl Vm {
                                 let (line, col) = chunk.source_map[ip - 1];
                                 return Err(self.error(
                                     format!("Record key must be String, got {}", pair[0]),
-                                    line, col,
+                                    line,
+                                    col,
                                 ));
                             }
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("Record key must be String, got {}", pair[0]),
-                                line, col,
+                                line,
+                                col,
                             ));
                         }
                     }
@@ -559,7 +601,11 @@ impl Vm {
                         Value::String(s) => s.clone(),
                         _ => {
                             let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error("GetField constant must be String".into(), line, col));
+                            return Err(self.error(
+                                "GetField constant must be String".into(),
+                                line,
+                                col,
+                            ));
                         }
                     };
                     let record = self.pop_fast();
@@ -567,7 +613,8 @@ impl Vm {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
                             format!("Cannot access field '{}' on {}", field_name, record),
-                            line, col,
+                            line,
+                            col,
                         ));
                     }
                     match record.as_heap_ref() {
@@ -578,7 +625,8 @@ impl Vm {
                                     let (line, col) = chunk.source_map[ip - 1];
                                     return Err(self.error(
                                         format!("Record has no field '{}'", field_name),
-                                        line, col,
+                                        line,
+                                        col,
                                     ));
                                 }
                             }
@@ -587,7 +635,8 @@ impl Vm {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
                                 format!("Cannot access field '{}' on {}", field_name, record),
-                                line, col,
+                                line,
+                                col,
                             ));
                         }
                     }
@@ -608,21 +657,30 @@ impl Vm {
                             if i >= items.len() {
                                 let (line, col) = chunk.source_map[ip - 1];
                                 return Err(self.error(
-                                    format!("Tuple index {} out of bounds (len {})", i, items.len()),
-                                    line, col,
+                                    format!(
+                                        "Tuple index {} out of bounds (len {})",
+                                        i,
+                                        items.len()
+                                    ),
+                                    line,
+                                    col,
                                 ));
                             }
                             self.stack.push(items[i].clone());
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("TupleGet requires Tuple, got {}", tuple), line, col,
+                                format!("TupleGet requires Tuple, got {}", tuple),
+                                line,
+                                col,
                             ));
                         }
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("TupleGet requires Tuple, got {}", tuple), line, col,
+                            format!("TupleGet requires Tuple, got {}", tuple),
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -632,7 +690,11 @@ impl Vm {
                         Value::String(s) => s.clone(),
                         _ => {
                             let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error("MakeEnum constant must be String".into(), line, col));
+                            return Err(self.error(
+                                "MakeEnum constant must be String".into(),
+                                line,
+                                col,
+                            ));
                         }
                     };
                     let payload = self.pop_fast();
@@ -644,7 +706,11 @@ impl Vm {
                         Value::String(s) => s.clone(),
                         _ => {
                             let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error("MakeStruct constant must be String".into(), line, col));
+                            return Err(self.error(
+                                "MakeStruct constant must be String".into(),
+                                line,
+                                col,
+                            ));
                         }
                     };
                     let record = self.pop_fast();
@@ -654,13 +720,17 @@ impl Vm {
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("MakeStruct requires Record, got {}", record), line, col,
+                                format!("MakeStruct requires Record, got {}", record),
+                                line,
+                                col,
                             ));
                         }
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("MakeStruct requires Record, got {}", record), line, col,
+                            format!("MakeStruct requires Record, got {}", record),
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -673,13 +743,17 @@ impl Vm {
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("EnumTag requires Enum, got {}", val), line, col,
+                                format!("EnumTag requires Enum, got {}", val),
+                                line,
+                                col,
                             ));
                         }
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("EnumTag requires Enum, got {}", val), line, col,
+                            format!("EnumTag requires Enum, got {}", val),
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -692,13 +766,17 @@ impl Vm {
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("EnumPayload requires Enum, got {}", val), line, col,
+                                format!("EnumPayload requires Enum, got {}", val),
+                                line,
+                                col,
                             ));
                         }
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("EnumPayload requires Enum, got {}", val), line, col,
+                            format!("EnumPayload requires Enum, got {}", val),
+                            line,
+                            col,
                         ));
                     }
                 }
@@ -711,7 +789,9 @@ impl Vm {
                     if !base.is_heap() {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
-                            format!("UpdateRecord requires Record, got {}", base), line, col,
+                            format!("UpdateRecord requires Record, got {}", base),
+                            line,
+                            col,
                         ));
                     }
                     match base.as_heap_ref() {
@@ -719,16 +799,21 @@ impl Vm {
                             let mut new_fields = fields.clone();
                             for pair in updates.chunks(2) {
                                 if pair[0].is_heap()
-                                    && let HeapObject::String(key) = pair[0].as_heap_ref() {
-                                        if let Some(existing) = new_fields.iter_mut().find(|(k, _)| *k == *key) {
-                                            existing.1 = pair[1].clone();
-                                        } else {
-                                            let (line, col) = chunk.source_map[ip - 1];
-                                            return Err(self.error(
-                                                format!("Record has no field '{}'", key), line, col,
-                                            ));
-                                        }
+                                    && let HeapObject::String(key) = pair[0].as_heap_ref()
+                                {
+                                    if let Some(existing) =
+                                        new_fields.iter_mut().find(|(k, _)| *k == *key)
+                                    {
+                                        existing.1 = pair[1].clone();
+                                    } else {
+                                        let (line, col) = chunk.source_map[ip - 1];
+                                        return Err(self.error(
+                                            format!("Record has no field '{}'", key),
+                                            line,
+                                            col,
+                                        ));
                                     }
+                                }
                             }
                             self.stack.push(NValue::record(new_fields));
                         }
@@ -736,36 +821,44 @@ impl Vm {
                             let mut new_fields = fields.clone();
                             for pair in updates.chunks(2) {
                                 if pair[0].is_heap()
-                                    && let HeapObject::String(key) = pair[0].as_heap_ref() {
-                                        if let Some(existing) = new_fields.iter_mut().find(|(k, _)| *k == *key) {
-                                            existing.1 = pair[1].clone();
-                                        } else {
-                                            let (line, col) = chunk.source_map[ip - 1];
-                                            return Err(self.error(
-                                                format!("Record has no field '{}'", key), line, col,
-                                            ));
-                                        }
+                                    && let HeapObject::String(key) = pair[0].as_heap_ref()
+                                {
+                                    if let Some(existing) =
+                                        new_fields.iter_mut().find(|(k, _)| *k == *key)
+                                    {
+                                        existing.1 = pair[1].clone();
+                                    } else {
+                                        let (line, col) = chunk.source_map[ip - 1];
+                                        return Err(self.error(
+                                            format!("Record has no field '{}'", key),
+                                            line,
+                                            col,
+                                        ));
                                     }
+                                }
                             }
-                            self.stack.push(NValue::struct_val(name.clone(), new_fields));
+                            self.stack
+                                .push(NValue::struct_val(name.clone(), new_fields));
                         }
                         _ => {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!("UpdateRecord requires Record, got {}", base), line, col,
+                                format!("UpdateRecord requires Record, got {}", base),
+                                line,
+                                col,
                             ));
                         }
                     }
                 }
 
                 // -- Functions --
-
                 Op::Call(arg_count) => {
                     if self.frames.len() >= MAX_CALL_DEPTH {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
                             "Stack overflow: maximum call depth exceeded".into(),
-                            line, col,
+                            line,
+                            col,
                         ));
                     }
                     let n = arg_count as usize;
@@ -775,21 +868,21 @@ impl Vm {
                     let (new_chunk_idx, new_upvalue_idx) = if func.is_function() {
                         (func.as_function(), u32::MAX)
                     } else if func.is_heap() {
-                        if let HeapObject::Closure { chunk_idx: idx, upvalues } = func.as_heap_ref() {
+                        if let HeapObject::Closure {
+                            chunk_idx: idx,
+                            upvalues,
+                        } = func.as_heap_ref()
+                        {
                             let uv_idx = self.upvalue_stack.len() as u32;
                             self.upvalue_stack.push(Rc::new(upvalues.clone()));
                             (*idx, uv_idx)
                         } else {
                             let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error(
-                                format!("Cannot call {}", func), line, col,
-                            ));
+                            return Err(self.error(format!("Cannot call {}", func), line, col));
                         }
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
-                        return Err(self.error(
-                            format!("Cannot call {}", func), line, col,
-                        ));
+                        return Err(self.error(format!("Cannot call {}", func), line, col));
                     };
 
                     // Save current frame state before pushing new frame
@@ -822,7 +915,8 @@ impl Vm {
                     let n = upvalue_count as usize;
                     let start = self.stack.len() - n;
                     let upvalues: Vec<NValue> = self.stack.drain(start..).collect();
-                    self.stack.push(NValue::closure(new_chunk_idx as usize, upvalues));
+                    self.stack
+                        .push(NValue::closure(new_chunk_idx as usize, upvalues));
                 }
 
                 Op::CallNative(fn_id, arg_count) => {
@@ -847,7 +941,6 @@ impl Vm {
                 }
 
                 // -- Superinstructions --
-
                 Op::GetLocalSubInt(slot, k) => {
                     let idx = base_slot + slot as usize;
                     debug_assert!(idx < self.stack.len());
@@ -870,7 +963,9 @@ impl Vm {
                     let args_start = self.stack.len() - n;
                     for i in 0..n {
                         let val = unsafe { self.stack.get_unchecked(args_start + i) }.clone();
-                        unsafe { *self.stack.get_unchecked_mut(base_slot + i) = val; }
+                        unsafe {
+                            *self.stack.get_unchecked_mut(base_slot + i) = val;
+                        }
                     }
                     // Truncate the stack: keep only base_slot + n (the args)
                     self.stack.truncate(base_slot + n);
@@ -953,7 +1048,9 @@ impl Vm {
     }
 
     fn pop(&mut self, line: usize, col: usize) -> Result<NValue, VmError> {
-        self.stack.pop().ok_or_else(|| self.error("Stack underflow".into(), line, col))
+        self.stack
+            .pop()
+            .ok_or_else(|| self.error("Stack underflow".into(), line, col))
     }
 
     /// Execute a HOF native function by calling bytecode closures from within the VM loop.
@@ -978,11 +1075,18 @@ impl Vm {
                 }
                 let items = match list.as_heap_ref() {
                     HeapObject::List(v) => v.clone(),
-                    _ => return Err(self.error("List.map: first arg must be List".into(), line, col)),
+                    _ => {
+                        return Err(self.error(
+                            "List.map: first arg must be List".into(),
+                            line,
+                            col,
+                        ));
+                    }
                 };
                 let mut results = Vec::with_capacity(items.len());
                 for item in &items {
-                    let result = self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
+                    let result =
+                        self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
                     results.push(result);
                 }
                 self.stack.push(NValue::list(results));
@@ -994,15 +1098,26 @@ impl Vm {
                 let func = self.pop(line, col)?;
                 let list = self.pop(line, col)?;
                 if !list.is_heap() {
-                    return Err(self.error("List.filter: first arg must be List".into(), line, col));
+                    return Err(self.error(
+                        "List.filter: first arg must be List".into(),
+                        line,
+                        col,
+                    ));
                 }
                 let items = match list.as_heap_ref() {
                     HeapObject::List(v) => v.clone(),
-                    _ => return Err(self.error("List.filter: first arg must be List".into(), line, col)),
+                    _ => {
+                        return Err(self.error(
+                            "List.filter: first arg must be List".into(),
+                            line,
+                            col,
+                        ));
+                    }
                 };
                 let mut results = Vec::new();
                 for item in &items {
-                    let result = self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
+                    let result =
+                        self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
                     if result.is_truthy() {
                         results.push(item.clone());
                     }
@@ -1021,7 +1136,13 @@ impl Vm {
                 }
                 let items = match list.as_heap_ref() {
                     HeapObject::List(v) => v.clone(),
-                    _ => return Err(self.error("List.fold: first arg must be List".into(), line, col)),
+                    _ => {
+                        return Err(self.error(
+                            "List.fold: first arg must be List".into(),
+                            line,
+                            col,
+                        ));
+                    }
                 };
                 let mut acc = initial;
                 for item in &items {
@@ -1040,11 +1161,18 @@ impl Vm {
                 }
                 let items = match list.as_heap_ref() {
                     HeapObject::List(v) => v.clone(),
-                    _ => return Err(self.error("List.find: first arg must be List".into(), line, col)),
+                    _ => {
+                        return Err(self.error(
+                            "List.find: first arg must be List".into(),
+                            line,
+                            col,
+                        ));
+                    }
                 };
                 let mut found = NValue::enum_val("None".into(), NValue::unit());
                 for item in &items {
-                    let result = self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
+                    let result =
+                        self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
                     if result.is_truthy() {
                         found = NValue::enum_val("Some".into(), item.clone());
                         break;
@@ -1059,17 +1187,34 @@ impl Vm {
                 let func = self.pop(line, col)?;
                 let opt = self.pop(line, col)?;
                 if !opt.is_heap() {
-                    return Err(self.error("Option.map: first arg must be Option".into(), line, col));
+                    return Err(self.error(
+                        "Option.map: first arg must be Option".into(),
+                        line,
+                        col,
+                    ));
                 }
                 match opt.as_heap_ref() {
                     HeapObject::Enum { tag, payload } if &**tag == "Some" => {
-                        let result = self.call_nvalue(&func, std::slice::from_ref(payload), chunks, line, col)?;
+                        let result = self.call_nvalue(
+                            &func,
+                            std::slice::from_ref(payload),
+                            chunks,
+                            line,
+                            col,
+                        )?;
                         self.stack.push(NValue::enum_val("Some".into(), result));
                     }
                     HeapObject::Enum { tag, .. } if &**tag == "None" => {
-                        self.stack.push(NValue::enum_val("None".into(), NValue::unit()));
+                        self.stack
+                            .push(NValue::enum_val("None".into(), NValue::unit()));
                     }
-                    _ => return Err(self.error("Option.map: first arg must be Option".into(), line, col)),
+                    _ => {
+                        return Err(self.error(
+                            "Option.map: first arg must be Option".into(),
+                            line,
+                            col,
+                        ));
+                    }
                 }
             }
             "Result.map" => {
@@ -1079,17 +1224,34 @@ impl Vm {
                 let func = self.pop(line, col)?;
                 let res = self.pop(line, col)?;
                 if !res.is_heap() {
-                    return Err(self.error("Result.map: first arg must be Result".into(), line, col));
+                    return Err(self.error(
+                        "Result.map: first arg must be Result".into(),
+                        line,
+                        col,
+                    ));
                 }
                 match res.as_heap_ref() {
                     HeapObject::Enum { tag, payload } if &**tag == "Ok" => {
-                        let result = self.call_nvalue(&func, std::slice::from_ref(payload), chunks, line, col)?;
+                        let result = self.call_nvalue(
+                            &func,
+                            std::slice::from_ref(payload),
+                            chunks,
+                            line,
+                            col,
+                        )?;
                         self.stack.push(NValue::enum_val("Ok".into(), result));
                     }
                     HeapObject::Enum { tag, payload } if &**tag == "Err" => {
-                        self.stack.push(NValue::enum_val("Err".into(), payload.clone()));
+                        self.stack
+                            .push(NValue::enum_val("Err".into(), payload.clone()));
                     }
-                    _ => return Err(self.error("Result.map: first arg must be Result".into(), line, col)),
+                    _ => {
+                        return Err(self.error(
+                            "Result.map: first arg must be Result".into(),
+                            line,
+                            col,
+                        ));
+                    }
                 }
             }
             _ => {
@@ -1111,7 +1273,8 @@ impl Vm {
         if self.frames.len() >= MAX_CALL_DEPTH {
             return Err(self.error(
                 "Stack overflow: maximum call depth exceeded".into(),
-                line, col,
+                line,
+                col,
             ));
         }
         let base_depth = self.frames.len();
@@ -1120,7 +1283,11 @@ impl Vm {
         let (ci, uv_idx) = if func.is_function() {
             (func.as_function(), u32::MAX)
         } else if func.is_heap() {
-            if let HeapObject::Closure { chunk_idx, upvalues } = func.as_heap_ref() {
+            if let HeapObject::Closure {
+                chunk_idx,
+                upvalues,
+            } = func.as_heap_ref()
+            {
                 let idx = self.upvalue_stack.len() as u32;
                 self.upvalue_stack.push(Rc::new(upvalues.clone()));
                 (*chunk_idx, idx)
@@ -1522,8 +1689,14 @@ mod tests {
             entry: 0,
         };
         let mut vm = Vm::new();
-        let err = vm.execute_program(&program).expect_err("Expected stack overflow");
-        assert!(err.message.contains("Stack overflow"), "got: {}", err.message);
+        let err = vm
+            .execute_program(&program)
+            .expect_err("Expected stack overflow");
+        assert!(
+            err.message.contains("Stack overflow"),
+            "got: {}",
+            err.message
+        );
     }
 
     // -- Superinstruction tests --
@@ -1534,7 +1707,7 @@ mod tests {
         // GetLocal(0) + LoadSmallInt(1) + SubInt
         let mut c_unfused = Chunk::new();
         let arg = c_unfused.add_constant(Value::Int(10));
-        c_unfused.emit(Op::LoadConst(arg), 1, 0);    // push 10 as local slot 0
+        c_unfused.emit(Op::LoadConst(arg), 1, 0); // push 10 as local slot 0
         c_unfused.emit(Op::GetLocal(0), 1, 0);
         c_unfused.emit(Op::LoadSmallInt(1), 1, 0);
         c_unfused.emit(Op::SubInt, 1, 0);
@@ -1543,7 +1716,7 @@ mod tests {
 
         let mut c_fused = Chunk::new();
         let arg = c_fused.add_constant(Value::Int(10));
-        c_fused.emit(Op::LoadConst(arg), 1, 0);       // push 10 as local slot 0
+        c_fused.emit(Op::LoadConst(arg), 1, 0); // push 10 as local slot 0
         c_fused.emit(Op::GetLocalSubInt(0, 1), 1, 0);
         c_fused.emit(Op::Return, 1, 0);
         let fused_result = run_chunk(c_fused);
@@ -1677,10 +1850,10 @@ mod tests {
         let func = entry.add_constant(Value::Function(1));
         let n = entry.add_constant(Value::Int(10));
         let acc = entry.add_constant(Value::Int(1));
-        entry.emit(Op::LoadConst(func), 1, 0);   // push function
-        entry.emit(Op::LoadConst(n), 1, 0);       // push 10
-        entry.emit(Op::LoadConst(acc), 1, 0);     // push 1
-        entry.emit(Op::Call(2), 1, 0);             // call fact(10, 1)
+        entry.emit(Op::LoadConst(func), 1, 0); // push function
+        entry.emit(Op::LoadConst(n), 1, 0); // push 10
+        entry.emit(Op::LoadConst(acc), 1, 0); // push 1
+        entry.emit(Op::Call(2), 1, 0); // call fact(10, 1)
         entry.emit(Op::Return, 1, 0);
 
         // fact: slot 0 = n, slot 1 = acc
@@ -1688,22 +1861,22 @@ mod tests {
         let mut fact = Chunk::new();
         let one = fact.add_constant(Value::Int(1));
         // Check n <= 1
-        fact.emit(Op::GetLocal(0), 2, 0);         // push n
-        fact.emit(Op::LoadConst(one), 2, 0);       // push 1
-        fact.emit(Op::Le, 2, 0);                   // n <= 1
+        fact.emit(Op::GetLocal(0), 2, 0); // push n
+        fact.emit(Op::LoadConst(one), 2, 0); // push 1
+        fact.emit(Op::Le, 2, 0); // n <= 1
         let then_jump = fact.emit(Op::JumpIfFalse(0), 2, 0);
         // Then: return acc
-        fact.emit(Op::GetLocal(1), 3, 0);          // push acc
+        fact.emit(Op::GetLocal(1), 3, 0); // push acc
         let else_jump = fact.emit(Op::Jump(0), 3, 0);
         // Else: TailCall(n-1, n*acc)
         fact.patch_jump(then_jump);
-        fact.emit(Op::GetLocal(0), 4, 0);          // push n
-        fact.emit(Op::LoadConst(one), 4, 0);       // push 1
-        fact.emit(Op::Sub, 4, 0);                  // n - 1  (first arg)
-        fact.emit(Op::GetLocal(0), 4, 0);          // push n
-        fact.emit(Op::GetLocal(1), 4, 0);          // push acc
-        fact.emit(Op::Mul, 4, 0);                  // n * acc  (second arg)
-        fact.emit(Op::TailCall(2), 4, 0);          // tail call with 2 args
+        fact.emit(Op::GetLocal(0), 4, 0); // push n
+        fact.emit(Op::LoadConst(one), 4, 0); // push 1
+        fact.emit(Op::Sub, 4, 0); // n - 1  (first arg)
+        fact.emit(Op::GetLocal(0), 4, 0); // push n
+        fact.emit(Op::GetLocal(1), 4, 0); // push acc
+        fact.emit(Op::Mul, 4, 0); // n * acc  (second arg)
+        fact.emit(Op::TailCall(2), 4, 0); // tail call with 2 args
         fact.patch_jump(else_jump);
         fact.emit(Op::Return, 5, 0);
 
@@ -1788,10 +1961,10 @@ mod tests {
         sum.patch_jump(then_jump);
         sum.emit(Op::GetLocal(0), 4, 0);
         sum.emit(Op::LoadConst(one_c), 4, 0);
-        sum.emit(Op::Sub, 4, 0);                  // n - 1
+        sum.emit(Op::Sub, 4, 0); // n - 1
         sum.emit(Op::GetLocal(1), 4, 0);
         sum.emit(Op::GetLocal(0), 4, 0);
-        sum.emit(Op::Add, 4, 0);                  // acc + n
+        sum.emit(Op::Add, 4, 0); // acc + n
         sum.emit(Op::TailCall(2), 4, 0);
         sum.patch_jump(else_jump);
         sum.emit(Op::Return, 5, 0);

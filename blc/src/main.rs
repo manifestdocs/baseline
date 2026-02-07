@@ -101,7 +101,9 @@ fn main() {
                 run_file_vm(&file);
             }
         }
-        Commands::Test { file, json, interp, .. } => {
+        Commands::Test {
+            file, json, interp, ..
+        } => {
             let result = if interp {
                 test_runner::run_test_file(&file)
             } else {
@@ -162,20 +164,45 @@ fn run_file_vm(file: &PathBuf) {
     // Run the type checker to build a TypeMap for opcode specialization.
     // If analysis produces errors, degrade gracefully (compile without TypeMap).
     let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
-    let has_type_errors = type_diags.iter().any(|d| d.severity == diagnostics::Severity::Error);
-    let type_map = if has_type_errors { None } else { Some(type_map) };
+    let has_type_errors = type_diags
+        .iter()
+        .any(|d| d.severity == diagnostics::Severity::Error);
+    let type_map = if has_type_errors {
+        None
+    } else {
+        Some(type_map)
+    };
 
-    let mut vm = vm::vm::Vm::new();
+    let mut vm_instance = vm::vm::Vm::new();
 
     let imports = resolver::ModuleLoader::parse_imports(&root, &source);
     let program = if imports.is_empty() {
-        let compiler = match type_map {
-            Some(tm) => vm::compiler::Compiler::new_with_type_map(&source, vm.natives(), tm),
-            None => vm::compiler::Compiler::new(&source, vm.natives()),
-        };
-        compiler.compile_program(&root)
+        // Use the new IR pipeline: CST → lower → codegen → Program
+        let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
+        let ir_module = lowerer
+            .lower_module(&root)
+            .map_err(|e| vm::compiler::CompileError {
+                message: e.message,
+                line: e.line,
+                col: e.col,
+            });
+        ir_module.and_then(|module| {
+            let codegen = vm::codegen::Codegen::new(vm_instance.natives());
+            codegen
+                .generate_program(&module)
+                .map_err(|e| vm::compiler::CompileError {
+                    message: e.message,
+                    line: e.line,
+                    col: e.col,
+                })
+        })
     } else {
-        vm::module_compiler::compile_with_imports(&source, &root, file.as_path(), vm.natives())
+        vm::module_compiler::compile_with_imports(
+            &source,
+            &root,
+            file.as_path(),
+            vm_instance.natives(),
+        )
     };
 
     let mut program = match program {
@@ -186,14 +213,20 @@ fn run_file_vm(file: &PathBuf) {
         }
     };
     program.optimize();
-    match vm.execute_program(&program) {
+    match vm_instance.execute_program(&program) {
         Ok(val) => {
             if !matches!(val, vm::value::Value::Unit) {
                 println!("{}", val);
             }
         }
         Err(e) => {
-            eprintln!("Runtime Error: {}:{}:{}: {}", file.display(), e.line, e.col, e.message);
+            eprintln!(
+                "Runtime Error: {}:{}:{}: {}",
+                file.display(),
+                e.line,
+                e.col,
+                e.message
+            );
             std::process::exit(1);
         }
     }
@@ -414,7 +447,11 @@ fn print_human_readable(result: &CheckResult) {
         };
         eprintln!(
             "{}:{}:{}: {}: {} [{}]",
-            diag.location.file, diag.location.line, diag.location.col, prefix, diag.message,
+            diag.location.file,
+            diag.location.line,
+            diag.location.col,
+            prefix,
+            diag.message,
             diag.code
         );
         if !diag.context.is_empty() {

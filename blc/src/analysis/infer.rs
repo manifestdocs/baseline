@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use super::types::Type;
+use std::collections::HashMap;
 
 /// A parameterized type template for generic builtins.
 /// `type_params` is the number of generic params (e.g., 1 for List<T>, 2 for Result<T,E>).
@@ -77,9 +77,7 @@ impl InferCtx {
                 }
                 self.unify(ret_a, ret_b)
             }
-            (Type::List(inner_a), Type::List(inner_b)) => {
-                self.unify(inner_a, inner_b)
-            }
+            (Type::List(inner_a), Type::List(inner_b)) => self.unify(inner_a, inner_b),
             (Type::Tuple(elems_a), Type::Tuple(elems_b)) => {
                 if elems_a.len() != elems_b.len() {
                     return Err(format!(
@@ -155,16 +153,13 @@ impl InferCtx {
                 }
             }
             Type::Function(params, ret) => {
-                params.iter().any(|p| self.occurs_check(var, p))
-                    || self.occurs_check(var, ret)
+                params.iter().any(|p| self.occurs_check(var, p)) || self.occurs_check(var, ret)
             }
             Type::List(inner) => self.occurs_check(var, inner),
             Type::Tuple(elems) => elems.iter().any(|e| self.occurs_check(var, e)),
-            Type::Enum(_, variants) => {
-                variants.iter().any(|(_, payloads)| {
-                    payloads.iter().any(|p| self.occurs_check(var, p))
-                })
-            }
+            Type::Enum(_, variants) => variants
+                .iter()
+                .any(|(_, payloads)| payloads.iter().any(|p| self.occurs_check(var, p))),
             _ => false,
         }
     }
@@ -189,319 +184,364 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
     let mut schemas = HashMap::new();
 
     // List.map : (List<A>, (A) -> B) -> List<B>
-    schemas.insert("List.map".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let b = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone())), Type::Function(vec![a], Box::new(b.clone()))],
-                Box::new(Type::List(Box::new(b))),
-            )
+    schemas.insert(
+        "List.map".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let b = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::List(Box::new(a.clone())),
+                        Type::Function(vec![a], Box::new(b.clone())),
+                    ],
+                    Box::new(Type::List(Box::new(b))),
+                )
+            },
         },
-    });
+    );
 
     // List.filter : (List<A>, (A) -> Bool) -> List<A>
-    schemas.insert("List.filter".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone())), Type::Function(vec![a.clone()], Box::new(Type::Bool))],
-                Box::new(Type::List(Box::new(a))),
-            )
+    schemas.insert(
+        "List.filter".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::List(Box::new(a.clone())),
+                        Type::Function(vec![a.clone()], Box::new(Type::Bool)),
+                    ],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
         },
-    });
+    );
 
     // List.fold : (List<A>, B, (B, A) -> B) -> B
-    schemas.insert("List.fold".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let b = ctx.fresh_var();
-            Type::Function(
-                vec![
-                    Type::List(Box::new(a.clone())),
-                    b.clone(),
-                    Type::Function(vec![b.clone(), a], Box::new(b.clone())),
-                ],
-                Box::new(b),
-            )
+    schemas.insert(
+        "List.fold".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let b = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::List(Box::new(a.clone())),
+                        b.clone(),
+                        Type::Function(vec![b.clone(), a], Box::new(b.clone())),
+                    ],
+                    Box::new(b),
+                )
+            },
         },
-    });
+    );
 
     // List.find : (List<A>, (A) -> Bool) -> Option<A>
-    schemas.insert("List.find".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone())), Type::Function(vec![a.clone()], Box::new(Type::Bool))],
-                Box::new(Type::Enum(
-                    "Option".to_string(),
+    schemas.insert(
+        "List.find".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
                     vec![
-                        ("Some".to_string(), vec![a]),
-                        ("None".to_string(), vec![]),
+                        Type::List(Box::new(a.clone())),
+                        Type::Function(vec![a.clone()], Box::new(Type::Bool)),
                     ],
-                )),
-            )
+                    Box::new(Type::Enum(
+                        "Option".to_string(),
+                        vec![("Some".to_string(), vec![a]), ("None".to_string(), vec![])],
+                    )),
+                )
+            },
         },
-    });
+    );
 
     // List.head : (List<A>) -> A
-    schemas.insert("List.head".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone()))],
-                Box::new(a),
-            )
+    schemas.insert(
+        "List.head".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(vec![Type::List(Box::new(a.clone()))], Box::new(a))
+            },
         },
-    });
+    );
 
     // List.tail : (List<A>) -> List<A>
-    schemas.insert("List.tail".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone()))],
-                Box::new(Type::List(Box::new(a))),
-            )
+    schemas.insert(
+        "List.tail".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone()))],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
         },
-    });
+    );
 
     // List.reverse : (List<A>) -> List<A>
-    schemas.insert("List.reverse".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone()))],
-                Box::new(Type::List(Box::new(a))),
-            )
+    schemas.insert(
+        "List.reverse".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone()))],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
         },
-    });
+    );
 
     // List.sort : (List<A>) -> List<A>
-    schemas.insert("List.sort".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone()))],
-                Box::new(Type::List(Box::new(a))),
-            )
+    schemas.insert(
+        "List.sort".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone()))],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
         },
-    });
+    );
 
     // List.concat : (List<A>, List<A>) -> List<A>
-    schemas.insert("List.concat".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::List(Box::new(a.clone())), Type::List(Box::new(a.clone()))],
-                Box::new(Type::List(Box::new(a))),
-            )
+    schemas.insert(
+        "List.concat".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::List(Box::new(a.clone())),
+                        Type::List(Box::new(a.clone())),
+                    ],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
         },
-    });
+    );
 
     // Option.unwrap : (Option<A>) -> A
-    schemas.insert("Option.unwrap".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![Type::Enum(
-                    "Option".to_string(),
-                    vec![
-                        ("Some".to_string(), vec![a.clone()]),
-                        ("None".to_string(), vec![]),
-                    ],
-                )],
-                Box::new(a),
-            )
+    schemas.insert(
+        "Option.unwrap".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Enum(
+                        "Option".to_string(),
+                        vec![
+                            ("Some".to_string(), vec![a.clone()]),
+                            ("None".to_string(), vec![]),
+                        ],
+                    )],
+                    Box::new(a),
+                )
+            },
         },
-    });
+    );
 
     // Option.unwrap_or : (Option<A>, A) -> A
-    schemas.insert("Option.unwrap_or".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![
-                    Type::Enum(
-                        "Option".to_string(),
-                        vec![
-                            ("Some".to_string(), vec![a.clone()]),
-                            ("None".to_string(), vec![]),
-                        ],
-                    ),
-                    a.clone(),
-                ],
-                Box::new(a),
-            )
+    schemas.insert(
+        "Option.unwrap_or".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::Enum(
+                            "Option".to_string(),
+                            vec![
+                                ("Some".to_string(), vec![a.clone()]),
+                                ("None".to_string(), vec![]),
+                            ],
+                        ),
+                        a.clone(),
+                    ],
+                    Box::new(a),
+                )
+            },
         },
-    });
+    );
 
     // Option.map : (Option<A>, (A) -> B) -> Option<B>
-    schemas.insert("Option.map".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let b = ctx.fresh_var();
-            Type::Function(
-                vec![
-                    Type::Enum(
-                        "Option".to_string(),
-                        vec![
-                            ("Some".to_string(), vec![a.clone()]),
-                            ("None".to_string(), vec![]),
-                        ],
-                    ),
-                    Type::Function(vec![a], Box::new(b.clone())),
-                ],
-                Box::new(Type::Enum(
-                    "Option".to_string(),
+    schemas.insert(
+        "Option.map".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let b = ctx.fresh_var();
+                Type::Function(
                     vec![
-                        ("Some".to_string(), vec![b]),
-                        ("None".to_string(), vec![]),
+                        Type::Enum(
+                            "Option".to_string(),
+                            vec![
+                                ("Some".to_string(), vec![a.clone()]),
+                                ("None".to_string(), vec![]),
+                            ],
+                        ),
+                        Type::Function(vec![a], Box::new(b.clone())),
                     ],
-                )),
-            )
+                    Box::new(Type::Enum(
+                        "Option".to_string(),
+                        vec![("Some".to_string(), vec![b]), ("None".to_string(), vec![])],
+                    )),
+                )
+            },
         },
-    });
+    );
 
     // Result.unwrap : (Result<A,E>) -> A
-    schemas.insert("Result.unwrap".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let e = ctx.fresh_var();
-            Type::Function(
-                vec![Type::Enum(
-                    "Result".to_string(),
-                    vec![
-                        ("Ok".to_string(), vec![a.clone()]),
-                        ("Err".to_string(), vec![e]),
-                    ],
-                )],
-                Box::new(a),
-            )
-        },
-    });
-
-    // Result.unwrap_or : (Result<A,E>, A) -> A
-    schemas.insert("Result.unwrap_or".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let e = ctx.fresh_var();
-            Type::Function(
-                vec![
-                    Type::Enum(
+    schemas.insert(
+        "Result.unwrap".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Enum(
                         "Result".to_string(),
                         vec![
                             ("Ok".to_string(), vec![a.clone()]),
                             ("Err".to_string(), vec![e]),
                         ],
-                    ),
-                    a.clone(),
-                ],
-                Box::new(a),
-            )
+                    )],
+                    Box::new(a),
+                )
+            },
         },
-    });
+    );
+
+    // Result.unwrap_or : (Result<A,E>, A) -> A
+    schemas.insert(
+        "Result.unwrap_or".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::Enum(
+                            "Result".to_string(),
+                            vec![
+                                ("Ok".to_string(), vec![a.clone()]),
+                                ("Err".to_string(), vec![e]),
+                            ],
+                        ),
+                        a.clone(),
+                    ],
+                    Box::new(a),
+                )
+            },
+        },
+    );
 
     // Result.map : (Result<A,E>, (A) -> B) -> Result<B,E>
-    schemas.insert("Result.map".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let b = ctx.fresh_var();
-            let e = ctx.fresh_var();
-            Type::Function(
-                vec![
-                    Type::Enum(
-                        "Result".to_string(),
-                        vec![
-                            ("Ok".to_string(), vec![a.clone()]),
-                            ("Err".to_string(), vec![e.clone()]),
-                        ],
-                    ),
-                    Type::Function(vec![a], Box::new(b.clone())),
-                ],
-                Box::new(Type::Enum(
-                    "Result".to_string(),
+    schemas.insert(
+        "Result.map".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let b = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                Type::Function(
                     vec![
-                        ("Ok".to_string(), vec![b]),
-                        ("Err".to_string(), vec![e]),
+                        Type::Enum(
+                            "Result".to_string(),
+                            vec![
+                                ("Ok".to_string(), vec![a.clone()]),
+                                ("Err".to_string(), vec![e.clone()]),
+                            ],
+                        ),
+                        Type::Function(vec![a], Box::new(b.clone())),
                     ],
-                )),
-            )
+                    Box::new(Type::Enum(
+                        "Result".to_string(),
+                        vec![("Ok".to_string(), vec![b]), ("Err".to_string(), vec![e])],
+                    )),
+                )
+            },
         },
-    });
+    );
 
     // -- Constructors: produce concrete generic types via inference --
 
     // Some : (A) -> Option<A>
-    schemas.insert("Some".into(), GenericSchema {
-        type_params: 1,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            Type::Function(
-                vec![a.clone()],
-                Box::new(Type::Enum(
-                    "Option".to_string(),
-                    vec![
-                        ("Some".to_string(), vec![a]),
-                        ("None".to_string(), vec![]),
-                    ],
-                )),
-            )
+    schemas.insert(
+        "Some".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![a.clone()],
+                    Box::new(Type::Enum(
+                        "Option".to_string(),
+                        vec![("Some".to_string(), vec![a]), ("None".to_string(), vec![])],
+                    )),
+                )
+            },
         },
-    });
+    );
 
     // Ok : (A) -> Result<A, E>
-    schemas.insert("Ok".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let e = ctx.fresh_var();
-            Type::Function(
-                vec![a.clone()],
-                Box::new(Type::Enum(
-                    "Result".to_string(),
-                    vec![
-                        ("Ok".to_string(), vec![a]),
-                        ("Err".to_string(), vec![e]),
-                    ],
-                )),
-            )
+    schemas.insert(
+        "Ok".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                Type::Function(
+                    vec![a.clone()],
+                    Box::new(Type::Enum(
+                        "Result".to_string(),
+                        vec![("Ok".to_string(), vec![a]), ("Err".to_string(), vec![e])],
+                    )),
+                )
+            },
         },
-    });
+    );
 
     // Err : (E) -> Result<A, E>
-    schemas.insert("Err".into(), GenericSchema {
-        type_params: 2,
-        build: |ctx| {
-            let a = ctx.fresh_var();
-            let e = ctx.fresh_var();
-            Type::Function(
-                vec![e.clone()],
-                Box::new(Type::Enum(
-                    "Result".to_string(),
-                    vec![
-                        ("Ok".to_string(), vec![a]),
-                        ("Err".to_string(), vec![e]),
-                    ],
-                )),
-            )
+    schemas.insert(
+        "Err".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                Type::Function(
+                    vec![e.clone()],
+                    Box::new(Type::Enum(
+                        "Result".to_string(),
+                        vec![("Ok".to_string(), vec![a]), ("Err".to_string(), vec![e])],
+                    )),
+                )
+            },
         },
-    });
+    );
 
     schemas
 }
@@ -549,7 +589,10 @@ mod tests {
 
         let fn_type = Type::Function(vec![a, b], Box::new(Type::String));
         let applied = ctx.apply(&fn_type);
-        assert_eq!(applied, Type::Function(vec![Type::Int, Type::Bool], Box::new(Type::String)));
+        assert_eq!(
+            applied,
+            Type::Function(vec![Type::Int, Type::Bool], Box::new(Type::String))
+        );
     }
 
     #[test]

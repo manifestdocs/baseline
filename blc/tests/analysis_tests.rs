@@ -7,7 +7,11 @@ fn check_ok(source: &str) {
     assert!(
         result.diagnostics.is_empty(),
         "Expected no diagnostics, got: {:?}",
-        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -18,14 +22,20 @@ fn check_has_error(source: &str, code: &str) {
         result.diagnostics.iter().any(|d| d.code == code),
         "Expected diagnostic {}, got: {:?}",
         code,
-        result.diagnostics.iter().map(|d| format!("{}: {}", d.code, d.message)).collect::<Vec<_>>()
+        result
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}: {}", d.code, d.message))
+            .collect::<Vec<_>>()
     );
 }
 
 /// Helper: check source has no errors (warnings are allowed)
 fn check_no_errors(source: &str) {
     let result = parse_source(source, "<test>");
-    let errors: Vec<_> = result.diagnostics.iter()
+    let errors: Vec<_> = result
+        .diagnostics
+        .iter()
         .filter(|d| d.severity == Severity::Error)
         .collect();
     assert!(
@@ -38,7 +48,11 @@ fn check_no_errors(source: &str) {
 /// Helper: count diagnostics with given code prefix
 fn count_errors(source: &str, prefix: &str) -> usize {
     let result = parse_source(source, "<test>");
-    result.diagnostics.iter().filter(|d| d.code.starts_with(prefix)).count()
+    result
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with(prefix))
+        .count()
 }
 
 // ============================================================
@@ -80,7 +94,7 @@ fn type_check_struct_construction() {
     check_ok(
         "type User = { name: String, age: Int }\n\
          make_user : () -> User\n\
-         make_user = User { name: \"Alice\", age: 30 }"
+         make_user = User { name: \"Alice\", age: 30 }",
     );
 }
 
@@ -89,7 +103,7 @@ fn type_check_struct_field_access() {
     check_ok(
         "type User = { name: String, age: Int }\n\
          get_name : User -> String\n\
-         get_name = |u| u.name"
+         get_name = |u| u.name",
     );
 }
 
@@ -99,7 +113,7 @@ fn type_check_struct_missing_field() {
         "type User = { name: String, age: Int }\n\
          make : () -> User\n\
          make = User { name: \"Alice\" }",
-        "TYP_012"
+        "TYP_012",
     );
 }
 
@@ -109,7 +123,7 @@ fn type_check_struct_wrong_field_type() {
         "type User = { name: String, age: Int }\n\
          make : () -> User\n\
          make = User { name: \"Alice\", age: \"thirty\" }",
-        "TYP_010"
+        "TYP_010",
     );
 }
 
@@ -118,7 +132,7 @@ fn type_check_if_expression_branch_mismatch() {
     check_has_error(
         "foo : Bool -> Int\n\
          foo = |x| if x then 1 else \"two\"",
-        "TYP_004"
+        "TYP_004",
     );
 }
 
@@ -127,7 +141,7 @@ fn type_check_if_condition_not_bool() {
     check_has_error(
         "foo : Int -> Int\n\
          foo = |x| if x then 1 else 2",
-        "TYP_003"
+        "TYP_003",
     );
 }
 
@@ -136,7 +150,7 @@ fn type_check_undefined_variable() {
     check_has_error(
         "foo : () -> Int\n\
          foo = unknown_var",
-        "TYP_002"
+        "TYP_002",
     );
 }
 
@@ -147,7 +161,7 @@ fn type_check_arg_count_mismatch() {
          add = |a, b| a + b\n\
          main : () -> Int\n\
          main = add(1)",
-        "TYP_007"
+        "TYP_007",
     );
 }
 
@@ -156,7 +170,7 @@ fn type_check_binary_op_type_mismatch() {
     check_has_error(
         "foo : () -> Int\n\
          foo = 1 + \"two\"",
-        "TYP_001"
+        "TYP_001",
     );
 }
 
@@ -165,7 +179,7 @@ fn type_check_list_homogeneity() {
     check_has_error(
         "foo : () -> List<Int>\n\
          foo = [1, \"two\", 3]",
-        "TYP_016"
+        "TYP_016",
     );
 }
 
@@ -173,7 +187,7 @@ fn type_check_list_homogeneity() {
 fn type_check_list_ok() {
     check_ok(
         "foo : () -> List<Int>\n\
-         foo = [1, 2, 3]"
+         foo = [1, 2, 3]",
     );
 }
 
@@ -188,7 +202,7 @@ fn type_check_println_wrong_arg_type() {
         "@prelude(script)\n\
          main! : () -> {Console} ()\n\
          main! = Console.println!(42)",
-        "TYP_008"
+        "TYP_008",
     );
 }
 
@@ -213,7 +227,7 @@ fn type_check_println_wrong_arg_count() {
         "@prelude(script)\n\
          main! : () -> {Console} ()\n\
          main! = Console.println!(\"a\", \"b\")",
-        "TYP_007"
+        "TYP_007",
     );
 }
 
@@ -224,7 +238,7 @@ fn type_check_read_line_returns_string() {
         "@prelude(script)\n\
          main! : () -> {Console} Int\n\
          main! = Console.read_line!()",
-        "TYP_006"
+        "TYP_006",
     );
 }
 
@@ -235,7 +249,7 @@ fn type_check_time_sleep_expects_int() {
         "@prelude(script)\n\
          main! : () -> {Time} ()\n\
          main! = Time.sleep!(\"100\")",
-        "TYP_008"
+        "TYP_008",
     );
 }
 
@@ -274,7 +288,7 @@ fn type_check_string_length_wrong_arg() {
         "@prelude(core)\n\
          len : () -> Int\n\
          len = String.length(42)",
-        "TYP_008"
+        "TYP_008",
     );
 }
 
@@ -287,7 +301,7 @@ fn type_check_tuple_return_type() {
     // Function returning (Int, String) with correct body
     check_ok(
         "pair : () -> (Int, String)\n\
-         pair = (1, \"hello\")"
+         pair = (1, \"hello\")",
     );
 }
 
@@ -297,7 +311,7 @@ fn type_check_tuple_return_mismatch() {
     check_has_error(
         "pair : () -> (Int, String)\n\
          pair = (1, 2)",
-        "TYP_006"
+        "TYP_006",
     );
 }
 
@@ -309,7 +323,7 @@ fn type_check_tuple_destructuring() {
          sum = {\n\
            let (x, y) = (10, 20)\n\
            x + y\n\
-         }"
+         }",
     );
 }
 
@@ -322,7 +336,7 @@ fn type_check_tuple_in_match() {
            let t = (10, \"hello\")\n\
            match t\n\
              (a, _) -> a\n\
-         }"
+         }",
     );
 }
 
@@ -338,7 +352,7 @@ fn type_check_float_annotation_mismatch() {
          foo = {\n\
            let x : Int = 3.14\n\
          }",
-        "TYP_021"
+        "TYP_021",
     );
 }
 
@@ -349,7 +363,7 @@ fn type_check_float_annotation_ok() {
         "foo : () -> ()\n\
          foo = {\n\
            let x : Float = 3.14\n\
-         }"
+         }",
     );
 }
 
@@ -358,7 +372,7 @@ fn type_check_mixed_int_float_arithmetic() {
     // 1 + 3.14 should promote to Float
     check_ok(
         "foo : () -> Float\n\
-         foo = 1 + 3.14"
+         foo = 1 + 3.14",
     );
 }
 
@@ -367,7 +381,7 @@ fn type_check_float_arithmetic_pure() {
     // Float + Float = Float
     check_ok(
         "foo : () -> Float\n\
-         foo = 1.5 + 2.5"
+         foo = 1.5 + 2.5",
     );
 }
 
@@ -379,7 +393,7 @@ fn type_check_let_annotation_string() {
          foo = {\n\
            let s : String = 42\n\
          }",
-        "TYP_021"
+        "TYP_021",
     );
 }
 
@@ -394,7 +408,7 @@ fn type_check_lambda_inferred_from_higher_order() {
         "apply : ((Int) -> Int, Int) -> Int\n\
          apply = |f, x| f(x)\n\
          main : () -> Int\n\
-         main = apply(|x| x + 1, 5)"
+         main = apply(|x| x + 1, 5)",
     );
 }
 
@@ -406,7 +420,7 @@ fn type_check_lambda_inferred_body_mismatch() {
          apply = |f, x| f(x)\n\
          main : () -> String\n\
          main = apply(|x| x + 1, 5)",
-        "TYP_008"
+        "TYP_008",
     );
 }
 
@@ -417,7 +431,7 @@ fn type_check_lambda_standalone_unknown_args() {
         "foo : () -> ()\n\
          foo = {\n\
            let f = |x| x\n\
-         }"
+         }",
     );
 }
 
@@ -440,7 +454,7 @@ fn type_check_sum_type_constructor_expression() {
     check_ok(
         "type Option = | Some(Int) | None\n\
          wrap : Int -> Option\n\
-         wrap = |x| Some(x)"
+         wrap = |x| Some(x)",
     );
 }
 
@@ -449,7 +463,7 @@ fn type_check_nullary_constructor_expression() {
     check_ok(
         "type Color = | Red | Green | Blue\n\
          get : () -> Color\n\
-         get = Red"
+         get = Red",
     );
 }
 
@@ -468,7 +482,7 @@ fn type_check_match_on_sum_type() {
              Red -> \"red\"\n\
              Green -> \"green\"\n\
              Blue -> \"blue\"\n\
-         }"
+         }",
     );
 }
 
@@ -481,7 +495,7 @@ fn type_check_constructor_pattern_match() {
            match opt\n\
              Some(v) -> v\n\
              None -> default\n\
-         }"
+         }",
     );
 }
 
@@ -492,7 +506,10 @@ fn type_check_constructor_pattern_match() {
 #[test]
 fn effect_check_no_effect_needed() {
     // Pure function should have zero effect diagnostics
-    assert_eq!(count_errors("add : (Int, Int) -> Int\nadd = |a, b| a + b", "CAP"), 0);
+    assert_eq!(
+        count_errors("add : (Int, Int) -> Int\nadd = |a, b| a + b", "CAP"),
+        0
+    );
 }
 
 #[test]
@@ -500,7 +517,7 @@ fn effect_check_missing_capability() {
     check_has_error(
         "fetch! : () -> String\n\
          fetch! = Http.get!(\"http://example.com\")",
-        "CAP_001"
+        "CAP_001",
     );
 }
 
@@ -544,7 +561,7 @@ fn refinement_check_invalid_port_too_high() {
          test_port = {\n\
            let p : Port = 70000\n\
          }",
-        "REF_001"
+        "REF_001",
     );
 }
 
@@ -556,7 +573,7 @@ fn refinement_check_invalid_port_zero() {
          test_port = {\n\
            let p : Port = 0\n\
          }",
-        "REF_001"
+        "REF_001",
     );
 }
 
@@ -568,7 +585,7 @@ fn refinement_check_probability_range() {
          check_prob = {\n\
            let p : Prob = 101\n\
          }",
-        "REF_001"
+        "REF_001",
     );
 }
 
@@ -592,7 +609,7 @@ fn parse_pipe_expression() {
         "double : Int -> Int\n\
          double = |x| x + x\n\
          main : () -> Int\n\
-         main = 5 |> double"
+         main = 5 |> double",
     );
 }
 
@@ -604,7 +621,7 @@ fn parse_match_expression() {
            match x\n\
              1 -> \"one\"\n\
              _ -> \"other\"\n\
-         }"
+         }",
     );
 }
 
@@ -612,7 +629,7 @@ fn parse_match_expression() {
 fn parse_for_expression() {
     check_ok(
         "foo : () -> ()\n\
-         foo = for x in [1, 2, 3] do x"
+         foo = for x in [1, 2, 3] do x",
     );
 }
 
@@ -620,7 +637,7 @@ fn parse_for_expression() {
 fn parse_string_interpolation() {
     check_ok(
         "greet : String -> String\n\
-         greet = |name| \"Hello, ${name}!\""
+         greet = |name| \"Hello, ${name}!\"",
     );
 }
 
@@ -630,9 +647,13 @@ fn parse_range_expression() {
     let result = parse_source(
         "r : () -> ()\n\
          r = 1..10",
-        "<test>"
+        "<test>",
     );
-    let syntax_errors = result.diagnostics.iter().filter(|d| d.code.starts_with("SYN")).count();
+    let syntax_errors = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with("SYN"))
+        .count();
     assert_eq!(syntax_errors, 0);
 }
 
@@ -641,7 +662,7 @@ fn parse_effect_def() {
     check_ok(
         "effect Logger {\n\
            log! : String -> ()\n\
-         }"
+         }",
     );
 }
 
@@ -663,7 +684,7 @@ fn parse_semicolons_in_block() {
            let x = 1;\n\
            let y = 2;\n\
            x + y\n\
-         }"
+         }",
     );
 }
 
@@ -672,7 +693,7 @@ fn parse_trailing_commas() {
     check_ok(
         "type User = { name: String, age: Int, }\n\
          make : () -> User\n\
-         make = User { name: \"Alice\", age: 30, }"
+         make = User { name: \"Alice\", age: 30, }",
     );
 }
 
@@ -785,35 +806,74 @@ main = || {
 fn integration_hello_world() {
     let source = std::fs::read_to_string("../examples/hello.bl").expect("Can't read hello.bl");
     let result = parse_source(&source, "hello.bl");
-    let syntax_errors: Vec<_> = result.diagnostics.iter().filter(|d| d.code.starts_with("SYN")).collect();
-    assert!(syntax_errors.is_empty(), "hello.bl has syntax errors: {:?}", syntax_errors);
+    let syntax_errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with("SYN"))
+        .collect();
+    assert!(
+        syntax_errors.is_empty(),
+        "hello.bl has syntax errors: {:?}",
+        syntax_errors
+    );
 }
 
 #[test]
 fn integration_sum_type_test() {
     let source = std::fs::read_to_string("../examples/sum_type_test.bl").expect("Can't read");
     let result = parse_source(&source, "sum_type_test.bl");
-    let syntax_errors: Vec<_> = result.diagnostics.iter().filter(|d| d.code.starts_with("SYN")).collect();
-    assert!(syntax_errors.is_empty(), "sum_type_test.bl has syntax errors: {:?}", syntax_errors);
+    let syntax_errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with("SYN"))
+        .collect();
+    assert!(
+        syntax_errors.is_empty(),
+        "sum_type_test.bl has syntax errors: {:?}",
+        syntax_errors
+    );
 }
 
 #[test]
 fn integration_struct_test() {
     let source = std::fs::read_to_string("../examples/struct_test.bl").expect("Can't read");
     let result = parse_source(&source, "struct_test.bl");
-    assert_eq!(result.status, "success", "struct_test.bl should pass: {:?}",
-        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>());
+    assert_eq!(
+        result.status,
+        "success",
+        "struct_test.bl should pass: {:?}",
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
+    );
 }
 
 #[test]
 fn integration_refinement_test() {
     let source = std::fs::read_to_string("../examples/refinement_test.bl").expect("Can't read");
     let result = parse_source(&source, "refinement_test.bl");
-    let syntax_errors: Vec<_> = result.diagnostics.iter().filter(|d| d.code.starts_with("SYN")).collect();
-    assert!(syntax_errors.is_empty(), "refinement_test.bl has syntax errors: {:?}", syntax_errors);
+    let syntax_errors: Vec<_> = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with("SYN"))
+        .collect();
+    assert!(
+        syntax_errors.is_empty(),
+        "refinement_test.bl has syntax errors: {:?}",
+        syntax_errors
+    );
     // Should have refinement violations
-    let ref_errors = result.diagnostics.iter().filter(|d| d.code.starts_with("REF")).count();
-    assert!(ref_errors > 0, "Expected refinement errors for out-of-range values");
+    let ref_errors = result
+        .diagnostics
+        .iter()
+        .filter(|d| d.code.starts_with("REF"))
+        .count();
+    assert!(
+        ref_errors > 0,
+        "Expected refinement errors for out-of-range values"
+    );
 }
 
 // ============================================================
@@ -989,18 +1049,21 @@ label = |s| {
 
 #[test]
 fn forward_call() {
-    check_ok(r#"
+    check_ok(
+        r#"
 main : () -> Int
 main = || helper(1)
 
 helper : Int -> Int
 helper = |x| x + 1
-"#);
+"#,
+    );
 }
 
 #[test]
 fn forward_mutual_recursion() {
-    check_ok(r#"
+    check_ok(
+        r#"
 is_even : Int -> Bool
 is_even = |n| {
   match n
@@ -1014,49 +1077,61 @@ is_odd = |n| {
     0 -> false
     _ -> is_even(n - 1)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn forward_call_type_check() {
-    check_ok(r#"
+    check_ok(
+        r#"
 run : () -> String
 run = || format(42)
 
 format : Int -> String
 format = |n| "hello"
-"#);
+"#,
+    );
 }
 
 #[test]
 fn truly_undefined_still_errors() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 main : () -> Int
 main = || nonexistent(1)
-"#, "TYP_002");
+"#,
+        "TYP_002",
+    );
 }
 
 #[test]
 fn forward_arg_type_mismatch() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 main : () -> Int
 main = || helper("wrong")
 
 helper : Int -> Int
 helper = |x| x + 1
-"#, "TYP_008");
+"#,
+        "TYP_008",
+    );
 }
 
 #[test]
 fn local_let_stays_sequential() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 main : () -> Int
 main = || {
   let result = future_val
   let future_val = 42
   result
 }
-"#, "TYP_002");
+"#,
+        "TYP_002",
+    );
 }
 
 // ============================================================
@@ -1065,18 +1140,23 @@ main = || {
 
 #[test]
 fn for_over_list_ok() {
-    check_ok(r#"
+    check_ok(
+        r#"
 foo : () -> ()
 foo = for x in [1, 2, 3] do x + 1
-"#);
+"#,
+    );
 }
 
 #[test]
 fn for_over_non_list_errors() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 foo : () -> ()
 foo = for x in 42 do x
-"#, "TYP_023");
+"#,
+        "TYP_023",
+    );
 }
 
 // ============================================================
@@ -1085,22 +1165,27 @@ foo = for x in 42 do x
 
 #[test]
 fn range_int_ok() {
-    check_ok(r#"
+    check_ok(
+        r#"
 foo : () -> ()
 foo = {
   let r = 1..10
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn range_non_int_errors() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 foo : () -> ()
 foo = {
   let r = "a".."z"
 }
-"#, "TYP_024");
+"#,
+        "TYP_024",
+    );
 }
 
 // ============================================================
@@ -1109,36 +1194,46 @@ foo = {
 
 #[test]
 fn unary_not_bool_ok() {
-    check_ok(r#"
+    check_ok(
+        r#"
 foo : () -> Bool
 foo = not true
-"#);
+"#,
+    );
 }
 
 #[test]
 fn unary_negate_int_ok() {
-    check_ok(r#"
+    check_ok(
+        r#"
 foo : () -> Int
 foo = -5
-"#);
+"#,
+    );
 }
 
 #[test]
 fn unary_not_int_errors() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 foo : () -> Bool
 foo = not 42
-"#, "TYP_025");
+"#,
+        "TYP_025",
+    );
 }
 
 #[test]
 fn unary_negate_string_errors() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 foo : () -> ()
 foo = {
   let n = -"hello"
 }
-"#, "TYP_025");
+"#,
+        "TYP_025",
+    );
 }
 
 // ============================================================
@@ -1147,21 +1242,26 @@ foo = {
 
 #[test]
 fn string_interpolation_checks_expr() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 foo : () -> String
 foo = "hello ${undefined_var}"
-"#, "TYP_002");
+"#,
+        "TYP_002",
+    );
 }
 
 #[test]
 fn string_interpolation_ok() {
-    check_ok(r#"
+    check_ok(
+        r#"
 foo : () -> String
 foo = {
   let x = 1
   "val: ${x}"
 }
-"#);
+"#,
+    );
 }
 
 // ============================================================
@@ -1182,7 +1282,10 @@ main : () -> Int
 main = f(g(1))
 "#;
     let result = parse_source(source, "<test>");
-    assert_eq!(result.status, "success", "Warnings should not cause failure");
+    assert_eq!(
+        result.status, "success",
+        "Warnings should not cause failure"
+    );
     assert!(
         result.diagnostics.iter().any(|d| d.code == "STY_001"),
         "Expected STY_001 warning"
@@ -1203,7 +1306,9 @@ main : () -> Int
 main = f(g(1))
 "#;
     let result = parse_source(source, "<test>");
-    let sty_warnings: Vec<_> = result.diagnostics.iter()
+    let sty_warnings: Vec<_> = result
+        .diagnostics
+        .iter()
         .filter(|d| d.code == "STY_001")
         .collect();
     assert!(!sty_warnings.is_empty(), "Expected STY_001 for nested call");
@@ -1246,11 +1351,17 @@ main = f(g(1))
     let result = parse_source(source, "<test>");
     assert_eq!(result.status, "failure", "Errors should cause failure");
     assert!(
-        result.diagnostics.iter().any(|d| d.severity == Severity::Error),
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Error),
         "Should have at least one error"
     );
     assert!(
-        result.diagnostics.iter().any(|d| d.severity == Severity::Warning),
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Warning),
         "Should have at least one warning"
     );
 }
@@ -1281,22 +1392,27 @@ main = f(1, g(2))
 
 #[test]
 fn inline_test_bool_ok() {
-    check_ok(r#"
+    check_ok(
+        r#"
 add : (Int, Int) -> Int
 add = |a, b| a + b
   where
     test "basic" = add(1, 2) == 3
-"#);
+"#,
+    );
 }
 
 #[test]
 fn inline_test_non_bool_errors() {
-    check_has_error(r#"
+    check_has_error(
+        r#"
 add : (Int, Int) -> Int
 add = |a, b| a + b
   where
     test "returns int" = add(1, 2)
-"#, "TYP_026");
+"#,
+        "TYP_026",
+    );
 }
 
 #[test]
@@ -1316,45 +1432,52 @@ fn inline_test_top_level_non_bool_errors() {
 #[test]
 fn infer_list_map_returns_typed_list() {
     // List.map([1,2,3], |x| x + 1) should type-check with inferred types
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> ()
 main = {
     let doubled = List.map([1, 2, 3], |x| x + 1)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_filter_preserves_element_type() {
     // List.filter preserves element type
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> ()
 main = {
     let xs = [1, 2, 3, 4]
     let evens = List.filter(xs, |x| x > 2)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_option_unwrap_extracts_inner() {
     // Option.unwrap(Some(42)) should return Int (nested call triggers STY_001 warning)
-    check_no_errors(r#"
+    check_no_errors(
+        r#"
 @prelude(core)
 main : () -> Int
 main = {
     let x = Option.unwrap(Some(42))
     x + 1
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_try_expression_option() {
     // Some(42)? should return Int
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 wrap : () -> Option<Int>
 wrap = {
@@ -1362,13 +1485,15 @@ wrap = {
     let val = x?
     Some(val + 1)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_try_expression_result() {
     // Ok(42)? should return Int
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 wrap : () -> Result<Int, String>
 wrap = {
@@ -1376,71 +1501,83 @@ wrap = {
     let val = x?
     Ok(val + 1)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_head_concrete() {
     // List.head([1, 2, 3]) should return Int
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> Int
 main = {
     let first = List.head([1, 2, 3])
     first + 1
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_let_propagation() {
     // let x = List.head([1,2,3]) then x + 1 type-checks (Int + Int)
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> Int
 main = {
     let x = List.head([1, 2, 3])
     x + 1
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_nested_generic_calls() {
     // List.head(List.map([1,2], |x| x > 0)) should return Bool (nested call triggers STY_001)
-    check_no_errors(r#"
+    check_no_errors(
+        r#"
 @prelude(core)
 main : () -> Bool
 main = List.head(List.map([1, 2], |x| x > 0))
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_map_string_result() {
     // List.map with a lambda that returns String should produce List<String>
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> ()
 main = {
     let names = List.map([1, 2, 3], |x| "item")
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_fold_accumulator() {
     // List.fold([1,2,3], 0, |acc, x| acc + x) should return Int
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> Int
 main = List.fold([1, 2, 3], 0, |acc, x| acc + x)
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_tail_preserves_type() {
     // List.tail([1,2,3]) should return List<Int>
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> ()
 main = {
@@ -1448,57 +1585,66 @@ main = {
     let first = List.head(rest)
     let sum = first + 1
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_concat_types() {
     // List.concat([1,2], [3,4]) should return List<Int>
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> Int
 main = {
     let combined = List.concat([1, 2], [3, 4])
     List.head(combined)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_result_unwrap_extracts_inner() {
     // Result.unwrap(Ok(42)) should return Int (nested call triggers STY_001 warning)
-    check_no_errors(r#"
+    check_no_errors(
+        r#"
 @prelude(core)
 main : () -> Int
 main = {
     let x = Result.unwrap(Ok(42))
     x + 1
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_reverse_preserves_type() {
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> Int
 main = {
     let rev = List.reverse([1, 2, 3])
     List.head(rev)
 }
-"#);
+"#,
+    );
 }
 
 #[test]
 fn infer_list_sort_preserves_type() {
-    check_ok(r#"
+    check_ok(
+        r#"
 @prelude(core)
 main : () -> Int
 main = {
     let sorted = List.sort([3, 1, 2])
     List.head(sorted)
 }
-"#);
+"#,
+    );
 }
 
 // ============================================================
@@ -1508,21 +1654,25 @@ main = {
 #[test]
 fn generic_some_produces_concrete_option() {
     // Some(42) should produce Option<Int>, not Option<Unknown>
-    check_no_errors(r#"
+    check_no_errors(
+        r#"
 @prelude(core)
 main : () -> Int
 main = Option.unwrap(Some(42))
-"#);
+"#,
+    );
 }
 
 #[test]
 fn generic_ok_produces_concrete_result() {
     // Ok("hello") should produce Result<String, E>, not Result<Unknown, Unknown>
-    check_no_errors(r#"
+    check_no_errors(
+        r#"
 @prelude(core)
 main : () -> String
 main = Result.unwrap(Ok("hello"))
-"#);
+"#,
+    );
 }
 
 #[test]
@@ -1535,7 +1685,7 @@ fn generic_some_match_extracts_concrete_type() {
            match Some(42)\n\
              Some(x) -> x + 1\n\
              None -> 0\n\
-         }"
+         }",
     );
 }
 
@@ -1549,7 +1699,7 @@ fn generic_ok_match_extracts_concrete_type() {
            match Ok(42)\n\
              Ok(x) -> x + 1\n\
              Err(_) -> 0\n\
-         }"
+         }",
     );
 }
 
@@ -1565,7 +1715,7 @@ fn generic_option_type_mismatch_in_match() {
              Some(x) -> String.length(x)\n\
              None -> 0\n\
          }",
-        "TYP_008"
+        "TYP_008",
     );
 }
 
@@ -1579,7 +1729,7 @@ fn generic_enum_payload_compatibility_checked() {
          \n\
          main : () -> Option<String>\n\
          main = identity(Some(42))",
-        "TYP_008"
+        "TYP_008",
     );
 }
 
@@ -1596,7 +1746,7 @@ fn generic_list_map_result_type_enforced() {
            let bools = List.map([1, 2, 3], |x| x > 0)\n\
            sum(bools)\n\
          }",
-        "TYP_008"
+        "TYP_008",
     );
 }
 
@@ -1609,7 +1759,7 @@ fn generic_try_expression_preserves_concrete_type() {
          main = {\n\
            let val = Some(42)?\n\
            Some(val + 1)\n\
-         }"
+         }",
     );
 }
 
@@ -1622,7 +1772,7 @@ fn generic_err_produces_concrete_result() {
            match Err(\"oops\")\n\
              Ok(_) -> \"ok\"\n\
              Err(msg) -> msg\n\
-         }"
+         }",
     );
 }
 
@@ -1636,7 +1786,7 @@ fn transitive_effect_direct_still_works() {
     check_has_error(
         "fetch! : () -> String\n\
          fetch! = Http.get!(\"http://example.com\")",
-        "CAP_001"
+        "CAP_001",
     );
 }
 
@@ -1653,13 +1803,19 @@ fn transitive_effect_via_helper() {
     check_has_error(source, "CAP_001");
     // Verify the transitive diagnostic mentions 'transitively'
     let result = parse_source(source, "<test>");
-    let transitive_diags: Vec<_> = result.diagnostics.iter()
+    let transitive_diags: Vec<_> = result
+        .diagnostics
+        .iter()
         .filter(|d| d.code == "CAP_001" && d.message.contains("transitively"))
         .collect();
     assert!(
         !transitive_diags.is_empty(),
         "Expected a transitive CAP_001 diagnostic, got: {:?}",
-        result.diagnostics.iter().map(|d| &d.message).collect::<Vec<_>>()
+        result
+            .diagnostics
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -1671,7 +1827,7 @@ fn transitive_effect_declared_ok() {
          helper = Console.println!(\"hi\")\n\
          \n\
          foo : () -> {Console} ()\n\
-         foo = helper()"
+         foo = helper()",
     );
 }
 
@@ -1690,14 +1846,19 @@ fn transitive_effect_chain() {
         a = b()";
     // Both a and b should get transitive CAP_001
     let result = parse_source(source, "<test>");
-    let transitive_diags: Vec<_> = result.diagnostics.iter()
+    let transitive_diags: Vec<_> = result
+        .diagnostics
+        .iter()
         .filter(|d| d.code == "CAP_001" && d.message.contains("transitively"))
         .collect();
     assert!(
         transitive_diags.len() >= 2,
         "Expected at least 2 transitive CAP_001 diagnostics (for a and b), got {}: {:?}",
         transitive_diags.len(),
-        transitive_diags.iter().map(|d| &d.message).collect::<Vec<_>>()
+        transitive_diags
+            .iter()
+            .map(|d| &d.message)
+            .collect::<Vec<_>>()
     );
 }
 
@@ -1710,7 +1871,7 @@ fn transitive_effect_mutual_recursion() {
          ping = pong()\n\
          \n\
          pong : () -> ()\n\
-         pong = ping()"
+         pong = ping()",
     );
 }
 
@@ -1723,7 +1884,7 @@ fn record_update_basic() {
     check_no_errors(
         "type Point = { x: Int, y: Int }\n\
          update : Point -> Point\n\
-         update = |p| { ..p, x: 42 }"
+         update = |p| { ..p, x: 42 }",
     );
 }
 
@@ -1736,7 +1897,7 @@ fn record_update_preserves_type() {
          shift = |p| {\n\
            let p2 = { ..p, x: 99 }\n\
            p2.x\n\
-         }"
+         }",
     );
 }
 
@@ -1746,7 +1907,7 @@ fn record_update_wrong_field_type() {
         "type Point = { x: Int, y: Int }\n\
          update : Point -> Point\n\
          update = |p| { ..p, x: \"hello\" }",
-        "TYP_028"
+        "TYP_028",
     );
 }
 
@@ -1756,6 +1917,6 @@ fn record_update_nonexistent_field() {
         "type Point = { x: Int, y: Int }\n\
          update : Point -> Point\n\
          update = |p| { ..p, z: 42 }",
-        "TYP_029"
+        "TYP_029",
     );
 }

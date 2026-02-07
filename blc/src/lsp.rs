@@ -48,11 +48,8 @@ impl BaselineLanguageServer {
         let file_name = uri.path().to_string();
         let result = parse::parse_source(&text, &file_name);
 
-        let lsp_diagnostics: Vec<tower_lsp::lsp_types::Diagnostic> = result
-            .diagnostics
-            .iter()
-            .map(convert_diagnostic)
-            .collect();
+        let lsp_diagnostics: Vec<tower_lsp::lsp_types::Diagnostic> =
+            result.diagnostics.iter().map(convert_diagnostic).collect();
 
         self.client
             .publish_diagnostics(uri.clone(), lsp_diagnostics, None)
@@ -286,10 +283,7 @@ fn extract_symbols(source: &str) -> Vec<SymbolInfo> {
                             end: Position::new(end.row as u32, end.column as u32),
                         },
                         selection_range: Range {
-                            start: Position::new(
-                                name_start.row as u32,
-                                name_start.column as u32,
-                            ),
+                            start: Position::new(name_start.row as u32, name_start.column as u32),
                             end: Position::new(name_end.row as u32, name_end.column as u32),
                         },
                     });
@@ -328,10 +322,7 @@ fn extract_symbols(source: &str) -> Vec<SymbolInfo> {
                             end: Position::new(end.row as u32, end.column as u32),
                         },
                         selection_range: Range {
-                            start: Position::new(
-                                name_start.row as u32,
-                                name_start.column as u32,
-                            ),
+                            start: Position::new(name_start.row as u32, name_start.column as u32),
                             end: Position::new(name_end.row as u32, name_end.column as u32),
                         },
                     });
@@ -425,7 +416,10 @@ mod tests {
         assert_eq!(lsp_d.range.start.character, 2);
         assert_eq!(lsp_d.range.end.line, 4);
         assert_eq!(lsp_d.range.end.character, 9);
-        assert_eq!(lsp_d.code, Some(NumberOrString::String("TYP_001".to_string())));
+        assert_eq!(
+            lsp_d.code,
+            Some(NumberOrString::String("TYP_001".to_string()))
+        );
         assert_eq!(lsp_d.message, "Type mismatch");
     }
 
@@ -462,10 +456,7 @@ greet = |name| "Hello"
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "greet");
         assert_eq!(symbols[0].kind, SymbolKind::FUNCTION);
-        assert_eq!(
-            symbols[0].type_sig.as_deref(),
-            Some("String -> String")
-        );
+        assert_eq!(symbols[0].type_sig.as_deref(), Some("String -> String"));
     }
 
     #[test]

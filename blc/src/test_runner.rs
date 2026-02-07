@@ -7,7 +7,7 @@ use tree_sitter_baseline::LANGUAGE;
 use crate::diagnostics::Location;
 use crate::interpreter::{self, Context, RuntimeValue};
 use crate::prelude;
-use crate::resolver::{self, ModuleLoader, ImportKind};
+use crate::resolver::{self, ImportKind, ModuleLoader};
 
 // ---------------------------------------------------------------------------
 // Result types
@@ -75,9 +75,9 @@ fn collect_tests<'a>(root: &Node<'a>, source: &str, file: &str) -> Vec<Collected
                             if test_node.kind() == "inline_test"
                                 && let Some(ct) =
                                     parse_inline_test(&test_node, source, file, &func_name)
-                                {
-                                    tests.push(ct);
-                                }
+                            {
+                                tests.push(ct);
+                            }
                         }
                     }
                 }
@@ -273,8 +273,14 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         results.push(result);
     }
 
-    let passed = results.iter().filter(|r| r.status == TestStatus::Pass).count();
-    let failed = results.iter().filter(|r| r.status == TestStatus::Fail).count();
+    let passed = results
+        .iter()
+        .filter(|r| r.status == TestStatus::Pass)
+        .count();
+    let failed = results
+        .iter()
+        .filter(|r| r.status == TestStatus::Fail)
+        .count();
     let total = results.len();
 
     TestSuiteResult {
@@ -301,20 +307,23 @@ fn inject_imports_for_test<'a>(
     // Phase 1: resolve and load all modules (needs &mut loader)
     let mut resolved: Vec<(resolver::ResolvedImport, usize)> = Vec::new();
     for (import, import_node) in &imports {
-        let file_path = loader.resolve_path(&import.module_name, import_node, &file_str)
+        let file_path = loader
+            .resolve_path(&import.module_name, import_node, &file_str)
             .map_err(|d| d.message.clone())?;
-        let module_idx = loader.load_module(&file_path, import_node, &file_str)
+        let module_idx = loader
+            .load_module(&file_path, import_node, &file_str)
             .map_err(|d| d.message.clone())?;
         resolved.push((import.clone(), module_idx));
     }
 
     // Phase 2: eval each module and inject into context (needs &loader)
     for (import, module_idx) in &resolved {
-        let (mod_root, mod_source, mod_path) = loader.get_module(*module_idx)
+        let (mod_root, mod_source, mod_path) = loader
+            .get_module(*module_idx)
             .ok_or_else(|| format!("Failed to get module {}", import.module_name))?;
 
-        let mod_prelude = prelude::extract_prelude(&mod_root, mod_source)
-            .unwrap_or(prelude::Prelude::Core);
+        let mod_prelude =
+            prelude::extract_prelude(&mod_root, mod_source).unwrap_or(prelude::Prelude::Core);
 
         let mod_file = mod_path.display().to_string();
         let mut mod_context = Context::with_prelude_and_file(mod_prelude, mod_file);
@@ -337,7 +346,10 @@ fn inject_imports_for_test<'a>(
             }
         }
 
-        let short_name = import.module_name.split('.').next_back()
+        let short_name = import
+            .module_name
+            .split('.')
+            .next_back()
             .unwrap_or(&import.module_name);
 
         context.set(

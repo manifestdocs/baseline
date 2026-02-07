@@ -67,10 +67,7 @@ fn assert_run_ok(file: &str, expected_stdout: &str) {
         "{file}: expected exit 0, got {}.\nstderr: {}",
         out.exit_code, out.stderr,
     );
-    assert_eq!(
-        out.stdout, expected_stdout,
-        "{file}: stdout mismatch",
-    );
+    assert_eq!(out.stdout, expected_stdout, "{file}: stdout mismatch",);
 }
 
 fn assert_run_fails_interp(file: &str, expected_fragments: &[&str]) {
@@ -415,15 +412,18 @@ fn test_inline_tests_pass() {
         "inline_test.bl: expected exit 0.\nstdout: {}\nstderr: {}",
         out.stdout, out.stderr,
     );
-    assert!(out.stdout.contains("5 tests: 5 passed, 0 failed"), "stdout: {}", out.stdout);
+    assert!(
+        out.stdout.contains("5 tests: 5 passed, 0 failed"),
+        "stdout: {}",
+        out.stdout
+    );
 }
 
 #[test]
 fn test_inline_tests_json() {
     let out = blc_test_json("inline_test.bl");
     assert_eq!(out.exit_code, 0, "expected exit 0.\nstdout: {}", out.stdout);
-    let json: serde_json::Value = serde_json::from_str(&out.stdout)
-        .expect("JSON parse failed");
+    let json: serde_json::Value = serde_json::from_str(&out.stdout).expect("JSON parse failed");
     assert_eq!(json["status"], "pass");
     assert_eq!(json["summary"]["total"], 5);
     assert_eq!(json["summary"]["passed"], 5);
@@ -530,10 +530,7 @@ fn assert_vm_run_ok(file: &str, expected_stdout: &str) {
         "VM {file}: expected exit 0, got {}.\nstderr: {}",
         out.exit_code, out.stderr,
     );
-    assert_eq!(
-        out.stdout, expected_stdout,
-        "VM {file}: stdout mismatch",
-    );
+    assert_eq!(out.stdout, expected_stdout, "VM {file}: stdout mismatch",);
 }
 
 #[test]
@@ -554,21 +551,33 @@ fn vm_run_import_wildcard() {
 #[test]
 fn vm_run_conformance_qualified_import() {
     let out = blc_run_vm_conformance("09_modules/qualified_import.bl");
-    assert_eq!(out.exit_code, 0, "VM qualified_import: exit {}.\nstderr: {}", out.exit_code, out.stderr);
+    assert_eq!(
+        out.exit_code, 0,
+        "VM qualified_import: exit {}.\nstderr: {}",
+        out.exit_code, out.stderr
+    );
     assert_eq!(out.stdout, "10\n", "VM qualified_import: stdout mismatch");
 }
 
 #[test]
 fn vm_run_conformance_selective_import() {
     let out = blc_run_vm_conformance("09_modules/selective_import.bl");
-    assert_eq!(out.exit_code, 0, "VM selective_import: exit {}.\nstderr: {}", out.exit_code, out.stderr);
+    assert_eq!(
+        out.exit_code, 0,
+        "VM selective_import: exit {}.\nstderr: {}",
+        out.exit_code, out.stderr
+    );
     assert_eq!(out.stdout, "11\n", "VM selective_import: stdout mismatch");
 }
 
 #[test]
 fn vm_run_conformance_wildcard_import() {
     let out = blc_run_vm_conformance("09_modules/wildcard_import.bl");
-    assert_eq!(out.exit_code, 0, "VM wildcard_import: exit {}.\nstderr: {}", out.exit_code, out.stderr);
+    assert_eq!(
+        out.exit_code, 0,
+        "VM wildcard_import: exit {}.\nstderr: {}",
+        out.exit_code, out.stderr
+    );
     assert_eq!(out.stdout, "11\n", "VM wildcard_import: stdout mismatch");
 }
 

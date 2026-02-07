@@ -7,9 +7,9 @@ pub mod result;
 pub mod router;
 pub mod string;
 
-use std::collections::HashMap;
 use crate::interpreter::RuntimeValue;
 use crate::prelude::Prelude;
+use std::collections::HashMap;
 
 /// Native function signature operating directly on RuntimeValues.
 pub type NativeFn = for<'a> fn(&[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String>;

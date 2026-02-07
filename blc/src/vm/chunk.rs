@@ -241,8 +241,15 @@ impl Chunk {
         let len = self.code.len();
         for i in 0..len {
             match self.code[i] {
-                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
-                | Op::Lt | Op::Le | Op::Gt | Op::Ge => {
+                Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::Mod
+                | Op::Lt
+                | Op::Le
+                | Op::Gt
+                | Op::Ge => {
                     if self.has_int_operand(i) {
                         self.code[i] = match self.code[i] {
                             Op::Add => Op::AddInt,
@@ -273,8 +280,12 @@ impl Chunk {
         while i > 0 && pushes_found < 2 {
             i -= 1;
             match self.code[i] {
-                Op::LoadSmallInt(_) | Op::AddInt | Op::SubInt
-                | Op::MulInt | Op::DivInt | Op::ModInt => {
+                Op::LoadSmallInt(_)
+                | Op::AddInt
+                | Op::SubInt
+                | Op::MulInt
+                | Op::DivInt
+                | Op::ModInt => {
                     has_int = true;
                     pushes_found += 1;
                 }
@@ -284,16 +295,42 @@ impl Chunk {
                     }
                     pushes_found += 1;
                 }
-                Op::GetLocal(_) | Op::GetUpvalue(_) | Op::Negate
-                | Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
-                | Op::Not | Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge
-                | Op::LtInt | Op::LeInt | Op::GtInt | Op::GeInt
-                | Op::ListLen | Op::EnumTag | Op::EnumPayload
-                | Op::Concat | Op::TupleGet(_) | Op::GetField(_) | Op::ListGet
-                | Op::MakeRange | Op::MakeList(_) | Op::MakeRecord(_) | Op::MakeTuple(_)
-                | Op::MakeEnum(_) | Op::MakeStruct(_) | Op::UpdateRecord(_)
+                Op::GetLocal(_)
+                | Op::GetUpvalue(_)
+                | Op::Negate
+                | Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::Mod
+                | Op::Not
+                | Op::Eq
+                | Op::Ne
+                | Op::Lt
+                | Op::Gt
+                | Op::Le
+                | Op::Ge
+                | Op::LtInt
+                | Op::LeInt
+                | Op::GtInt
+                | Op::GeInt
+                | Op::ListLen
+                | Op::EnumTag
+                | Op::EnumPayload
+                | Op::Concat
+                | Op::TupleGet(_)
+                | Op::GetField(_)
+                | Op::ListGet
+                | Op::MakeRange
+                | Op::MakeList(_)
+                | Op::MakeRecord(_)
+                | Op::MakeTuple(_)
+                | Op::MakeEnum(_)
+                | Op::MakeStruct(_)
+                | Op::UpdateRecord(_)
                 | Op::MakeClosure(_, _)
-                | Op::GetLocalSubInt(_, _) | Op::GetLocalLeInt(_, _) => {
+                | Op::GetLocalSubInt(_, _)
+                | Op::GetLocalLeInt(_, _) => {
                     pushes_found += 1;
                 }
                 // Control flow or Call/CallNative — stop scanning

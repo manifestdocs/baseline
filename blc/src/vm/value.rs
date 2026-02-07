@@ -45,17 +45,27 @@ impl fmt::Display for Value {
             Value::Bool(b) => write!(f, "{}", b),
             Value::Unit => write!(f, "()"),
             Value::List(vals) => {
-                let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                let s = vals
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "[{}]", s)
             }
             Value::Record(fields) => {
-                let s = fields.iter()
+                let s = fields
+                    .iter()
                     .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<_>>().join(", ");
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "{{ {} }}", s)
             }
             Value::Tuple(vals) => {
-                let s = vals.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(", ");
+                let s = vals
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "({})", s)
             }
             Value::Enum(tag, payload) => {
@@ -66,9 +76,11 @@ impl fmt::Display for Value {
                 }
             }
             Value::Struct(name, fields) => {
-                let s = fields.iter()
+                let s = fields
+                    .iter()
                     .map(|(k, v)| format!("{}: {}", k, v))
-                    .collect::<Vec<_>>().join(", ");
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(f, "{} {{ {} }}", name, s)
             }
             Value::Function(idx) => write!(f, "<fn:{}>", idx),

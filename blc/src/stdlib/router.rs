@@ -180,9 +180,7 @@ impl<'a> RadixTree<'a> {
         }
 
         // First registered wins
-        node.handlers
-            .entry(method.to_string())
-            .or_insert(handler);
+        node.handlers.entry(method.to_string()).or_insert(handler);
     }
 
     /// Find a handler matching the given method and path.
@@ -217,9 +215,10 @@ fn find_in_node<'a>(
 
     // Try exact match first (more specific)
     if let Some(child) = node.children.get(seg)
-        && let result @ Some(_) = find_in_node(child, rest, method, params) {
-            return result;
-        }
+        && let result @ Some(_) = find_in_node(child, rest, method, params)
+    {
+        return result;
+    }
 
     // Try parameter match
     if let Some((name, child)) = &node.param {
@@ -417,7 +416,13 @@ mod tests {
         let mw_fn = RuntimeValue::String("mw".to_string());
         let router = add_middleware(&router, &mw_fn).unwrap();
         let handler = RuntimeValue::String("handler".to_string());
-        let router = add_route("GET", &router, &RuntimeValue::String("/a".to_string()), &handler).unwrap();
+        let router = add_route(
+            "GET",
+            &router,
+            &RuntimeValue::String("/a".to_string()),
+            &handler,
+        )
+        .unwrap();
 
         // Both middleware and routes preserved
         let mw = extract_middleware(&router).unwrap();
@@ -450,7 +455,10 @@ mod tests {
         let mut tree = RadixTree::new();
         tree.insert("GET", "/hello", RuntimeValue::String("h".to_string()));
         let result = tree.find("GET", "/hello");
-        assert_eq!(result, Some((RuntimeValue::String("h".to_string()), vec![])));
+        assert_eq!(
+            result,
+            Some((RuntimeValue::String("h".to_string()), vec![]))
+        );
     }
 
     #[test]
@@ -505,8 +513,16 @@ mod tests {
     #[test]
     fn radix_tree_exact_beats_param() {
         let mut tree = RadixTree::new();
-        tree.insert("GET", "/users/:id", RuntimeValue::String("param".to_string()));
-        tree.insert("GET", "/users/me", RuntimeValue::String("exact".to_string()));
+        tree.insert(
+            "GET",
+            "/users/:id",
+            RuntimeValue::String("param".to_string()),
+        );
+        tree.insert(
+            "GET",
+            "/users/me",
+            RuntimeValue::String("exact".to_string()),
+        );
         // Exact match should win over param
         let result = tree.find("GET", "/users/me");
         assert_eq!(
@@ -573,8 +589,14 @@ mod tests {
     #[test]
     fn radix_tree_compile_routes() {
         let mut route_fields = HashMap::new();
-        route_fields.insert("method".to_string(), RuntimeValue::String("GET".to_string()));
-        route_fields.insert("path".to_string(), RuntimeValue::String("/hello".to_string()));
+        route_fields.insert(
+            "method".to_string(),
+            RuntimeValue::String("GET".to_string()),
+        );
+        route_fields.insert(
+            "path".to_string(),
+            RuntimeValue::String("/hello".to_string()),
+        );
         route_fields.insert("handler".to_string(), RuntimeValue::String("h".to_string()));
 
         let routes = vec![RuntimeValue::Record(route_fields)];
