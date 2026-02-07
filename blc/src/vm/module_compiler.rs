@@ -53,9 +53,8 @@ pub fn compile_with_imports(
     let mut merged_functions: HashMap<String, usize> = HashMap::new();
 
     for (import, module_idx) in &resolved {
-        let (mod_root, mod_source, _mod_path) = loader
-            .get_module(*module_idx)
-            .ok_or_else(|| CompileError {
+        let (mod_root, mod_source, _mod_path) =
+            loader.get_module(*module_idx).ok_or_else(|| CompileError {
                 message: format!("Failed to get module {}", import.module_name),
                 line: 1,
                 col: 0,
@@ -63,17 +62,22 @@ pub fn compile_with_imports(
 
         // Use IR pipeline for module compilation
         let mut lowerer = Lowerer::new(mod_source, natives, None);
-        let ir_functions = lowerer.lower_module_functions(&mod_root).map_err(|e| CompileError {
-            message: e.message,
-            line: e.line,
-            col: e.col,
-        })?;
+        let ir_functions = lowerer
+            .lower_module_functions(&mod_root)
+            .map_err(|e| CompileError {
+                message: e.message,
+                line: e.line,
+                col: e.col,
+            })?;
         let codegen = Codegen::new(natives);
-        let (mut mod_chunks, local_map) = codegen.generate_module(&ir_functions).map_err(|e| CompileError {
-            message: e.message,
-            line: e.line,
-            col: e.col,
-        })?;
+        let (mut mod_chunks, local_map) =
+            codegen
+                .generate_module(&ir_functions)
+                .map_err(|e| CompileError {
+                    message: e.message,
+                    line: e.line,
+                    col: e.col,
+                })?;
 
         let offset = merged_chunks.len();
 
@@ -85,8 +89,8 @@ pub fn compile_with_imports(
         // Extract the short module name (last component of dotted path)
         let short_name = import
             .module_name
-            .split('.')
-            .last()
+            .rsplit('.')
+            .next()
             .unwrap_or(&import.module_name);
 
         // Build merged function map based on import kind
@@ -134,9 +138,11 @@ pub fn compile_with_imports(
     })?;
     let mut codegen = Codegen::new(natives);
     codegen.set_pre_compiled(merged_chunks, merged_functions);
-    codegen.generate_program(&ir_module).map_err(|e| CompileError {
-        message: e.message,
-        line: e.line,
-        col: e.col,
-    })
+    codegen
+        .generate_program(&ir_module)
+        .map_err(|e| CompileError {
+            message: e.message,
+            line: e.line,
+            col: e.col,
+        })
 }

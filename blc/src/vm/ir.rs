@@ -278,29 +278,95 @@ mod tests {
             Expr::Bool(true),
             Expr::Unit,
             Expr::Var("x".into(), None),
-            Expr::CallDirect { name: "f".into(), args: vec![], ty: None },
-            Expr::CallNative { module: "M".into(), method: "m".into(), args: vec![], ty: None },
-            Expr::CallIndirect { callee: Box::new(Expr::Var("f".into(), None)), args: vec![], ty: None },
-            Expr::TailCall { name: "f".into(), args: vec![], ty: None },
-            Expr::MakeEnum { tag: "T".into(), payload: Box::new(Expr::Unit), ty: None },
-            Expr::MakeStruct { name: "S".into(), fields: vec![], ty: None },
+            Expr::CallDirect {
+                name: "f".into(),
+                args: vec![],
+                ty: None,
+            },
+            Expr::CallNative {
+                module: "M".into(),
+                method: "m".into(),
+                args: vec![],
+                ty: None,
+            },
+            Expr::CallIndirect {
+                callee: Box::new(Expr::Var("f".into(), None)),
+                args: vec![],
+                ty: None,
+            },
+            Expr::TailCall {
+                name: "f".into(),
+                args: vec![],
+                ty: None,
+            },
+            Expr::MakeEnum {
+                tag: "T".into(),
+                payload: Box::new(Expr::Unit),
+                ty: None,
+            },
+            Expr::MakeStruct {
+                name: "S".into(),
+                fields: vec![],
+                ty: None,
+            },
             Expr::MakeList(vec![], None),
             Expr::MakeRecord(vec![], None),
             Expr::MakeTuple(vec![], None),
             Expr::MakeRange(Box::new(Expr::Int(0)), Box::new(Expr::Int(1))),
-            Expr::UpdateRecord { base: Box::new(Expr::Unit), updates: vec![], ty: None },
-            Expr::GetField { object: Box::new(Expr::Unit), field: "f".into(), ty: None },
-            Expr::BinOp { op: BinOp::Add, lhs: Box::new(Expr::Int(0)), rhs: Box::new(Expr::Int(0)), ty: None },
-            Expr::UnaryOp { op: UnaryOp::Neg, operand: Box::new(Expr::Int(0)), ty: None },
+            Expr::UpdateRecord {
+                base: Box::new(Expr::Unit),
+                updates: vec![],
+                ty: None,
+            },
+            Expr::GetField {
+                object: Box::new(Expr::Unit),
+                field: "f".into(),
+                ty: None,
+            },
+            Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Int(0)),
+                rhs: Box::new(Expr::Int(0)),
+                ty: None,
+            },
+            Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                operand: Box::new(Expr::Int(0)),
+                ty: None,
+            },
             Expr::And(Box::new(Expr::Bool(true)), Box::new(Expr::Bool(true))),
             Expr::Or(Box::new(Expr::Bool(true)), Box::new(Expr::Bool(false))),
-            Expr::If { condition: Box::new(Expr::Bool(true)), then_branch: Box::new(Expr::Int(1)), else_branch: None, ty: None },
-            Expr::Match { subject: Box::new(Expr::Int(0)), arms: vec![], ty: None },
-            Expr::For { binding: "x".into(), iterable: Box::new(Expr::MakeList(vec![], None)), body: Box::new(Expr::Unit) },
-            Expr::Let { pattern: Box::new(Pattern::Var("x".into())), value: Box::new(Expr::Int(0)), ty: None },
+            Expr::If {
+                condition: Box::new(Expr::Bool(true)),
+                then_branch: Box::new(Expr::Int(1)),
+                else_branch: None,
+                ty: None,
+            },
+            Expr::Match {
+                subject: Box::new(Expr::Int(0)),
+                arms: vec![],
+                ty: None,
+            },
+            Expr::For {
+                binding: "x".into(),
+                iterable: Box::new(Expr::MakeList(vec![], None)),
+                body: Box::new(Expr::Unit),
+            },
+            Expr::Let {
+                pattern: Box::new(Pattern::Var("x".into())),
+                value: Box::new(Expr::Int(0)),
+                ty: None,
+            },
             Expr::Block(vec![], None),
-            Expr::Lambda { params: vec![], body: Box::new(Expr::Unit), ty: None },
-            Expr::Try { expr: Box::new(Expr::Unit), ty: None },
+            Expr::Lambda {
+                params: vec![],
+                body: Box::new(Expr::Unit),
+                ty: None,
+            },
+            Expr::Try {
+                expr: Box::new(Expr::Unit),
+                ty: None,
+            },
             Expr::Concat(vec![]),
         ];
         assert_eq!(exprs.len(), 30);
@@ -321,8 +387,17 @@ mod tests {
     #[test]
     fn all_binop_variants() {
         let ops = [
-            BinOp::Add, BinOp::Sub, BinOp::Mul, BinOp::Div, BinOp::Mod,
-            BinOp::Eq, BinOp::Ne, BinOp::Lt, BinOp::Gt, BinOp::Le, BinOp::Ge,
+            BinOp::Add,
+            BinOp::Sub,
+            BinOp::Mul,
+            BinOp::Div,
+            BinOp::Mod,
+            BinOp::Eq,
+            BinOp::Ne,
+            BinOp::Lt,
+            BinOp::Gt,
+            BinOp::Le,
+            BinOp::Ge,
         ];
         assert_eq!(ops.len(), 11);
     }

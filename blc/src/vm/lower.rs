@@ -43,11 +43,7 @@ pub struct Lowerer<'a> {
 }
 
 impl<'a> Lowerer<'a> {
-    pub fn new(
-        source: &'a str,
-        natives: &'a NativeRegistry,
-        type_map: Option<TypeMap>,
-    ) -> Self {
+    pub fn new(source: &'a str, natives: &'a NativeRegistry, type_map: Option<TypeMap>) -> Self {
         Lowerer {
             source,
             type_map,
@@ -74,12 +70,12 @@ impl<'a> Lowerer<'a> {
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            if child.kind() == "function_def" {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    let name = self.node_text(&name_node);
-                    self.functions.insert(name.clone());
-                    func_nodes.push((name, i));
-                }
+            if child.kind() == "function_def"
+                && let Some(name_node) = child.child_by_field_name("name")
+            {
+                let name = self.node_text(&name_node);
+                self.functions.insert(name.clone());
+                func_nodes.push((name, i));
             }
         }
 
@@ -123,12 +119,12 @@ impl<'a> Lowerer<'a> {
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            if child.kind() == "function_def" {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    let name = self.node_text(&name_node);
-                    self.functions.insert(name.clone());
-                    func_nodes.push((name, i));
-                }
+            if child.kind() == "function_def"
+                && let Some(name_node) = child.child_by_field_name("name")
+            {
+                let name = self.node_text(&name_node);
+                self.functions.insert(name.clone());
+                func_nodes.push((name, i));
             }
         }
 
@@ -143,9 +139,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_function_def(&mut self, node: &Node, name: &str) -> Result<IrFunction, LowerError> {
-        let body_node = node.child_by_field_name("body").ok_or_else(|| {
-            self.error("Function missing body".into(), node)
-        })?;
+        let body_node = node
+            .child_by_field_name("body")
+            .ok_or_else(|| self.error("Function missing body".into(), node))?;
 
         let span = self.span(node);
         self.current_fn_name = Some(name.to_string());
@@ -181,9 +177,10 @@ impl<'a> Lowerer<'a> {
         self.current_fn_name = None;
 
         // Look up function type from type_map
-        let ty = self.type_map.as_ref().and_then(|tm| {
-            tm.get(&node.start_byte()).cloned()
-        });
+        let ty = self
+            .type_map
+            .as_ref()
+            .and_then(|tm| tm.get(&node.start_byte()).cloned());
 
         Ok(IrFunction {
             name: name.to_string(),
@@ -207,15 +204,15 @@ impl<'a> Lowerer<'a> {
             "match_expression" => self.lower_match(node),
             "block" => self.lower_block(node),
             "parenthesized_expression" => {
-                let inner = node.named_child(0).ok_or_else(|| {
-                    self.error("Empty parenthesized expression".into(), node)
-                })?;
+                let inner = node
+                    .named_child(0)
+                    .ok_or_else(|| self.error("Empty parenthesized expression".into(), node))?;
                 self.lower_expression(&inner)
             }
             "literal" => {
-                let child = node.named_child(0).ok_or_else(|| {
-                    self.error("Empty literal".into(), node)
-                })?;
+                let child = node
+                    .named_child(0)
+                    .ok_or_else(|| self.error("Empty literal".into(), node))?;
                 self.lower_expression(&child)
             }
 
@@ -241,10 +238,7 @@ impl<'a> Lowerer<'a> {
             "record_update" => self.lower_record_update(node),
             "let_binding" => self.lower_let(node),
             "line_comment" | "block_comment" => Ok(Expr::Unit),
-            _ => Err(self.error(
-                format!("Unsupported expression kind: {}", kind),
-                node,
-            )),
+            _ => Err(self.error(format!("Unsupported expression kind: {}", kind), node)),
         }
     }
 
@@ -254,17 +248,17 @@ impl<'a> Lowerer<'a> {
 
     fn lower_integer(&self, node: &Node) -> Result<Expr, LowerError> {
         let text = self.node_text(node);
-        let val: i64 = text.parse().map_err(|_| {
-            self.error(format!("Invalid integer: {}", text), node)
-        })?;
+        let val: i64 = text
+            .parse()
+            .map_err(|_| self.error(format!("Invalid integer: {}", text), node))?;
         Ok(Expr::Int(val))
     }
 
     fn lower_float(&self, node: &Node) -> Result<Expr, LowerError> {
         let text = self.node_text(node);
-        let val: f64 = text.parse().map_err(|_| {
-            self.error(format!("Invalid float: {}", text), node)
-        })?;
+        let val: f64 = text
+            .parse()
+            .map_err(|_| self.error(format!("Invalid float: {}", text), node))?;
         Ok(Expr::Float(val))
     }
 
@@ -284,7 +278,7 @@ impl<'a> Lowerer<'a> {
 
         let mut parts: Vec<Expr> = Vec::new();
         let mut cursor = node_start + 1; // skip opening quote
-        let content_end = node_end - 1;  // skip closing quote
+        let content_end = node_end - 1; // skip closing quote
 
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
@@ -300,9 +294,9 @@ impl<'a> Lowerer<'a> {
 
             match child.kind() {
                 "interpolation" => {
-                    let expr_node = child.named_child(0).ok_or_else(|| {
-                        self.error("Empty interpolation".into(), &child)
-                    })?;
+                    let expr_node = child
+                        .named_child(0)
+                        .ok_or_else(|| self.error("Empty interpolation".into(), &child))?;
                     parts.push(self.lower_expression(&expr_node)?);
                 }
                 "escape_sequence" => {
@@ -347,9 +341,10 @@ impl<'a> Lowerer<'a> {
 
     fn lower_identifier(&self, node: &Node) -> Result<Expr, LowerError> {
         let name = self.node_text(node);
-        let ty = self.type_map.as_ref().and_then(|tm| {
-            tm.get(&node.start_byte()).cloned()
-        });
+        let ty = self
+            .type_map
+            .as_ref()
+            .and_then(|tm| tm.get(&node.start_byte()).cloned());
         Ok(Expr::Var(name, ty))
     }
 
@@ -363,12 +358,13 @@ impl<'a> Lowerer<'a> {
             return Ok(val);
         }
 
-        let op_text = node.child(0)
+        let op_text = node
+            .child(0)
             .map(|c| self.node_text(&c))
             .unwrap_or_default();
-        let operand = node.named_child(0).ok_or_else(|| {
-            self.error("Unary missing operand".into(), node)
-        })?;
+        let operand = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Unary missing operand".into(), node))?;
 
         let was_tail = self.tail_position;
         self.tail_position = false;
@@ -378,10 +374,7 @@ impl<'a> Lowerer<'a> {
         let op = match op_text.as_str() {
             "-" => UnaryOp::Neg,
             "not" => UnaryOp::Not,
-            _ => return Err(self.error(
-                format!("Unknown unary operator: {}", op_text),
-                node,
-            )),
+            _ => return Err(self.error(format!("Unknown unary operator: {}", op_text), node)),
         };
 
         Ok(Expr::UnaryOp {
@@ -397,15 +390,17 @@ impl<'a> Lowerer<'a> {
             return Ok(val);
         }
 
-        let lhs_node = node.child_by_field_name("left")
+        let lhs_node = node
+            .child_by_field_name("left")
             .or_else(|| node.named_child(0))
             .ok_or_else(|| self.error("Binary missing lhs".into(), node))?;
-        let rhs_node = node.child_by_field_name("right")
+        let rhs_node = node
+            .child_by_field_name("right")
             .or_else(|| node.named_child(1))
             .ok_or_else(|| self.error("Binary missing rhs".into(), node))?;
-        let op_node = node.child(1).ok_or_else(|| {
-            self.error("Binary missing operator".into(), node)
-        })?;
+        let op_node = node
+            .child(1)
+            .ok_or_else(|| self.error("Binary missing operator".into(), node))?;
         let op_text = self.node_text(&op_node);
 
         // Short-circuit operators
@@ -430,9 +425,12 @@ impl<'a> Lowerer<'a> {
         self.tail_position = was_tail;
 
         // Determine type for specialization
-        let both_int = self.type_map.as_ref().map_or(false, |tm| {
+        let both_int = self.type_map.as_ref().is_some_and(|tm| {
             matches!(
-                (tm.get(&lhs_node.start_byte()), tm.get(&rhs_node.start_byte())),
+                (
+                    tm.get(&lhs_node.start_byte()),
+                    tm.get(&rhs_node.start_byte())
+                ),
                 (Some(Type::Int), Some(Type::Int))
             )
         }) || (self.is_int_expr(&lhs_node) && self.is_int_expr(&rhs_node));
@@ -451,10 +449,7 @@ impl<'a> Lowerer<'a> {
             ">" => BinOp::Gt,
             "<=" => BinOp::Le,
             ">=" => BinOp::Ge,
-            _ => return Err(self.error(
-                format!("Unknown binary operator: {}", op_text),
-                node,
-            )),
+            _ => return Err(self.error(format!("Unknown binary operator: {}", op_text), node)),
         };
 
         Ok(Expr::BinOp {
@@ -468,15 +463,15 @@ impl<'a> Lowerer<'a> {
     fn is_int_expr(&self, node: &Node) -> bool {
         match node.kind() {
             "integer_literal" => true,
-            "unary_expression" => {
-                node.named_child(0).map_or(false, |c| c.kind() == "integer_literal")
-            }
+            "unary_expression" => node
+                .named_child(0)
+                .is_some_and(|c| c.kind() == "integer_literal"),
             "binary_expression" => {
                 if let Some(op) = node.child(1) {
                     let op_text = self.node_text(&op);
                     matches!(op_text.as_str(), "+" | "-" | "*" | "/" | "%")
-                        && node.named_child(0).map_or(false, |c| self.is_int_expr(&c))
-                        && node.named_child(1).map_or(false, |c| self.is_int_expr(&c))
+                        && node.named_child(0).is_some_and(|c| self.is_int_expr(&c))
+                        && node.named_child(1).is_some_and(|c| self.is_int_expr(&c))
                 } else {
                     false
                 }
@@ -491,15 +486,9 @@ impl<'a> Lowerer<'a> {
 
     fn try_eval_const(&self, node: &Node) -> Option<Expr> {
         match node.kind() {
-            "integer_literal" => {
-                self.node_text(node).parse::<i64>().ok().map(Expr::Int)
-            }
-            "float_literal" => {
-                self.node_text(node).parse::<f64>().ok().map(Expr::Float)
-            }
-            "boolean_literal" => {
-                Some(Expr::Bool(self.node_text(node) == "true"))
-            }
+            "integer_literal" => self.node_text(node).parse::<i64>().ok().map(Expr::Int),
+            "float_literal" => self.node_text(node).parse::<f64>().ok().map(Expr::Float),
+            "boolean_literal" => Some(Expr::Bool(self.node_text(node) == "true")),
             "string_literal" if node.named_child_count() == 0 => {
                 let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
                 Some(Expr::String(text.into()))
@@ -560,13 +549,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_let(&mut self, node: &Node) -> Result<Expr, LowerError> {
-        let pattern_node = node.named_child(0).ok_or_else(|| {
-            self.error("Let binding missing pattern".into(), node)
-        })?;
+        let pattern_node = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Let binding missing pattern".into(), node))?;
 
-        let value_node = node.named_child(node.named_child_count() - 1).ok_or_else(|| {
-            self.error("Let binding missing value".into(), node)
-        })?;
+        let value_node = node
+            .named_child(node.named_child_count() - 1)
+            .ok_or_else(|| self.error("Let binding missing value".into(), node))?;
 
         let value = self.lower_expression(&value_node)?;
 
@@ -587,9 +576,10 @@ impl<'a> Lowerer<'a> {
             Pattern::Var(name)
         };
 
-        let ty = self.type_map.as_ref().and_then(|tm| {
-            tm.get(&node.start_byte()).cloned()
-        });
+        let ty = self
+            .type_map
+            .as_ref()
+            .and_then(|tm| tm.get(&node.start_byte()).cloned());
 
         Ok(Expr::Let {
             pattern: Box::new(pattern),
@@ -683,34 +673,35 @@ impl<'a> Lowerer<'a> {
         match node.kind() {
             "wildcard_pattern" => Ok(Pattern::Wildcard),
             "identifier" => Ok(Pattern::Var(self.node_text(node))),
-            "literal" | "integer_literal" | "float_literal"
-            | "boolean_literal" | "string_literal" => {
-                let expr = match node.kind() {
-                    "integer_literal" => {
-                        let text = self.node_text(node);
-                        Expr::Int(text.parse().map_err(|_| {
-                            self.error(format!("Invalid integer: {}", text), node)
-                        })?)
-                    }
-                    "float_literal" => {
-                        let text = self.node_text(node);
-                        Expr::Float(text.parse().map_err(|_| {
-                            self.error(format!("Invalid float: {}", text), node)
-                        })?)
-                    }
-                    "boolean_literal" => Expr::Bool(self.node_text(node) == "true"),
-                    "string_literal" => {
-                        let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
-                        Expr::String(text.into())
-                    }
-                    "literal" => {
-                        let child = node.named_child(0).ok_or_else(|| {
-                            self.error("Empty literal pattern".into(), node)
-                        })?;
-                        return self.lower_pattern(&child);
-                    }
-                    _ => return Err(self.error("Unexpected pattern literal".into(), node)),
-                };
+            "literal" | "integer_literal" | "float_literal" | "boolean_literal"
+            | "string_literal" => {
+                let expr =
+                    match node.kind() {
+                        "integer_literal" => {
+                            let text = self.node_text(node);
+                            Expr::Int(text.parse().map_err(|_| {
+                                self.error(format!("Invalid integer: {}", text), node)
+                            })?)
+                        }
+                        "float_literal" => {
+                            let text = self.node_text(node);
+                            Expr::Float(text.parse().map_err(|_| {
+                                self.error(format!("Invalid float: {}", text), node)
+                            })?)
+                        }
+                        "boolean_literal" => Expr::Bool(self.node_text(node) == "true"),
+                        "string_literal" => {
+                            let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
+                            Expr::String(text.into())
+                        }
+                        "literal" => {
+                            let child = node
+                                .named_child(0)
+                                .ok_or_else(|| self.error("Empty literal pattern".into(), node))?;
+                            return self.lower_pattern(&child);
+                        }
+                        _ => return Err(self.error("Unexpected pattern literal".into(), node)),
+                    };
                 Ok(Pattern::Literal(Box::new(expr)))
             }
             "type_identifier" => {
@@ -743,10 +734,7 @@ impl<'a> Lowerer<'a> {
                 }
                 Ok(Pattern::Tuple(pats))
             }
-            _ => Err(self.error(
-                format!("Unsupported pattern kind: {}", node.kind()),
-                node,
-            )),
+            _ => Err(self.error(format!("Unsupported pattern kind: {}", node.kind()), node)),
         }
     }
 
@@ -778,12 +766,12 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     fn lower_range(&mut self, node: &Node) -> Result<Expr, LowerError> {
-        let lhs = node.named_child(0).ok_or_else(|| {
-            self.error("Range missing start".into(), node)
-        })?;
-        let rhs = node.named_child(1).ok_or_else(|| {
-            self.error("Range missing end".into(), node)
-        })?;
+        let lhs = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Range missing start".into(), node))?;
+        let rhs = node
+            .named_child(1)
+            .ok_or_else(|| self.error("Range missing end".into(), node))?;
 
         let start = self.lower_expression(&lhs)?;
         let end = self.lower_expression(&rhs)?;
@@ -828,25 +816,24 @@ impl<'a> Lowerer<'a> {
         }
 
         // TCO: self-recursive tail call
-        if self.tail_position {
-            if callee.kind() == "identifier" {
-                let callee_name = self.node_text(callee);
-                if let Some(ref fn_name) = self.current_fn_name {
-                    if callee_name == *fn_name {
-                        let was_tail = self.tail_position;
-                        self.tail_position = false;
-                        let mut args = Vec::new();
-                        for arg in arg_nodes {
-                            args.push(self.lower_expression(arg)?);
-                        }
-                        self.tail_position = was_tail;
-                        return Ok(Expr::TailCall {
-                            name: callee_name,
-                            args,
-                            ty: None,
-                        });
-                    }
+        if self.tail_position
+            && callee.kind() == "identifier"
+            && let Some(ref fn_name) = self.current_fn_name
+        {
+            let callee_name = self.node_text(callee);
+            if callee_name == *fn_name {
+                let was_tail = self.tail_position;
+                self.tail_position = false;
+                let mut args = Vec::new();
+                for arg in arg_nodes {
+                    args.push(self.lower_expression(arg)?);
                 }
+                self.tail_position = was_tail;
+                return Ok(Expr::TailCall {
+                    name: callee_name,
+                    args,
+                    ty: None,
+                });
             }
         }
 
@@ -854,34 +841,34 @@ impl<'a> Lowerer<'a> {
         self.tail_position = false;
 
         // Native call: Module.method(args)
-        if callee.kind() == "field_expression" {
-            if let Some((module, method, qualified)) = self.try_resolve_qualified(callee) {
-                if self.natives.lookup(&qualified).is_some() {
-                    let mut args = Vec::new();
-                    for arg in arg_nodes {
-                        args.push(self.lower_expression(arg)?);
-                    }
-                    self.tail_position = was_tail;
-                    return Ok(Expr::CallNative {
-                        module,
-                        method,
-                        args,
-                        ty: None,
-                    });
+        if callee.kind() == "field_expression"
+            && let Some((module, method, qualified)) = self.try_resolve_qualified(callee)
+        {
+            if self.natives.lookup(&qualified).is_some() {
+                let mut args = Vec::new();
+                for arg in arg_nodes {
+                    args.push(self.lower_expression(arg)?);
                 }
-                // Imported module function
-                if self.functions.contains(&qualified) {
-                    let mut args = Vec::new();
-                    for arg in arg_nodes {
-                        args.push(self.lower_expression(arg)?);
-                    }
-                    self.tail_position = was_tail;
-                    return Ok(Expr::CallDirect {
-                        name: qualified,
-                        args,
-                        ty: None,
-                    });
+                self.tail_position = was_tail;
+                return Ok(Expr::CallNative {
+                    module,
+                    method,
+                    args,
+                    ty: None,
+                });
+            }
+            // Imported module function
+            if self.functions.contains(&qualified) {
+                let mut args = Vec::new();
+                for arg in arg_nodes {
+                    args.push(self.lower_expression(arg)?);
                 }
+                self.tail_position = was_tail;
+                return Ok(Expr::CallDirect {
+                    name: qualified,
+                    args,
+                    ty: None,
+                });
             }
         }
 
@@ -935,12 +922,12 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     fn lower_pipe(&mut self, node: &Node) -> Result<Expr, LowerError> {
-        let lhs_node = node.named_child(0).ok_or_else(|| {
-            self.error("Pipe missing left operand".into(), node)
-        })?;
-        let rhs_node = node.named_child(1).ok_or_else(|| {
-            self.error("Pipe missing right operand".into(), node)
-        })?;
+        let lhs_node = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Pipe missing left operand".into(), node))?;
+        let rhs_node = node
+            .named_child(1)
+            .ok_or_else(|| self.error("Pipe missing right operand".into(), node))?;
 
         let lhs = self.lower_expression(&lhs_node)?;
 
@@ -957,32 +944,32 @@ impl<'a> Lowerer<'a> {
             let extra_args = &rhs_children[1..];
 
             // Check for native module call
-            if callee.kind() == "field_expression" {
-                if let Some((module, method, qualified)) = self.try_resolve_qualified(callee) {
-                    if self.natives.lookup(&qualified).is_some() {
-                        let mut args = vec![lhs];
-                        for arg in extra_args {
-                            args.push(self.lower_expression(arg)?);
-                        }
-                        return Ok(Expr::CallNative {
-                            module,
-                            method,
-                            args,
-                            ty: None,
-                        });
+            if callee.kind() == "field_expression"
+                && let Some((module, method, qualified)) = self.try_resolve_qualified(callee)
+            {
+                if self.natives.lookup(&qualified).is_some() {
+                    let mut args = vec![lhs];
+                    for arg in extra_args {
+                        args.push(self.lower_expression(arg)?);
                     }
-                    // Imported module function
-                    if self.functions.contains(&qualified) {
-                        let mut args = vec![lhs];
-                        for arg in extra_args {
-                            args.push(self.lower_expression(arg)?);
-                        }
-                        return Ok(Expr::CallDirect {
-                            name: qualified,
-                            args,
-                            ty: None,
-                        });
+                    return Ok(Expr::CallNative {
+                        module,
+                        method,
+                        args,
+                        ty: None,
+                    });
+                }
+                // Imported module function
+                if self.functions.contains(&qualified) {
+                    let mut args = vec![lhs];
+                    for arg in extra_args {
+                        args.push(self.lower_expression(arg)?);
                     }
+                    return Ok(Expr::CallDirect {
+                        name: qualified,
+                        args,
+                        ty: None,
+                    });
                 }
             }
 
@@ -1008,11 +995,11 @@ impl<'a> Lowerer<'a> {
             for arg in extra_args {
                 args.push(self.lower_expression(arg)?);
             }
-            return Ok(Expr::CallIndirect {
+            Ok(Expr::CallIndirect {
                 callee: Box::new(callee_expr),
                 args,
                 ty: None,
-            });
+            })
         } else if rhs_node.kind() == "field_expression" {
             // x |> Module.method → CallNative/CallDirect(x)
             if let Some((module, method, qualified)) = self.try_resolve_qualified(&rhs_node) {
@@ -1034,31 +1021,31 @@ impl<'a> Lowerer<'a> {
             }
             // Not a native — regular indirect call
             let callee_expr = self.lower_expression(&rhs_node)?;
-            return Ok(Expr::CallIndirect {
+            Ok(Expr::CallIndirect {
                 callee: Box::new(callee_expr),
                 args: vec![lhs],
                 ty: None,
-            });
+            })
         } else {
             // x |> f → f(x)
             let rhs = self.lower_expression(&rhs_node)?;
 
             // Check if rhs is a known function var
-            if let Expr::Var(ref name, _) = rhs {
-                if self.functions.contains(name) {
-                    return Ok(Expr::CallDirect {
-                        name: name.clone(),
-                        args: vec![lhs],
-                        ty: None,
-                    });
-                }
+            if let Expr::Var(ref name, _) = rhs
+                && self.functions.contains(name)
+            {
+                return Ok(Expr::CallDirect {
+                    name: name.clone(),
+                    args: vec![lhs],
+                    ty: None,
+                });
             }
 
-            return Ok(Expr::CallIndirect {
+            Ok(Expr::CallIndirect {
                 callee: Box::new(rhs),
                 args: vec![lhs],
                 ty: None,
-            });
+            })
         }
     }
 
@@ -1112,12 +1099,12 @@ impl<'a> Lowerer<'a> {
             if field_init.kind() != "record_field_init" {
                 continue;
             }
-            let key_node = field_init.named_child(0).ok_or_else(|| {
-                self.error("Record field missing key".into(), &field_init)
-            })?;
-            let val_node = field_init.named_child(1).ok_or_else(|| {
-                self.error("Record field missing value".into(), &field_init)
-            })?;
+            let key_node = field_init
+                .named_child(0)
+                .ok_or_else(|| self.error("Record field missing key".into(), &field_init))?;
+            let val_node = field_init
+                .named_child(1)
+                .ok_or_else(|| self.error("Record field missing value".into(), &field_init))?;
             let key = self.node_text(&key_node);
             let val = self.lower_expression(&val_node)?;
             fields.push((key, val));
@@ -1144,12 +1131,12 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_field_access(&mut self, node: &Node) -> Result<Expr, LowerError> {
-        let obj = node.named_child(0).ok_or_else(|| {
-            self.error("Field access missing object".into(), node)
-        })?;
-        let field = node.named_child(1).ok_or_else(|| {
-            self.error("Field access missing field name".into(), node)
-        })?;
+        let obj = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Field access missing object".into(), node))?;
+        let field = node
+            .named_child(1)
+            .ok_or_else(|| self.error("Field access missing field name".into(), node))?;
 
         let object = self.lower_expression(&obj)?;
         let field_name = self.node_text(&field);
@@ -1162,9 +1149,9 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_struct_expression(&mut self, node: &Node) -> Result<Expr, LowerError> {
-        let type_node = node.named_child(0).ok_or_else(|| {
-            self.error("Struct expression missing type".into(), node)
-        })?;
+        let type_node = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Struct expression missing type".into(), node))?;
         let type_name = self.node_text(&type_node);
 
         let mut fields = Vec::new();
@@ -1210,9 +1197,9 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     fn lower_try(&mut self, node: &Node) -> Result<Expr, LowerError> {
-        let expr_node = node.named_child(0).ok_or_else(|| {
-            self.error("Try expression missing operand".into(), node)
-        })?;
+        let expr_node = node
+            .named_child(0)
+            .ok_or_else(|| self.error("Try expression missing operand".into(), node))?;
         let expr = self.lower_expression(&expr_node)?;
         Ok(Expr::Try {
             expr: Box::new(expr),
@@ -1257,7 +1244,9 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     fn node_text(&self, node: &Node) -> String {
-        node.utf8_text(self.source.as_bytes()).unwrap_or("").to_string()
+        node.utf8_text(self.source.as_bytes())
+            .unwrap_or("")
+            .to_string()
     }
 
     fn span(&self, node: &Node) -> Span {
@@ -1375,9 +1364,9 @@ mod tests {
 
     #[test]
     fn lower_float_literal() {
-        match lower_expr("3.14") {
-            Expr::Float(f) => assert!((f - 3.14).abs() < 1e-10),
-            other => panic!("Expected Float(3.14), got {:?}", other),
+        match lower_expr("1.5") {
+            Expr::Float(f) => assert!((f - 1.5).abs() < 1e-10),
+            other => panic!("Expected Float(1.5), got {:?}", other),
         }
     }
 
@@ -1408,7 +1397,8 @@ mod tests {
     #[test]
     fn lower_pipe_desugars() {
         // x |> f desugars to a call
-        let source = "double : Int -> Int\ndouble = |x| x * 2\nmain : () -> Int\nmain = 5 |> double";
+        let source =
+            "double : Int -> Int\ndouble = |x| x * 2\nmain : () -> Int\nmain = 5 |> double";
         let tree = parse(source);
         let root = tree.root_node();
         let natives = NativeRegistry::new();

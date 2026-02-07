@@ -126,7 +126,10 @@ impl<'a> Codegen<'a> {
     }
 
     /// Generate chunks for a module (no entry point). Returns chunks and name→index map.
-    pub fn generate_module(mut self, functions: &[IrFunction]) -> Result<(Vec<Chunk>, HashMap<String, usize>), CodegenError> {
+    pub fn generate_module(
+        mut self,
+        functions: &[IrFunction],
+    ) -> Result<(Vec<Chunk>, HashMap<String, usize>), CodegenError> {
         // First pass: register names
         for (i, func) in functions.iter().enumerate() {
             self.functions.insert(func.name.clone(), i);
@@ -193,7 +196,12 @@ impl<'a> Codegen<'a> {
             Expr::CallDirect { name, args, .. } => {
                 self.gen_call_direct(name, args, span)?;
             }
-            Expr::CallNative { module, method, args, .. } => {
+            Expr::CallNative {
+                module,
+                method,
+                args,
+                ..
+            } => {
                 self.gen_call_native(module, method, args, span)?;
             }
             Expr::CallIndirect { callee, args, .. } => {
@@ -263,7 +271,9 @@ impl<'a> Codegen<'a> {
 
             Expr::GetField { object, field, .. } => {
                 self.gen_expr(object, span)?;
-                let name_idx = self.chunk.add_constant(Value::String(field.as_str().into()));
+                let name_idx = self
+                    .chunk
+                    .add_constant(Value::String(field.as_str().into()));
                 self.emit(Op::GetField(name_idx), span);
             }
 
@@ -325,7 +335,12 @@ impl<'a> Codegen<'a> {
                 self.chunk.patch_jump(end_jump);
             }
 
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 self.gen_expr(condition, span)?;
                 let then_jump = self.emit(Op::JumpIfFalse(0), span);
                 self.gen_expr(then_branch, span)?;
@@ -348,7 +363,11 @@ impl<'a> Codegen<'a> {
                 self.gen_match(subject, arms, span)?;
             }
 
-            Expr::For { binding, iterable, body } => {
+            Expr::For {
+                binding,
+                iterable,
+                body,
+            } => {
                 self.gen_for(binding, iterable, body, span)?;
             }
 
@@ -427,14 +446,18 @@ impl<'a> Codegen<'a> {
                     break;
                 }
             }
-            if found_at.is_some() { break; }
+            if found_at.is_some() {
+                break;
+            }
             for (i, uv) in self.enclosing[d].upvalues.iter().enumerate() {
                 if uv.name == name {
                     found_at = Some((d, i as u16, false));
                     break;
                 }
             }
-            if found_at.is_some() { break; }
+            if found_at.is_some() {
+                break;
+            }
         }
 
         let (found_depth, mut index, mut is_local) = found_at?;
@@ -463,7 +486,12 @@ impl<'a> Codegen<'a> {
     // Calls
     // -----------------------------------------------------------------------
 
-    fn gen_call_direct(&mut self, name: &str, args: &[Expr], span: &Span) -> Result<(), CodegenError> {
+    fn gen_call_direct(
+        &mut self,
+        name: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
         if let Some(&chunk_idx) = self.functions.get(name) {
             let idx = self.chunk.add_constant(Value::Function(chunk_idx));
             self.emit(Op::LoadConst(idx), span);
@@ -483,7 +511,13 @@ impl<'a> Codegen<'a> {
         }
     }
 
-    fn gen_call_native(&mut self, module: &str, method: &str, args: &[Expr], span: &Span) -> Result<(), CodegenError> {
+    fn gen_call_native(
+        &mut self,
+        module: &str,
+        method: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
         let qualified = format!("{}.{}", module, method);
         if let Some(fn_id) = self.natives.lookup(&qualified) {
             for arg in args {
@@ -504,7 +538,12 @@ impl<'a> Codegen<'a> {
     // Match
     // -----------------------------------------------------------------------
 
-    fn gen_match(&mut self, subject: &Expr, arms: &[MatchArm], span: &Span) -> Result<(), CodegenError> {
+    fn gen_match(
+        &mut self,
+        subject: &Expr,
+        arms: &[MatchArm],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
         self.gen_expr(subject, span)?;
         self.declare_local("__match_subject");
         let subject_slot = (self.locals.len() - 1) as u16;
@@ -616,7 +655,13 @@ impl<'a> Codegen<'a> {
     // For loop
     // -----------------------------------------------------------------------
 
-    fn gen_for(&mut self, binding: &str, iterable: &Expr, body: &Expr, span: &Span) -> Result<(), CodegenError> {
+    fn gen_for(
+        &mut self,
+        binding: &str,
+        iterable: &Expr,
+        body: &Expr,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
         self.gen_expr(iterable, span)?;
         self.declare_local("__for_list");
         let list_slot = (self.locals.len() - 1) as u16;
@@ -736,7 +781,12 @@ impl<'a> Codegen<'a> {
     // Lambda
     // -----------------------------------------------------------------------
 
-    fn gen_lambda(&mut self, params: &[String], body: &Expr, span: &Span) -> Result<(), CodegenError> {
+    fn gen_lambda(
+        &mut self,
+        params: &[String],
+        body: &Expr,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
         self.enter_function();
 
         for param in params {
@@ -760,7 +810,10 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::GetUpvalue(uv.index as u8), span);
                 }
             }
-            self.emit(Op::MakeClosure(chunk_idx as u16, captured.len() as u8), span);
+            self.emit(
+                Op::MakeClosure(chunk_idx as u16, captured.len() as u8),
+                span,
+            );
         }
 
         Ok(())
@@ -866,7 +919,8 @@ impl<'a> Codegen<'a> {
             pop_count += 1;
         }
         if pop_count > 0 {
-            self.chunk.emit(Op::CloseScope(pop_count), span.line, span.col);
+            self.chunk
+                .emit(Op::CloseScope(pop_count), span.line, span.col);
         }
     }
 
@@ -930,11 +984,13 @@ mod tests {
 
         let natives = NativeRegistry::new();
         let mut lowerer = Lowerer::new(source, &natives, None);
-        let module = lowerer.lower_module(&root)
+        let module = lowerer
+            .lower_module(&root)
             .unwrap_or_else(|e| panic!("Lower error: {}", e));
 
         let codegen = Codegen::new(&natives);
-        let mut program = codegen.generate_program(&module)
+        let mut program = codegen
+            .generate_program(&module)
             .unwrap_or_else(|e| panic!("Codegen error: {}", e));
         program.optimize();
 
@@ -998,7 +1054,8 @@ mod tests {
 
     #[test]
     fn ir_pipeline_pipe() {
-        let source = "double : Int -> Int\ndouble = |x| x * 2\nmain : () -> Int\nmain = 5 |> double";
+        let source =
+            "double : Int -> Int\ndouble = |x| x * 2\nmain : () -> Int\nmain = 5 |> double";
         assert_eq!(eval_via_ir(source), Value::Int(10));
     }
 
@@ -1048,7 +1105,11 @@ main = countdown(50000)";
         let source = "main : () -> Unknown\nmain = [1, 2, 3]";
         assert_eq!(
             eval_via_ir(source),
-            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(std::rc::Rc::new(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3)
+            ])),
         );
     }
 
@@ -1087,13 +1148,18 @@ main = countdown(50000)";
         let source = "main : () -> Unknown\nmain = 1..4";
         assert_eq!(
             eval_via_ir(source),
-            Value::List(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(std::rc::Rc::new(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3)
+            ])),
         );
     }
 
     #[test]
     fn ir_pipeline_record_update() {
-        let source = "main : () -> Unknown\nmain = {\n  let r = { x: 1, y: 2 }\n  { ..r, x: 10 }\n}";
+        let source =
+            "main : () -> Unknown\nmain = {\n  let r = { x: 1, y: 2 }\n  { ..r, x: 10 }\n}";
         assert_eq!(
             eval_via_ir(source),
             Value::Record(std::rc::Rc::new(vec![
@@ -1126,7 +1192,11 @@ main = countdown(50000)";
         let source = "main : () -> Unknown\nmain = (1, 2, 3)";
         assert_eq!(
             eval_via_ir(source),
-            Value::Tuple(std::rc::Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::Tuple(std::rc::Rc::new(vec![
+                Value::Int(1),
+                Value::Int(2),
+                Value::Int(3)
+            ])),
         );
     }
 
@@ -1154,13 +1224,18 @@ main = {
         let source = "main : () -> Unknown\nmain = List.map([1, 2, 3], |x| x * 2)";
         assert_eq!(
             eval_via_ir(source),
-            Value::List(std::rc::Rc::new(vec![Value::Int(2), Value::Int(4), Value::Int(6)])),
+            Value::List(std::rc::Rc::new(vec![
+                Value::Int(2),
+                Value::Int(4),
+                Value::Int(6)
+            ])),
         );
     }
 
     #[test]
     fn ir_pipeline_pipe_with_args() {
-        let source = "add : (Int, Int) -> Int\nadd = |a, b| a + b\nmain : () -> Int\nmain = 3 |> add(4)";
+        let source =
+            "add : (Int, Int) -> Int\nadd = |a, b| a + b\nmain : () -> Int\nmain = 3 |> add(4)";
         assert_eq!(eval_via_ir(source), Value::Int(7));
     }
 }
