@@ -15,23 +15,25 @@ enum TokenType {
 
 void *tree_sitter_baseline_external_scanner_create() { return NULL; }
 
-void tree_sitter_baseline_external_scanner_destroy(void *payload) {}
+void tree_sitter_baseline_external_scanner_destroy(void *p) { (void)p; }
 
-unsigned tree_sitter_baseline_external_scanner_serialize(void *payload,
-                                                        char *buffer) {
+unsigned tree_sitter_baseline_external_scanner_serialize(void *p,
+                                                        char *buf) {
+  (void)p; (void)buf;
   return 0;
 }
 
-void tree_sitter_baseline_external_scanner_deserialize(void *payload,
-                                                      const char *buffer,
-                                                      unsigned length) {}
+void tree_sitter_baseline_external_scanner_deserialize(void *p,
+                                                      const char *buf,
+                                                      unsigned len) {
+  (void)p; (void)buf; (void)len;
+}
 
 static void advance(TSLexer *lexer) { lexer->advance(lexer, false); }
 
-static void skip(TSLexer *lexer) { lexer->advance(lexer, true); }
-
-bool tree_sitter_baseline_external_scanner_scan(void *payload, TSLexer *lexer,
+bool tree_sitter_baseline_external_scanner_scan(void *p, TSLexer *lexer,
                                                const bool *valid_symbols) {
+  (void)p;
   // Handle string content and interpolation
   if (valid_symbols[STRING_CONTENT] || valid_symbols[INTERPOLATION_START]) {
     bool has_content = false;
