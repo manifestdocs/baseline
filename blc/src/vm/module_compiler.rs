@@ -89,8 +89,8 @@ pub fn compile_with_imports(
         // Extract the short module name (last component of dotted path)
         let short_name = import
             .module_name
-            .rsplit('.')
-            .next()
+            .split('.')
+            .next_back()
             .unwrap_or(&import.module_name);
 
         // Build merged function map based on import kind

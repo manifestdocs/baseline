@@ -15,6 +15,12 @@ pub struct InferCtx {
     substitution: HashMap<u32, Type>,
 }
 
+impl Default for InferCtx {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InferCtx {
     pub fn new() -> Self {
         Self {

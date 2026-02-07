@@ -98,6 +98,7 @@ fn assert_check_ok(file: &str) {
     );
 }
 
+#[allow(dead_code)]
 fn assert_run_fails(file: &str, expected_fragments: &[&str]) {
     let out = blc_run(file);
     assert_eq!(

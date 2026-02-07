@@ -128,13 +128,11 @@ fn http_request<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Strin
     let req_headers: Vec<(String, String)> = match fields.get("headers") {
         Some(RuntimeValue::List(items)) => {
             items.iter().filter_map(|item| {
-                if let RuntimeValue::Tuple(pair) = item {
-                    if pair.len() == 2 {
-                        if let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1]) {
+                if let RuntimeValue::Tuple(pair) = item
+                    && pair.len() == 2
+                        && let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1]) {
                             return Some((k.clone(), v.clone()));
                         }
-                    }
-                }
                 None
             }).collect()
         }

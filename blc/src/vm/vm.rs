@@ -54,6 +54,12 @@ pub struct Vm {
     natives: NativeRegistry,
 }
 
+impl Default for Vm {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Vm {
     pub fn new() -> Self {
         Vm {
@@ -371,15 +377,14 @@ impl Vm {
                 Op::Concat => {
                     let (b, a) = self.pop2_fast();
                     // Fast path: both strings — avoid Display overhead
-                    if a.is_heap() && b.is_heap() {
-                        if let (HeapObject::String(sa), HeapObject::String(sb)) = (a.as_heap_ref(), b.as_heap_ref()) {
+                    if a.is_heap() && b.is_heap()
+                        && let (HeapObject::String(sa), HeapObject::String(sb)) = (a.as_heap_ref(), b.as_heap_ref()) {
                             let mut s = String::with_capacity(sa.len() + sb.len());
                             s.push_str(sa);
                             s.push_str(sb);
                             self.stack.push(NValue::string(s.into()));
                             continue;
                         }
-                    }
                     // Slow path: mixed types via Display
                     let result = NValue::string(format!("{}{}", a, b).into());
                     self.stack.push(result);
@@ -431,11 +436,10 @@ impl Vm {
                 }
 
                 Op::JumpIfTrue(offset) => {
-                    if let Some(v) = self.stack.last() {
-                        if v.is_truthy() {
+                    if let Some(v) = self.stack.last()
+                        && v.is_truthy() {
                             ip += offset as usize;
                         }
-                    }
                 }
 
                 Op::JumpBack(offset) => {
@@ -714,8 +718,8 @@ impl Vm {
                         HeapObject::Record(fields) => {
                             let mut new_fields = fields.clone();
                             for pair in updates.chunks(2) {
-                                if pair[0].is_heap() {
-                                    if let HeapObject::String(key) = pair[0].as_heap_ref() {
+                                if pair[0].is_heap()
+                                    && let HeapObject::String(key) = pair[0].as_heap_ref() {
                                         if let Some(existing) = new_fields.iter_mut().find(|(k, _)| *k == *key) {
                                             existing.1 = pair[1].clone();
                                         } else {
@@ -725,15 +729,14 @@ impl Vm {
                                             ));
                                         }
                                     }
-                                }
                             }
                             self.stack.push(NValue::record(new_fields));
                         }
                         HeapObject::Struct { name, fields } => {
                             let mut new_fields = fields.clone();
                             for pair in updates.chunks(2) {
-                                if pair[0].is_heap() {
-                                    if let HeapObject::String(key) = pair[0].as_heap_ref() {
+                                if pair[0].is_heap()
+                                    && let HeapObject::String(key) = pair[0].as_heap_ref() {
                                         if let Some(existing) = new_fields.iter_mut().find(|(k, _)| *k == *key) {
                                             existing.1 = pair[1].clone();
                                         } else {
@@ -743,7 +746,6 @@ impl Vm {
                                             ));
                                         }
                                     }
-                                }
                             }
                             self.stack.push(NValue::struct_val(name.clone(), new_fields));
                         }
@@ -980,7 +982,7 @@ impl Vm {
                 };
                 let mut results = Vec::with_capacity(items.len());
                 for item in &items {
-                    let result = self.call_nvalue(&func, &[item.clone()], chunks, line, col)?;
+                    let result = self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
                     results.push(result);
                 }
                 self.stack.push(NValue::list(results));
@@ -1000,7 +1002,7 @@ impl Vm {
                 };
                 let mut results = Vec::new();
                 for item in &items {
-                    let result = self.call_nvalue(&func, &[item.clone()], chunks, line, col)?;
+                    let result = self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
                     if result.is_truthy() {
                         results.push(item.clone());
                     }
@@ -1042,7 +1044,7 @@ impl Vm {
                 };
                 let mut found = NValue::enum_val("None".into(), NValue::unit());
                 for item in &items {
-                    let result = self.call_nvalue(&func, &[item.clone()], chunks, line, col)?;
+                    let result = self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
                     if result.is_truthy() {
                         found = NValue::enum_val("Some".into(), item.clone());
                         break;
@@ -1061,7 +1063,7 @@ impl Vm {
                 }
                 match opt.as_heap_ref() {
                     HeapObject::Enum { tag, payload } if &**tag == "Some" => {
-                        let result = self.call_nvalue(&func, &[payload.clone()], chunks, line, col)?;
+                        let result = self.call_nvalue(&func, std::slice::from_ref(payload), chunks, line, col)?;
                         self.stack.push(NValue::enum_val("Some".into(), result));
                     }
                     HeapObject::Enum { tag, .. } if &**tag == "None" => {
@@ -1081,7 +1083,7 @@ impl Vm {
                 }
                 match res.as_heap_ref() {
                     HeapObject::Enum { tag, payload } if &**tag == "Ok" => {
-                        let result = self.call_nvalue(&func, &[payload.clone()], chunks, line, col)?;
+                        let result = self.call_nvalue(&func, std::slice::from_ref(payload), chunks, line, col)?;
                         self.stack.push(NValue::enum_val("Ok".into(), result));
                     }
                     HeapObject::Enum { tag, payload } if &**tag == "Err" => {
@@ -1257,11 +1259,11 @@ mod tests {
     #[test]
     fn negate_float() {
         let mut c = Chunk::new();
-        let a = c.add_constant(Value::Float(3.14));
+        let a = c.add_constant(Value::Float(3.125));
         c.emit(Op::LoadConst(a), 1, 0);
         c.emit(Op::Negate, 1, 0);
         c.emit(Op::Return, 1, 0);
-        assert_eq!(run_chunk(c), Value::Float(-3.14));
+        assert_eq!(run_chunk(c), Value::Float(-3.125));
     }
 
     // -- Mixed int/float --

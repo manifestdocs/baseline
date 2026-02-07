@@ -144,6 +144,12 @@ pub struct Context<'a> {
     effect_handlers: Vec<EffectCapture>,
 }
 
+impl<'a> Default for Context<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<'a> Context<'a> {
     /// Create a context with ALL modules (backwards compat for tests).
     pub fn new() -> Self {
@@ -435,7 +441,7 @@ fn dispatch_hof<'a>(
             let pred_fn = &arg_vals[1];
             let mut results = Vec::new();
             for item in items {
-                let keep = apply_function(pred_fn, &[item.clone()], source, context, Some(node))?;
+                let keep = apply_function(pred_fn, std::slice::from_ref(&item), source, context, Some(node))?;
                 if let RuntimeValue::Bool(true) = keep {
                     results.push(item);
                 }
@@ -469,7 +475,7 @@ fn dispatch_hof<'a>(
             };
             let pred_fn = &arg_vals[1];
             for item in items {
-                let found = apply_function(pred_fn, &[item.clone()], source, context, Some(node))?;
+                let found = apply_function(pred_fn, std::slice::from_ref(&item), source, context, Some(node))?;
                 if let RuntimeValue::Bool(true) = found {
                     return Ok(Some(RuntimeValue::Enum("Some".to_string(), vec![item])));
                 }
@@ -656,13 +662,11 @@ fn extract_response(value: RuntimeValue) -> (u16, Vec<(String, String)>, String)
             let headers = match fields.get("headers") {
                 Some(RuntimeValue::List(items)) => {
                     items.iter().filter_map(|item| {
-                        if let RuntimeValue::Tuple(pair) = item {
-                            if pair.len() == 2 {
-                                if let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1]) {
+                        if let RuntimeValue::Tuple(pair) = item
+                            && pair.len() == 2
+                                && let (RuntimeValue::String(k), RuntimeValue::String(v)) = (&pair[0], &pair[1]) {
                                     return Some((k.clone(), v.clone()));
                                 }
-                            }
-                        }
                         None
                     }).collect()
                 }
@@ -736,7 +740,7 @@ fn apply_middleware_chain<'a>(
     context: &mut Context<'a>,
 ) -> Result<RuntimeValue<'a>, RuntimeError> {
     if middleware.is_empty() {
-        return apply_function(handler, &[request.clone()], source, context, Some(node));
+        return apply_function(handler, std::slice::from_ref(request), source, context, Some(node));
     }
 
     let current_mw = &middleware[0];
@@ -834,21 +838,19 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
         }
         "type_def" => {
             // Register enum constructors as values in context
-            if let Some(def_node) = node.child_by_field_name("def") {
-                if def_node.kind() == "variant_list" {
+            if let Some(def_node) = node.child_by_field_name("def")
+                && def_node.kind() == "variant_list" {
                     let mut cursor = def_node.walk();
                     for child in def_node.children(&mut cursor) {
-                        if child.kind() == "variant" {
-                            if let Some(vname_node) = child.child_by_field_name("name") {
+                        if child.kind() == "variant"
+                            && let Some(vname_node) = child.child_by_field_name("name") {
                                 let vname = vname_node.utf8_text(source.as_bytes()).unwrap().to_string();
                                 // Register nullary constructors as enum values
                                 // Constructors with payload will be created via call_expression
                                 context.set(vname.clone(), RuntimeValue::Enum(vname, Vec::new()));
                             }
-                        }
                     }
                 }
-            }
             Ok(RuntimeValue::Unit)
         }
         "lambda" | "lambda_expression" => {
@@ -922,11 +924,10 @@ pub fn eval<'a>(node: &Node<'a>, source: &'a str, context: &mut Context<'a>) -> 
                  }
 
                  // No builtin/native matched — check if it's a known module not in scope
-                 if obj_node.kind() == "type_identifier" {
-                     if let Some(err_msg) = context.check_module_scope(obj_name) {
+                 if obj_node.kind() == "type_identifier"
+                     && let Some(err_msg) = context.check_module_scope(obj_name) {
                          return Err(err_at(err_msg, node, context));
                      }
-                 }
              }
 
              let func_val = eval(&func_node, source, context)?;
@@ -1671,10 +1672,9 @@ fn match_pattern<'a>(
                     return None;
                 }
                 let mut bindings = HashMap::new();
-                for i in 0..count {
+                for (i, val) in vals.iter().enumerate().take(count) {
                     let sub_pat = pattern.named_child(i).unwrap();
-                    let sub_val = &vals[i];
-                    let sub_bindings = match_pattern(&sub_pat, sub_val, source)?;
+                    let sub_bindings = match_pattern(&sub_pat, val, source)?;
                     bindings.extend(sub_bindings);
                 }
                 Some(bindings)
@@ -1736,9 +1736,9 @@ fn bind_pattern<'a>(
                         vals.len()
                     ));
                 }
-                for i in 0..count {
+                for (i, val) in vals.iter().enumerate().take(count) {
                     let sub_pat = pattern.named_child(i).unwrap();
-                    bind_pattern(&sub_pat, &vals[i], source, context)?;
+                    bind_pattern(&sub_pat, val, source, context)?;
                 }
                 Ok(())
             } else {
@@ -2046,8 +2046,8 @@ mod tests {
 
     #[test]
     fn test_float_literal() {
-        let result = eval_source("main : () -> Float\nmain = || 3.14");
-        assert_eq!(result, Ok(RuntimeValue::Float(3.14)));
+        let result = eval_source("main : () -> Float\nmain = || 3.125");
+        assert_eq!(result, Ok(RuntimeValue::Float(3.125)));
     }
 
     #[test]
@@ -2076,8 +2076,8 @@ mod tests {
 
     #[test]
     fn test_float_negate() {
-        let result = eval_source("main : () -> Float\nmain = || -3.14");
-        assert_eq!(result, Ok(RuntimeValue::Float(-3.14)));
+        let result = eval_source("main : () -> Float\nmain = || -3.125");
+        assert_eq!(result, Ok(RuntimeValue::Float(-3.125)));
     }
 
     #[test]
