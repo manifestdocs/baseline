@@ -25,6 +25,8 @@ pub enum Value {
     Tuple(Rc<Vec<Value>>),
     /// Tagged enum variant: (tag_name, optional payload).
     Enum(RcStr, Rc<Value>),
+    /// Named struct: type name + ordered key-value fields (e.g., Point { x: 1, y: 2 }).
+    Struct(RcStr, Rc<Vec<(RcStr, Value)>>),
     /// A compiled function — index into Program.chunks.
     Function(usize),
     /// A closure — function + captured upvalues.
@@ -62,6 +64,12 @@ impl fmt::Display for Value {
                 } else {
                     write!(f, "{}({})", tag, payload)
                 }
+            }
+            Value::Struct(name, fields) => {
+                let s = fields.iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>().join(", ");
+                write!(f, "{} {{ {} }}", name, s)
             }
             Value::Function(idx) => write!(f, "<fn:{}>", idx),
             Value::Closure { chunk_idx, .. } => write!(f, "<closure:{}>", chunk_idx),

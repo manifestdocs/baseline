@@ -116,3 +116,175 @@ pub fn compile_with_imports(
     compiler.set_pre_compiled(merged_chunks, merged_functions);
     compiler.compile_program(main_root)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+    use tree_sitter::Parser;
+    use tree_sitter_baseline::LANGUAGE;
+
+    use super::super::vm::Vm;
+
+    fn parse(source: &str) -> (tree_sitter::Tree, String) {
+        let mut parser = Parser::new();
+        parser
+            .set_language(&LANGUAGE.into())
+            .expect("Failed to load grammar");
+        let tree = parser.parse(source, None).expect("Failed to parse");
+        (tree, source.to_string())
+    }
+
+    fn setup_module_dir(files: &[(&str, &str)]) -> TempDir {
+        let dir = TempDir::new().unwrap();
+        for (name, content) in files {
+            fs::write(dir.path().join(name), content).unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn qualified_import_compiles_and_runs() {
+        let dir = setup_module_dir(&[
+            ("util.bl", "@prelude(core)\nadd : (Int, Int) -> Int\nadd = |a, b| a + b\n"),
+            ("main.bl", "@prelude(core)\nimport Util\nmain : () -> Int\nmain = { Util.add(3, 7) }\n"),
+        ]);
+
+        let main_path = dir.path().join("main.bl");
+        let source = fs::read_to_string(&main_path).unwrap();
+        let (tree, _) = parse(&source);
+        let natives = NativeRegistry::new();
+
+        let program = compile_with_imports(&source, &tree.root_node(), &main_path, &natives)
+            .expect("compile_with_imports failed");
+
+        let mut vm = Vm::new();
+        let result = vm.execute_program(&program).expect("VM execution failed");
+        assert_eq!(result, super::super::value::Value::Int(10));
+    }
+
+    #[test]
+    fn selective_import_compiles_and_runs() {
+        let dir = setup_module_dir(&[
+            ("util.bl", "@prelude(core)\nadd : (Int, Int) -> Int\nadd = |a, b| a + b\ndouble : Int -> Int\ndouble = |x| x * 2\n"),
+            ("main.bl", "@prelude(core)\nimport Util.{add, double}\nmain : () -> Int\nmain = { add(double(5), 1) }\n"),
+        ]);
+
+        let main_path = dir.path().join("main.bl");
+        let source = fs::read_to_string(&main_path).unwrap();
+        let (tree, _) = parse(&source);
+        let natives = NativeRegistry::new();
+
+        let program = compile_with_imports(&source, &tree.root_node(), &main_path, &natives)
+            .expect("compile_with_imports failed");
+
+        let mut vm = Vm::new();
+        let result = vm.execute_program(&program).expect("VM execution failed");
+        assert_eq!(result, super::super::value::Value::Int(11));
+    }
+
+    #[test]
+    fn wildcard_import_compiles_and_runs() {
+        let dir = setup_module_dir(&[
+            ("util.bl", "@prelude(core)\nadd : (Int, Int) -> Int\nadd = |a, b| a + b\ndouble : Int -> Int\ndouble = |x| x * 2\n"),
+            ("main.bl", "@prelude(core)\nimport Util.*\nmain : () -> Int\nmain = { add(double(5), 1) }\n"),
+        ]);
+
+        let main_path = dir.path().join("main.bl");
+        let source = fs::read_to_string(&main_path).unwrap();
+        let (tree, _) = parse(&source);
+        let natives = NativeRegistry::new();
+
+        let program = compile_with_imports(&source, &tree.root_node(), &main_path, &natives)
+            .expect("compile_with_imports failed");
+
+        let mut vm = Vm::new();
+        let result = vm.execute_program(&program).expect("VM execution failed");
+        assert_eq!(result, super::super::value::Value::Int(11));
+    }
+
+    #[test]
+    fn qualified_import_also_works_via_field_expression() {
+        let dir = setup_module_dir(&[
+            ("util.bl", "@prelude(core)\ndouble : Int -> Int\ndouble = |x| x * 2\n"),
+            ("main.bl", "@prelude(core)\nimport Util\nmain : () -> Int\nmain = { Util.double(21) }\n"),
+        ]);
+
+        let main_path = dir.path().join("main.bl");
+        let source = fs::read_to_string(&main_path).unwrap();
+        let (tree, _) = parse(&source);
+        let natives = NativeRegistry::new();
+
+        let program = compile_with_imports(&source, &tree.root_node(), &main_path, &natives)
+            .expect("compile_with_imports failed");
+
+        let mut vm = Vm::new();
+        let result = vm.execute_program(&program).expect("VM execution failed");
+        assert_eq!(result, super::super::value::Value::Int(42));
+    }
+
+    #[test]
+    fn missing_module_returns_error() {
+        let dir = setup_module_dir(&[
+            ("main.bl", "@prelude(core)\nimport Missing\nmain : () -> Int\nmain = { Missing.foo(1) }\n"),
+        ]);
+
+        let main_path = dir.path().join("main.bl");
+        let source = fs::read_to_string(&main_path).unwrap();
+        let (tree, _) = parse(&source);
+        let natives = NativeRegistry::new();
+
+        let err = compile_with_imports(&source, &tree.root_node(), &main_path, &natives)
+            .expect_err("Should fail for missing module");
+        assert!(
+            err.message.contains("Missing") || err.message.contains("missing") || err.message.contains("not found"),
+            "Error should mention the missing module, got: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn multiple_modules_imported() {
+        let dir = setup_module_dir(&[
+            ("math.bl", "@prelude(core)\nadd : (Int, Int) -> Int\nadd = |a, b| a + b\n"),
+            ("strings.bl", "@prelude(core)\nlen : String -> Int\nlen = |s| 5\n"),
+            ("main.bl", "@prelude(core)\nimport Math\nimport Strings\nmain : () -> Int\nmain = { Math.add(Strings.len(\"hello\"), 1) }\n"),
+        ]);
+
+        let main_path = dir.path().join("main.bl");
+        let source = fs::read_to_string(&main_path).unwrap();
+        let (tree, _) = parse(&source);
+        let natives = NativeRegistry::new();
+
+        let program = compile_with_imports(&source, &tree.root_node(), &main_path, &natives)
+            .expect("compile_with_imports failed");
+
+        let mut vm = Vm::new();
+        let result = vm.execute_program(&program).expect("VM execution failed");
+        assert_eq!(result, super::super::value::Value::Int(6));
+    }
+
+    #[test]
+    fn chunk_offsets_correct_with_multiple_functions() {
+        let dir = setup_module_dir(&[
+            ("util.bl", "@prelude(core)\nadd : (Int, Int) -> Int\nadd = |a, b| a + b\nsub : (Int, Int) -> Int\nsub = |a, b| a - b\n"),
+            ("main.bl", "@prelude(core)\nimport Util\nmain : () -> Int\nmain = { Util.sub(Util.add(10, 5), 3) }\n"),
+        ]);
+
+        let main_path = dir.path().join("main.bl");
+        let source = fs::read_to_string(&main_path).unwrap();
+        let (tree, _) = parse(&source);
+        let natives = NativeRegistry::new();
+
+        let program = compile_with_imports(&source, &tree.root_node(), &main_path, &natives)
+            .expect("compile_with_imports failed");
+
+        // Module has 2 functions, main has 1 → at least 3 chunks
+        assert!(program.chunks.len() >= 3, "Expected >= 3 chunks, got {}", program.chunks.len());
+
+        let mut vm = Vm::new();
+        let result = vm.execute_program(&program).expect("VM execution failed");
+        assert_eq!(result, super::super::value::Value::Int(12));
+    }
+}

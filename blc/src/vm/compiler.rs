@@ -525,8 +525,9 @@ impl<'a> Compiler<'a> {
 
                     // Tag matched — bind payload variables
                     self.begin_scope();
-                    if pat_children.len() > 1 {
-                        // Extract payload and bind to pattern variable
+                    let binding_count = pat_children.len() - 1;
+                    if binding_count == 1 {
+                        // Single binding: Some(v), Ok(val), Circle(r)
                         self.emit(Op::GetLocal(subject_slot), arm);
                         self.emit(Op::EnumPayload, arm);
                         let binding = &pat_children[1];
@@ -535,6 +536,24 @@ impl<'a> Compiler<'a> {
                             self.declare_local(&name);
                         } else if binding.kind() == "wildcard_pattern" {
                             self.declare_local("_");
+                        }
+                    } else if binding_count > 1 {
+                        // Multi-binding: Rectangle(w, h) — payload is a Tuple
+                        self.emit(Op::GetLocal(subject_slot), arm);
+                        self.emit(Op::EnumPayload, arm);
+                        self.declare_local("__payload");
+                        let payload_slot = (self.locals.len() - 1) as u16;
+
+                        for i in 0..binding_count {
+                            let binding = &pat_children[i + 1];
+                            self.emit(Op::GetLocal(payload_slot), arm);
+                            self.emit(Op::TupleGet(i as u16), arm);
+                            if binding.kind() == "identifier" {
+                                let name = self.node_text(binding);
+                                self.declare_local(&name);
+                            } else if binding.kind() == "wildcard_pattern" {
+                                self.declare_local("_");
+                            }
                         }
                     }
 
@@ -980,38 +999,40 @@ impl<'a> Compiler<'a> {
             }
         }
 
-        if func_defs.is_empty() {
-            return Err(CompileError {
-                message: "No function definitions found".into(),
-                line: 1,
-                col: 0,
-            });
-        }
-
-        // Pre-allocate chunk slots for named functions
         let num_funcs = func_defs.len();
-        for _ in 0..num_funcs {
-            self.compiled_chunks.push(Chunk::new());
-        }
 
-        // Second pass: compile each function body
-        for (i, func_node) in func_defs.iter().enumerate() {
-            let body = func_node.child_by_field_name("body").ok_or_else(|| {
-                self.error("Function missing body".into(), func_node)
-            })?;
-
-            self.chunk = Chunk::new();
-            self.locals.clear();
-            self.scope_depth = 0;
-
-            if body.kind() == "lambda" {
-                self.compile_lambda_body(&body)?;
-            } else {
-                self.compile_expression(&body)?;
+        if num_funcs > 0 {
+            // Pre-allocate chunk slots for named functions
+            for _ in 0..num_funcs {
+                self.compiled_chunks.push(Chunk::new());
             }
 
-            let chunk = self.finish_chunk();
-            self.compiled_chunks[chunk_offset + i] = chunk;
+            // Second pass: compile each function body
+            for (i, func_node) in func_defs.iter().enumerate() {
+                let body = func_node.child_by_field_name("body").ok_or_else(|| {
+                    self.error("Function missing body".into(), func_node)
+                })?;
+
+                self.chunk = Chunk::new();
+                self.locals.clear();
+                self.scope_depth = 0;
+
+                if body.kind() == "lambda" {
+                    self.compile_lambda_body(&body)?;
+                } else {
+                    self.compile_expression(&body)?;
+                }
+
+                let chunk = self.finish_chunk();
+                self.compiled_chunks[chunk_offset + i] = chunk;
+            }
+        } else {
+            // No functions — push a no-op entry chunk so test runner has valid chunks
+            let mut noop = Chunk::new();
+            let unit_idx = noop.add_constant(Value::Unit);
+            noop.emit(Op::LoadConst(unit_idx), 1, 0);
+            noop.emit(Op::Return, 1, 0);
+            self.compiled_chunks.push(noop);
         }
 
         // Third pass: collect and compile inline tests
@@ -1051,7 +1072,7 @@ impl<'a> Compiler<'a> {
         let entry = self.functions.get("main!")
             .or_else(|| self.functions.get("main"))
             .copied()
-            .unwrap_or(chunk_offset + num_funcs - 1);
+            .unwrap_or(chunk_offset);
 
         Ok(TestProgram {
             program: Program {
@@ -1462,12 +1483,14 @@ impl<'a> Compiler<'a> {
         }
         if field_count > 0 {
             self.emit(Op::MakeRecord(field_count), node);
+            let tag_idx = self.chunk.add_constant(Value::String(type_name.into()));
+            self.emit(Op::MakeStruct(tag_idx), node);
         } else {
             let idx = self.chunk.add_constant(Value::Unit);
             self.emit(Op::LoadConst(idx), node);
+            let tag_idx = self.chunk.add_constant(Value::String(type_name.into()));
+            self.emit(Op::MakeEnum(tag_idx), node);
         }
-        let tag_idx = self.chunk.add_constant(Value::String(type_name.into()));
-        self.emit(Op::MakeEnum(tag_idx), node);
         Ok(())
     }
 

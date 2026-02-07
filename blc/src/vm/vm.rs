@@ -408,7 +408,7 @@ impl Vm {
                     };
                     let record = self.pop(line, col)?;
                     match record {
-                        Value::Record(fields) => {
+                        Value::Record(fields) | Value::Struct(_, fields) => {
                             match fields.iter().find(|(k, _)| *k == field_name) {
                                 Some((_, v)) => self.stack.push(v.clone()),
                                 None => return Err(self.error(
@@ -431,6 +431,25 @@ impl Vm {
                     self.stack.push(Value::Tuple(Rc::new(items)));
                 }
 
+                Op::TupleGet(idx) => {
+                    let tuple = self.pop(line, col)?;
+                    match tuple {
+                        Value::Tuple(items) => {
+                            let i = idx as usize;
+                            if i >= items.len() {
+                                return Err(self.error(
+                                    format!("Tuple index {} out of bounds (len {})", i, items.len()),
+                                    line, col,
+                                ));
+                            }
+                            self.stack.push(items[i].clone());
+                        }
+                        _ => return Err(self.error(
+                            format!("TupleGet requires Tuple, got {}", tuple), line, col,
+                        )),
+                    }
+                }
+
                 Op::MakeEnum(tag_idx) => {
                     let chunk_idx = self.frames.last().unwrap().chunk_idx;
                     let tag = match &chunks[chunk_idx].constants[tag_idx as usize] {
@@ -439,6 +458,23 @@ impl Vm {
                     };
                     let payload = self.pop(line, col)?;
                     self.stack.push(Value::Enum(tag, Rc::new(payload)));
+                }
+
+                Op::MakeStruct(tag_idx) => {
+                    let chunk_idx = self.frames.last().unwrap().chunk_idx;
+                    let tag = match &chunks[chunk_idx].constants[tag_idx as usize] {
+                        Value::String(s) => s.clone(),
+                        _ => return Err(self.error("MakeStruct constant must be String".into(), line, col)),
+                    };
+                    let record = self.pop(line, col)?;
+                    match record {
+                        Value::Record(fields) => {
+                            self.stack.push(Value::Struct(tag, fields));
+                        }
+                        _ => return Err(self.error(
+                            format!("MakeStruct requires Record, got {}", record), line, col,
+                        )),
+                    }
                 }
 
                 Op::EnumTag => {
@@ -484,6 +520,22 @@ impl Vm {
                                 }
                             }
                             self.stack.push(Value::Record(Rc::new(fields)));
+                        }
+                        Value::Struct(name, fields_rc) => {
+                            let mut fields = Rc::try_unwrap(fields_rc)
+                                .unwrap_or_else(|rc| (*rc).clone());
+                            for pair in updates.chunks(2) {
+                                if let Value::String(key) = &pair[0] {
+                                    if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == *key) {
+                                        existing.1 = pair[1].clone();
+                                    } else {
+                                        return Err(self.error(
+                                            format!("Record has no field '{}'", key), line, col,
+                                        ));
+                                    }
+                                }
+                            }
+                            self.stack.push(Value::Struct(name, Rc::new(fields)));
                         }
                         _ => return Err(self.error(
                             format!("UpdateRecord requires Record, got {}", base), line, col,

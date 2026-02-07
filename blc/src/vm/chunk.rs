@@ -73,9 +73,14 @@ pub enum Op {
     GetField(u16),
     /// Pop N values from stack, push as Tuple.
     MakeTuple(u16),
+    /// Pop Tuple from stack, push element at index.
+    TupleGet(u16),
     /// Pop value and tag from stack, push as Enum { tag, payload }.
     /// Tag is a constant index (string). Payload is the value (or Unit for nullary).
     MakeEnum(u16),
+    /// Pop Record and tag from stack, push as Struct { name, fields }.
+    /// Tag is a constant index (string).
+    MakeStruct(u16),
     /// Pop Enum from stack, push its tag as String.
     EnumTag,
     /// Pop Enum from stack, push its payload.

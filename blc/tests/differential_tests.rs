@@ -72,27 +72,9 @@ fn discover_files(dir: &Path) -> Vec<PathBuf> {
 /// The VM doesn't support all features yet — expand this as VM gains features.
 fn is_vm_skip(path: &Path) -> bool {
     let name = path.file_name().unwrap().to_str().unwrap();
-    let parent = path
-        .parent()
-        .and_then(|p| p.file_name())
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
 
     // Skip negative test files and helper files
-    if name.starts_with("errors_") || name == "util.bl" {
-        return true;
-    }
-
-    // Skip features the VM doesn't support yet
-    matches!(
-        parent,
-        "08_effects"
-            | "10_error_handling"
-            | "07_type_system"
-            | "06_data_types"
-            | "11_stdlib"
-            | "12_edge_cases"
-    )
+    name.starts_with("errors_") || name == "util.bl"
 }
 
 #[test]
