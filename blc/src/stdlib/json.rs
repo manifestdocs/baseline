@@ -49,7 +49,7 @@ fn serde_to_runtime<'a>(value: serde_json::Value) -> RuntimeValue<'a> {
 }
 
 /// Convert a RuntimeValue into a serde_json::Value for serialization.
-fn runtime_to_serde(value: &RuntimeValue) -> Result<serde_json::Value, String> {
+pub(crate) fn runtime_to_serde(value: &RuntimeValue) -> Result<serde_json::Value, String> {
     match value {
         RuntimeValue::Enum(name, payload) if name == "Null" && payload.is_empty() => {
             Ok(serde_json::Value::Null)

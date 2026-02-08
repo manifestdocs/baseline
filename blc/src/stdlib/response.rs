@@ -43,6 +43,7 @@ fn response_ok<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String
 }
 
 // Response.json(body) -> { status: 200, headers: [("Content-Type", "application/json")], body }
+// Accepts String (used as-is) or any other value (auto-serialized to JSON).
 fn response_json<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, String> {
     if args.len() != 1 {
         return Err(format!(
@@ -52,7 +53,11 @@ fn response_json<'a>(args: &[RuntimeValue<'a>]) -> Result<RuntimeValue<'a>, Stri
     }
     let body = match &args[0] {
         RuntimeValue::String(s) => s.clone(),
-        other => return Err(format!("Response.json expects String body, got {}", other)),
+        other => {
+            let serde_val = super::json::runtime_to_serde(other)?;
+            serde_json::to_string(&serde_val)
+                .map_err(|e| format!("Response.json: {}", e))?
+        }
     };
     let headers = vec![RuntimeValue::Tuple(vec![
         RuntimeValue::String("Content-Type".to_string()),
@@ -357,6 +362,74 @@ mod tests {
             } else {
                 panic!("Expected List headers");
             }
+        } else {
+            panic!("Expected Record");
+        }
+    }
+
+    #[test]
+    fn json_auto_serializes_record() {
+        let mut fields = HashMap::new();
+        fields.insert("name".to_string(), RuntimeValue::String("Alice".into()));
+        fields.insert("age".to_string(), RuntimeValue::Int(30));
+        let result = response_json(&[RuntimeValue::Record(fields)]).unwrap();
+        if let RuntimeValue::Record(resp) = result {
+            assert_eq!(resp.get("status"), Some(&RuntimeValue::Int(200)));
+            if let Some(RuntimeValue::String(body)) = resp.get("body") {
+                // Parse back to verify it's valid JSON
+                let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+                assert_eq!(parsed["name"], "Alice");
+                assert_eq!(parsed["age"], 30);
+            } else {
+                panic!("Expected String body");
+            }
+        } else {
+            panic!("Expected Record");
+        }
+    }
+
+    #[test]
+    fn json_auto_serializes_int() {
+        let result = response_json(&[RuntimeValue::Int(42)]).unwrap();
+        if let RuntimeValue::Record(resp) = result {
+            assert_eq!(
+                resp.get("body"),
+                Some(&RuntimeValue::String("42".into()))
+            );
+        } else {
+            panic!("Expected Record");
+        }
+    }
+
+    #[test]
+    fn json_auto_serializes_list() {
+        let result = response_json(&[RuntimeValue::List(vec![
+            RuntimeValue::Int(1),
+            RuntimeValue::Int(2),
+            RuntimeValue::Int(3),
+        ])])
+        .unwrap();
+        if let RuntimeValue::Record(resp) = result {
+            if let Some(RuntimeValue::String(body)) = resp.get("body") {
+                let parsed: serde_json::Value = serde_json::from_str(body).unwrap();
+                assert_eq!(parsed, serde_json::json!([1, 2, 3]));
+            } else {
+                panic!("Expected String body");
+            }
+        } else {
+            panic!("Expected Record");
+        }
+    }
+
+    #[test]
+    fn json_passes_string_through() {
+        let json_str = r#"{"already":"serialized"}"#;
+        let result = response_json(&[RuntimeValue::String(json_str.into())]).unwrap();
+        if let RuntimeValue::Record(resp) = result {
+            assert_eq!(
+                resp.get("body"),
+                Some(&RuntimeValue::String(json_str.into()))
+            );
         } else {
             panic!("Expected Record");
         }

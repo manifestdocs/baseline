@@ -28,10 +28,11 @@ impl Prelude {
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure | Prelude::Core => &["Option", "Result", "String", "List", "Json"],
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Json", "Http", "Response",
+                "Option", "Result", "String", "List", "Json", "Http", "Response", "Request",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Json", "Http", "Response", "Router",
+                "Option", "Result", "String", "List", "Json", "Http", "Response", "Request",
+                "Router",
             ],
         }
     }
@@ -58,11 +59,11 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time",
-                "Random", "Env", "Fs", "Http", "Response",
+                "Random", "Env", "Fs", "Http", "Response", "Request",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time",
-                "Env", "Http", "Response", "Router", "Server", "Db", "Metrics",
+                "Env", "Http", "Response", "Request", "Router", "Server", "Db", "Metrics",
             ],
         }
     }

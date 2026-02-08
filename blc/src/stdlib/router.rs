@@ -91,6 +91,48 @@ pub fn add_middleware<'a>(
     Ok(RuntimeValue::Record(new_router))
 }
 
+/// Merge a sub-router's routes into a parent router, prepending prefix to each path.
+/// Router.group(router, prefix, sub_router) -> Router
+pub fn group_routes<'a>(
+    router: &RuntimeValue<'a>,
+    prefix: &RuntimeValue<'a>,
+    sub_router: &RuntimeValue<'a>,
+) -> Result<RuntimeValue<'a>, String> {
+    let prefix_str = match prefix {
+        RuntimeValue::String(s) => s.clone(),
+        _ => return Err(format!("Router.group: prefix must be String, got {}", prefix)),
+    };
+    let parent_routes = extract_routes(router)?;
+    let sub_routes = extract_routes(sub_router)?;
+    let parent_mw = extract_middleware(router)?;
+
+    // Prepend prefix to each sub-route path
+    let mut merged_routes = parent_routes;
+    for route in sub_routes {
+        if let RuntimeValue::Record(fields) = route {
+            let mut new_fields = fields.clone();
+            if let Some(RuntimeValue::String(path)) = new_fields.get("path") {
+                let prefixed = format!(
+                    "{}{}",
+                    prefix_str.trim_end_matches('/'),
+                    if path.starts_with('/') {
+                        path.clone()
+                    } else {
+                        format!("/{}", path)
+                    }
+                );
+                new_fields.insert("path".to_string(), RuntimeValue::String(prefixed));
+            }
+            merged_routes.push(RuntimeValue::Record(new_fields));
+        }
+    }
+
+    let mut new_router = HashMap::new();
+    new_router.insert("routes".to_string(), RuntimeValue::List(merged_routes));
+    new_router.insert("middleware".to_string(), RuntimeValue::List(parent_mw));
+    Ok(RuntimeValue::Record(new_router))
+}
+
 /// Extract the routes list from a router Record.
 fn extract_routes<'a>(router: &RuntimeValue<'a>) -> Result<Vec<RuntimeValue<'a>>, String> {
     match router {
@@ -614,5 +656,93 @@ mod tests {
         // Both with and without trailing slash should match
         assert!(tree.find("GET", "/hello").is_some());
         assert!(tree.find("GET", "/hello/").is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Router.group tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn group_routes_prepends_prefix() {
+        let parent = router_new(&[]).unwrap();
+        let sub = router_new(&[]).unwrap();
+        let handler = RuntimeValue::String("h".to_string());
+        let sub = add_route("GET", &sub, &RuntimeValue::String("/".to_string()), &handler).unwrap();
+        let sub =
+            add_route("GET", &sub, &RuntimeValue::String("/:id".to_string()), &handler).unwrap();
+
+        let result = group_routes(
+            &parent,
+            &RuntimeValue::String("/users".to_string()),
+            &sub,
+        )
+        .unwrap();
+
+        let routes = router_routes(&[result]).unwrap();
+        if let RuntimeValue::List(routes) = routes {
+            assert_eq!(routes.len(), 2);
+            // Check paths are prefixed
+            let paths: Vec<String> = routes
+                .iter()
+                .filter_map(|r| {
+                    if let RuntimeValue::Record(f) = r {
+                        if let Some(RuntimeValue::String(p)) = f.get("path") {
+                            return Some(p.clone());
+                        }
+                    }
+                    None
+                })
+                .collect();
+            assert!(paths.contains(&"/users/".to_string()));
+            assert!(paths.contains(&"/users/:id".to_string()));
+        } else {
+            panic!("Expected List of routes");
+        }
+    }
+
+    #[test]
+    fn group_routes_merges_with_existing() {
+        let parent = router_new(&[]).unwrap();
+        let handler = RuntimeValue::String("h".to_string());
+        let parent = add_route(
+            "GET",
+            &parent,
+            &RuntimeValue::String("/health".to_string()),
+            &handler,
+        )
+        .unwrap();
+
+        let sub = router_new(&[]).unwrap();
+        let sub = add_route("GET", &sub, &RuntimeValue::String("/".to_string()), &handler).unwrap();
+
+        let result = group_routes(
+            &parent,
+            &RuntimeValue::String("/api".to_string()),
+            &sub,
+        )
+        .unwrap();
+
+        let routes = router_routes(&[result]).unwrap();
+        if let RuntimeValue::List(routes) = routes {
+            assert_eq!(routes.len(), 2); // /health + /api
+        } else {
+            panic!("Expected List of routes");
+        }
+    }
+
+    #[test]
+    fn group_routes_empty_sub_router() {
+        let parent = router_new(&[]).unwrap();
+        let sub = router_new(&[]).unwrap();
+
+        let result = group_routes(
+            &parent,
+            &RuntimeValue::String("/api".to_string()),
+            &sub,
+        )
+        .unwrap();
+
+        let routes = router_routes(&[result]).unwrap();
+        assert_eq!(routes, RuntimeValue::List(vec![]));
     }
 }

@@ -1,11 +1,17 @@
 pub mod http;
+#[cfg(feature = "async-server")]
+pub mod hyper_server;
 pub mod json;
 pub mod list;
 pub mod option;
+pub mod request;
 pub mod response;
 pub mod result;
 pub mod router;
 pub mod string;
+
+#[cfg(all(test, feature = "async-server"))]
+mod hyper_server_tests;
 
 use crate::interpreter::RuntimeValue;
 use crate::prelude::Prelude;
@@ -60,6 +66,9 @@ impl NativeRegistry {
         }
         if modules.contains(&"Response") {
             response::register(&mut registry);
+        }
+        if modules.contains(&"Request") {
+            request::register(&mut registry);
         }
         registry
     }

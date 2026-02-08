@@ -349,9 +349,28 @@ impl ModuleLoader {
                             .utf8_text(source.as_bytes())
                             .unwrap_or("")
                             .to_string();
-                        let sig = child
-                            .child_by_field_name("signature")
-                            .map(|s| s.utf8_text(source.as_bytes()).unwrap_or("").to_string());
+                        // Build signature string from params and return type
+                        let sig = {
+                            let mut parts = Vec::new();
+                            if let Some(params) = child.child_by_field_name("params") {
+                                parts.push(
+                                    params
+                                        .utf8_text(source.as_bytes())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                );
+                            }
+                            if let Some(ret) = child.child_by_field_name("return_type") {
+                                parts.push(
+                                    ret.utf8_text(source.as_bytes()).unwrap_or("").to_string(),
+                                );
+                            }
+                            if parts.is_empty() {
+                                None
+                            } else {
+                                Some(parts.join(" -> "))
+                            }
+                        };
                         functions.push((name, sig));
                     }
                 }
@@ -570,11 +589,9 @@ mod tests {
         let mut parser = Parser::new();
         parser.set_language(&LANGUAGE.into()).unwrap();
         let source = r#"
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
-multiply : (Int, Int) -> Int
-multiply = |a, b| a * b
+fn multiply(a: Int, b: Int) -> Int = a * b
 "#;
         let tree = parser.parse(source, None).unwrap();
         let root = tree.root_node();

@@ -140,6 +140,46 @@ fn err_at(msg: impl Into<String>, node: &Node, ctx: &Context) -> RuntimeError {
     }
 }
 
+/// Resolve named arguments into positional order based on function param names.
+/// Appends named arg values to `arg_vals` in the order they appear in `param_names`.
+fn resolve_named_args<'a>(
+    param_names: &[String],
+    arg_vals: &mut Vec<RuntimeValue<'a>>,
+    named_args: Vec<(String, RuntimeValue<'a>)>,
+    node: &Node,
+    ctx: &Context,
+) -> Result<(), RuntimeError> {
+    let positional_count = arg_vals.len();
+    for (name, val) in named_args {
+        if let Some(pos) = param_names.iter().position(|p| *p == name) {
+            if pos < positional_count {
+                return Err(err_at(
+                    format!("Named argument '{}' conflicts with positional argument at position {}", name, pos + 1),
+                    node,
+                    ctx,
+                ));
+            }
+            // Extend arg_vals to the right size if needed
+            while arg_vals.len() <= pos {
+                arg_vals.push(RuntimeValue::Unit);
+            }
+            arg_vals[pos] = val;
+        } else {
+            let available: Vec<&str> = param_names.iter().map(|s| s.as_str()).collect();
+            return Err(err_at(
+                format!(
+                    "Unknown named argument '{}'. Available: {}",
+                    name,
+                    available.join(", ")
+                ),
+                node,
+                ctx,
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// All known module names in the language (for error messages).
 const ALL_MODULES: &[&str] = &[
     "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time", "Random",
@@ -644,19 +684,37 @@ fn dispatch_hof<'a>(
                 )),
             }
         }
-        // Server.listen!(port, router) — start HTTP server
+        // Router.group — 3 args: direct, 2 args: partial for pipes
+        "Router.group" => match arg_vals.len() {
+            3 => {
+                let result = router::group_routes(&arg_vals[0], &arg_vals[1], &arg_vals[2])
+                    .map_err(|msg| err_at(msg, node, context))?;
+                Ok(Some(result))
+            }
+            2 => Ok(Some(RuntimeValue::NativeClosure(
+                "Router.group".to_string(),
+                arg_vals,
+            ))),
+            n => Err(err_at(
+                format!("Router.group expects 2 or 3 arguments, got {}", n),
+                node,
+                context,
+            )),
+        },
+        // Server.listen!(router, port) — start HTTP server (pipe-friendly)
         "Server.listen!" => {
             if arg_vals.len() != 2 {
                 return Err(err_at(
                     format!(
-                        "Server.listen! expects 2 arguments (port, router), got {}",
+                        "Server.listen! expects 2 arguments (router, port), got {}",
                         arg_vals.len()
                     ),
                     node,
                     context,
                 ));
             }
-            let port = match &arg_vals[0] {
+            let router_val = arg_vals[0].clone();
+            let port = match &arg_vals[1] {
                 RuntimeValue::Int(p) => *p as u16,
                 other => {
                     return Err(err_at(
@@ -666,7 +724,6 @@ fn dispatch_hof<'a>(
                     ));
                 }
             };
-            let router_val = arg_vals[1].clone();
             server_listen(port, &router_val, node, source, context)?;
             Ok(Some(RuntimeValue::Unit))
         }
@@ -959,6 +1016,20 @@ fn apply_native_closure<'a>(
             router::add_middleware(piped_val, &captured_args[0])
                 .map_err(|msg| err_at(msg, node, context))
         }
+        "Router.group" => {
+            if captured_args.len() != 2 {
+                return Err(err_at(
+                    format!(
+                        "Router.group NativeClosure expects 2 captured args, got {}",
+                        captured_args.len()
+                    ),
+                    node,
+                    context,
+                ));
+            }
+            router::group_routes(piped_val, &captured_args[0], &captured_args[1])
+                .map_err(|msg| err_at(msg, node, context))
+        }
         // Middleware chain: next(request) invokes the remaining middleware/handler
         "__mw_next" => {
             // captured_args[0] = handler, captured_args[1..] = remaining middleware
@@ -1001,17 +1072,21 @@ pub fn eval<'a>(
             let name_node = node.child_by_field_name("name").unwrap();
             let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
 
-            let body_node = node.child_by_field_name("body").unwrap();
-
-            if body_node.kind() == "lambda" {
-                // Lambda evaluates to Function(args, body) — store it
-                let body_val = eval(&body_node, source, context)?;
-                context.set(name, body_val);
-            } else {
-                // Non-lambda body (block, expression, constructor, etc.)
-                // Store as zero-arg function for deferred evaluation
-                context.set(name, RuntimeValue::Function(Vec::new(), body_node, source));
+            // Extract param names from param_list
+            let mut params = Vec::new();
+            if let Some(param_list) = node.child_by_field_name("params") {
+                let mut cursor = param_list.walk();
+                for param in param_list.named_children(&mut cursor) {
+                    if param.kind() == "param"
+                        && let Some(pname) = param.child_by_field_name("name")
+                    {
+                        params.push(pname.utf8_text(source.as_bytes()).unwrap().to_string());
+                    }
+                }
             }
+
+            let body_node = node.child_by_field_name("body").unwrap();
+            context.set(name, RuntimeValue::Function(params, body_node, source));
             Ok(RuntimeValue::Unit)
         }
         "type_def" => {
@@ -1114,14 +1189,27 @@ pub fn eval<'a>(
             propagate!(func_val);
 
             // Eval args (shared for all call forms)
+            // Handles both positional and named arguments.
             let mut arg_vals = Vec::new();
+            let mut named_args: Vec<(String, RuntimeValue<'a>)> = Vec::new();
             let total_children = node.named_child_count();
             for i in 1..total_children {
                 let arg_node = node.named_child(i).unwrap();
-                let val = eval(&arg_node, source, context)?;
-                propagate!(val);
-                arg_vals.push(val);
+                if arg_node.kind() == "named_argument" {
+                    let name_node = arg_node.child_by_field_name("name").unwrap();
+                    let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                    let expr_count = arg_node.named_child_count();
+                    let expr_node = arg_node.named_child(expr_count - 1).unwrap();
+                    let val = eval(&expr_node, source, context)?;
+                    propagate!(val);
+                    named_args.push((name, val));
+                } else {
+                    let val = eval(&arg_node, source, context)?;
+                    propagate!(val);
+                    arg_vals.push(val);
+                }
             }
+            let has_named_args = !named_args.is_empty();
 
             // Resolve the function name for stack frame tracking
             let func_name = func_node
@@ -1130,6 +1218,11 @@ pub fn eval<'a>(
 
             match func_val {
                 RuntimeValue::Function(param_names, body_node, fn_source) => {
+                    // Resolve named arguments into positional order
+                    if has_named_args {
+                        resolve_named_args(&param_names, &mut arg_vals, named_args, node, context)?;
+                    }
+
                     if arg_vals.len() != param_names.len() {
                         return Err(err_at(
                             format!(
@@ -1154,6 +1247,9 @@ pub fn eval<'a>(
                     unwrap_early_return(result)
                 }
                 RuntimeValue::Closure(param_names, body_node, fn_source, captured_env) => {
+                    if has_named_args {
+                        resolve_named_args(&param_names, &mut arg_vals, named_args.clone(), node, context)?;
+                    }
                     if arg_vals.len() != param_names.len() {
                         return Err(err_at(
                             format!(
@@ -1218,7 +1314,8 @@ pub fn eval<'a>(
         }
         "let_binding" | "let_expression" => {
             let pattern = node.named_child(0).unwrap();
-            let expr = node.named_child(1).unwrap();
+            let named_count = node.named_child_count();
+            let expr = node.named_child(named_count - 1).unwrap();
             let val = eval(&expr, source, context)?;
 
             // Propagate EarlyReturn without binding
@@ -1249,9 +1346,8 @@ pub fn eval<'a>(
         }
         "integer_literal" => {
             let text = node.utf8_text(source.as_bytes()).unwrap();
-            let val = text
-                .parse::<i64>()
-                .map_err(|_| err_at("Invalid integer", node, context))?;
+            let val = crate::parse::parse_int_literal(text)
+                .ok_or_else(|| err_at("Invalid integer", node, context))?;
             Ok(RuntimeValue::Int(val))
         }
         "float_literal" => {
@@ -1261,62 +1357,52 @@ pub fn eval<'a>(
                 .map_err(|_| err_at("Invalid float", node, context))?;
             Ok(RuntimeValue::Float(val))
         }
-        "string_literal" => {
-            // Range-based approach: extract raw text between named children
-            // (interpolation and escape_sequence are named; raw text is absorbed by tree-sitter)
+        "string_literal" | "multiline_string_literal" => {
             let mut result = String::new();
             let bytes = source.as_bytes();
 
-            // Start after the opening quote
-            let str_start = node.start_byte() + 1; // skip "
-            let str_end = node.end_byte() - 1; // skip "
-
-            let named_count = node.named_child_count();
-            if named_count == 0 {
-                // Simple string with no interpolation or escapes
-                let raw = &source[str_start..str_end];
-                result.push_str(raw);
-            } else {
-                let mut cursor = str_start;
-                for i in 0..named_count {
-                    let child = node.named_child(i).unwrap();
-                    let child_start = child.start_byte();
-                    let child_end = child.end_byte();
-
-                    // Raw text before this named child
-                    if cursor < child_start {
-                        result.push_str(&source[cursor..child_start]);
+            for i in 0..node.named_child_count() {
+                let child = node.named_child(i).unwrap();
+                match child.kind() {
+                    "string_content" | "multiline_string_content" => {
+                        let text = child.utf8_text(bytes).unwrap();
+                        result.push_str(text);
                     }
-
-                    match child.kind() {
-                        "interpolation" => {
-                            let expr = child.named_child(0).unwrap();
-                            let val = eval(&expr, source, context)?;
-                            propagate!(val);
-                            result.push_str(&val.to_string());
-                        }
-                        "escape_sequence" => {
-                            let esc = child.utf8_text(bytes).unwrap();
-                            match esc {
-                                "\\n" => result.push('\n'),
-                                "\\t" => result.push('\t'),
-                                "\\r" => result.push('\r'),
-                                "\\\\" => result.push('\\'),
-                                "\\\"" => result.push('"'),
-                                "\\0" => result.push('\0'),
-                                other => result.push_str(other),
-                            }
-                        }
-                        _ => {}
+                    "interpolation" => {
+                        let expr = child.named_child(0).unwrap();
+                        let val = eval(&expr, source, context)?;
+                        propagate!(val);
+                        result.push_str(&val.to_string());
                     }
-                    cursor = child_end;
-                }
-                // Raw text after the last named child
-                if cursor < str_end {
-                    result.push_str(&source[cursor..str_end]);
+                    "escape_sequence" => {
+                        let esc = child.utf8_text(bytes).unwrap();
+                        match esc {
+                            "\\n" => result.push('\n'),
+                            "\\t" => result.push('\t'),
+                            "\\r" => result.push('\r'),
+                            "\\\\" => result.push('\\'),
+                            "\\\"" => result.push('"'),
+                            "\\0" => result.push('\0'),
+                            other => result.push_str(other),
+                        }
+                    }
+                    _ => {} // string_start, string_end, etc.
                 }
             }
             Ok(RuntimeValue::String(result))
+        }
+        "raw_string_literal" | "raw_hash_string_literal" => {
+            // Raw strings have no escape or interpolation processing.
+            // Find the content child by kind (children are: start, [content], end).
+            let mut content = "";
+            for i in 0..node.named_child_count() {
+                let child = node.named_child(i).unwrap();
+                if child.kind().contains("content") {
+                    content = child.utf8_text(source.as_bytes()).unwrap_or("");
+                    break;
+                }
+            }
+            Ok(RuntimeValue::String(content.to_string()))
         }
         "boolean_literal" => {
             let text = node.utf8_text(source.as_bytes()).unwrap();
@@ -1446,6 +1532,11 @@ pub fn eval<'a>(
                             )),
                         },
                         (RuntimeValue::List(l), RuntimeValue::List(r)) => match op {
+                            "++" => {
+                                let mut result = l;
+                                result.extend(r);
+                                Ok(RuntimeValue::List(result))
+                            }
                             "==" => Ok(RuntimeValue::Bool(l == r)),
                             "!=" => Ok(RuntimeValue::Bool(l != r)),
                             _ => Err(err_at(
@@ -1531,6 +1622,19 @@ pub fn eval<'a>(
                     context,
                 )),
             }
+        }
+        "hole_expression" => {
+            Err(err_at(
+                "Typed hole (??) encountered at runtime".to_string(),
+                node,
+                context,
+            ))
+        }
+        "named_argument" => {
+            // For builtins/natives: evaluate the expression part of the named argument
+            let count = node.named_child_count();
+            let expr = node.named_child(count - 1).unwrap();
+            eval(&expr, source, context)
         }
         "range_expression" => {
             let start = eval(&node.named_child(0).unwrap(), source, context)?;
@@ -1938,7 +2042,7 @@ fn match_pattern<'a>(
         }
         "integer_literal" => {
             let text = pattern.utf8_text(source.as_bytes()).unwrap();
-            let p_val = text.parse::<i64>().ok()?;
+            let p_val = crate::parse::parse_int_literal(text)?;
             if let RuntimeValue::Int(v) = value {
                 if *v == p_val {
                     Some(HashMap::new())
@@ -2058,7 +2162,7 @@ mod tests {
     use tree_sitter_baseline::LANGUAGE;
 
     /// Parse and evaluate Baseline source, returning main's evaluated body.
-    /// Source should define main as: `main : () -> T\nmain = || expr`
+    /// Source should define main as: `fn main() -> T = expr`
     fn eval_source(source: &str) -> Result<RuntimeValue<'static>, String> {
         eval_with_prelude(source, Prelude::Script)
     }
@@ -2107,37 +2211,37 @@ mod tests {
 
     #[test]
     fn test_less_than_or_equal_true() {
-        let result = eval_source("main : () -> Bool\nmain = || 3 <= 5");
+        let result = eval_source("fn main() -> Bool = 3 <= 5");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_less_than_or_equal_equal() {
-        let result = eval_source("main : () -> Bool\nmain = || 5 <= 5");
+        let result = eval_source("fn main() -> Bool = 5 <= 5");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_less_than_or_equal_false() {
-        let result = eval_source("main : () -> Bool\nmain = || 7 <= 5");
+        let result = eval_source("fn main() -> Bool = 7 <= 5");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
     #[test]
     fn test_greater_than_or_equal_true() {
-        let result = eval_source("main : () -> Bool\nmain = || 5 >= 3");
+        let result = eval_source("fn main() -> Bool = 5 >= 3");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_greater_than_or_equal_equal() {
-        let result = eval_source("main : () -> Bool\nmain = || 5 >= 5");
+        let result = eval_source("fn main() -> Bool = 5 >= 5");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_greater_than_or_equal_false() {
-        let result = eval_source("main : () -> Bool\nmain = || 3 >= 5");
+        let result = eval_source("fn main() -> Bool = 3 >= 5");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
@@ -2145,39 +2249,39 @@ mod tests {
 
     #[test]
     fn test_and_true_true() {
-        let result = eval_source("main : () -> Bool\nmain = || true && true");
+        let result = eval_source("fn main() -> Bool = true && true");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_and_true_false() {
-        let result = eval_source("main : () -> Bool\nmain = || true && false");
+        let result = eval_source("fn main() -> Bool = true && false");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
     #[test]
     fn test_and_false_short_circuits() {
         // false && <anything> should return false without evaluating right side
-        let result = eval_source("main : () -> Bool\nmain = || false && true");
+        let result = eval_source("fn main() -> Bool = false && true");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
     #[test]
     fn test_or_false_false() {
-        let result = eval_source("main : () -> Bool\nmain = || false || false");
+        let result = eval_source("fn main() -> Bool = false || false");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
     #[test]
     fn test_or_false_true() {
-        let result = eval_source("main : () -> Bool\nmain = || false || true");
+        let result = eval_source("fn main() -> Bool = false || true");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_or_true_short_circuits() {
         // true || <anything> should return true without evaluating right side
-        let result = eval_source("main : () -> Bool\nmain = || true || false");
+        let result = eval_source("fn main() -> Bool = true || false");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
@@ -2185,14 +2289,14 @@ mod tests {
 
     #[test]
     fn test_comparison_in_if() {
-        let source = "main : () -> Int\nmain = || if 3 <= 5 then 42 else 0";
+        let source = "fn main() -> Int = if 3 <= 5 then 42 else 0";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
 
     #[test]
     fn test_logical_and_with_comparisons() {
-        let source = "main : () -> Bool\nmain = || 3 <= 5 && 10 >= 8";
+        let source = "fn main() -> Bool = 3 <= 5 && 10 >= 8";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
@@ -2201,25 +2305,25 @@ mod tests {
 
     #[test]
     fn test_string_concatenation() {
-        let result = eval_source("main : () -> String\nmain = || \"hello\" + \" world\"");
+        let result = eval_source("fn main() -> String = \"hello\" + \" world\"");
         assert_eq!(result, Ok(RuntimeValue::String("hello world".to_string())));
     }
 
     #[test]
     fn test_string_equality() {
-        let result = eval_source("main : () -> Bool\nmain = || \"abc\" == \"abc\"");
+        let result = eval_source("fn main() -> Bool = \"abc\" == \"abc\"");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_string_inequality() {
-        let result = eval_source("main : () -> Bool\nmain = || \"abc\" != \"xyz\"");
+        let result = eval_source("fn main() -> Bool = \"abc\" != \"xyz\"");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_string_equality_false() {
-        let result = eval_source("main : () -> Bool\nmain = || \"abc\" == \"xyz\"");
+        let result = eval_source("fn main() -> Bool = \"abc\" == \"xyz\"");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
@@ -2227,25 +2331,25 @@ mod tests {
 
     #[test]
     fn test_not_true() {
-        let result = eval_source("main : () -> Bool\nmain = || not true");
+        let result = eval_source("fn main() -> Bool = not true");
         assert_eq!(result, Ok(RuntimeValue::Bool(false)));
     }
 
     #[test]
     fn test_not_false() {
-        let result = eval_source("main : () -> Bool\nmain = || not false");
+        let result = eval_source("fn main() -> Bool = not false");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_negate_int() {
-        let result = eval_source("main : () -> Int\nmain = || -5");
+        let result = eval_source("fn main() -> Int = -5");
         assert_eq!(result, Ok(RuntimeValue::Int(-5)));
     }
 
     #[test]
     fn test_negate_positive() {
-        let result = eval_source("main : () -> Int\nmain = || -42");
+        let result = eval_source("fn main() -> Int = -42");
         assert_eq!(result, Ok(RuntimeValue::Int(-42)));
     }
 
@@ -2253,7 +2357,7 @@ mod tests {
 
     #[test]
     fn test_range_basic() {
-        let result = eval_source("main : () -> List\nmain = || 1..5");
+        let result = eval_source("fn main() -> List = 1..5");
         assert_eq!(
             result,
             Ok(RuntimeValue::List(vec![
@@ -2267,13 +2371,13 @@ mod tests {
 
     #[test]
     fn test_range_single() {
-        let result = eval_source("main : () -> List\nmain = || 3..4");
+        let result = eval_source("fn main() -> List = 3..4");
         assert_eq!(result, Ok(RuntimeValue::List(vec![RuntimeValue::Int(3)])));
     }
 
     #[test]
     fn test_range_empty() {
-        let result = eval_source("main : () -> List\nmain = || 5..5");
+        let result = eval_source("fn main() -> List = 5..5");
         assert_eq!(result, Ok(RuntimeValue::List(vec![])));
     }
 
@@ -2281,7 +2385,7 @@ mod tests {
 
     #[test]
     fn test_tuple_creation() {
-        let result = eval_source("main : () -> (Int, String)\nmain = || (1, \"a\")");
+        let result = eval_source("fn main() -> (Int, String) = (1, \"a\")");
         assert_eq!(
             result,
             Ok(RuntimeValue::Tuple(vec![
@@ -2293,7 +2397,7 @@ mod tests {
 
     #[test]
     fn test_tuple_three_elements() {
-        let result = eval_source("main : () -> (Int, Int, Int)\nmain = || (1, 2, 3)");
+        let result = eval_source("fn main() -> (Int, Int, Int) = (1, 2, 3)");
         assert_eq!(
             result,
             Ok(RuntimeValue::Tuple(vec![
@@ -2306,13 +2410,13 @@ mod tests {
 
     #[test]
     fn test_unit_literal() {
-        let result = eval_source("main : () -> Unit\nmain = || ()");
+        let result = eval_source("fn main() -> Unit = ()");
         assert_eq!(result, Ok(RuntimeValue::Unit));
     }
 
     #[test]
     fn test_tuple_destructuring() {
-        let source = "main : () -> Int\nmain = || {\n  let (x, y) = (10, 20)\n  x + y\n}";
+        let source = "fn main() -> Int = {\n  let (x, y) = (10, 20)\n  x + y\n}";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(30)));
     }
@@ -2322,7 +2426,7 @@ mod tests {
     #[test]
     fn test_effectful_main() {
         // main! should be found and executed
-        let result = eval_source("main! : () -> {Console} Int\nmain! = || 42");
+        let result = eval_source("fn main!() -> {Console} Int = 42");
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
 
@@ -2330,7 +2434,7 @@ mod tests {
 
     #[test]
     fn test_block_multiple_statements() {
-        let source = "main : () -> Int\nmain = || {\n  let x = 10\n  let y = 20\n  x + y\n}";
+        let source = "fn main() -> Int = {\n  let x = 10\n  let y = 20\n  x + y\n}";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(30)));
     }
@@ -2339,19 +2443,19 @@ mod tests {
 
     #[test]
     fn test_float_literal() {
-        let result = eval_source("main : () -> Float\nmain = || 3.125");
+        let result = eval_source("fn main() -> Float = 3.125");
         assert_eq!(result, Ok(RuntimeValue::Float(3.125)));
     }
 
     #[test]
     fn test_float_addition() {
-        let result = eval_source("main : () -> Float\nmain = || 1.5 + 2.5");
+        let result = eval_source("fn main() -> Float = 1.5 + 2.5");
         assert_eq!(result, Ok(RuntimeValue::Float(4.0)));
     }
 
     #[test]
     fn test_float_division() {
-        let result = eval_source("main : () -> Float\nmain = || 10.0 / 3.0");
+        let result = eval_source("fn main() -> Float = 10.0 / 3.0");
         match result {
             Ok(RuntimeValue::Float(f)) => {
                 let expected = 10.0_f64 / 3.0_f64;
@@ -2368,19 +2472,19 @@ mod tests {
 
     #[test]
     fn test_float_comparison() {
-        let result = eval_source("main : () -> Bool\nmain = || 3.14 > 2.0");
+        let result = eval_source("fn main() -> Bool = 3.14 > 2.0");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_float_negate() {
-        let result = eval_source("main : () -> Float\nmain = || -3.125");
+        let result = eval_source("fn main() -> Float = -3.125");
         assert_eq!(result, Ok(RuntimeValue::Float(-3.125)));
     }
 
     #[test]
     fn test_float_division_by_zero() {
-        let result = eval_source("main : () -> Float\nmain = || 1.0 / 0.0");
+        let result = eval_source("fn main() -> Float = 1.0 / 0.0");
         assert!(
             result.is_err(),
             "Expected error for division by zero, got {:?}",
@@ -2392,7 +2496,7 @@ mod tests {
 
     #[test]
     fn test_option_some_constructor() {
-        let result = eval_source("main : () -> Option\nmain = || Some(42)");
+        let result = eval_source("fn main() -> Option = Some(42)");
         assert_eq!(
             result,
             Ok(RuntimeValue::Enum(
@@ -2404,55 +2508,55 @@ mod tests {
 
     #[test]
     fn test_option_none_constructor() {
-        let result = eval_source("main : () -> Option\nmain = || None");
+        let result = eval_source("fn main() -> Option = None");
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
 
     #[test]
     fn test_option_unwrap_some() {
-        let source = "main : () -> Int\nmain = || Option.unwrap(Some(42))";
+        let source = "fn main() -> Int = Option.unwrap(Some(42))";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
 
     #[test]
     fn test_option_unwrap_none_errors() {
-        let source = "main : () -> Int\nmain = || Option.unwrap(None)";
+        let source = "fn main() -> Int = Option.unwrap(None)";
         let result = eval_source(source);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_option_unwrap_or_some() {
-        let source = "main : () -> Int\nmain = || Option.unwrap_or(Some(42), 0)";
+        let source = "fn main() -> Int = Option.unwrap_or(Some(42), 0)";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
 
     #[test]
     fn test_option_unwrap_or_none() {
-        let source = "main : () -> Int\nmain = || Option.unwrap_or(None, 99)";
+        let source = "fn main() -> Int = Option.unwrap_or(None, 99)";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(99)));
     }
 
     #[test]
     fn test_option_is_some() {
-        let source = "main : () -> Bool\nmain = || Option.is_some(Some(1))";
+        let source = "fn main() -> Bool = Option.is_some(Some(1))";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_option_is_none() {
-        let source = "main : () -> Bool\nmain = || Option.is_none(None)";
+        let source = "fn main() -> Bool = Option.is_none(None)";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_option_map_some() {
-        let source = "main : () -> Option\nmain = || Option.map(Some(10), |x| x + 1)";
+        let source = "fn main() -> Option = Option.map(Some(10), |x| x + 1)";
         let result = eval_source(source);
         assert_eq!(
             result,
@@ -2465,14 +2569,14 @@ mod tests {
 
     #[test]
     fn test_option_map_none() {
-        let source = "main : () -> Option\nmain = || Option.map(None, |x| x + 1)";
+        let source = "fn main() -> Option = Option.map(None, |x| x + 1)";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
 
     #[test]
     fn test_option_match() {
-        let source = "main : () -> Int\nmain = || {\n  let x = Some(42)\n  match x\n    Some(v) -> v\n    None -> 0\n}";
+        let source = "fn main() -> Int = {\n  let x = Some(42)\n  match x\n    Some(v) -> v\n    None -> 0\n}";
         let result = eval_source(source);
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
@@ -2481,7 +2585,7 @@ mod tests {
 
     #[test]
     fn test_result_ok_constructor() {
-        let result = eval_source("main : () -> Result\nmain = || Ok(42)");
+        let result = eval_source("fn main() -> Result = Ok(42)");
         assert_eq!(
             result,
             Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(42)]))
@@ -2490,7 +2594,7 @@ mod tests {
 
     #[test]
     fn test_result_err_constructor() {
-        let result = eval_source("main : () -> Result\nmain = || Err(\"failed\")");
+        let result = eval_source("fn main() -> Result = Err(\"failed\")");
         assert_eq!(
             result,
             Ok(RuntimeValue::Enum(
@@ -2502,31 +2606,31 @@ mod tests {
 
     #[test]
     fn test_result_unwrap_ok() {
-        let result = eval_source("main : () -> Int\nmain = || Result.unwrap(Ok(42))");
+        let result = eval_source("fn main() -> Int = Result.unwrap(Ok(42))");
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
 
     #[test]
     fn test_result_unwrap_err_errors() {
-        let result = eval_source("main : () -> Int\nmain = || Result.unwrap(Err(\"e\"))");
+        let result = eval_source("fn main() -> Int = Result.unwrap(Err(\"e\"))");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_result_is_ok() {
-        let result = eval_source("main : () -> Bool\nmain = || Result.is_ok(Ok(1))");
+        let result = eval_source("fn main() -> Bool = Result.is_ok(Ok(1))");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_result_is_err() {
-        let result = eval_source("main : () -> Bool\nmain = || Result.is_err(Err(\"e\"))");
+        let result = eval_source("fn main() -> Bool = Result.is_err(Err(\"e\"))");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_result_map_ok() {
-        let result = eval_source("main : () -> Result\nmain = || Result.map(Ok(10), |x| x + 1)");
+        let result = eval_source("fn main() -> Result = Result.map(Ok(10), |x| x + 1)");
         assert_eq!(
             result,
             Ok(RuntimeValue::Enum("Ok".into(), vec![RuntimeValue::Int(11)]))
@@ -2535,8 +2639,7 @@ mod tests {
 
     #[test]
     fn test_result_map_err() {
-        let result =
-            eval_source("main : () -> Result\nmain = || Result.map(Err(\"e\"), |x| x + 1)");
+        let result = eval_source("fn main() -> Result = Result.map(Err(\"e\"), |x| x + 1)");
         assert_eq!(
             result,
             Ok(RuntimeValue::Enum(
@@ -2550,39 +2653,37 @@ mod tests {
 
     #[test]
     fn test_string_length() {
-        let result = eval_source("main : () -> Int\nmain = || String.length(\"hello\")");
+        let result = eval_source("fn main() -> Int = String.length(\"hello\")");
         assert_eq!(result, Ok(RuntimeValue::Int(5)));
     }
 
     #[test]
     fn test_string_trim() {
-        let result = eval_source("main : () -> String\nmain = || String.trim(\" hi \")");
+        let result = eval_source("fn main() -> String = String.trim(\" hi \")");
         assert_eq!(result, Ok(RuntimeValue::String("hi".into())));
     }
 
     #[test]
     fn test_string_contains() {
-        let result =
-            eval_source("main : () -> Bool\nmain = || String.contains(\"hello\", \"ell\")");
+        let result = eval_source("fn main() -> Bool = String.contains(\"hello\", \"ell\")");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_string_starts_with() {
-        let result =
-            eval_source("main : () -> Bool\nmain = || String.starts_with(\"hello\", \"he\")");
+        let result = eval_source("fn main() -> Bool = String.starts_with(\"hello\", \"he\")");
         assert_eq!(result, Ok(RuntimeValue::Bool(true)));
     }
 
     #[test]
     fn test_string_to_upper() {
-        let result = eval_source("main : () -> String\nmain = || String.to_upper(\"hi\")");
+        let result = eval_source("fn main() -> String = String.to_upper(\"hi\")");
         assert_eq!(result, Ok(RuntimeValue::String("HI".into())));
     }
 
     #[test]
     fn test_string_split() {
-        let result = eval_source("main : () -> List\nmain = || String.split(\"a,b,c\", \",\")");
+        let result = eval_source("fn main() -> List = String.split(\"a,b,c\", \",\")");
         assert_eq!(
             result,
             Ok(RuntimeValue::List(vec![
@@ -2595,14 +2696,13 @@ mod tests {
 
     #[test]
     fn test_string_join() {
-        let result =
-            eval_source("main : () -> String\nmain = || String.join([\"a\", \"b\"], \"-\")");
+        let result = eval_source("fn main() -> String = String.join([\"a\", \"b\"], \"-\")");
         assert_eq!(result, Ok(RuntimeValue::String("a-b".into())));
     }
 
     #[test]
     fn test_string_slice() {
-        let result = eval_source("main : () -> String\nmain = || String.slice(\"hello\", 1, 3)");
+        let result = eval_source("fn main() -> String = String.slice(\"hello\", 1, 3)");
         assert_eq!(result, Ok(RuntimeValue::String("el".into())));
     }
 
@@ -2610,13 +2710,13 @@ mod tests {
 
     #[test]
     fn test_list_length() {
-        let result = eval_source("main : () -> Int\nmain = || List.length([1, 2, 3])");
+        let result = eval_source("fn main() -> Int = List.length([1, 2, 3])");
         assert_eq!(result, Ok(RuntimeValue::Int(3)));
     }
 
     #[test]
     fn test_list_head() {
-        let result = eval_source("main : () -> Option\nmain = || List.head([1, 2, 3])");
+        let result = eval_source("fn main() -> Option = List.head([1, 2, 3])");
         assert_eq!(
             result,
             Ok(RuntimeValue::Enum(
@@ -2628,7 +2728,7 @@ mod tests {
 
     #[test]
     fn test_list_reverse() {
-        let result = eval_source("main : () -> List\nmain = || List.reverse([1, 2, 3])");
+        let result = eval_source("fn main() -> List = List.reverse([1, 2, 3])");
         assert_eq!(
             result,
             Ok(RuntimeValue::List(vec![
@@ -2641,7 +2741,7 @@ mod tests {
 
     #[test]
     fn test_list_sort() {
-        let result = eval_source("main : () -> List\nmain = || List.sort([3, 1, 2])");
+        let result = eval_source("fn main() -> List = List.sort([3, 1, 2])");
         assert_eq!(
             result,
             Ok(RuntimeValue::List(vec![
@@ -2654,7 +2754,7 @@ mod tests {
 
     #[test]
     fn test_list_map() {
-        let result = eval_source("main : () -> List\nmain = || List.map([1, 2, 3], |x| x * 2)");
+        let result = eval_source("fn main() -> List = List.map([1, 2, 3], |x| x * 2)");
         assert_eq!(
             result,
             Ok(RuntimeValue::List(vec![
@@ -2667,8 +2767,7 @@ mod tests {
 
     #[test]
     fn test_list_filter() {
-        let result =
-            eval_source("main : () -> List\nmain = || List.filter([1, 2, 3, 4], |x| x > 2)");
+        let result = eval_source("fn main() -> List = List.filter([1, 2, 3, 4], |x| x > 2)");
         assert_eq!(
             result,
             Ok(RuntimeValue::List(vec![
@@ -2680,14 +2779,13 @@ mod tests {
 
     #[test]
     fn test_list_fold() {
-        let result =
-            eval_source("main : () -> Int\nmain = || List.fold([1, 2, 3], 0, |acc, x| acc + x)");
+        let result = eval_source("fn main() -> Int = List.fold([1, 2, 3], 0, |acc, x| acc + x)");
         assert_eq!(result, Ok(RuntimeValue::Int(6)));
     }
 
     #[test]
     fn test_list_find_some() {
-        let result = eval_source("main : () -> Option\nmain = || List.find([1, 2, 3], |x| x == 2)");
+        let result = eval_source("fn main() -> Option = List.find([1, 2, 3], |x| x == 2)");
         assert_eq!(
             result,
             Ok(RuntimeValue::Enum(
@@ -2699,7 +2797,7 @@ mod tests {
 
     #[test]
     fn test_list_find_none() {
-        let result = eval_source("main : () -> Option\nmain = || List.find([1, 2, 3], |x| x == 9)");
+        let result = eval_source("fn main() -> Option = List.find([1, 2, 3], |x| x == 9)");
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
 
@@ -2707,32 +2805,29 @@ mod tests {
 
     #[test]
     fn test_try_some_unwraps() {
-        let result = eval_source(
-            "get : () -> Option<Int>\nget = || Some(42)\nmain : () -> Int\nmain = || get()?",
-        );
+        let result = eval_source("fn get() -> Option<Int> = Some(42)\nfn main() -> Int = get()?");
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
 
     #[test]
     fn test_try_none_propagates() {
         let result = eval_source(
-            "get : () -> Option<Int>\nget = || None\nmain : () -> Option<Int>\nmain = || {\n  let x = get()?\n  Some(x + 1)\n}",
+            "fn get() -> Option<Int> = None\nfn main() -> Option<Int> = {\n  let x = get()?\n  Some(x + 1)\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
 
     #[test]
     fn test_try_ok_unwraps() {
-        let result = eval_source(
-            "get : () -> Result<Int, String>\nget = || Ok(10)\nmain : () -> Int\nmain = || get()?",
-        );
+        let result =
+            eval_source("fn get() -> Result<Int, String> = Ok(10)\nfn main() -> Int = get()?");
         assert_eq!(result, Ok(RuntimeValue::Int(10)));
     }
 
     #[test]
     fn test_try_err_propagates() {
         let result = eval_source(
-            "get : () -> Result<Int, String>\nget = || Err(\"fail\")\nmain : () -> Result<Int, String>\nmain = || {\n  let x = get()?\n  Ok(x)\n}",
+            "fn get() -> Result<Int, String> = Err(\"fail\")\nfn main() -> Result<Int, String> = {\n  let x = get()?\n  Ok(x)\n}",
         );
         assert_eq!(
             result,
@@ -2745,7 +2840,7 @@ mod tests {
 
     #[test]
     fn test_try_on_plain_value_errors() {
-        let result = eval_source("main : () -> Int\nmain = || 42?");
+        let result = eval_source("fn main() -> Int = 42?");
         assert!(result.is_err());
         assert!(
             result
@@ -2759,7 +2854,7 @@ mod tests {
     #[test]
     fn test_try_propagates_through_binary_op() {
         let result = eval_source(
-            "get : () -> Option<Int>\nget = || None\nmain : () -> Option<Int>\nmain = || {\n  let r = get()? + 1\n  Some(r)\n}",
+            "fn get() -> Option<Int> = None\nfn main() -> Option<Int> = {\n  let r = get()? + 1\n  Some(r)\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
@@ -2768,7 +2863,7 @@ mod tests {
     fn test_try_first_none_skips_subsequent() {
         // first() returns None, so second() should never be reached
         let result = eval_source(
-            "first : () -> Option<Int>\nfirst = || None\nsecond : () -> Option<Int>\nsecond = || Some(99)\nmain : () -> Option<Int>\nmain = || {\n  let a = first()?\n  let b = second()?\n  Some(a + b)\n}",
+            "fn first() -> Option<Int> = None\nfn second() -> Option<Int> = Some(99)\nfn main() -> Option<Int> = {\n  let a = first()?\n  let b = second()?\n  Some(a + b)\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
@@ -2777,7 +2872,7 @@ mod tests {
     fn test_try_propagates_through_function_arg() {
         // ? inside a function argument should propagate
         let result = eval_source(
-            "get : () -> Option<Int>\nget = || None\nadd : Int -> Int\nadd = |x| x + 1\nmain : () -> Option<Int>\nmain = || {\n  let r = add(get()?)\n  Some(r)\n}",
+            "fn get() -> Option<Int> = None\nfn add(x: Int) -> Int = x + 1\nfn main() -> Option<Int> = {\n  let r = add(get()?)\n  Some(r)\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
@@ -2785,7 +2880,7 @@ mod tests {
     #[test]
     fn test_try_propagates_through_if_condition() {
         let result = eval_source(
-            "get : () -> Option<Bool>\nget = || None\nmain : () -> Option<Int>\nmain = || {\n  let r = if get()? then 1 else 2\n  Some(r)\n}",
+            "fn get() -> Option<Bool> = None\nfn main() -> Option<Int> = {\n  let r = if get()? then 1 else 2\n  Some(r)\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Enum("None".into(), vec![])));
     }
@@ -2794,17 +2889,15 @@ mod tests {
 
     #[test]
     fn test_module_in_scope_resolves() {
-        let result = eval_with_prelude(
-            "main : () -> Int\nmain = || String.length(\"hello\")",
-            Prelude::Core,
-        );
+        let result =
+            eval_with_prelude("fn main() -> Int = String.length(\"hello\")", Prelude::Core);
         assert_eq!(result, Ok(RuntimeValue::Int(5)));
     }
 
     #[test]
     fn test_module_not_in_scope_error() {
         let result = eval_with_prelude(
-            "main : () -> Int\nmain = || String.length(\"hello\")",
+            "fn main() -> Int = String.length(\"hello\")",
             Prelude::Minimal,
         );
         assert!(result.is_err());
@@ -2819,7 +2912,7 @@ mod tests {
     #[test]
     fn test_effect_module_not_in_pure_prelude() {
         let result = eval_with_prelude(
-            "main! : () -> {Console} ()\nmain! = || Console.println!(\"hi\")",
+            "fn main!() -> {Console} () = Console.println!(\"hi\")",
             Prelude::Pure,
         );
         assert!(result.is_err());
@@ -2836,7 +2929,7 @@ mod tests {
     #[test]
     fn test_record_update_struct() {
         let result = eval_source(
-            "type Point = { x: Int, y: Int }\nmain : () -> Int\nmain = || {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 42 }\n  p2.x\n}",
+            "type Point = { x: Int, y: Int }\nfn main() -> Int = {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 42 }\n  p2.x\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Int(42)));
     }
@@ -2844,7 +2937,7 @@ mod tests {
     #[test]
     fn test_record_update_preserves_unmodified_fields() {
         let result = eval_source(
-            "type Point = { x: Int, y: Int }\nmain : () -> Int\nmain = || {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 42 }\n  p2.y\n}",
+            "type Point = { x: Int, y: Int }\nfn main() -> Int = {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 42 }\n  p2.y\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Int(20)));
     }
@@ -2852,7 +2945,7 @@ mod tests {
     #[test]
     fn test_record_update_multiple_fields() {
         let result = eval_source(
-            "type Point = { x: Int, y: Int }\nmain : () -> Int\nmain = || {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 1, y: 2 }\n  p2.x + p2.y\n}",
+            "type Point = { x: Int, y: Int }\nfn main() -> Int = {\n  let p = Point { x: 10, y: 20 }\n  let p2 = { ..p, x: 1, y: 2 }\n  p2.x + p2.y\n}",
         );
         assert_eq!(result, Ok(RuntimeValue::Int(3)));
     }
