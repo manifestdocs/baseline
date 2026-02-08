@@ -52,17 +52,49 @@ pub fn jit_take_error() -> Option<String> {
 // ---------------------------------------------------------------------------
 // Runtime helper functions (extern "C", callable from JIT code)
 // ---------------------------------------------------------------------------
+//
+// # Safety Invariants for JIT Callbacks
+//
+// These functions are called from JIT-generated machine code via function
+// pointers. The JIT compiler guarantees the following invariants:
+//
+// 1. **Pointer Validity**: All pointer arguments point to valid memory that
+//    remains live for the duration of the call.
+//
+// 2. **NValue Encoding**: All `u64` arguments representing NValues are valid
+//    NaN-boxed encodings as produced by `NValue::raw()`.
+//
+// 3. **Ownership**: Unless documented otherwise, the caller retains ownership
+//    of input NValues. Functions use `borrow_from_raw` for non-consuming reads.
+//    Return values transfer ownership to the caller.
+//
+// 4. **Registry Lifetime**: The `registry` pointer remains valid for the
+//    entire JIT execution (it's pinned by the Vm).
+//
+// 5. **Array Bounds**: The `count` parameter accurately reflects the number
+//    of elements in the corresponding array pointer.
 
 /// Call a native function by ID.
+///
+/// # Safety
+///
+/// - `registry` must point to a valid, pinned `NativeRegistry`
+/// - `args` must point to `count` valid NValue-encoded u64s
+/// - The caller retains ownership of the args; this function borrows them
+/// - Returns an owned NValue (caller must eventually drop it)
 extern "C" fn jit_call_native(
     registry: *const NativeRegistry,
     id: u64,
     args: *const u64,
     count: u64,
 ) -> u64 {
+    // SAFETY: JIT compiler guarantees registry is a valid pointer to a live
+    // NativeRegistry that is pinned for the duration of execution.
     let registry = unsafe { &*registry };
+    // SAFETY: JIT compiler guarantees args points to count valid u64s.
     let arg_slice = unsafe { std::slice::from_raw_parts(args, count as usize) };
     // Convert raw u64s to NValues (without taking ownership — we just borrow)
+    // SAFETY: Each bits value is a valid NValue encoding per JIT invariant.
     let nvalues: Vec<NValue> = arg_slice
         .iter()
         .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
@@ -81,10 +113,19 @@ extern "C" fn jit_call_native(
 }
 
 /// Concatenate NValue parts into a new string.
+///
+/// # Safety
+///
+/// - `parts` must point to `count` valid NValue-encoded u64s
+/// - Ownership of the parts is transferred to this function (consumed)
+/// - Returns an owned NValue string
 extern "C" fn jit_concat(parts: *const u64, count: u64) -> u64 {
+    // SAFETY: JIT compiler guarantees parts points to count valid u64s.
     let slice = unsafe { std::slice::from_raw_parts(parts, count as usize) };
     let mut result = String::new();
     for &bits in slice {
+        // SAFETY: Each bits value is a valid NValue encoding. We take ownership
+        // here and forget after extracting the string representation.
         let nv = unsafe { NValue::from_raw(bits) };
         result.push_str(&nv.to_string());
         std::mem::forget(nv);
@@ -96,7 +137,15 @@ extern "C" fn jit_concat(parts: *const u64, count: u64) -> u64 {
 }
 
 /// Build an enum variant from a tag (NaN-boxed string) and payload.
+///
+/// # Safety
+///
+/// - `tag_bits` must be a valid NValue encoding of a string
+/// - `payload_bits` must be a valid NValue encoding
+/// - Ownership is transferred; this function consumes both inputs
+/// - Returns an owned NValue enum
 extern "C" fn jit_make_enum(tag_bits: u64, payload_bits: u64) -> u64 {
+    // SAFETY: JIT guarantees both are valid NValue encodings. We take ownership.
     let tag_nv = unsafe { NValue::from_raw(tag_bits) };
     let payload = unsafe { NValue::from_raw(payload_bits) };
     let Some(tag_str) = tag_nv.as_string().cloned() else {
@@ -114,8 +163,16 @@ extern "C" fn jit_make_enum(tag_bits: u64, payload_bits: u64) -> u64 {
 }
 
 /// Build a tuple from items.
+///
+/// # Safety
+///
+/// - `items` must point to `count` valid NValue-encoded u64s
+/// - The caller retains ownership of items; this function borrows them
+/// - Returns an owned NValue tuple
 extern "C" fn jit_make_tuple(items: *const u64, count: u64) -> u64 {
+    // SAFETY: JIT guarantees items points to count valid u64s.
     let slice = unsafe { std::slice::from_raw_parts(items, count as usize) };
+    // SAFETY: Each bits value is valid. We borrow (clone) to preserve caller's ownership.
     let nvalues: Vec<NValue> = slice
         .iter()
         .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
@@ -127,8 +184,16 @@ extern "C" fn jit_make_tuple(items: *const u64, count: u64) -> u64 {
 }
 
 /// Build a list from items.
+///
+/// # Safety
+///
+/// - `items` must point to `count` valid NValue-encoded u64s
+/// - The caller retains ownership of items; this function borrows them
+/// - Returns an owned NValue list
 extern "C" fn jit_make_list(items: *const u64, count: u64) -> u64 {
+    // SAFETY: JIT guarantees items points to count valid u64s.
     let slice = unsafe { std::slice::from_raw_parts(items, count as usize) };
+    // SAFETY: Each bits value is valid. We borrow (clone) to preserve caller's ownership.
     let nvalues: Vec<NValue> = slice
         .iter()
         .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
@@ -375,10 +440,7 @@ extern "C" fn jit_list_get(list_bits: u64, index_bits: u64) -> u64 {
     if idx_i64 < 0 {
         let len = list.as_list().map(|l| l.len()).unwrap_or(0);
         std::mem::forget(list);
-        jit_set_error(format!(
-            "Negative index {} (len {})",
-            idx_i64, len
-        ));
+        jit_set_error(format!("Negative index {} (len {})", idx_i64, len));
         return NV_UNIT;
     }
 
@@ -626,7 +688,11 @@ pub fn compile_with_natives(
         for (i, func) in module.functions.iter().enumerate() {
             eprintln!(
                 "JIT: func[{}] '{}' scalar={} unboxed={} ty={:?}",
-                i, func.name, is_scalar_only(func), unboxed_flags[i], func.ty
+                i,
+                func.name,
+                is_scalar_only(func),
+                unboxed_flags[i],
+                func.ty
             );
         }
     }
@@ -770,10 +836,7 @@ pub fn compile_with_natives(
         _module: jit_module,
         dispatch,
         entry: module.entry,
-        entry_unboxed: unboxed_flags
-            .get(module.entry)
-            .copied()
-            .unwrap_or(false),
+        entry_unboxed: unboxed_flags.get(module.entry).copied().unwrap_or(false),
         _heap_roots: heap_roots,
     })
 }
@@ -1255,7 +1318,10 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 ..
             } => {
                 let is_simple = |e: &Expr| {
-                    matches!(e, Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit)
+                    matches!(
+                        e,
+                        Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit
+                    )
                 };
                 if is_simple(then_branch) {
                     (condition.as_ref(), then_branch.as_ref(), true)
@@ -1330,12 +1396,10 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
         self.builder.seal_block(call_block);
         let func_id = self.func_ids[func_idx].unwrap();
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
-        let callee_unboxed =
-            func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
+        let callee_unboxed = func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
         let call_result = if callee_unboxed {
             // Callee expects raw i64: untag args, tag result
-            let untagged_args: Vec<CValue> =
-                arg_vals.iter().map(|&v| self.untag_int(v)).collect();
+            let untagged_args: Vec<CValue> = arg_vals.iter().map(|&v| self.untag_int(v)).collect();
             let call = self.builder.ins().call(func_ref, &untagged_args);
             let raw = self.builder.inst_results(call)[0];
             self.tag_int(raw)
@@ -1404,22 +1468,17 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                         Ok(self.builder.ins().uextend(types::I64, cmp))
                     }
                     BinOp::Le => {
-                        let cmp =
-                            self.builder
-                                .ins()
-                                .icmp(IntCC::SignedLessThanOrEqual, l, r);
+                        let cmp = self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r);
                         Ok(self.builder.ins().uextend(types::I64, cmp))
                     }
                     BinOp::Ge => {
-                        let cmp =
-                            self.builder
-                                .ins()
-                                .icmp(IntCC::SignedGreaterThanOrEqual, l, r);
+                        let cmp = self
+                            .builder
+                            .ins()
+                            .icmp(IntCC::SignedGreaterThanOrEqual, l, r);
                         Ok(self.builder.ins().uextend(types::I64, cmp))
                     }
-                    BinOp::ListConcat => Err(
-                        "ListConcat cannot be JIT-compiled".into(),
-                    ),
+                    BinOp::ListConcat => Err("ListConcat cannot be JIT-compiled".into()),
                 }
             }
 
@@ -1507,8 +1566,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                     if let Some(func_id) = self.func_ids[func_idx] {
                         let callee_unboxed =
                             func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
-                        let func_ref =
-                            self.module.declare_func_in_func(func_id, self.builder.func);
+                        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
 
                         if callee_unboxed {
                             // Unboxed → unboxed: pass raw values, receive raw result
@@ -1570,8 +1628,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                     if let Some(func_id) = self.func_ids[func_idx] {
                         let callee_unboxed =
                             func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
-                        let func_ref =
-                            self.module.declare_func_in_func(func_id, self.builder.func);
+                        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
 
                         if callee_unboxed {
                             let arg_vals: Vec<CValue> = args
@@ -1619,9 +1676,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 self.builder.switch_to_block(eval_b);
                 self.builder.seal_block(eval_b);
                 let b_val = self.compile_expr_unboxed(b)?;
-                self.builder
-                    .ins()
-                    .jump(merge, &[BlockArg::Value(b_val)]);
+                self.builder.ins().jump(merge, &[BlockArg::Value(b_val)]);
 
                 self.builder.switch_to_block(merge);
                 self.builder.seal_block(merge);
@@ -1645,19 +1700,14 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 self.builder.switch_to_block(eval_b);
                 self.builder.seal_block(eval_b);
                 let b_val = self.compile_expr_unboxed(b)?;
-                self.builder
-                    .ins()
-                    .jump(merge, &[BlockArg::Value(b_val)]);
+                self.builder.ins().jump(merge, &[BlockArg::Value(b_val)]);
 
                 self.builder.switch_to_block(merge);
                 self.builder.seal_block(merge);
                 Ok(self.builder.block_params(merge)[0])
             }
 
-            _ => Err(format!(
-                "Unsupported expression in unboxed JIT: {:?}",
-                expr
-            )),
+            _ => Err(format!("Unsupported expression in unboxed JIT: {:?}", expr)),
         }
     }
 
@@ -1690,7 +1740,10 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 ..
             } => {
                 let is_simple = |e: &Expr| {
-                    matches!(e, Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit)
+                    matches!(
+                        e,
+                        Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit
+                    )
                 };
                 if is_simple(then_branch) {
                     (condition.as_ref(), then_branch.as_ref(), true)
@@ -1870,9 +1923,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                                     .icmp(IntCC::SignedGreaterThanOrEqual, l, r);
                             Ok(self.tag_bool(cmp))
                         }
-                        BinOp::ListConcat => Err(
-                            "ListConcat cannot be JIT-compiled".into(),
-                        ),
+                        BinOp::ListConcat => Err("ListConcat cannot be JIT-compiled".into()),
                     }
                 } else {
                     // Non-int: compare raw NaN-boxed bits for equality/ordering,
@@ -1916,9 +1967,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                             let cmp = self.builder.ins().icmp(cc, l, r);
                             Ok(self.tag_bool(cmp))
                         }
-                        BinOp::ListConcat => Err(
-                            "ListConcat cannot be JIT-compiled".into(),
-                        ),
+                        BinOp::ListConcat => Err("ListConcat cannot be JIT-compiled".into()),
                     }
                 }
             }
