@@ -969,8 +969,8 @@ fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> bool {
             expr_can_jit(iterable, natives) && expr_can_jit(body, natives)
         }
         Expr::Try { expr, .. } => expr_can_jit(expr, natives),
-        // Lambda and CallIndirect not yet supported
-        Expr::Lambda { .. } | Expr::CallIndirect { .. } => false,
+        // Lambda, CallIndirect, and WithHandlers not yet JIT-supported
+        Expr::Lambda { .. } | Expr::CallIndirect { .. } | Expr::WithHandlers { .. } => false,
     }
 }
 

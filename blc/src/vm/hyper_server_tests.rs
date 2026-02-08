@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 // Re-export from hyper_server for testing
-use crate::stdlib::hyper_server::{
+use crate::vm::hyper_server::{
     AsyncRequest, AsyncResponse, AsyncRouteTree, AsyncRouteTreeBuilder, ServerConfig,
 };
 
@@ -235,6 +235,79 @@ mod tests {
                 .iter()
                 .any(|(k, v)| k == "Content-Type" && v == "application/json")
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Zero-Copy Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_async_request_to_sendable() {
+        use crate::vm::async_executor::SendableValue;
+
+        let mut params = HashMap::new();
+        params.insert("id".to_string(), "123".to_string());
+        let req = AsyncRequest::test_request(
+            Method::GET,
+            "/users/123",
+            Some("q=test"),
+            "body content",
+            params,
+        );
+
+        let sv = req.to_sendable();
+
+        if let SendableValue::Record(fields) = sv {
+            let get_field = |name: &str| fields.iter().find(|(k, _)| k == name).map(|(_, v)| v);
+            
+            assert_eq!(
+                get_field("method").and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+                Some("GET")
+            );
+            assert_eq!(
+                get_field("url").and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+                Some("/users/123")
+            );
+             assert_eq!(
+                get_field("body").and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+                Some("body content")
+            );
+            
+            // Check params
+            if let Some(SendableValue::Record(params)) = get_field("params") {
+                let id = params.iter().find(|(k, _)| k == "id").map(|(_, v)| v);
+                assert_eq!(
+                    id.and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+                    Some("123")
+                );
+            } else {
+                panic!("params field missing or not a record");
+            }
+        } else {
+            panic!("Expected Record");
+        }
+    }
+
+    #[test]
+    fn test_async_response_from_sendable_val() {
+        use crate::vm::async_executor::SendableValue;
+
+        let sv = SendableValue::Record(vec![
+            ("status".to_string(), SendableValue::Int(201)),
+            ("body".to_string(), SendableValue::String(r#"{"created":true}"#.to_string())),
+            ("headers".to_string(), SendableValue::List(vec![
+                SendableValue::Tuple(vec![
+                    SendableValue::String("Content-Type".to_string()),
+                    SendableValue::String("application/json".to_string()),
+                ])
+            ])),
+        ]);
+
+        let resp = AsyncResponse::from_sendable_val(&sv);
+
+        assert_eq!(resp.status.as_u16(), 201);
+        assert_eq!(resp.body, Bytes::from(r#"{"created":true}"#));
+        assert!(resp.headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
     }
 
     // -----------------------------------------------------------------------

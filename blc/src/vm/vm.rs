@@ -143,6 +143,8 @@ pub struct Vm {
     frames: FrameStack,
     upvalue_stack: Vec<Rc<Vec<NValue>>>,
     natives: NativeRegistry,
+    /// Handler stack for `with { Effect: handler } body` — maps effect module name → handler record
+    handler_stack: Vec<HashMap<String, NValue>>,
 }
 
 impl Default for Vm {
@@ -158,6 +160,7 @@ impl Vm {
             frames: FrameStack::new(),
             upvalue_stack: Vec::new(),
             natives: NativeRegistry::new(),
+            handler_stack: Vec::new(),
         }
     }
 
@@ -171,6 +174,7 @@ impl Vm {
         self.stack.clear();
         self.frames.clear();
         self.upvalue_stack.clear();
+        self.handler_stack.clear();
         self.frames.push(CallFrame {
             chunk_idx: 0,
             ip: 0,
@@ -186,6 +190,7 @@ impl Vm {
         self.stack.clear();
         self.frames.clear();
         self.upvalue_stack.clear();
+        self.handler_stack.clear();
         self.frames.push(CallFrame {
             chunk_idx: program.entry as u32,
             ip: 0,
@@ -1075,6 +1080,70 @@ impl Vm {
 
                 Op::CallNative(fn_id, arg_count) => {
                     let n = arg_count as usize;
+
+                    // Effect handler interception
+                    if !self.handler_stack.is_empty() {
+                        let name = self.natives.name(fn_id);
+                        if let Some(dot) = name.find('.') {
+                            let module = &name[..dot];
+                            let method = name[dot + 1..].strip_suffix('!').unwrap_or(&name[dot + 1..]);
+                            let mut found_handler = None;
+                            for frame in self.handler_stack.iter().rev() {
+                                if let Some(handler_record) = frame.get(module) {
+                                    if let HeapObject::Record(fields) = handler_record.as_heap_ref() {
+                                        for (k, v) in fields {
+                                            if k.as_ref() == method {
+                                                found_handler = Some(v.clone());
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                            if let Some(handler_fn) = found_handler {
+                                let start = self.stack.len() - n;
+                                if handler_fn.is_function() {
+                                    let fn_idx = handler_fn.as_function();
+                                    let caller = self.frames.last_mut();
+                                    caller.ip = ip as u32;
+                                    caller.chunk_idx = chunk_idx as u32;
+                                    self.frames.push(CallFrame {
+                                        chunk_idx: fn_idx as u32,
+                                        ip: 0,
+                                        base_slot: start as u32,
+                                        upvalue_idx: u32::MAX,
+                                    });
+                                    chunk_idx = fn_idx;
+                                    chunk = &chunks[chunk_idx];
+                                    ip = 0;
+                                    base_slot = start;
+                                    continue;
+                                } else if handler_fn.is_heap() {
+                                    if let HeapObject::Closure { chunk_idx: cidx, upvalues } = handler_fn.as_heap_ref() {
+                                        let fn_idx = *cidx;
+                                        let caller = self.frames.last_mut();
+                                        caller.ip = ip as u32;
+                                        caller.chunk_idx = chunk_idx as u32;
+                                        self.upvalue_stack.push(Rc::new(upvalues.clone()));
+                                        let uv_idx = self.upvalue_stack.len() - 1;
+                                        self.frames.push(CallFrame {
+                                            chunk_idx: fn_idx as u32,
+                                            ip: 0,
+                                            base_slot: start as u32,
+                                            upvalue_idx: uv_idx as u32,
+                                        });
+                                        chunk_idx = fn_idx;
+                                        chunk = &chunks[chunk_idx];
+                                        ip = 0;
+                                        base_slot = start;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     if self.natives.is_hof(fn_id) {
                         let caller = self.frames.last_mut();
                         caller.ip = ip as u32;
@@ -1086,7 +1155,20 @@ impl Vm {
                         caller.ip = ip as u32;
                         caller.chunk_idx = chunk_idx as u32;
                         let (line, col) = chunk.source_map[ip - 1];
-                        self.dispatch_server_listen(n, chunks, line, col)?;
+                        
+                        #[cfg(feature = "async-server")]
+                        {
+                            let name = self.natives.name(fn_id);
+                            if name.contains("async") {
+                                self.dispatch_server_listen_async(n, chunks, line, col)?;
+                            } else {
+                                self.dispatch_server_listen(n, chunks, line, col)?;
+                            }
+                        }
+                        #[cfg(not(feature = "async-server"))]
+                        {
+                            self.dispatch_server_listen(n, chunks, line, col)?;
+                        }
                     } else {
                         let start = self.stack.len() - n;
                         let result = self.natives.call(fn_id, &self.stack[start..]);
@@ -1163,6 +1245,30 @@ impl Vm {
                     // Reset instruction pointer to beginning of current chunk
                     ip = 0;
                     continue;
+                }
+
+                Op::PushHandler => {
+                    // Pop handler record from stack, extract effect name → handler pairs
+                    // The stack has: [effect_name_str, handler_record] for each binding
+                    // But for simplicity, pop a single record that maps effect names
+                    let handler_record = self.stack.pop().unwrap();
+                    match handler_record.as_heap_ref() {
+                        HeapObject::Record(fields) => {
+                            let mut map = HashMap::new();
+                            for (k, v) in fields {
+                                map.insert(k.to_string(), v.clone());
+                            }
+                            self.handler_stack.push(map);
+                        }
+                        _ => {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error("PushHandler: expected Record".to_string(), line, col));
+                        }
+                    }
+                }
+
+                Op::PopHandler => {
+                    self.handler_stack.pop();
                 }
 
                 Op::Halt(idx) => {
@@ -1537,6 +1643,91 @@ impl Vm {
         let result = self.run_frames(chunks, base_depth)?;
         self.stack.truncate(stack_base);
         Ok(result)
+    }
+
+    /// Dispatch Server.listen_async!(router, port) — blocks in accept loop.
+    /// Uses Hyper + Tokio for async request handling.
+    #[cfg(feature = "async-server")]
+    fn dispatch_server_listen_async(
+        &mut self,
+        arg_count: usize,
+        chunks: &[Chunk],
+        line: usize,
+        col: usize,
+    ) -> Result<(), VmError> {
+        if arg_count != 2 {
+            return Err(self.error(
+                format!(
+                    "Server.listen_async! expects 2 arguments (router, port), got {}",
+                    arg_count
+                ),
+                line,
+                col,
+            ));
+        }
+
+        let port_val = self.pop(line, col)?;
+        let router_val = self.pop(line, col)?;
+
+        if !port_val.is_any_int() {
+            return Err(self.error(
+                format!("Server.listen_async! port must be Int, got {}", port_val),
+                line,
+                col,
+            ));
+        }
+        let port = port_val.as_any_int() as u16;
+
+        let router_fields = match router_val.as_record() {
+            Some(f) => f.clone(),
+            None => {
+                return Err(self.error(
+                    format!(
+                        "Server.listen_async! first argument must be a Router, got {}",
+                        router_val
+                    ),
+                    line,
+                    col,
+                ));
+            }
+        };
+
+        let middleware: Vec<NValue> = router_fields
+            .iter()
+            .find(|(k, _)| &**k == "middleware")
+            .and_then(|(_, v)| v.as_list())
+            .cloned()
+            .unwrap_or_default();
+
+        let sendable_mw: Vec<crate::vm::async_executor::SendableHandler> = middleware
+            .iter()
+            .filter_map(crate::vm::async_executor::SendableHandler::from_nvalue)
+            .collect();
+        
+        let route_tree = crate::vm::hyper_server::AsyncRouteTree::from_nvalue(&router_val)
+            .map_err(|e| self.error(format!("Failed to build route tree: {}", e), line, col))?;
+
+        let chunks_vec = chunks.to_vec();
+
+        let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::with_executor(
+            route_tree,
+            chunks_vec,
+            sendable_mw,
+        ));
+
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| self.error(format!("Failed to create runtime: {}", e), line, col))?;
+
+        eprintln!("[async-server] Listening on http://0.0.0.0:{} (Hyper+Tokio)", port);
+        
+        rt.block_on(crate::vm::hyper_server::run_server_with_context(addr, ctx))
+            .map_err(|e| self.error(format!("Server error: {}", e), line, col))?;
+
+        self.stack.push(NValue::unit());
+        Ok(())
     }
 
     /// Dispatch Server.listen!(router, port) — blocks in accept loop.

@@ -88,7 +88,7 @@ impl NativeRegistry {
     pub fn is_server_listen(&self, id: u16) -> bool {
         self.entries
             .get(id as usize)
-            .map(|e| matches!(e.name, "Server.listen!" | "Server.listen"))
+            .map(|e| matches!(e.name, "Server.listen!" | "Server.listen" | "Server.listen_async!" | "Server.listen_async"))
             .unwrap_or(false)
     }
 
@@ -235,9 +235,31 @@ impl NativeRegistry {
         self.register("Request.with_state", native_request_with_state);
         self.register("Request.state", native_request_state);
 
+        // -- Map --
+        self.register("Map.empty", native_map_empty);
+        self.register("Map.insert", native_map_insert);
+        self.register("Map.get", native_map_get);
+        self.register("Map.remove", native_map_remove);
+        self.register("Map.contains", native_map_contains);
+        self.register("Map.keys", native_map_keys);
+        self.register("Map.values", native_map_values);
+        self.register("Map.len", native_map_len);
+
+        // -- Set --
+        self.register("Set.empty", native_set_empty);
+        self.register("Set.insert", native_set_insert);
+        self.register("Set.remove", native_set_remove);
+        self.register("Set.contains", native_set_contains);
+        self.register("Set.union", native_set_union);
+        self.register("Set.intersection", native_set_intersection);
+        self.register("Set.len", native_set_len);
+        self.register("Set.from_list", native_set_from_list);
+
         // -- Server (VM-reentrant, dispatched specially in vm.rs) --
         self.register("Server.listen!", native_server_listen_placeholder);
         self.register("Server.listen", native_server_listen_placeholder);
+        self.register("Server.listen_async!", native_server_listen_placeholder);
+        self.register("Server.listen_async", native_server_listen_placeholder);
     }
 }
 
@@ -1564,6 +1586,197 @@ fn native_server_listen_placeholder(_args: &[NValue]) -> Result<NValue, NativeEr
     Err(NativeError(
         "Server.listen! must be executed by VM, not called directly".into(),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Map operations
+// ---------------------------------------------------------------------------
+
+fn native_map_empty(_args: &[NValue]) -> Result<NValue, NativeError> {
+    Ok(NValue::map(Vec::new()))
+}
+
+fn native_map_insert(args: &[NValue]) -> Result<NValue, NativeError> {
+    let map_val = &args[0];
+    let key = args[1].clone();
+    let val = args[2].clone();
+    match map_val.as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let mut new_entries: Vec<(NValue, NValue)> = entries
+                .iter()
+                .filter(|(k, _)| *k != key)
+                .cloned()
+                .collect();
+            new_entries.push((key, val));
+            Ok(NValue::map(new_entries))
+        }
+        _ => Err(NativeError("Map.insert: expected Map".into())),
+    }
+}
+
+fn native_map_get(args: &[NValue]) -> Result<NValue, NativeError> {
+    let map_val = &args[0];
+    let key = &args[1];
+    match map_val.as_heap_ref() {
+        HeapObject::Map(entries) => {
+            for (k, v) in entries {
+                if k == key {
+                    return Ok(NValue::enum_val("Some".into(), v.clone()));
+                }
+            }
+            Ok(NValue::enum_val("None".into(), NValue::unit()))
+        }
+        _ => Err(NativeError("Map.get: expected Map".into())),
+    }
+}
+
+fn native_map_remove(args: &[NValue]) -> Result<NValue, NativeError> {
+    let map_val = &args[0];
+    let key = &args[1];
+    match map_val.as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let new_entries: Vec<_> = entries.iter().filter(|(k, _)| k != key).cloned().collect();
+            Ok(NValue::map(new_entries))
+        }
+        _ => Err(NativeError("Map.remove: expected Map".into())),
+    }
+}
+
+fn native_map_contains(args: &[NValue]) -> Result<NValue, NativeError> {
+    let map_val = &args[0];
+    let key = &args[1];
+    match map_val.as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let found = entries.iter().any(|(k, _)| k == key);
+            Ok(NValue::bool(found))
+        }
+        _ => Err(NativeError("Map.contains: expected Map".into())),
+    }
+}
+
+fn native_map_keys(args: &[NValue]) -> Result<NValue, NativeError> {
+    let map_val = &args[0];
+    match map_val.as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let keys: Vec<_> = entries.iter().map(|(k, _)| k.clone()).collect();
+            Ok(NValue::list(keys))
+        }
+        _ => Err(NativeError("Map.keys: expected Map".into())),
+    }
+}
+
+fn native_map_values(args: &[NValue]) -> Result<NValue, NativeError> {
+    let map_val = &args[0];
+    match map_val.as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let vals: Vec<_> = entries.iter().map(|(_, v)| v.clone()).collect();
+            Ok(NValue::list(vals))
+        }
+        _ => Err(NativeError("Map.values: expected Map".into())),
+    }
+}
+
+fn native_map_len(args: &[NValue]) -> Result<NValue, NativeError> {
+    let map_val = &args[0];
+    match map_val.as_heap_ref() {
+        HeapObject::Map(entries) => Ok(NValue::int(entries.len() as i64)),
+        _ => Err(NativeError("Map.len: expected Map".into())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Set operations
+// ---------------------------------------------------------------------------
+
+fn native_set_empty(_args: &[NValue]) -> Result<NValue, NativeError> {
+    Ok(NValue::set(Vec::new()))
+}
+
+fn native_set_insert(args: &[NValue]) -> Result<NValue, NativeError> {
+    let set_val = &args[0];
+    let elem = args[1].clone();
+    match set_val.as_heap_ref() {
+        HeapObject::Set(elems) => {
+            if elems.contains(&elem) {
+                Ok(NValue::set(elems.clone()))
+            } else {
+                let mut new_elems = elems.clone();
+                new_elems.push(elem);
+                Ok(NValue::set(new_elems))
+            }
+        }
+        _ => Err(NativeError("Set.insert: expected Set".into())),
+    }
+}
+
+fn native_set_remove(args: &[NValue]) -> Result<NValue, NativeError> {
+    let set_val = &args[0];
+    let elem = &args[1];
+    match set_val.as_heap_ref() {
+        HeapObject::Set(elems) => {
+            let new_elems: Vec<_> = elems.iter().filter(|e| *e != elem).cloned().collect();
+            Ok(NValue::set(new_elems))
+        }
+        _ => Err(NativeError("Set.remove: expected Set".into())),
+    }
+}
+
+fn native_set_contains(args: &[NValue]) -> Result<NValue, NativeError> {
+    let set_val = &args[0];
+    let elem = &args[1];
+    match set_val.as_heap_ref() {
+        HeapObject::Set(elems) => Ok(NValue::bool(elems.contains(elem))),
+        _ => Err(NativeError("Set.contains: expected Set".into())),
+    }
+}
+
+fn native_set_union(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_heap_ref(), args[1].as_heap_ref()) {
+        (HeapObject::Set(a), HeapObject::Set(b)) => {
+            let mut result = a.clone();
+            for elem in b {
+                if !result.contains(elem) {
+                    result.push(elem.clone());
+                }
+            }
+            Ok(NValue::set(result))
+        }
+        _ => Err(NativeError("Set.union: expected two Sets".into())),
+    }
+}
+
+fn native_set_intersection(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_heap_ref(), args[1].as_heap_ref()) {
+        (HeapObject::Set(a), HeapObject::Set(b)) => {
+            let result: Vec<_> = a.iter().filter(|e| b.contains(e)).cloned().collect();
+            Ok(NValue::set(result))
+        }
+        _ => Err(NativeError("Set.intersection: expected two Sets".into())),
+    }
+}
+
+fn native_set_len(args: &[NValue]) -> Result<NValue, NativeError> {
+    let set_val = &args[0];
+    match set_val.as_heap_ref() {
+        HeapObject::Set(elems) => Ok(NValue::int(elems.len() as i64)),
+        _ => Err(NativeError("Set.len: expected Set".into())),
+    }
+}
+
+fn native_set_from_list(args: &[NValue]) -> Result<NValue, NativeError> {
+    let list_val = &args[0];
+    match list_val.as_heap_ref() {
+        HeapObject::List(items) => {
+            let mut result = Vec::new();
+            for item in items {
+                if !result.contains(item) {
+                    result.push(item.clone());
+                }
+            }
+            Ok(NValue::set(result))
+        }
+        _ => Err(NativeError("Set.from_list: expected List".into())),
+    }
 }
 
 // ---------------------------------------------------------------------------

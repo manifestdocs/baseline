@@ -3,6 +3,10 @@ pub mod async_executor;
 pub mod chunk;
 pub mod codegen;
 pub mod compiler;
+#[cfg(feature = "async-server")]
+pub mod hyper_server;
+#[cfg(all(test, feature = "async-server"))]
+mod hyper_server_tests;
 pub mod ir;
 #[cfg(feature = "jit")]
 pub mod jit;

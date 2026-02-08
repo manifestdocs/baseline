@@ -29,6 +29,8 @@ pub struct TestResult {
 pub enum TestStatus {
     Pass,
     Fail,
+    #[serde(rename = "skipped")]
+    Skip,
 }
 
 #[derive(Debug, Serialize)]
@@ -43,6 +45,12 @@ pub struct TestSummary {
     pub total: usize,
     pub passed: usize,
     pub failed: usize,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub skipped: usize,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
 }
 
 // ---------------------------------------------------------------------------
@@ -54,21 +62,49 @@ struct CollectedTest<'a> {
     function: Option<String>,
     expr_node: Node<'a>,
     location: Location,
+    skip: bool,
+}
+
+/// A BDD describe/context block with hooks and nested tests.
+#[allow(dead_code)]
+struct DescribeBlock<'a> {
+    name: String,
+    before_each: Vec<Node<'a>>,
+    after_each: Vec<Node<'a>>,
+    tests: Vec<CollectedTest<'a>>,
+    children: Vec<DescribeBlock<'a>>,
 }
 
 fn collect_tests<'a>(root: &Node<'a>, source: &str, file: &str) -> Vec<CollectedTest<'a>> {
     let mut tests = Vec::new();
     let mut cursor = root.walk();
 
+    // Check for focused tests (it.only) — if any exist, only run those
+    let has_only = has_focused_tests(root, source);
+
     for child in root.children(&mut cursor) {
-        match child.kind() {
+        // Unwrap spec_block to access the inner function_def
+        let effective = if child.kind() == "spec_block" {
+            let mut found = None;
+            let mut sc = child.walk();
+            for c in child.named_children(&mut sc) {
+                if c.kind() == "function_def" {
+                    found = Some(c);
+                    break;
+                }
+            }
+            found.unwrap_or(child)
+        } else {
+            child
+        };
+        match effective.kind() {
             "function_def" => {
-                let func_name = child
+                let func_name = effective
                     .child_by_field_name("name")
                     .map(|n| n.utf8_text(source.as_bytes()).unwrap_or("").to_string());
 
-                let mut child_cursor = child.walk();
-                for fc in child.children(&mut child_cursor) {
+                let mut child_cursor = effective.walk();
+                for fc in effective.children(&mut child_cursor) {
                     if fc.kind() == "where_block" {
                         let mut wb_cursor = fc.walk();
                         for test_node in fc.children(&mut wb_cursor) {
@@ -83,15 +119,172 @@ fn collect_tests<'a>(root: &Node<'a>, source: &str, file: &str) -> Vec<Collected
                 }
             }
             "inline_test" => {
-                if let Some(ct) = parse_inline_test(&child, source, file, &None) {
+                if let Some(ct) = parse_inline_test(&effective, source, file, &None) {
                     tests.push(ct);
                 }
+            }
+            "describe_block" => {
+                let block = collect_describe_block(&effective, source, file, "", has_only);
+                flatten_describe_block(block, &mut tests);
             }
             _ => {}
         }
     }
 
     tests
+}
+
+fn has_focused_tests(node: &Node, source: &str) -> bool {
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "it_block" {
+            if let Some(mod_node) = child.child_by_field_name("modifier") {
+                let modifier = mod_node.utf8_text(source.as_bytes()).unwrap_or("");
+                if modifier == ".only" {
+                    return true;
+                }
+            }
+        }
+        if child.kind() == "describe_block" && has_focused_tests(&child, source) {
+            return true;
+        }
+    }
+    false
+}
+
+fn collect_describe_block<'a>(
+    node: &Node<'a>,
+    source: &str,
+    file: &str,
+    prefix: &str,
+    has_only: bool,
+) -> DescribeBlock<'a> {
+    let name_node = node.child_by_field_name("name");
+    let raw_name = name_node
+        .map(|n| {
+            let text = n.utf8_text(source.as_bytes()).unwrap_or("");
+            text.strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .unwrap_or(text)
+                .to_string()
+        })
+        .unwrap_or_default();
+
+    let full_name = if prefix.is_empty() {
+        raw_name.clone()
+    } else {
+        format!("{} > {}", prefix, raw_name)
+    };
+
+    let mut block = DescribeBlock {
+        name: full_name.clone(),
+        before_each: Vec::new(),
+        after_each: Vec::new(),
+        tests: Vec::new(),
+        children: Vec::new(),
+    };
+
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        match child.kind() {
+            "it_block" => {
+                if let Some(ct) = parse_it_block(&child, source, file, &full_name, has_only) {
+                    block.tests.push(ct);
+                }
+            }
+            "inline_test" => {
+                if let Some(mut ct) = parse_inline_test(&child, source, file, &None) {
+                    ct.name = format!("{} > {}", full_name, ct.name);
+                    block.tests.push(ct);
+                }
+            }
+            "before_each_block" => {
+                // Last named child is the expression
+                let count = child.named_child_count();
+                if count > 0 {
+                    if let Some(expr) = child.named_child(count - 1) {
+                        block.before_each.push(expr);
+                    }
+                }
+            }
+            "after_each_block" => {
+                let count = child.named_child_count();
+                if count > 0 {
+                    if let Some(expr) = child.named_child(count - 1) {
+                        block.after_each.push(expr);
+                    }
+                }
+            }
+            "describe_block" => {
+                let nested = collect_describe_block(&child, source, file, &full_name, has_only);
+                block.children.push(nested);
+            }
+            _ => {}
+        }
+    }
+
+    block
+}
+
+fn parse_it_block<'a>(
+    node: &Node<'a>,
+    source: &str,
+    file: &str,
+    prefix: &str,
+    has_only: bool,
+) -> Option<CollectedTest<'a>> {
+    let name_node = node.child_by_field_name("name")?;
+    let raw_name = name_node.utf8_text(source.as_bytes()).ok()?;
+    let name = raw_name
+        .strip_prefix('"')
+        .and_then(|s| s.strip_suffix('"'))
+        .unwrap_or(raw_name)
+        .to_string();
+
+    let full_name = if prefix.is_empty() {
+        name
+    } else {
+        format!("{} > {}", prefix, name)
+    };
+
+    let body_node = node.child_by_field_name("body")?;
+
+    let modifier = node
+        .child_by_field_name("modifier")
+        .map(|n| n.utf8_text(source.as_bytes()).unwrap_or("").to_string());
+
+    let skip = match modifier.as_deref() {
+        Some(".skip") => true,
+        Some(".only") => false,
+        _ => has_only, // If any test has .only, skip non-only tests
+    };
+
+    let start = node.start_position();
+    let end = node.end_position();
+    let location = Location {
+        file: file.to_string(),
+        line: start.row + 1,
+        col: start.column + 1,
+        end_line: Some(end.row + 1),
+        end_col: Some(end.column + 1),
+    };
+
+    Some(CollectedTest {
+        name: full_name,
+        function: None,
+        expr_node: body_node,
+        location,
+        skip,
+    })
+}
+
+fn flatten_describe_block<'a>(block: DescribeBlock<'a>, out: &mut Vec<CollectedTest<'a>>) {
+    for test in block.tests {
+        out.push(test);
+    }
+    for child in block.children {
+        flatten_describe_block(child, out);
+    }
 }
 
 fn parse_inline_test<'a>(
@@ -134,6 +327,7 @@ fn parse_inline_test<'a>(
         function: function.clone(),
         expr_node,
         location,
+        skip: false,
     })
 }
 
@@ -152,6 +346,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                     total: 0,
                     passed: 0,
                     failed: 0,
+                    skipped: 0,
                 },
             };
         }
@@ -200,6 +395,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 total: 1,
                 passed: 0,
                 failed: 1,
+                skipped: 0,
             },
         };
     }
@@ -236,6 +432,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 total: 1,
                 passed: 0,
                 failed: 1,
+                skipped: 0,
             },
         };
     }
@@ -260,6 +457,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 total: 1,
                 passed: 0,
                 failed: 1,
+                skipped: 0,
             },
         };
     }
@@ -281,6 +479,10 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         .iter()
         .filter(|r| r.status == TestStatus::Fail)
         .count();
+    let skipped = results
+        .iter()
+        .filter(|r| r.status == TestStatus::Skip)
+        .count();
     let total = results.len();
 
     TestSuiteResult {
@@ -290,6 +492,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             total,
             passed,
             failed,
+            skipped,
         },
     }
 }
@@ -382,6 +585,16 @@ fn run_single_test<'a>(
     source: &'a str,
     context: &mut Context<'a>,
 ) -> TestResult {
+    if test.skip {
+        return TestResult {
+            name: test.name.clone(),
+            function: test.function.clone(),
+            status: TestStatus::Skip,
+            message: None,
+            location: test.location.clone(),
+        };
+    }
+
     context.enter_scope();
     let result = interpreter::eval(&test.expr_node, source, context);
     context.exit_scope();

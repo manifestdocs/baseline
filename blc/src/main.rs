@@ -28,6 +28,10 @@ enum Commands {
         /// Output diagnostics as JSON (for LLM agents)
         #[arg(long)]
         json: bool,
+
+        /// Verification level: types, refinements, or full (includes SMT spec checking)
+        #[arg(long, default_value = "refinements")]
+        level: String,
     },
 
     /// Start the Language Server Protocol server
@@ -83,14 +87,42 @@ enum Commands {
         #[arg(long)]
         check: bool,
     },
+
+    /// Start the Constrained Generation Protocol (CGP) server
+    Cgp {
+        /// Port to listen on
+        #[arg(long, default_value = "8765")]
+        port: u16,
+    },
 }
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Check { file, json } => {
-            let result = check_file(&file);
+        Commands::Check { file, json, level } => {
+            let mut result = check_file(&file);
+
+            // Run SMT verification at --level=full
+            if level == "full" {
+                let source = std::fs::read_to_string(&file).unwrap_or_default();
+                let mut parser = tree_sitter::Parser::new();
+                parser
+                    .set_language(&tree_sitter_baseline::LANGUAGE.into())
+                    .expect("Failed to load grammar");
+                if let Some(tree) = parser.parse(&source, None) {
+                    let file_name = file.display().to_string();
+                    let smt_diags =
+                        blc::analysis::check_specs(&tree, &source, &file_name, 5000);
+                    let has_smt_errors = smt_diags
+                        .iter()
+                        .any(|d| d.severity == diagnostics::Severity::Error);
+                    result.diagnostics.extend(smt_diags);
+                    if has_smt_errors && result.status != "failure" {
+                        result.status = "failure".to_string();
+                    }
+                }
+            }
 
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap());
@@ -162,6 +194,9 @@ fn main() {
                     std::process::exit(1);
                 });
             }
+        }
+        Commands::Cgp { port } => {
+            blc::cgp::run_server(port);
         }
     }
 }
@@ -641,11 +676,21 @@ fn print_test_results(result: &test_runner::TestSuiteResult) {
                     println!("  {}", msg);
                 }
             }
+            test_runner::TestStatus::Skip => {
+                println!("SKIP  {} ({})", test.name, context);
+            }
         }
     }
 
-    println!(
-        "\n{} tests: {} passed, {} failed",
-        result.summary.total, result.summary.passed, result.summary.failed
-    );
+    if result.summary.skipped > 0 {
+        println!(
+            "\n{} tests: {} passed, {} failed, {} skipped",
+            result.summary.total, result.summary.passed, result.summary.failed, result.summary.skipped
+        );
+    } else {
+        println!(
+            "\n{} tests: {} passed, {} failed",
+            result.summary.total, result.summary.passed, result.summary.failed
+        );
+    }
 }

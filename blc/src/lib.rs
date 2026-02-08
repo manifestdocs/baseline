@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod builtins;
+pub mod cgp;
 pub mod diagnostics;
 pub mod format;
 pub mod interpreter;

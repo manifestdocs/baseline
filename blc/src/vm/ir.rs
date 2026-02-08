@@ -172,6 +172,14 @@ pub enum Expr {
     // -- String interpolation (desugared) --
     /// Concatenation of string segments (text + interpolated expressions).
     Concat(Vec<Expr>),
+
+    // -- Effect handlers --
+    /// `with { Effect: handler } body` or `handle body with { clauses }`.
+    /// handlers: Vec<(effect_name, Vec<(method_name, handler_fn)>)>
+    WithHandlers {
+        handlers: Vec<(String, Vec<(String, Expr)>)>,
+        body: Box<Expr>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -371,8 +379,12 @@ mod tests {
                 ty: None,
             },
             Expr::Concat(vec![]),
+            Expr::WithHandlers {
+                handlers: vec![],
+                body: Box::new(Expr::Unit),
+            },
         ];
-        assert_eq!(exprs.len(), 30);
+        assert_eq!(exprs.len(), 31);
     }
 
     #[test]

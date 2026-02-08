@@ -647,6 +647,7 @@ impl<'a> FnCtx<'a> {
             Expr::GetField { .. } => Err("LLVM backend: field access not supported".into()),
             Expr::Try { .. } => Err("LLVM backend: try expression not supported".into()),
             Expr::Concat(_) => Err("LLVM backend: string concat not supported".into()),
+            Expr::WithHandlers { .. } => Err("LLVM backend: effect handlers not supported".into()),
         }
     }
 }

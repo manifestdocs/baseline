@@ -148,6 +148,13 @@ pub enum Op {
     /// Tests local[slot] < k and jumps if false, without pushing/popping a bool.
     GetLocalLtIntJumpIfFalse(u16, i16, u16),
 
+    // -- Effect handlers --
+    /// Push a handler map onto the handler stack. The record is on top of stack.
+    /// N is the number of effect name/handler pairs. Stack: [handler_record] → []
+    PushHandler,
+    /// Pop the most recent handler map from the handler stack.
+    PopHandler,
+
     // -- Termination --
     /// Runtime error with message from constant pool.
     Halt(u16),
@@ -183,7 +190,7 @@ impl ConstKey {
 }
 
 /// A compiled unit of bytecode with its constant pool and debug info.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct Chunk {
     pub code: Vec<Op>,
     pub constants: Vec<Value>,

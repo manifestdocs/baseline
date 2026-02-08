@@ -206,6 +206,69 @@ impl AsyncRequest {
             ("query".into(), NValue::record(query_params)),
         ])
     }
+
+    /// Convert to SendableValue record for cross-thread transfer.
+    /// This avoids intermediate NValue/RcStr allocations.
+    pub fn to_sendable(&self) -> crate::vm::async_executor::SendableValue {
+        use crate::vm::async_executor::SendableValue;
+
+        let headers: Vec<SendableValue> = self
+            .headers
+            .iter()
+            .map(|(k, v)| {
+                SendableValue::Tuple(vec![
+                    SendableValue::String(k.to_string()),
+                    SendableValue::String(v.to_str().unwrap_or("").to_string()),
+                ])
+            })
+            .collect();
+
+        // Convert params map to vec of (String, SendableValue)
+        let params_vec: Vec<(String, SendableValue)> = self
+            .params
+            .iter()
+            .map(|(k, v)| {
+                (
+                    k.clone(),
+                    SendableValue::String(v.clone()),
+                )
+            })
+            .collect();
+        let params_sv = SendableValue::Record(params_vec);
+
+        // Convert query if present
+        let query_vec: Vec<(String, SendableValue)> = self
+            .raw_query
+            .as_ref()
+            .map(|q| {
+                parse_query_string(Some(q))
+                    .into_iter()
+                    .map(|(k, v)| {
+                        (
+                            k,
+                            SendableValue::String(v),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let query_sv = SendableValue::Record(query_vec);
+
+        SendableValue::Record(vec![
+            (
+                "method".to_string(),
+                SendableValue::String(self.method.to_string()),
+            ),
+            ("url".to_string(), SendableValue::String(self.path.clone())),
+            ("headers".to_string(), SendableValue::List(headers)),
+            (
+                "body".to_string(),
+                SendableValue::String(self.body_str().unwrap_or("").to_string()),
+            ),
+            ("params".to_string(), params_sv),
+            ("query".to_string(), query_sv),
+        ])
+    }
 }
 
 /// Async response builder with pre-allocated buffers.
@@ -285,6 +348,77 @@ impl AsyncResponse {
             // Fallback: treat as string body
             let body = val.as_str().map(|s| s.to_string()).unwrap_or_default();
             Self::text(200, body)
+        }
+    }
+
+
+    /// Create from SendableValue response.
+    /// Avoids converting back to NValue on the IO thread.
+    pub fn from_sendable_val(val: &crate::vm::async_executor::SendableValue) -> Self {
+        use crate::vm::async_executor::SendableValue;
+
+        if let SendableValue::Record(fields) = val {
+            let status = fields
+                .iter()
+                .find(|(k, _)| k == "status")
+                .and_then(|(_, v)| {
+                    // Check for Int or AnyInt (usually Int in SendableValue)
+                    if let SendableValue::Int(i) = v {
+                        Some(*i as u16)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(200);
+
+            let body = fields
+                .iter()
+                .find(|(k, _)| k == "body")
+                .and_then(|(_, v)| {
+                    if let SendableValue::String(s) = v {
+                        Some(Bytes::from(s.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            let headers: Vec<(String, String)> = fields
+                .iter()
+                .find(|(k, _)| k == "headers")
+                .and_then(|(_, v)| {
+                    if let SendableValue::List(list) = v {
+                        Some(list.iter()
+                            .filter_map(|item| {
+                                if let SendableValue::Tuple(tuple) = item {
+                                    if tuple.len() == 2 {
+                                        let k = if let SendableValue::String(s) = &tuple[0] { s } else { return None; };
+                                        let v = if let SendableValue::String(s) = &tuple[1] { s } else { return None; };
+                                        return Some((k.clone(), v.clone()));
+                                    }
+                                }
+                                None
+                            })
+                            .collect())
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            Self {
+                status: StatusCode::from_u16(status).unwrap_or(StatusCode::OK),
+                headers,
+                body,
+            }
+        } else {
+             // Fallback: treat as string body
+             let body = if let SendableValue::String(s) = val {
+                 Bytes::from(s.clone())
+             } else {
+                 Bytes::new()
+             };
+             Self::text(200, body)
         }
     }
 
@@ -490,6 +624,45 @@ impl AsyncRouteTree {
 
         None
     }
+
+    /// Create from NValue router record.
+    pub fn from_nvalue(router: &NValue) -> Result<Self, String> {
+        let fields = router.as_record().ok_or("Router must be a record")?;
+        let routes = fields
+            .iter()
+            .find(|(k, _)| &**k == "routes")
+            .and_then(|(_, v)| v.as_list())
+            .ok_or("Router must have 'routes' list")?;
+
+        let mut builder = Self::builder();
+
+        for route in routes {
+            if let Some(route_fields) = route.as_record() {
+                let method = route_fields
+                    .iter()
+                    .find(|(k, _)| &**k == "method")
+                    .and_then(|(_, v)| v.as_str())
+                    .ok_or("Route must have 'method' string")?;
+                let path = route_fields
+                    .iter()
+                    .find(|(k, _)| &**k == "path")
+                    .and_then(|(_, v)| v.as_str())
+                    .ok_or("Route must have 'path' string")?;
+                let handler_val = route_fields
+                    .iter()
+                    .find(|(k, _)| &**k == "handler")
+                    .map(|(_, v)| v)
+                    .ok_or("Route must have 'handler'")?;
+
+                if let Some(sendable) = crate::vm::async_executor::SendableHandler::from_nvalue(handler_val) {
+                    builder = builder.route(method, path, AsyncHandler::Vm(sendable));
+                } else {
+                     return Err(format!("Invalid handler for route {} {}", method, path));
+                }
+            }
+        }
+        Ok(builder.build())
+    }
 }
 
 impl Default for AsyncRouteTree {
@@ -605,14 +778,13 @@ async fn handle_request_with_context(
                     if let Some(executor) = &ctx.executor {
                         use crate::vm::async_executor::SendableValue;
 
-                        // Convert request to sendable format
-                        let request_nv = async_req.to_nvalue();
-                        let request_sv = SendableValue::from_nvalue(&request_nv);
+                        // Convert request to sendable format DIRECTLY
+                        let request_sv = async_req.to_sendable();
 
                         match executor.execute_handler(vm_handler, request_sv).await {
                             Ok(result_sv) => {
-                                let result_nv = result_sv.to_nvalue();
-                                AsyncResponse::from_nvalue(&result_nv)
+                                // Convert result from sendable format DIRECTLY
+                                AsyncResponse::from_sendable_val(&result_sv)
                             }
                             Err(e) => {
                                 eprintln!("[server] Handler error: {}", e);

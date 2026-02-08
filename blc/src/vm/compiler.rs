@@ -52,6 +52,7 @@ pub struct CompiledTest {
     pub col: usize,
     pub end_line: usize,
     pub end_col: usize,
+    pub skip: bool,
 }
 
 /// A compiled program with inline test metadata.
@@ -69,6 +70,8 @@ pub struct Compiler<'a> {
     scope_depth: usize,
     /// Global function name → chunk index mapping.
     functions: HashMap<String, usize>,
+    /// Function name → parameter names (for named argument reordering).
+    fn_params: HashMap<String, Vec<String>>,
     /// Finished function chunks (each function compiles to its own chunk).
     compiled_chunks: Vec<Chunk>,
     /// Stack of saved compiler state for nested function compilation.
@@ -94,6 +97,7 @@ impl<'a> Compiler<'a> {
             locals: Vec::new(),
             scope_depth: 0,
             functions: HashMap::new(),
+            fn_params: HashMap::new(),
             compiled_chunks: Vec::new(),
             enclosing: Vec::new(),
             upvalues: Vec::new(),
@@ -236,6 +240,12 @@ impl<'a> Compiler<'a> {
             "list_expression" => {
                 self.compile_list(node)?;
             }
+            "map_literal" => {
+                self.compile_map_literal(node)?;
+            }
+            "map_entry" => {
+                // Handled within map_literal
+            }
             "record_expression" => {
                 self.compile_record(node)?;
             }
@@ -253,6 +263,145 @@ impl<'a> Compiler<'a> {
             }
             "record_update" => {
                 self.compile_record_update(node)?;
+            }
+            "named_argument" => {
+                // Lower the expression part of a named argument
+                let count = node.named_child_count();
+                if count > 0 {
+                    self.compile_expression(&node.named_child(count - 1).unwrap())?;
+                }
+            }
+            "with_expression" => {
+                if let Some(handlers_node) = node.child_by_field_name("handlers") {
+                    // with { Console: handler } body — handler map form
+                    // Build a record mapping effect module names → handler records
+                    // Then wrap the body with PushHandler/PopHandler
+                    let mut bindings = Vec::new();
+                    let mut hcursor = handlers_node.walk();
+                    for child in handlers_node.named_children(&mut hcursor) {
+                        if child.kind() == "handler_binding" {
+                            let effect_name = child
+                                .child_by_field_name("effect")
+                                .map(|n| n.utf8_text(self.source.as_bytes()).unwrap().to_string())
+                                .unwrap_or_default();
+                            let handler_node = child.child_by_field_name("handler").unwrap();
+                            bindings.push((effect_name, handler_node));
+                        }
+                    }
+                    // Build handler record: { "Console": handler_val, ... }
+                    for (name, handler_node) in &bindings {
+                        let key_idx = self.chunk.add_constant(Value::String(name.as_str().into()));
+                        self.emit(Op::LoadConst(key_idx), node);
+                        self.compile_expression(handler_node)?;
+                    }
+                    self.emit(Op::MakeRecord(bindings.len() as u16), node);
+                    self.emit(Op::PushHandler, node);
+
+                    let body_node = node.child_by_field_name("body").unwrap();
+                    self.compile_expression(&body_node)?;
+
+                    self.emit(Op::PopHandler, node);
+                } else {
+                    // Legacy capture form: with Console.println! { body }
+                    // For now, just compile the body and return (result, [])
+                    let body_node = node
+                        .child_by_field_name("body")
+                        .unwrap_or_else(|| node.named_child(1).unwrap());
+                    self.compile_expression(&body_node)?;
+                    // Wrap in tuple: (result, [])
+                    self.emit(Op::MakeList(0), node);
+                    self.emit(Op::MakeTuple(2), node);
+                }
+            }
+            "handle_expression" => {
+                // handle body with { Effect.method!(args) -> handler_body }
+                let body_node = node.child_by_field_name("body").unwrap();
+
+                // Collect clauses, grouped by effect name
+                struct ClauseInfo<'b> {
+                    method_key: String,
+                    params: Vec<String>,
+                    handler_body: tree_sitter::Node<'b>,
+                    clause_node: tree_sitter::Node<'b>,
+                }
+                let mut by_effect: Vec<(String, Vec<ClauseInfo<'a>>)> = Vec::new();
+                let mut effect_order: Vec<String> = Vec::new();
+
+                let mut cursor = node.walk();
+                for child in node.named_children(&mut cursor) {
+                    if child.kind() == "handler_clause" {
+                        let effect_name = child
+                            .child_by_field_name("effect")
+                            .map(|n| n.utf8_text(self.source.as_bytes()).unwrap().to_string())
+                            .unwrap_or_default();
+                        let method_node = child.child_by_field_name("method").unwrap();
+                        let method_name = method_node.utf8_text(self.source.as_bytes()).unwrap();
+                        let method_key = method_name.strip_suffix('!').unwrap_or(method_name).to_string();
+
+                        let mut params = Vec::new();
+                        let mut pcursor = child.walk();
+                        for pchild in child.named_children(&mut pcursor) {
+                            if pchild.kind() == "identifier" && pchild.start_byte() > method_node.end_byte() {
+                                params.push(pchild.utf8_text(self.source.as_bytes()).unwrap().to_string());
+                            }
+                        }
+
+                        let handler_body = child.child_by_field_name("handler_body").unwrap();
+
+                        if !effect_order.contains(&effect_name) {
+                            effect_order.push(effect_name.clone());
+                            by_effect.push((effect_name, vec![ClauseInfo { method_key, params, handler_body, clause_node: child }]));
+                        } else {
+                            for (eff, clauses) in &mut by_effect {
+                                if eff == &effect_name {
+                                    clauses.push(ClauseInfo { method_key, params, handler_body, clause_node: child });
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Build the handler record: { EffectName: { method: fn, ... }, ... }
+                // MakeRecord expects [key0, val0, key1, val1, ...] on stack
+                for (effect_name, clauses) in &by_effect {
+                    // Push effect name key
+                    let eff_key = self.chunk.add_constant(Value::String(effect_name.as_str().into()));
+                    self.emit(Op::LoadConst(eff_key), node);
+
+                    // Build inner method record: [method_key, fn_val, ...]
+                    for clause in clauses {
+                        let mk = self.chunk.add_constant(Value::String(clause.method_key.as_str().into()));
+                        self.emit(Op::LoadConst(mk), &clause.clause_node);
+
+                        let handler_chunk_idx = self.compile_handler_function(&clause.params, &clause.handler_body)?;
+                        let fn_idx = self.chunk.add_constant(Value::Function(handler_chunk_idx));
+                        self.emit(Op::LoadConst(fn_idx), &clause.clause_node);
+                    }
+                    self.emit(Op::MakeRecord(clauses.len() as u16), node);
+                }
+                self.emit(Op::MakeRecord(by_effect.len() as u16), node);
+                self.emit(Op::PushHandler, node);
+
+                self.compile_expression(&body_node)?;
+
+                self.emit(Op::PopHandler, node);
+            }
+            "expect_expression" => {
+                self.compile_expect(node)?;
+            }
+            "matcher" => {
+                // Matchers are handled as part of expect_expression
+                let idx = self.chunk.add_constant(Value::Bool(true));
+                self.emit(Op::LoadConst(idx), node);
+            }
+            "describe_block" | "it_block" | "before_each_block" | "after_each_block" => {
+                // BDD blocks in expression context — no-op, return Unit
+                let idx = self.chunk.add_constant(Value::Unit);
+                self.emit(Op::LoadConst(idx), node);
+            }
+            "handler_map" | "handler_binding" | "handler_clause" => {
+                // These are handled as part of with_expression / handle_expression
             }
             "line_comment" | "block_comment" => {
                 // Comments are no-ops — skip them
@@ -1163,6 +1312,23 @@ impl<'a> Compiler<'a> {
     // Program compilation
     // -----------------------------------------------------------------------
 
+    /// Extract function_def from a node, unwrapping spec_block if needed.
+    fn unwrap_function_def(node: Node<'a>) -> Option<Node<'a>> {
+        match node.kind() {
+            "function_def" => Some(node),
+            "spec_block" => {
+                for i in 0..node.named_child_count() {
+                    let child = node.named_child(i).unwrap();
+                    if child.kind() == "function_def" {
+                        return Some(child);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
     /// Compile a full source file into a multi-chunk Program.
     /// Each function_def becomes its own chunk. Entry point is the last function.
     pub fn compile_program(mut self, root: &Node<'a>) -> Result<Program, CompileError> {
@@ -1173,11 +1339,24 @@ impl<'a> Compiler<'a> {
         let mut func_defs: Vec<Node<'a>> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            if child.kind() == "function_def" {
-                let name_node = child.child_by_field_name("name").unwrap();
+            if let Some(func) = Self::unwrap_function_def(child) {
+                let name_node = func.child_by_field_name("name").unwrap();
                 let name = self.node_text(&name_node);
-                self.functions.insert(name, chunk_offset + func_defs.len());
-                func_defs.push(child);
+                self.functions.insert(name.clone(), chunk_offset + func_defs.len());
+                // Extract parameter names for named argument reordering
+                if let Some(params) = func.child_by_field_name("params") {
+                    let mut param_names = Vec::new();
+                    let mut pc = params.walk();
+                    for p in params.named_children(&mut pc) {
+                        if p.kind() == "param" {
+                            if let Some(pn) = p.child_by_field_name("name") {
+                                param_names.push(self.node_text(&pn));
+                            }
+                        }
+                    }
+                    self.fn_params.insert(name, param_names);
+                }
+                func_defs.push(func);
             }
         }
 
@@ -1240,11 +1419,11 @@ impl<'a> Compiler<'a> {
         let mut func_defs: Vec<Node<'a>> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            if child.kind() == "function_def" {
-                let name_node = child.child_by_field_name("name").unwrap();
+            if let Some(func) = Self::unwrap_function_def(child) {
+                let name_node = func.child_by_field_name("name").unwrap();
                 let name = self.node_text(&name_node);
                 self.functions.insert(name, func_defs.len());
-                func_defs.push(child);
+                func_defs.push(func);
             }
         }
 
@@ -1285,11 +1464,24 @@ impl<'a> Compiler<'a> {
         let mut func_defs: Vec<Node<'a>> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            if child.kind() == "function_def" {
-                let name_node = child.child_by_field_name("name").unwrap();
+            if let Some(func) = Self::unwrap_function_def(child) {
+                let name_node = func.child_by_field_name("name").unwrap();
                 let name = self.node_text(&name_node);
-                self.functions.insert(name, chunk_offset + func_defs.len());
-                func_defs.push(child);
+                self.functions.insert(name.clone(), chunk_offset + func_defs.len());
+                // Extract parameter names for named argument reordering
+                if let Some(params) = func.child_by_field_name("params") {
+                    let mut param_names = Vec::new();
+                    let mut pc = params.walk();
+                    for p in params.named_children(&mut pc) {
+                        if p.kind() == "param" {
+                            if let Some(pn) = p.child_by_field_name("name") {
+                                param_names.push(self.node_text(&pn));
+                            }
+                        }
+                    }
+                    self.fn_params.insert(name, param_names);
+                }
+                func_defs.push(func);
             }
         }
 
@@ -1331,14 +1523,20 @@ impl<'a> Compiler<'a> {
 
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            match child.kind() {
+            // Unwrap spec_block to access the inner function_def
+            let effective = if child.kind() == "spec_block" {
+                Self::unwrap_function_def(child).unwrap_or(child)
+            } else {
+                child
+            };
+            match effective.kind() {
                 "function_def" => {
-                    let func_name = child
+                    let func_name = effective
                         .child_by_field_name("name")
                         .map(|n| self.node_text(&n));
 
-                    let mut child_cursor = child.walk();
-                    for fc in child.children(&mut child_cursor) {
+                    let mut child_cursor = effective.walk();
+                    for fc in effective.children(&mut child_cursor) {
                         if fc.kind() == "where_block" {
                             let mut wb_cursor = fc.walk();
                             for test_node in fc.children(&mut wb_cursor) {
@@ -1353,9 +1551,13 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 "inline_test" => {
-                    if let Some(ct) = self.compile_inline_test(&child, &None)? {
+                    if let Some(ct) = self.compile_inline_test(&effective, &None)? {
                         compiled_tests.push(ct);
                     }
+                }
+                "describe_block" => {
+                    let has_only = self.has_focused_tests(&effective);
+                    self.collect_describe_tests(&effective, "", has_only, &mut compiled_tests)?;
                 }
                 _ => {}
             }
@@ -1421,7 +1623,212 @@ impl<'a> Compiler<'a> {
             col: start.column + 1,
             end_line: end.row + 1,
             end_col: end.column + 1,
+            skip: false,
         }))
+    }
+
+    /// Check if any it_block in the tree has .only modifier.
+    fn has_focused_tests(&self, node: &Node<'a>) -> bool {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "it_block" {
+                if let Some(mod_node) = child.child_by_field_name("modifier") {
+                    let modifier = self.node_text(&mod_node);
+                    if modifier == ".only" {
+                        return true;
+                    }
+                }
+            }
+            if child.kind() == "describe_block" && self.has_focused_tests(&child) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Collect BDD tests from a describe_block, recursively handling nested blocks.
+    fn collect_describe_tests(
+        &mut self,
+        node: &Node<'a>,
+        prefix: &str,
+        has_only: bool,
+        out: &mut Vec<CompiledTest>,
+    ) -> Result<(), CompileError> {
+        let name_node = node.child_by_field_name("name");
+        let raw_name = name_node
+            .map(|n| {
+                let text = self.node_text(&n);
+                text.strip_prefix('"')
+                    .and_then(|s| s.strip_suffix('"'))
+                    .unwrap_or(&text)
+                    .to_string()
+            })
+            .unwrap_or_default();
+
+        let full_name = if prefix.is_empty() {
+            raw_name
+        } else {
+            format!("{} > {}", prefix, raw_name)
+        };
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "it_block" => {
+                    if let Some(ct) = self.compile_it_block(&child, &full_name, has_only)? {
+                        out.push(ct);
+                    }
+                }
+                "inline_test" => {
+                    if let Some(mut ct) = self.compile_inline_test(&child, &None)? {
+                        ct.name = format!("{} > {}", full_name, ct.name);
+                        out.push(ct);
+                    }
+                }
+                "describe_block" => {
+                    self.collect_describe_tests(&child, &full_name, has_only, out)?;
+                }
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    /// Compile a BDD it_block as a standalone test chunk.
+    fn compile_it_block(
+        &mut self,
+        node: &Node<'a>,
+        prefix: &str,
+        has_only: bool,
+    ) -> Result<Option<CompiledTest>, CompileError> {
+        let name_node = match node.child_by_field_name("name") {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+        let raw_name = self.node_text(&name_node);
+        let name = raw_name
+            .strip_prefix('"')
+            .and_then(|s| s.strip_suffix('"'))
+            .unwrap_or(&raw_name)
+            .to_string();
+
+        let full_name = if prefix.is_empty() {
+            name
+        } else {
+            format!("{} > {}", prefix, name)
+        };
+
+        let modifier = node
+            .child_by_field_name("modifier")
+            .map(|n| self.node_text(&n));
+
+        let skip = match modifier.as_deref() {
+            Some(".skip") => true,
+            Some(".only") => false,
+            _ => has_only,
+        };
+
+        let body_node = match node.child_by_field_name("body") {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+
+        // Compile the body expression as a standalone chunk
+        self.chunk = Chunk::new();
+        self.locals.clear();
+        self.scope_depth = 0;
+        self.compile_expression(&body_node)?;
+        let chunk = self.finish_chunk();
+
+        let chunk_idx = self.compiled_chunks.len();
+        self.compiled_chunks.push(chunk);
+
+        let start = node.start_position();
+        let end = node.end_position();
+
+        Ok(Some(CompiledTest {
+            name: full_name,
+            function: None,
+            chunk_idx,
+            line: start.row + 1,
+            col: start.column + 1,
+            end_line: end.row + 1,
+            end_col: end.column + 1,
+            skip,
+        }))
+    }
+
+    /// Compile an expect expression: `expect <actual> <matcher>`
+    /// Emits bytecode that evaluates to Bool (true if matcher passes).
+    fn compile_expect(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
+        let actual = node
+            .child_by_field_name("actual")
+            .ok_or_else(|| self.error("expect missing actual".into(), node))?;
+        let matcher = node
+            .child_by_field_name("matcher")
+            .ok_or_else(|| self.error("expect missing matcher".into(), node))?;
+
+        // Get first child text of matcher to determine kind
+        let matcher_kind = matcher
+            .child(0)
+            .map(|c| self.node_text(&c))
+            .unwrap_or_default();
+
+        match matcher_kind.as_str() {
+            "to_equal" => {
+                self.compile_expression(&actual)?;
+                if let Some(expected) = matcher.named_child(0) {
+                    self.compile_expression(&expected)?;
+                }
+                self.emit(Op::Eq, node);
+            }
+            "to_be_ok" => {
+                self.compile_expression(&actual)?;
+                self.emit(Op::EnumTag, node);
+                let ok_str = self.chunk.add_constant(Value::String("Ok".into()));
+                self.emit(Op::LoadConst(ok_str), node);
+                self.emit(Op::Eq, node);
+            }
+            "to_be_some" => {
+                self.compile_expression(&actual)?;
+                self.emit(Op::EnumTag, node);
+                let some_str = self.chunk.add_constant(Value::String("Some".into()));
+                self.emit(Op::LoadConst(some_str), node);
+                self.emit(Op::Eq, node);
+            }
+            "to_be_none" => {
+                self.compile_expression(&actual)?;
+                self.emit(Op::EnumTag, node);
+                let none_str = self.chunk.add_constant(Value::String("None".into()));
+                self.emit(Op::LoadConst(none_str), node);
+                self.emit(Op::Eq, node);
+            }
+            "to_be_empty" => {
+                self.compile_expression(&actual)?;
+                self.emit(Op::ListLen, node);
+                self.emit(Op::LoadSmallInt(0), node);
+                self.emit(Op::Eq, node);
+            }
+            "to_have_length" => {
+                self.compile_expression(&actual)?;
+                self.emit(Op::ListLen, node);
+                if let Some(expected) = matcher.named_child(0) {
+                    self.compile_expression(&expected)?;
+                }
+                self.emit(Op::Eq, node);
+            }
+            _ => {
+                // Fallback: compile actual, compile matcher expression, compare with Eq
+                self.compile_expression(&actual)?;
+                if matcher.named_child_count() > 0 {
+                    if let Some(expected) = matcher.named_child(0) {
+                        self.compile_expression(&expected)?;
+                    }
+                }
+                self.emit(Op::Eq, node);
+            }
+        }
+        Ok(())
     }
 
     /// Declare params from a function_def's param_list and compile its body.
@@ -1453,6 +1860,37 @@ impl<'a> Compiler<'a> {
     // Call expressions
     // -----------------------------------------------------------------------
 
+    /// Reorder named arguments to match parameter order.
+    /// Returns a new Vec of argument nodes in the correct parameter order.
+    fn reorder_named_args(&self, fn_name: &str, args: &[Node<'a>]) -> Vec<Node<'a>> {
+        let has_named = args.iter().any(|a| a.kind() == "named_argument");
+        if !has_named {
+            return args.to_vec();
+        }
+        if let Some(param_names) = self.fn_params.get(fn_name) {
+            let mut ordered = vec![None; param_names.len()];
+            let mut positional_idx = 0;
+            for arg in args {
+                if arg.kind() == "named_argument" {
+                    if let Some(name_node) = arg.child_by_field_name("name") {
+                        let name = self.node_text(&name_node);
+                        if let Some(pos) = param_names.iter().position(|p| *p == name) {
+                            ordered[pos] = Some(*arg);
+                        }
+                    }
+                } else {
+                    if positional_idx < ordered.len() {
+                        ordered[positional_idx] = Some(*arg);
+                    }
+                    positional_idx += 1;
+                }
+            }
+            ordered.into_iter().flatten().collect()
+        } else {
+            args.to_vec()
+        }
+    }
+
     fn compile_call_expression(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         let mut cursor = node.walk();
         let children: Vec<Node<'a>> = node.named_children(&mut cursor).collect();
@@ -1462,7 +1900,30 @@ impl<'a> Compiler<'a> {
         }
 
         let callee = &children[0];
-        let args = &children[1..];
+        let raw_args = &children[1..];
+
+        // Tail-resumptive: resume(val) = val (identity)
+        if callee.kind() == "identifier" && self.node_text(callee) == "resume" {
+            if raw_args.len() == 1 {
+                self.compile_expression(&raw_args[0])?;
+            } else {
+                let idx = self.chunk.add_constant(Value::Unit);
+                self.emit(Op::LoadConst(idx), node);
+            }
+            return Ok(());
+        }
+
+        // Resolve function name for named argument reordering
+        let fn_name = match callee.kind() {
+            "identifier" => Some(self.node_text(callee)),
+            _ => None,
+        };
+        let args: Vec<Node<'a>> = if let Some(ref name) = fn_name {
+            self.reorder_named_args(name, raw_args)
+        } else {
+            raw_args.to_vec()
+        };
+        let args = &args[..];
 
         // Check if callee is a constructor (type_identifier = starts with uppercase)
         if callee.kind() == "type_identifier" {
@@ -1559,6 +2020,33 @@ impl<'a> Compiler<'a> {
         } else {
             None
         }
+    }
+
+    /// Compile a handler function for an effect handler clause.
+    /// Returns the chunk index of the compiled function.
+    fn compile_handler_function(
+        &mut self,
+        params: &[String],
+        body_node: &Node<'a>,
+    ) -> Result<usize, CompileError> {
+        self.enter_function();
+
+        for param in params {
+            self.declare_local(param);
+        }
+
+        self.compile_expression(body_node)?;
+
+        let (func_chunk, _captured) = self.leave_function();
+
+        // Note: For now, handlers that capture variables (closures) are not fully supported
+        // because the 'handle' opcode expects simple function indices in the handler map.
+        // If _captured is not empty, this might fail at runtime or behave unexpectedly.
+        // Future work: update 'handle' opcode to support closures.
+
+        let chunk_idx = self.compiled_chunks.len();
+        self.compiled_chunks.push(func_chunk);
+        Ok(chunk_idx)
     }
 
     // -----------------------------------------------------------------------
@@ -1710,6 +2198,39 @@ impl<'a> Compiler<'a> {
     // -----------------------------------------------------------------------
     // Data structures
     // -----------------------------------------------------------------------
+
+    fn compile_map_literal(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
+        // Desugar #{ k1: v1, k2: v2 } into Map.empty() then Map.insert chains
+        let empty_id = self
+            .natives
+            .lookup("Map.empty")
+            .ok_or_else(|| self.error("Map.empty native not found".into(), node))?;
+        let insert_id = self
+            .natives
+            .lookup("Map.insert")
+            .ok_or_else(|| self.error("Map.insert native not found".into(), node))?;
+
+        // Start with Map.empty()
+        self.emit(Op::CallNative(empty_id, 0), node);
+
+        // For each entry, call Map.insert(map, key, value)
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            if child.kind() == "map_entry" {
+                let key_node = child
+                    .child_by_field_name("key")
+                    .ok_or_else(|| self.error("Map entry missing key".into(), &child))?;
+                let val_node = child
+                    .child_by_field_name("value")
+                    .ok_or_else(|| self.error("Map entry missing value".into(), &child))?;
+                // Stack: [map] → compile key → compile value → [map, key, value]
+                self.compile_expression(&key_node)?;
+                self.compile_expression(&val_node)?;
+                self.emit(Op::CallNative(insert_id, 3), node);
+            }
+        }
+        Ok(())
+    }
 
     fn compile_list(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
         let count = node.named_child_count();
@@ -2078,7 +2599,7 @@ impl std::fmt::Display for CompileError {
 mod tests {
     use super::*;
     use crate::vm::vm::Vm;
-    use std::rc::Rc;
+    use std::sync::Arc;
 
     /// Helper: wrap expr in a function def, parse, compile the body, execute.
     fn eval_expr(expr: &str) -> Value {
@@ -2378,7 +2899,7 @@ mod tests {
     fn compile_range_expression() {
         assert_eq!(
             eval_expr("1..4"),
-            Value::List(Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         );
     }
 
@@ -2542,20 +3063,20 @@ mod tests {
     fn compile_list_literal() {
         assert_eq!(
             eval_expr("[1, 2, 3]"),
-            Value::List(Rc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
+            Value::List(Arc::new(vec![Value::Int(1), Value::Int(2), Value::Int(3)])),
         );
     }
 
     #[test]
     fn compile_empty_list() {
-        assert_eq!(eval_expr("[]"), Value::List(Rc::new(vec![])));
+        assert_eq!(eval_expr("[]"), Value::List(Arc::new(vec![])));
     }
 
     #[test]
     fn compile_list_with_expressions() {
         assert_eq!(
             eval_expr("[1 + 1, 2 * 3]"),
-            Value::List(Rc::new(vec![Value::Int(2), Value::Int(6)])),
+            Value::List(Arc::new(vec![Value::Int(2), Value::Int(6)])),
         );
     }
 
@@ -2565,7 +3086,7 @@ mod tests {
     fn compile_record_literal() {
         assert_eq!(
             eval_expr("{ x: 1, y: 2 }"),
-            Value::Record(Rc::new(vec![
+            Value::Record(Arc::new(vec![
                 ("x".into(), Value::Int(1)),
                 ("y".into(), Value::Int(2)),
             ])),
@@ -2594,7 +3115,7 @@ mod tests {
     fn compile_tuple_literal() {
         assert_eq!(
             eval_expr("(1, \"hello\", true)"),
-            Value::Tuple(Rc::new(vec![
+            Value::Tuple(Arc::new(vec![
                 Value::Int(1),
                 Value::String("hello".into()),
                 Value::Bool(true)
@@ -2613,7 +3134,7 @@ mod tests {
     fn compile_some_constructor() {
         assert_eq!(
             eval_expr("Some(42)"),
-            Value::Enum("Some".into(), Rc::new(Value::Int(42))),
+            Value::Enum("Some".into(), Arc::new(Value::Int(42))),
         );
     }
 
@@ -2621,7 +3142,7 @@ mod tests {
     fn compile_none_constructor() {
         assert_eq!(
             eval_expr("None"),
-            Value::Enum("None".into(), Rc::new(Value::Unit)),
+            Value::Enum("None".into(), Arc::new(Value::Unit)),
         );
     }
 
@@ -2629,7 +3150,7 @@ mod tests {
     fn compile_ok_constructor() {
         assert_eq!(
             eval_expr("Ok(10)"),
-            Value::Enum("Ok".into(), Rc::new(Value::Int(10))),
+            Value::Enum("Ok".into(), Arc::new(Value::Int(10))),
         );
     }
 
@@ -2637,7 +3158,7 @@ mod tests {
     fn compile_err_constructor() {
         assert_eq!(
             eval_expr("Err(\"bad\")"),
-            Value::Enum("Err".into(), Rc::new(Value::String("bad".into()))),
+            Value::Enum("Err".into(), Arc::new(Value::String("bad".into()))),
         );
     }
 
@@ -2692,7 +3213,7 @@ mod tests {
         );
         assert_eq!(
             result,
-            Value::Enum("Err".into(), Rc::new(Value::String("oops".into())))
+            Value::Enum("Err".into(), Arc::new(Value::String("oops".into())))
         );
     }
 
@@ -2702,7 +3223,7 @@ mod tests {
     fn compile_record_update() {
         assert_eq!(
             eval_expr("{\n  let r = { x: 1, y: 2 }\n  { ..r, x: 10 }\n}"),
-            Value::Record(Rc::new(vec![
+            Value::Record(Arc::new(vec![
                 ("x".into(), Value::Int(10)),
                 ("y".into(), Value::Int(2))
             ])),
@@ -2748,7 +3269,7 @@ mod tests {
     fn compile_list_head() {
         assert_eq!(
             eval_expr("List.head([10, 20])"),
-            Value::Enum("Some".into(), Rc::new(Value::Int(10))),
+            Value::Enum("Some".into(), Arc::new(Value::Int(10))),
         );
     }
 
@@ -2756,7 +3277,7 @@ mod tests {
     fn compile_list_reverse() {
         assert_eq!(
             eval_expr("List.reverse([1, 2, 3])"),
-            Value::List(Rc::new(vec![Value::Int(3), Value::Int(2), Value::Int(1)])),
+            Value::List(Arc::new(vec![Value::Int(3), Value::Int(2), Value::Int(1)])),
         );
     }
 
@@ -2814,7 +3335,7 @@ mod tests {
     fn compile_list_map() {
         assert_eq!(
             eval_expr("List.map([1, 2, 3], |x| x * 2)"),
-            Value::List(Rc::new(vec![Value::Int(2), Value::Int(4), Value::Int(6)])),
+            Value::List(Arc::new(vec![Value::Int(2), Value::Int(4), Value::Int(6)])),
         );
     }
 
@@ -2822,7 +3343,7 @@ mod tests {
     fn compile_list_filter() {
         assert_eq!(
             eval_expr("List.filter([1, 2, 3, 4, 5], |x| x > 3)"),
-            Value::List(Rc::new(vec![Value::Int(4), Value::Int(5)])),
+            Value::List(Arc::new(vec![Value::Int(4), Value::Int(5)])),
         );
     }
 
@@ -2838,7 +3359,7 @@ mod tests {
     fn compile_list_find() {
         assert_eq!(
             eval_expr("List.find([1, 2, 3], |x| x == 2)"),
-            Value::Enum("Some".into(), Rc::new(Value::Int(2))),
+            Value::Enum("Some".into(), Arc::new(Value::Int(2))),
         );
     }
 
@@ -2846,7 +3367,7 @@ mod tests {
     fn compile_list_find_not_found() {
         assert_eq!(
             eval_expr("List.find([1, 2, 3], |x| x > 10)"),
-            Value::Enum("None".into(), Rc::new(Value::Unit)),
+            Value::Enum("None".into(), Arc::new(Value::Unit)),
         );
     }
 
@@ -2854,7 +3375,7 @@ mod tests {
     fn compile_option_map_some() {
         assert_eq!(
             eval_expr("Option.map(Some(5), |x| x * 2)"),
-            Value::Enum("Some".into(), Rc::new(Value::Int(10))),
+            Value::Enum("Some".into(), Arc::new(Value::Int(10))),
         );
     }
 
@@ -2862,7 +3383,7 @@ mod tests {
     fn compile_option_map_none() {
         assert_eq!(
             eval_expr("Option.map(None, |x| x * 2)"),
-            Value::Enum("None".into(), Rc::new(Value::Unit)),
+            Value::Enum("None".into(), Arc::new(Value::Unit)),
         );
     }
 
@@ -2870,7 +3391,7 @@ mod tests {
     fn compile_result_map_ok() {
         assert_eq!(
             eval_expr("Result.map(Ok(5), |x| x + 1)"),
-            Value::Enum("Ok".into(), Rc::new(Value::Int(6))),
+            Value::Enum("Ok".into(), Arc::new(Value::Int(6))),
         );
     }
 
@@ -2878,7 +3399,7 @@ mod tests {
     fn compile_result_map_err() {
         assert_eq!(
             eval_expr("Result.map(Err(\"bad\"), |x| x + 1)"),
-            Value::Enum("Err".into(), Rc::new(Value::String("bad".into()))),
+            Value::Enum("Err".into(), Arc::new(Value::String("bad".into()))),
         );
     }
 
@@ -2888,7 +3409,7 @@ mod tests {
     fn compile_pipe_list_map() {
         assert_eq!(
             eval_expr("[1, 2, 3] |> List.map(|x| x * 10)"),
-            Value::List(Rc::new(vec![
+            Value::List(Arc::new(vec![
                 Value::Int(10),
                 Value::Int(20),
                 Value::Int(30)
@@ -2910,7 +3431,7 @@ mod tests {
     fn compile_list_map_with_closure() {
         assert_eq!(
             eval_expr("{\n  let offset = 100\n  List.map([1, 2, 3], |x| x + offset)\n}"),
-            Value::List(Rc::new(vec![
+            Value::List(Arc::new(vec![
                 Value::Int(101),
                 Value::Int(102),
                 Value::Int(103)

@@ -250,6 +250,13 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
             Expr::Concat(parts.into_iter().map(|e| propagate_expr(e, env)).collect())
         }
 
+        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
+            handlers: handlers.into_iter().map(|(name, methods)| {
+                (name, methods.into_iter().map(|(mk, h)| (mk, propagate_expr(h, env))).collect())
+            }).collect(),
+            body: Box::new(propagate_expr(*body, env)),
+        },
+
         // Literals pass through unchanged
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
     }
@@ -410,6 +417,10 @@ fn expr_node_count(expr: &Expr) -> usize {
         Expr::For { iterable, body, .. } => 1 + expr_node_count(iterable) + expr_node_count(body),
         Expr::Try { expr, .. } => 1 + expr_node_count(expr),
         Expr::Concat(parts) => parts.iter().map(expr_node_count).sum::<usize>(),
+        Expr::WithHandlers { handlers, body, .. } => {
+            1 + handlers.iter().map(|(_, methods)| methods.iter().map(|(_, h)| expr_node_count(h)).sum::<usize>()).sum::<usize>()
+                + expr_node_count(body)
+        }
     }
 }
 
@@ -471,6 +482,10 @@ fn references_function(expr: &Expr, name: &str) -> bool {
         }
         Expr::Try { expr, .. } => references_function(expr, name),
         Expr::Concat(parts) => parts.iter().any(|e| references_function(e, name)),
+        Expr::WithHandlers { handlers, body, .. } => {
+            handlers.iter().any(|(_, methods)| methods.iter().any(|(_, h)| references_function(h, name)))
+                || references_function(body, name)
+        }
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
         | Expr::Var(_, _) => false,
     }
@@ -666,6 +681,12 @@ fn rename_vars(expr: Expr, rename_map: &HashMap<String, String>) -> Expr {
                 .map(|e| rename_vars(e, rename_map))
                 .collect(),
         ),
+        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
+            handlers: handlers.into_iter().map(|(name, methods)| {
+                (name, methods.into_iter().map(|(mk, h)| (mk, rename_vars(h, rename_map))).collect())
+            }).collect(),
+            body: Box::new(rename_vars(*body, rename_map)),
+        },
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
     }
 }
@@ -921,6 +942,12 @@ fn inline_expr(
                 .map(|e| inline_expr(e, inlineable, counter))
                 .collect(),
         ),
+        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
+            handlers: handlers.into_iter().map(|(name, methods)| {
+                (name, methods.into_iter().map(|(mk, h)| (mk, inline_expr(h, inlineable, counter))).collect())
+            }).collect(),
+            body: Box::new(inline_expr(*body, inlineable, counter)),
+        },
         // Literals pass through
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
         | Expr::Var(_, _) => expr,
@@ -1102,6 +1129,12 @@ fn simplify_blocks(expr: Expr) -> Expr {
         Expr::Concat(parts) => {
             Expr::Concat(parts.into_iter().map(simplify_blocks).collect())
         }
+        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
+            handlers: handlers.into_iter().map(|(name, methods)| {
+                (name, methods.into_iter().map(|(mk, h)| (mk, simplify_blocks(h))).collect())
+            }).collect(),
+            body: Box::new(simplify_blocks(*body)),
+        },
         // Leaves pass through
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
         | Expr::Var(_, _) => expr,
@@ -1214,6 +1247,14 @@ fn count_var_uses(expr: &Expr, counts: &mut HashMap<String, usize>) {
             for p in parts {
                 count_var_uses(p, counts);
             }
+        }
+        Expr::WithHandlers { handlers, body, .. } => {
+            for (_, methods) in handlers {
+                for (_, h) in methods {
+                    count_var_uses(h, counts);
+                }
+            }
+            count_var_uses(body, counts);
         }
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => {}
     }

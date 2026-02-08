@@ -26,6 +26,8 @@ pub enum RuntimeValue<'a> {
     Record(HashMap<String, RuntimeValue<'a>>),
     List(Vec<RuntimeValue<'a>>),
     Enum(String, Vec<RuntimeValue<'a>>), // VariantName, PayloadValues
+    Map(Vec<(RuntimeValue<'a>, RuntimeValue<'a>)>), // Association list (key, value)
+    Set(Vec<RuntimeValue<'a>>),                     // Sorted unique elements
     /// Sentinel for `?` operator early-return propagation.
     EarlyReturn(Box<RuntimeValue<'a>>),
     /// Native closure: qualified name + captured args for partial application.
@@ -74,6 +76,22 @@ impl<'a> std::fmt::Display for RuntimeValue<'a> {
                         .join(", ");
                     write!(f, "{}({})", name, s)
                 }
+            }
+            RuntimeValue::Map(entries) => {
+                let s = entries
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "#{{{}}}", s)
+            }
+            RuntimeValue::Set(elems) => {
+                let s = elems
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Set({})", s)
             }
             RuntimeValue::EarlyReturn(inner) => write!(f, "<early_return: {}>", inner),
             RuntimeValue::NativeClosure(name, _) => write!(f, "<native_closure: {}>", name),
@@ -194,6 +212,12 @@ pub struct EffectCapture {
     pub captured: Vec<String>,
 }
 
+/// An installed effect handler: maps effect module name → handler record/function.
+pub struct EffectHandler<'a> {
+    /// Effect module name, e.g. "Console"
+    pub handlers: HashMap<String, RuntimeValue<'a>>,
+}
+
 pub struct Context<'a> {
     scopes: Vec<HashMap<String, RuntimeValue<'a>>>,
     builtins: BuiltinRegistry,
@@ -202,6 +226,8 @@ pub struct Context<'a> {
     pub file: String,
     call_stack: Vec<StackFrame>,
     effect_handlers: Vec<EffectCapture>,
+    /// Handler map stack for `with { Effect: handler } body`
+    handler_stack: Vec<EffectHandler<'a>>,
 }
 
 impl<'a> Default for Context<'a> {
@@ -231,6 +257,7 @@ impl<'a> Context<'a> {
             file,
             call_stack: Vec::new(),
             effect_handlers: Vec::new(),
+            handler_stack: Vec::new(),
         };
         // Option/Result constructors are language primitives — always available.
         ctx.set(
@@ -341,6 +368,27 @@ impl<'a> Context<'a> {
             }
         }
         false
+    }
+
+    /// Push a handler map onto the stack for `with { Effect: handler } body`.
+    fn push_handler_map(&mut self, handlers: HashMap<String, RuntimeValue<'a>>) {
+        self.handler_stack.push(EffectHandler { handlers });
+    }
+
+    /// Pop the handler map from the stack.
+    fn pop_handler_map(&mut self) {
+        self.handler_stack.pop();
+    }
+
+    /// Look up a handler for a qualified effect call like "Console.println!".
+    /// Returns the handler value for the effect module if installed.
+    fn find_handler(&self, module_name: &str) -> Option<&RuntimeValue<'a>> {
+        for frame in self.handler_stack.iter().rev() {
+            if let Some(handler) = frame.handlers.get(module_name) {
+                return Some(handler);
+            }
+        }
+        None
     }
 }
 
@@ -1068,6 +1116,24 @@ pub fn eval<'a>(
         }
         // Import declarations and where blocks are processed before eval; skip them.
         "import_decl" | "where_block" | "inline_test" | "prelude_decl" => Ok(RuntimeValue::Unit),
+        // Spec blocks: walk into children to eval the wrapped function_def
+        "spec_block" => {
+            let mut last_val = RuntimeValue::Unit;
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "function_def" | "type_def" | "effect_def" => {
+                        last_val = eval(&child, source, context)?;
+                    }
+                    _ => {} // Skip spec_attribute nodes
+                }
+            }
+            Ok(last_val)
+        }
+        // Spec annotation nodes — skip during evaluation
+        "spec_attribute" | "spec_decl" | "given_clause" | "returns_clause"
+        | "requires_clause" | "ensures_clause" | "assume_clause"
+        | "pure_attribute" | "total_attribute" => Ok(RuntimeValue::Unit),
         "function_def" => {
             let name_node = node.child_by_field_name("name").unwrap();
             let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
@@ -1128,6 +1194,20 @@ pub fn eval<'a>(
             // func(arg1, arg2)
             let func_node = node.named_child(0).unwrap();
 
+            // resume(val) in handle expression — identity (tail-resumptive)
+            if func_node.kind() == "identifier" {
+                let fname = func_node.utf8_text(source.as_bytes()).unwrap();
+                if fname == "resume" && !context.handler_stack.is_empty() {
+                    let total_children = node.named_child_count();
+                    if total_children > 1 {
+                        let arg_node = node.named_child(1).unwrap();
+                        return eval(&arg_node, source, context);
+                    } else {
+                        return Ok(RuntimeValue::Unit);
+                    }
+                }
+            }
+
             // Check for builtin dispatch: Module.method!(args)
             if func_node.kind() == "field_expression" {
                 let obj_node = func_node.named_child(0).unwrap();
@@ -1135,6 +1215,70 @@ pub fn eval<'a>(
                 let obj_name = obj_node.utf8_text(source.as_bytes()).unwrap();
                 let method_name = method_node.utf8_text(source.as_bytes()).unwrap();
                 let qualified = format!("{}.{}", obj_name, method_name);
+
+                // Handler map interception: if a handler is installed for this
+                // effect module, dispatch to the handler's method instead.
+                if let Some(handler_val) = context.find_handler(obj_name).cloned() {
+                    let total_children = node.named_child_count();
+                    let mut arg_vals = Vec::new();
+                    for i in 1..total_children {
+                        let arg_node = node.named_child(i).unwrap();
+                        let val = eval(&arg_node, source, context)?;
+                        propagate!(val);
+                        arg_vals.push(val);
+                    }
+                    // Look up method on handler record — strip trailing `!` from effect names
+                    let method_key = method_name.strip_suffix('!').unwrap_or(method_name).to_string();
+                    match &handler_val {
+                        RuntimeValue::Record(fields) => {
+                            if let Some(method_val) = fields.get(&method_key).cloned() {
+                                match method_val {
+                                    RuntimeValue::Function(params, body, fn_source) => {
+                                        context.enter_scope();
+                                        for (i, param) in params.iter().enumerate() {
+                                            if let Some(arg) = arg_vals.get(i) {
+                                                context.set(param.clone(), arg.clone());
+                                            }
+                                        }
+                                        let result = eval(&body, fn_source, context);
+                                        context.exit_scope();
+                                        return unwrap_early_return(result);
+                                    }
+                                    RuntimeValue::Closure(params, body, fn_source, captured_env) => {
+                                        context.enter_scope();
+                                        for (k, v) in &captured_env {
+                                            context.set(k.clone(), v.clone());
+                                        }
+                                        for (i, param) in params.iter().enumerate() {
+                                            if let Some(arg) = arg_vals.get(i) {
+                                                context.set(param.clone(), arg.clone());
+                                            }
+                                        }
+                                        let result = eval(&body, fn_source, context);
+                                        context.exit_scope();
+                                        return unwrap_early_return(result);
+                                    }
+                                    _ => return Err(err_at(
+                                        format!("Handler method '{}' is not a function", method_key),
+                                        node,
+                                        context,
+                                    )),
+                                }
+                            } else {
+                                return Err(err_at(
+                                    format!("Handler for '{}' has no method '{}'", obj_name, method_key),
+                                    node,
+                                    context,
+                                ));
+                            }
+                        }
+                        _ => return Err(err_at(
+                            format!("Handler for '{}' must be a record", obj_name),
+                            node,
+                            context,
+                        )),
+                    }
+                }
 
                 if let Some(builtin_fn) = context.builtins.get(&qualified) {
                     let builtin_fn = *builtin_fn;
@@ -1630,6 +1774,19 @@ pub fn eval<'a>(
                 context,
             ))
         }
+        "expect_expression" => {
+            // expect actual matcher → Bool
+            let actual_node = node.child_by_field_name("actual").unwrap();
+            let actual = eval(&actual_node, source, context)?;
+            propagate!(actual);
+
+            let matcher_node = node.child_by_field_name("matcher").unwrap();
+            eval_matcher(&actual, &matcher_node, source, context)
+        }
+        "describe_block" | "it_block" | "before_each_block" | "after_each_block" | "matcher" => {
+            // BDD blocks are handled by the test runner, not the interpreter
+            Ok(RuntimeValue::Unit)
+        }
         "named_argument" => {
             // For builtins/natives: evaluate the expression part of the named argument
             let count = node.named_child_count();
@@ -1702,6 +1859,27 @@ pub fn eval<'a>(
                 vals.push(val);
             }
             Ok(RuntimeValue::List(vals))
+        }
+        "map_literal" => {
+            // #{ key: value, ... }
+            let mut entries = Vec::new();
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "map_entry" {
+                    let key_node = child.child_by_field_name("key").unwrap();
+                    let val_node = child.child_by_field_name("value").unwrap();
+                    let key = eval(&key_node, source, context)?;
+                    propagate!(key);
+                    let val = eval(&val_node, source, context)?;
+                    propagate!(val);
+                    entries.push((key, val));
+                }
+            }
+            Ok(RuntimeValue::Map(entries))
+        }
+        "map_entry" => {
+            // Handled within map_literal
+            Ok(RuntimeValue::Unit)
         }
         "struct_expression" => {
             let type_name_node = node.named_child(0).unwrap();
@@ -1854,26 +2032,107 @@ pub fn eval<'a>(
             }
         }
         "with_expression" => {
-            // with Console.println! { body } → (result, captured_args)
-            let effect_node = node
-                .child_by_field_name("effect")
-                .unwrap_or_else(|| node.named_child(0).unwrap());
-            let body_node = node
-                .child_by_field_name("body")
-                .unwrap_or_else(|| node.named_child(1).unwrap());
+            if let Some(handlers_node) = node.child_by_field_name("handlers") {
+                // with { Console: mock_console } body — handler map form
+                let body_node = node.child_by_field_name("body").unwrap();
+                let mut handlers = HashMap::new();
+                let mut hcursor = handlers_node.walk();
+                for child in handlers_node.named_children(&mut hcursor) {
+                    if child.kind() == "handler_binding" {
+                        let effect_name = child
+                            .child_by_field_name("effect")
+                            .map(|n| n.utf8_text(source.as_bytes()).unwrap().to_string())
+                            .unwrap_or_default();
+                        let handler_node = child.child_by_field_name("handler").unwrap();
+                        let handler_val = eval(&handler_node, source, context)?;
+                        handlers.insert(effect_name, handler_val);
+                    }
+                }
+                context.push_handler_map(handlers);
+                let result = eval(&body_node, source, context);
+                context.pop_handler_map();
+                result
+            } else {
+                // with Console.println! { body } → (result, captured_args)
+                let effect_node = node
+                    .child_by_field_name("effect")
+                    .unwrap_or_else(|| node.named_child(0).unwrap());
+                let body_node = node
+                    .child_by_field_name("body")
+                    .unwrap_or_else(|| node.named_child(1).unwrap());
 
-            let effect_name = effect_node
-                .utf8_text(source.as_bytes())
-                .unwrap()
-                .to_string();
+                let effect_name = effect_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap()
+                    .to_string();
 
-            context.push_effect_handler(effect_name);
-            let result = eval(&body_node, source, context)?;
-            let captured = context.pop_effect_handler().unwrap_or_default();
+                context.push_effect_handler(effect_name);
+                let result = eval(&body_node, source, context)?;
+                let captured = context.pop_effect_handler().unwrap_or_default();
 
-            let captured_list =
-                RuntimeValue::List(captured.into_iter().map(RuntimeValue::String).collect());
-            Ok(RuntimeValue::Tuple(vec![result, captured_list]))
+                let captured_list =
+                    RuntimeValue::List(captured.into_iter().map(RuntimeValue::String).collect());
+                Ok(RuntimeValue::Tuple(vec![result, captured_list]))
+            }
+        }
+        "handle_expression" => {
+            // handle expr with { Effect.method!(args) -> resume(result) }
+            // Tail-resumptive: resume(val) = return val
+            let body_node = node.child_by_field_name("body").unwrap();
+
+            // Parse handler clauses into a handler map
+            // Each clause: Effect.method!(params) -> handler_body
+            let mut handler_records: HashMap<String, HashMap<String, RuntimeValue<'a>>> = HashMap::new();
+
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "handler_clause" {
+                    let effect_name = child
+                        .child_by_field_name("effect")
+                        .map(|n| n.utf8_text(source.as_bytes()).unwrap().to_string())
+                        .unwrap_or_default();
+                    let method_node = child.child_by_field_name("method").unwrap();
+                    let method_name = method_node.utf8_text(source.as_bytes()).unwrap();
+                    // Strip trailing ! from method name
+                    let method_key = method_name.strip_suffix('!').unwrap_or(method_name).to_string();
+
+                    // Extract parameter names from the clause
+                    let mut params = Vec::new();
+                    let mut pcursor = child.walk();
+                    for pchild in child.named_children(&mut pcursor) {
+                        if pchild.kind() == "identifier" {
+                            // Skip the method name (first identifier after effect type)
+                            let text = pchild.utf8_text(source.as_bytes()).unwrap().to_string();
+                            // Only add identifiers that appear after the method
+                            if pchild.start_byte() > method_node.end_byte() {
+                                params.push(text);
+                            }
+                        }
+                    }
+
+                    let handler_body = child.child_by_field_name("handler_body").unwrap();
+
+                    // Create a closure-like value for the handler
+                    let handler_fn = RuntimeValue::Function(params, handler_body, source);
+
+                    handler_records
+                        .entry(effect_name)
+                        .or_default()
+                        .insert(method_key, handler_fn);
+                }
+            }
+
+            // Convert handler_records to handler_map (effect → record)
+            let mut handlers = HashMap::new();
+            for (effect, methods) in handler_records {
+                handlers.insert(effect, RuntimeValue::Record(methods));
+            }
+
+            // Install handlers and evaluate body
+            context.push_handler_map(handlers);
+            let result = eval(&body_node, source, context);
+            context.pop_handler_map();
+            result
         }
         "for_expression" => {
             // for <pattern> in <collection> do <body>
@@ -1969,6 +2228,156 @@ fn extract_param_name(node: &Node, source: &str) -> Option<String> {
             }
         }
         _ => None,
+    }
+}
+
+/// Evaluate a matcher node against an actual value, returning Bool.
+fn eval_matcher<'a>(
+    actual: &RuntimeValue<'a>,
+    matcher_node: &Node<'a>,
+    source: &'a str,
+    context: &mut Context<'a>,
+) -> Result<RuntimeValue<'a>, RuntimeError> {
+    let mut cursor = matcher_node.walk();
+    let children: Vec<Node> = matcher_node.children(&mut cursor).collect();
+
+    if children.is_empty() {
+        return Ok(RuntimeValue::Bool(false));
+    }
+
+    let keyword = children[0].utf8_text(source.as_bytes()).unwrap_or("");
+
+    match keyword {
+        "to_equal" => {
+            // expect actual to_equal expected
+            let expected_node = matcher_node.named_child(0).unwrap();
+            let expected = eval(&expected_node, source, context)?;
+            Ok(RuntimeValue::Bool(values_equal(actual, &expected)))
+        }
+        "to_be" => {
+            // expect actual to_be Pattern
+            let pattern_node = matcher_node.named_child(0).unwrap();
+            let matched = match_pattern(&pattern_node, actual, source).is_some();
+            Ok(RuntimeValue::Bool(matched))
+        }
+        "to_contain" => {
+            // expect list to_contain element
+            let expected_node = matcher_node.named_child(0).unwrap();
+            let expected = eval(&expected_node, source, context)?;
+            match actual {
+                RuntimeValue::List(items) => {
+                    let found = items.iter().any(|item| values_equal(item, &expected));
+                    Ok(RuntimeValue::Bool(found))
+                }
+                RuntimeValue::String(s) => {
+                    if let RuntimeValue::String(sub) = &expected {
+                        Ok(RuntimeValue::Bool(s.contains(sub.as_str())))
+                    } else {
+                        Ok(RuntimeValue::Bool(false))
+                    }
+                }
+                _ => Ok(RuntimeValue::Bool(false)),
+            }
+        }
+        "to_have_length" => {
+            let expected_node = matcher_node.named_child(0).unwrap();
+            let expected = eval(&expected_node, source, context)?;
+            let len = match actual {
+                RuntimeValue::List(items) => items.len() as i64,
+                RuntimeValue::String(s) => s.len() as i64,
+                _ => -1,
+            };
+            match expected {
+                RuntimeValue::Int(n) => Ok(RuntimeValue::Bool(len == n)),
+                _ => Ok(RuntimeValue::Bool(false)),
+            }
+        }
+        "to_be_empty" => {
+            let empty = match actual {
+                RuntimeValue::List(items) => items.is_empty(),
+                RuntimeValue::String(s) => s.is_empty(),
+                _ => false,
+            };
+            Ok(RuntimeValue::Bool(empty))
+        }
+        "to_start_with" => {
+            let expected_node = matcher_node.named_child(0).unwrap();
+            let expected = eval(&expected_node, source, context)?;
+            match (actual, &expected) {
+                (RuntimeValue::String(s), RuntimeValue::String(prefix)) => {
+                    Ok(RuntimeValue::Bool(s.starts_with(prefix.as_str())))
+                }
+                _ => Ok(RuntimeValue::Bool(false)),
+            }
+        }
+        "to_satisfy" => {
+            // expect actual to_satisfy |x| predicate
+            let pred_node = matcher_node.named_child(0).unwrap();
+            let predicate = eval(&pred_node, source, context)?;
+            match &predicate {
+                RuntimeValue::Function(params, body, fn_source) => {
+                    context.enter_scope();
+                    if let Some(p) = params.first() {
+                        context.set(p.clone(), actual.clone());
+                    }
+                    let result = eval(body, fn_source, context)?;
+                    context.exit_scope();
+                    match result {
+                        RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
+                        _ => Ok(RuntimeValue::Bool(false)),
+                    }
+                }
+                RuntimeValue::Closure(params, body, fn_source, env) => {
+                    context.enter_scope();
+                    for (k, v) in env {
+                        context.set(k.clone(), v.clone());
+                    }
+                    if let Some(p) = params.first() {
+                        context.set(p.clone(), actual.clone());
+                    }
+                    let result = eval(body, fn_source, context)?;
+                    context.exit_scope();
+                    match result {
+                        RuntimeValue::Bool(b) => Ok(RuntimeValue::Bool(b)),
+                        _ => Ok(RuntimeValue::Bool(false)),
+                    }
+                }
+                _ => Ok(RuntimeValue::Bool(false)),
+            }
+        }
+        "to_be_ok" => {
+            let is_ok = matches!(actual, RuntimeValue::Enum(tag, _) if tag == "Ok");
+            Ok(RuntimeValue::Bool(is_ok))
+        }
+        "to_be_some" => {
+            let is_some = matches!(actual, RuntimeValue::Enum(tag, _) if tag == "Some");
+            Ok(RuntimeValue::Bool(is_some))
+        }
+        "to_be_none" => {
+            let is_none = matches!(actual, RuntimeValue::Enum(tag, _) if tag == "None");
+            Ok(RuntimeValue::Bool(is_none))
+        }
+        _ => Ok(RuntimeValue::Bool(false)),
+    }
+}
+
+/// Check if two RuntimeValues are structurally equal.
+fn values_equal(a: &RuntimeValue, b: &RuntimeValue) -> bool {
+    match (a, b) {
+        (RuntimeValue::Int(a), RuntimeValue::Int(b)) => a == b,
+        (RuntimeValue::Float(a), RuntimeValue::Float(b)) => a == b,
+        (RuntimeValue::String(a), RuntimeValue::String(b)) => a == b,
+        (RuntimeValue::Bool(a), RuntimeValue::Bool(b)) => a == b,
+        (RuntimeValue::Unit, RuntimeValue::Unit) => true,
+        (RuntimeValue::List(a), RuntimeValue::List(b)) => {
+            a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| values_equal(x, y))
+        }
+        (RuntimeValue::Enum(ta, pa), RuntimeValue::Enum(tb, pb)) => {
+            ta == tb
+                && pa.len() == pb.len()
+                && pa.iter().zip(pb.iter()).all(|(x, y)| values_equal(x, y))
+        }
+        _ => false,
     }
 }
 

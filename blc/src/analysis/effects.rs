@@ -18,6 +18,24 @@ use tree_sitter::{Node, Tree};
 
 use crate::diagnostics::{Diagnostic, Location, Patch, Severity, Suggestion};
 
+/// Extract function_def from a top-level child, unwrapping spec_block if needed.
+fn extract_function_def<'a>(node: Node<'a>) -> Option<Node<'a>> {
+    match node.kind() {
+        "function_def" => Some(node),
+        "spec_block" => {
+            let count = node.named_child_count();
+            for i in 0..count {
+                let child = node.named_child(i).unwrap();
+                if child.kind() == "function_def" {
+                    return Some(child);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
 /// Check effects in a parsed syntax tree.
 ///
 /// Returns a list of diagnostics for any effect violations found.
@@ -29,10 +47,10 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut defined_functions: HashSet<String> = HashSet::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() == "function_def"
-            && let Some(name) = find_function_name(child, source)
-        {
-            defined_functions.insert(name.to_string());
+        if let Some(func) = extract_function_def(child) {
+            if let Some(name) = find_function_name(func, source) {
+                defined_functions.insert(name.to_string());
+            }
         }
     }
 
@@ -44,20 +62,20 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
 
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() == "function_def" {
+        if let Some(func) = extract_function_def(child) {
             // Existing direct checking (emits CAP_001 for direct ! calls)
-            check_function(child, source, file, &mut diagnostics);
+            check_function(func, source, file, &mut diagnostics);
 
             // Build call graph data
-            if let Some(name) = find_function_name(child, source) {
+            if let Some(name) = find_function_name(func, source) {
                 let name = name.to_string();
-                let declared = extract_declared_effects(child, source);
+                let declared = extract_declared_effects(func, source);
                 declared_effects_map.insert(name.clone(), declared);
 
                 let mut direct_effects = HashSet::new();
                 let mut callees = HashSet::new();
 
-                if let Some(body) = get_function_body(child) {
+                if let Some(body) = get_function_body(func) {
                     collect_call_graph_info(
                         body,
                         source,
@@ -79,21 +97,21 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     // Phase 3: Check transitive effects against declared effects
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() == "function_def"
-            && let Some(name) = find_function_name(child, source)
-        {
-            let name_str = name.to_string();
-            check_transitive_effects(
-                child,
-                &name_str,
-                source,
-                file,
-                &declared_effects_map,
-                &transitive_effects,
-                &call_graph,
-                &direct_effects_map,
-                &mut diagnostics,
-            );
+        if let Some(func) = extract_function_def(child) {
+            if let Some(name) = find_function_name(func, source) {
+                let name_str = name.to_string();
+                check_transitive_effects(
+                    func,
+                    &name_str,
+                    source,
+                    file,
+                    &declared_effects_map,
+                    &transitive_effects,
+                    &call_graph,
+                    &direct_effects_map,
+                    &mut diagnostics,
+                );
+            }
         }
     }
 
@@ -183,10 +201,9 @@ fn collect_call_graph_info(
         }
     }
 
-    // with_expression suppresses its named effect — skip the body for that effect
-    if node.kind() == "with_expression" {
-        // The body is handled by the with; don't collect effects from it
-        // (they are intercepted at runtime)
+    // with_expression and handle_expression suppress their named effects
+    if node.kind() == "with_expression" || node.kind() == "handle_expression" {
+        // The body is handled; don't collect effects from it
         return;
     }
 
@@ -502,8 +519,8 @@ fn check_node_for_effects(
         return;
     }
 
-    // with_expression suppresses its named effect — don't check its body
-    if node.kind() == "with_expression" {
+    // with_expression and handle_expression suppress their named effects
+    if node.kind() == "with_expression" || node.kind() == "handle_expression" {
         return;
     }
 

@@ -23,6 +23,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                     total: 0,
                     passed: 0,
                     failed: 0,
+                    skipped: 0,
                 },
             };
         }
@@ -70,6 +71,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 total: 1,
                 passed: 0,
                 failed: 1,
+                skipped: 0,
             },
         };
     }
@@ -99,6 +101,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                     total: 1,
                     passed: 0,
                     failed: 1,
+                    skipped: 0,
                 },
             };
         }
@@ -115,6 +118,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 total: 0,
                 passed: 0,
                 failed: 0,
+                skipped: 0,
             },
         };
     }
@@ -124,7 +128,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
     let chunks = &test_program.program.chunks;
 
     for test in &test_program.tests {
-        let mut vm = Vm::new();
         let location = Location {
             file: file_str.clone(),
             line: test.line,
@@ -133,6 +136,18 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             end_col: Some(test.end_col),
         };
 
+        if test.skip {
+            results.push(TestResult {
+                name: test.name.clone(),
+                function: test.function.clone(),
+                status: TestStatus::Skip,
+                message: None,
+                location,
+            });
+            continue;
+        }
+
+        let mut vm = Vm::new();
         match vm.execute_chunk_at(chunks, test.chunk_idx) {
             Ok(Value::Bool(true)) => {
                 results.push(TestResult {
@@ -181,6 +196,10 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         .iter()
         .filter(|r| r.status == TestStatus::Fail)
         .count();
+    let skipped = results
+        .iter()
+        .filter(|r| r.status == TestStatus::Skip)
+        .count();
     let total = results.len();
 
     TestSuiteResult {
@@ -190,6 +209,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             total,
             passed,
             failed,
+            skipped,
         },
     }
 }

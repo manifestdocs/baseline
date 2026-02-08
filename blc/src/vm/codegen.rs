@@ -405,6 +405,10 @@ impl<'a> Codegen<'a> {
             Expr::Concat(parts) => {
                 self.gen_concat(parts, span)?;
             }
+
+            Expr::WithHandlers { handlers, body } => {
+                self.gen_with_handlers(handlers, body, span)?;
+            }
         }
         Ok(())
     }
@@ -912,6 +916,43 @@ impl<'a> Codegen<'a> {
     }
 
     // -----------------------------------------------------------------------
+    // Effect handlers
+    // -----------------------------------------------------------------------
+
+    fn gen_with_handlers(
+        &mut self,
+        handlers: &[(String, Vec<(String, Expr)>)],
+        body: &Expr,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        // Build outer record: { EffectName: { method: fn, ... }, ... }
+        for (effect_name, methods) in handlers {
+            let eff_key = self.chunk.add_constant(Value::String(effect_name.as_str().into()));
+            self.emit(Op::LoadConst(eff_key), span);
+
+            if methods.len() == 1 && methods[0].0 == "__record__" {
+                // with { Effect: expr } form — handler value is already a record
+                self.gen_expr(&methods[0].1, span)?;
+            } else {
+                // handle form — build inner method record
+                for (method_key, handler_fn) in methods {
+                    let mk = self.chunk.add_constant(Value::String(method_key.as_str().into()));
+                    self.emit(Op::LoadConst(mk), span);
+                    self.gen_expr(handler_fn, span)?;
+                }
+                self.emit(Op::MakeRecord(methods.len() as u16), span);
+            }
+        }
+        self.emit(Op::MakeRecord(handlers.len() as u16), span);
+        self.emit(Op::PushHandler, span);
+
+        self.gen_expr(body, span)?;
+
+        self.emit(Op::PopHandler, span);
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
     // Scope management
     // -----------------------------------------------------------------------
 
@@ -1097,7 +1138,7 @@ mod tests {
         let source = "fn main() -> Unknown = Some(42)";
         assert_eq!(
             eval_via_ir(source),
-            Value::Enum("Some".into(), std::rc::Rc::new(Value::Int(42))),
+            Value::Enum("Some".into(), std::sync::Arc::new(Value::Int(42))),
         );
     }
 
@@ -1134,7 +1175,7 @@ fn main() -> Int = countdown(50000)";
         let source = "fn main() -> Unknown = [1, 2, 3]";
         assert_eq!(
             eval_via_ir(source),
-            Value::List(std::rc::Rc::new(vec![
+            Value::List(std::sync::Arc::new(vec![
                 Value::Int(1),
                 Value::Int(2),
                 Value::Int(3)
@@ -1147,7 +1188,7 @@ fn main() -> Int = countdown(50000)";
         let source = "fn main() -> Unknown = { x: 1, y: 2 }";
         assert_eq!(
             eval_via_ir(source),
-            Value::Record(std::rc::Rc::new(vec![
+            Value::Record(std::sync::Arc::new(vec![
                 ("x".into(), Value::Int(1)),
                 ("y".into(), Value::Int(2)),
             ])),
@@ -1177,7 +1218,7 @@ fn main() -> Int = countdown(50000)";
         let source = "fn main() -> Unknown = 1..4";
         assert_eq!(
             eval_via_ir(source),
-            Value::List(std::rc::Rc::new(vec![
+            Value::List(std::sync::Arc::new(vec![
                 Value::Int(1),
                 Value::Int(2),
                 Value::Int(3)
@@ -1190,7 +1231,7 @@ fn main() -> Int = countdown(50000)";
         let source = "fn main() -> Unknown = {\n  let r = { x: 1, y: 2 }\n  { ..r, x: 10 }\n}";
         assert_eq!(
             eval_via_ir(source),
-            Value::Record(std::rc::Rc::new(vec![
+            Value::Record(std::sync::Arc::new(vec![
                 ("x".into(), Value::Int(10)),
                 ("y".into(), Value::Int(2)),
             ])),
@@ -1220,7 +1261,7 @@ fn main() -> Int = countdown(50000)";
         let source = "fn main() -> Unknown = (1, 2, 3)";
         assert_eq!(
             eval_via_ir(source),
-            Value::Tuple(std::rc::Rc::new(vec![
+            Value::Tuple(std::sync::Arc::new(vec![
                 Value::Int(1),
                 Value::Int(2),
                 Value::Int(3)
@@ -1250,7 +1291,7 @@ fn main() -> Int = {
         let source = "fn main() -> Unknown = List.map([1, 2, 3], |x| x * 2)";
         assert_eq!(
             eval_via_ir(source),
-            Value::List(std::rc::Rc::new(vec![
+            Value::List(std::sync::Arc::new(vec![
                 Value::Int(2),
                 Value::Int(4),
                 Value::Int(6)
