@@ -1,0 +1,35 @@
+// SMT verification conformance tests
+// These tests verify that @spec annotations parse correctly
+// and inline tests still work for spec-annotated functions.
+
+@prelude(core)
+
+// Function with spec annotations
+@spec add_one
+@ensures result == n + 1
+fn add_one(n: Int) -> Int = n + 1
+  where
+    test "add_one basic" = add_one(5) == 6
+    test "add_one zero" = add_one(0) == 1
+
+// Function with precondition
+@spec safe_div
+@requires d != 0
+fn safe_div(n: Int, d: Int) -> Int = n / d
+  where
+    test "safe_div basic" = safe_div(10, 2) == 5
+    test "safe_div negative" = safe_div(10, 3) == 3
+
+// Function with @pure annotation
+@spec double
+@pure
+@ensures result == n * 2
+fn double(n: Int) -> Int = n * 2
+  where
+    test "double basic" = double(5) == 10
+    test "double zero" = double(0) == 0
+
+// Function without spec — should still work normally
+fn triple(n: Int) -> Int = n * 3
+  where
+    test "triple basic" = triple(5) == 15

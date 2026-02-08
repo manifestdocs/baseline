@@ -1,0 +1,10 @@
+// Focus and skip modifier test
+@prelude(core)
+
+describe "Focus and Skip" {
+  it "runs normally" = true
+
+  it.skip "is skipped" = false
+
+  it "also runs normally" = true
+}

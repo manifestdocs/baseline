@@ -1,0 +1,36 @@
+@prelude(script)
+
+// Conformance: tail-resumptive effect handlers with `handle body with { clauses }`
+
+// Basic handler that intercepts println! and returns a value
+test "handle intercepts effect call" = {
+  let result = handle {
+    Console.println!("hello")
+    42
+  } with {
+    Console.println!(msg) -> resume(())
+  }
+  result == 42
+}
+
+// Handler that modifies the return value of an effect call
+test "handle body returns final value" = {
+  let result = handle {
+    Console.println!("a")
+    Console.println!("b")
+    100 + 200
+  } with {
+    Console.println!(msg) -> resume(())
+  }
+  result == 300
+}
+
+// Pure body still works with handle
+test "handle with pure body" = {
+  let result = handle {
+    1 + 2 + 3
+  } with {
+    Console.println!(msg) -> resume(())
+  }
+  result == 6
+}

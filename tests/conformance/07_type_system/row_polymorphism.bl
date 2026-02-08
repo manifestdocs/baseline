@@ -1,0 +1,46 @@
+// Row polymorphism conformance tests
+@prelude(core)
+
+// A function that accepts any record with at least a "name" field
+fn greet(person: { name: String, ..r }) -> String =
+  person.name
+
+// A function that accepts a record with name and age
+fn describe(person: { name: String, age: Int, ..r }) -> String =
+  person.name
+
+// Closed record (no row variable) — exact match required
+fn sum_point(p: { x: Int, y: Int }) -> Int =
+  p.x + p.y
+
+// Test: open record accepts record with extra fields
+fn test_extra_fields() -> String =
+  greet({ name: "Alice", age: 30 })
+  where
+    test "open record accepts extra fields" = test_extra_fields() == "Alice"
+
+// Test: open record accepts exact match
+fn test_exact_match() -> String =
+  greet({ name: "Bob" })
+  where
+    test "open record accepts exact match" = test_exact_match() == "Bob"
+
+// Test: multiple required fields with extras
+fn test_multi_required() -> String =
+  describe({ name: "Carol", age: 25, email: "carol@test.com" })
+  where
+    test "multi-field open record accepts extras" = test_multi_required() == "Carol"
+
+// Test: closed record with exact fields
+fn test_closed_exact() -> Int =
+  sum_point({ x: 3, y: 4 })
+  where
+    test "closed record exact match" = test_closed_exact() == 7
+
+// Test: open record compatible with struct
+type Person = { name: String, age: Int }
+
+fn greet_person() -> String =
+  greet(Person { name: "Dave", age: 40 })
+  where
+    test "open record accepts struct" = greet_person() == "Dave"

@@ -1,0 +1,32 @@
+// Expect expression and matcher conformance test
+@prelude(core)
+
+describe "expect with to_equal" {
+  it "compares integers" = expect 42 to_equal 42
+
+  it "compares strings" = expect "hello" to_equal "hello"
+
+  it "compares booleans" = expect true to_equal true
+}
+
+describe "expect with to_be" {
+  it "matches true" = expect true to_be true
+
+  it "matches false" = expect false to_be false
+}
+
+describe "expect with list matchers" {
+  it "checks empty list" = expect [] to_be_empty
+
+  it "checks list length" = expect [1, 2, 3] to_have_length 3
+}
+
+describe "expect with option matchers" {
+  it "checks Some value" = expect Some(42) to_be_some
+
+  it "checks None value" = expect None to_be_none
+}
+
+describe "expect with result matchers" {
+  it "checks Ok value" = expect Ok(42) to_be_ok
+}

@@ -1,0 +1,33 @@
+// Named Arguments — conformance tests
+// Tests calling functions with named arguments (order-independent, self-documenting)
+
+fn add(a: Int, b: Int) -> Int = a + b
+
+fn greet(name: String, greeting: String) -> String =
+  "${greeting}, ${name}!"
+
+fn make_range(start: Int, end: Int, step: Int) -> Int = {
+  let diff = end - start
+  diff / step
+}
+
+// Test 1: Positional calling still works
+test "positional call" = add(3, 4) == 7
+
+// Test 2: Named args in same order
+test "named args same order" = add(a: 10, b: 20) == 30
+
+// Test 3: Named args reversed order
+test "named args reversed order" = add(b: 5, a: 3) == 8
+
+// Test 4: Named args with strings
+test "named string args" = greet(name: "World", greeting: "Hello") == "Hello, World!"
+
+// Test 5: Named args reversed with strings
+test "named string args reversed" = greet(greeting: "Hi", name: "Alice") == "Hi, Alice!"
+
+// Test 6: Three params with named args
+test "three named args" = make_range(start: 0, end: 100, step: 10) == 10
+
+// Test 7: Three params reordered
+test "three named args reordered" = make_range(step: 5, end: 50, start: 10) == 8

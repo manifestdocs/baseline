@@ -1,0 +1,37 @@
+// BDD Testing Framework conformance test
+// Tests: describe/it/expect with matchers
+@prelude(core)
+
+describe "Math operations" {
+  it "adds two numbers" = 1 + 1 == 2
+
+  it "subtracts two numbers" = 5 - 3 == 2
+
+  it "multiplies two numbers" = 3 * 4 == 12
+}
+
+describe "String operations" {
+  it "checks string equality" = "hello" == "hello"
+
+  it "compares strings" = "abc" == "abc"
+}
+
+describe "List operations" {
+  it "creates a list" = List.length([1, 2, 3]) == 3
+
+  it "checks empty list" = List.length([]) == 0
+}
+
+describe "Boolean logic" {
+  it "and operation" = true && true == true
+
+  it "or operation" = false || true == true
+
+  it "not operation" = not false == true
+}
+
+describe "Nested describes" {
+  describe "inner group" {
+    it "works in nested context" = 42 == 42
+  }
+}

@@ -1,0 +1,39 @@
+@prelude(script)
+
+// Conformance: effect handlers with `with { Effect: handler } body`
+
+// Handler that replaces println! with a no-op (returns Unit)
+test "handler replaces effect with no-op" = {
+  let mock = {
+    println: |_msg| ()
+  }
+  let result = with { Console: mock } {
+    Console.println!("should not print")
+    42
+  }
+  result == 42
+}
+
+// Handler that replaces println! — body returns value
+test "handler body returns result" = {
+  let mock = {
+    println: |_msg| ()
+  }
+  let result = with { Console: mock } {
+    Console.println!("first")
+    Console.println!("second")
+    100 + 200
+  }
+  result == 300
+}
+
+// Body with no effect calls still works
+test "handler with pure body" = {
+  let mock = {
+    println: |_msg| ()
+  }
+  let result = with { Console: mock } {
+    1 + 2 + 3
+  }
+  result == 6
+}

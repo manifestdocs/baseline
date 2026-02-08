@@ -1,0 +1,55 @@
+@prelude(core)
+
+// Conformance: Set type operations
+
+test "empty set has length 0" =
+  Set.len(Set.empty()) == 0
+
+test "insert element" = {
+  let s = Set.insert(Set.empty(), 1)
+  Set.len(s) == 1
+}
+
+test "insert duplicate is idempotent" = {
+  let s = Set.insert(Set.empty(), 1)
+  let s2 = Set.insert(s, 1)
+  Set.len(s2) == 1
+}
+
+test "remove element" = {
+  let s = Set.insert(Set.empty(), 42)
+  let s2 = Set.remove(s, 42)
+  Set.len(s2) == 0
+}
+
+test "contains element" = {
+  let s = Set.insert(Set.empty(), 5)
+  Set.contains(s, 5) == true
+}
+
+test "contains missing element" =
+  Set.contains(Set.empty(), 99) == false
+
+test "union combines sets" = {
+  let a = Set.insert(Set.insert(Set.empty(), 1), 2)
+  let b = Set.insert(Set.insert(Set.empty(), 2), 3)
+  let u = Set.union(a, b)
+  Set.len(u) == 3
+}
+
+test "intersection keeps common" = {
+  let a = Set.insert(Set.insert(Set.insert(Set.empty(), 1), 2), 3)
+  let b = Set.insert(Set.insert(Set.insert(Set.empty(), 2), 3), 4)
+  let i = Set.intersection(a, b)
+  Set.len(i) == 2
+}
+
+test "from_list deduplicates" = {
+  let s = Set.from_list([1, 2, 2, 3, 3, 3])
+  Set.len(s) == 3
+}
+
+test "from_list contains all unique" = {
+  let s = Set.from_list([10, 20, 30])
+  Set.contains(s, 10) == true
+}

@@ -1,0 +1,63 @@
+@prelude(core)
+
+// Conformance: Map type operations
+
+test "empty map has length 0" =
+  Map.len(Map.empty()) == 0
+
+test "insert and get" = {
+  let m = Map.insert(Map.empty(), "key", 42)
+  match Map.get(m, "key")
+    Some(v) -> v == 42
+    None -> false
+}
+
+test "insert overwrites existing key" = {
+  let m = Map.insert(Map.empty(), "a", 1)
+  let m2 = Map.insert(m, "a", 2)
+  match Map.get(m2, "a")
+    Some(v) -> v == 2
+    None -> false
+}
+
+test "get missing key returns None" = {
+  let m = Map.empty()
+  match Map.get(m, "missing")
+    Some(_) -> false
+    None -> true
+}
+
+test "remove key" = {
+  let m = Map.insert(Map.empty(), "x", 10)
+  let m2 = Map.remove(m, "x")
+  Map.len(m2) == 0
+}
+
+test "contains key" = {
+  let m = Map.insert(Map.empty(), "hello", 1)
+  Map.contains(m, "hello") == true
+}
+
+test "contains missing key" =
+  Map.contains(Map.empty(), "nope") == false
+
+test "keys returns list" = {
+  let m = Map.insert(Map.empty(), "a", 1)
+  let m2 = Map.insert(m, "b", 2)
+  let ks = Map.keys(m2)
+  List.length(ks) == 2
+}
+
+test "values returns list" = {
+  let m = Map.insert(Map.empty(), "x", 10)
+  let m2 = Map.insert(m, "y", 20)
+  let vs = Map.values(m2)
+  List.length(vs) == 2
+}
+
+test "len after multiple inserts" = {
+  let m = Map.insert(Map.empty(), "a", 1)
+  let m2 = Map.insert(m, "b", 2)
+  let m3 = Map.insert(m2, "c", 3)
+  Map.len(m3) == 3
+}
