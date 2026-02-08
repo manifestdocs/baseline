@@ -25,7 +25,7 @@ jit = [
     "dep:target-lexicon",
 ]
 llvm = ["dep:inkwell"]
-async-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:tokio", "dep:bytes"]
+async-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -38,11 +38,11 @@ tiny_http = "0.12"
 tower-lsp = "0.20"
 tokio = { version = "1", features = ["full"] }
 
-# Async HTTP server (Hyper + utilities)
-hyper = { version = "1", features = ["http1", "server"] }
-hyper-util = { version = "0.1", features = ["tokio"] }
-http-body-util = "0.1"
-bytes = "1"
+# Async HTTP server (behind feature flag)
+hyper = { version = "1", features = ["http1", "server"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+bytes = { version = "1", optional = true }
 
 # JIT dependencies (behind feature flag)
 cranelift-codegen = { version = "0.128", optional = true }
