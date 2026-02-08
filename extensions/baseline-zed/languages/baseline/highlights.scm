@@ -55,6 +55,7 @@
 ] @keyword
 
 [
+  "fn"
   "type"
   "effect"
   "module"
@@ -91,6 +92,14 @@
 
 (call_expression
   (field_expression) @function.call)
+
+; Function parameters
+(param
+  name: (identifier) @variable.parameter)
+
+; Return type arrow in function_def
+(function_def
+  "->" @punctuation.delimiter)
 
 ; Lambda delimiters
 (lambda

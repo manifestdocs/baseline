@@ -32,6 +32,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -132,6 +136,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -247,6 +255,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -268,6 +280,10 @@
         },
         {
           "type": "match_expression",
+          "named": true
+        },
+        {
+          "type": "named_argument",
           "named": true
         },
         {
@@ -419,6 +435,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -523,6 +543,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -637,6 +661,10 @@
             "named": true
           },
           {
+            "type": "hole_expression",
+            "named": true
+          },
+          {
             "type": "identifier",
             "named": true
           },
@@ -706,8 +734,18 @@
           }
         ]
       },
+      "effects": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "effect_set",
+            "named": true
+          }
+        ]
+      },
       "name": {
-        "multiple": true,
+        "multiple": false,
         "required": true,
         "types": [
           {
@@ -720,12 +758,42 @@
           }
         ]
       },
-      "signature": {
+      "params": {
         "multiple": false,
-        "required": true,
+        "required": false,
         "types": [
           {
-            "type": "type_signature",
+            "type": "param_list",
+            "named": true
+          }
+        ]
+      },
+      "return_type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "generic_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
+            "type": "record_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
             "named": true
           }
         ]
@@ -868,6 +936,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -1006,6 +1078,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -1113,6 +1189,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -1217,6 +1297,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -1346,6 +1430,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -1457,6 +1545,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -1548,6 +1640,18 @@
           "named": true
         },
         {
+          "type": "multiline_string_literal",
+          "named": true
+        },
+        {
+          "type": "raw_hash_string_literal",
+          "named": true
+        },
+        {
+          "type": "raw_string_literal",
+          "named": true
+        },
+        {
           "type": "string_literal",
           "named": true
         }
@@ -1588,6 +1692,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -1702,6 +1810,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -1807,6 +1919,155 @@
     }
   },
   {
+    "type": "multiline_string_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "escape_sequence",
+          "named": true
+        },
+        {
+          "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "multiline_string_content",
+          "named": true
+        },
+        {
+          "type": "multiline_string_end",
+          "named": true
+        },
+        {
+          "type": "multiline_string_start",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "named_argument",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "binary_expression",
+          "named": true
+        },
+        {
+          "type": "block",
+          "named": true
+        },
+        {
+          "type": "call_expression",
+          "named": true
+        },
+        {
+          "type": "effect_identifier",
+          "named": true
+        },
+        {
+          "type": "field_expression",
+          "named": true
+        },
+        {
+          "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "if_expression",
+          "named": true
+        },
+        {
+          "type": "lambda",
+          "named": true
+        },
+        {
+          "type": "list_expression",
+          "named": true
+        },
+        {
+          "type": "literal",
+          "named": true
+        },
+        {
+          "type": "match_expression",
+          "named": true
+        },
+        {
+          "type": "parenthesized_expression",
+          "named": true
+        },
+        {
+          "type": "pipe_expression",
+          "named": true
+        },
+        {
+          "type": "range_expression",
+          "named": true
+        },
+        {
+          "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_update",
+          "named": true
+        },
+        {
+          "type": "struct_expression",
+          "named": true
+        },
+        {
+          "type": "try_expression",
+          "named": true
+        },
+        {
+          "type": "tuple_expression",
+          "named": true
+        },
+        {
+          "type": "type_identifier",
+          "named": true
+        },
+        {
+          "type": "unary_expression",
+          "named": true
+        },
+        {
+          "type": "with_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "option_type",
     "named": true,
     "fields": {},
@@ -1842,6 +2103,67 @@
     }
   },
   {
+    "type": "param",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "generic_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
+            "type": "record_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "param_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "param",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "parenthesized_expression",
     "named": true,
     "fields": {},
@@ -1871,6 +2193,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -1977,6 +2303,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -2077,6 +2407,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -2198,6 +2532,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -2263,6 +2601,52 @@
         },
         {
           "type": "with_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "raw_hash_string_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "raw_hash_string_content",
+          "named": true
+        },
+        {
+          "type": "raw_hash_string_end",
+          "named": true
+        },
+        {
+          "type": "raw_hash_string_start",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "raw_string_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "raw_string_content",
+          "named": true
+        },
+        {
+          "type": "raw_string_end",
+          "named": true
+        },
+        {
+          "type": "raw_string_start",
           "named": true
         }
       ]
@@ -2352,6 +2736,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -2470,6 +2858,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -2608,7 +3000,7 @@
     "fields": {},
     "children": {
       "multiple": true,
-      "required": false,
+      "required": true,
       "types": [
         {
           "type": "escape_sequence",
@@ -2616,6 +3008,18 @@
         },
         {
           "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "string_content",
+          "named": true
+        },
+        {
+          "type": "string_end",
+          "named": true
+        },
+        {
+          "type": "string_start",
           "named": true
         }
       ]
@@ -2670,6 +3074,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -2773,6 +3181,10 @@
         },
         {
           "type": "for_expression",
+          "named": true
+        },
+        {
+          "type": "hole_expression",
           "named": true
         },
         {
@@ -3102,6 +3514,10 @@
           "named": true
         },
         {
+          "type": "hole_expression",
+          "named": true
+        },
+        {
           "type": "identifier",
           "named": true
         },
@@ -3279,10 +3695,6 @@
     "named": false
   },
   {
-    "type": "\"",
-    "named": false
-  },
-  {
     "type": "${",
     "named": false
   },
@@ -3308,6 +3720,10 @@
   },
   {
     "type": "+",
+    "named": false
+  },
+  {
+    "type": "++",
     "named": false
   },
   {
@@ -3424,8 +3840,16 @@
     "named": true
   },
   {
+    "type": "fn",
+    "named": false
+  },
+  {
     "type": "for",
     "named": false
+  },
+  {
+    "type": "hole_expression",
+    "named": true
   },
   {
     "type": "identifier",
@@ -3465,8 +3889,56 @@
     "named": false
   },
   {
+    "type": "multiline_string_content",
+    "named": true
+  },
+  {
+    "type": "multiline_string_end",
+    "named": true
+  },
+  {
+    "type": "multiline_string_start",
+    "named": true
+  },
+  {
     "type": "not",
     "named": false
+  },
+  {
+    "type": "raw_hash_string_content",
+    "named": true
+  },
+  {
+    "type": "raw_hash_string_end",
+    "named": true
+  },
+  {
+    "type": "raw_hash_string_start",
+    "named": true
+  },
+  {
+    "type": "raw_string_content",
+    "named": true
+  },
+  {
+    "type": "raw_string_end",
+    "named": true
+  },
+  {
+    "type": "raw_string_start",
+    "named": true
+  },
+  {
+    "type": "string_content",
+    "named": true
+  },
+  {
+    "type": "string_end",
+    "named": true
+  },
+  {
+    "type": "string_start",
+    "named": true
   },
   {
     "type": "test",

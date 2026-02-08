@@ -52,6 +52,7 @@
 ] @keyword
 
 [
+  "fn"
   "type"
   "effect"
   "export"
@@ -80,6 +81,14 @@
 ; Function calls - highlight the callable identifier
 (call_expression
   (identifier) @function.call)
+
+; Function parameters
+(param
+  name: (identifier) @variable.parameter)
+
+; Return type arrow in function_def
+(function_def
+  "->" @punctuation.delimiter)
 
 ; Lambda
 (lambda

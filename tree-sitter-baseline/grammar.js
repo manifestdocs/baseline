@@ -31,6 +31,22 @@ module.exports = grammar({
     $.block_comment,
   ],
 
+  externals: $ => [
+    $.multiline_string_start,
+    $.multiline_string_content,
+    $.multiline_string_end,
+    $.string_start,
+    $.string_content,
+    $.string_end,
+    $.raw_string_start,
+    $.raw_string_content,
+    $.raw_string_end,
+    $.raw_hash_string_start,
+    $.raw_hash_string_content,
+    $.raw_hash_string_end,
+    $._error_sentinel,  // Never used in grammar; detects error recovery
+  ],
+
   conflicts: $ => [
     // Ambiguity between () -> T as function_type vs tuple_type followed by ->
     [$.tuple_type, $.function_type],
@@ -46,6 +62,8 @@ module.exports = grammar({
     [$._expression, $.struct_expression],
     // type_identifier ( could be expression or constructor pattern
     [$._expression, $.constructor_pattern],
+    // named_argument vs record_field_init (both are identifier : expression)
+    [$.named_argument, $.record_field_init],
   ],
 
   rules: {
@@ -111,13 +129,18 @@ module.exports = grammar({
     // explicit node for highlighting
     refinement_clause: $ => seq('where', $.predicate),
 
-    // fizzbuzz : Int -> String
+    // fn fizzbuzz(n: Int) -> String = body
     function_def: $ => seq(
       optional('export'),
-      field('name', $._name), ':', field('signature', $.type_signature),
-      field('name', $._name), '=', field('body', $._expression),
+      'fn', field('name', $._name),
+      '(', optional(field('params', $.param_list)), ')',
+      optional(seq('->', optional(field('effects', $.effect_set)), field('return_type', $._type_expr))),
+      '=', field('body', $._expression),
       optional($.where_block) // Inline tests
     ),
+
+    param_list: $ => commaSep1($.param),
+    param: $ => seq(field('name', $.identifier), ':', field('type', $._type_expr)),
 
     effect_def: $ => seq(
       optional('export'),
@@ -177,7 +200,8 @@ module.exports = grammar({
       $.record_expression,
       $.block,
       $.lambda,
-      $.parenthesized_expression
+      $.parenthesized_expression,
+      $.hole_expression
     ),
 
     // [1, 2, 3]
@@ -209,17 +233,19 @@ module.exports = grammar({
       choice($.identifier, $.effect_identifier)
     )),
 
-    // f(x, y)
+    // f(x, y) or f(name: "Alice", age: 30)
     call_expression: $ => prec.left(PREC.CALL, seq(
-      $._expression, '(', optional(commaSep($._expression)), ')'
+      $._expression, '(', optional(commaSep(choice($.named_argument, $._expression))), ')'
     )),
+
+    named_argument: $ => seq(field('name', $.identifier), ':', $._expression),
 
     // 1..100
     range_expression: $ => prec.left(PREC.RANGE, seq($._expression, '..', $._expression)),
 
     // Arithmetic & Logic
     binary_expression: $ => choice(
-      prec.left(PREC.ADDITIVE, seq($._expression, choice('+', '-'), $._expression)),
+      prec.left(PREC.ADDITIVE, seq($._expression, choice('+', '-', '++'), $._expression)),
       prec.left(PREC.MULTIPLICATIVE, seq($._expression, choice('*', '/', '%'), $._expression)),
       prec.left(PREC.COMPARE, seq($._expression, choice('==', '!=', '<', '>', '<=', '>='), $._expression)),
       prec.left(PREC.LOGICAL_AND, seq($._expression, '&&', $._expression)),
@@ -256,6 +282,9 @@ module.exports = grammar({
 
     parenthesized_expression: $ => seq('(', $._expression, ')'),
 
+    // ?? — typed hole placeholder
+    hole_expression: $ => '??',
+
     // --- Patterns ---
 
     _pattern: $ => choice(
@@ -279,23 +308,51 @@ module.exports = grammar({
 
     // --- Literals ---
 
-    literal: $ => choice($.float_literal, $.integer_literal, $.string_literal, $.boolean_literal),
+    literal: $ => choice($.float_literal, $.integer_literal, $.multiline_string_literal, $.string_literal, $.raw_string_literal, $.raw_hash_string_literal, $.boolean_literal),
     float_literal: $ => token(seq(/\d+/, '.', /\d+/, optional(seq(/[eE]/, optional(/[+-]/), /\d+/)))),
-    integer_literal: $ => /\d+/,
+    integer_literal: $ => token(choice(
+      /0[xX][0-9a-fA-F][0-9a-fA-F_]*/,   // hex: 0xFF, 0x1A_2B
+      /0[bB][01][01_]*/,                   // binary: 0b1010, 0b1111_0000
+      /0[oO][0-7][0-7_]*/,                 // octal: 0o755, 0o77_77
+      /[0-9][0-9_]*/,                      // decimal: 42, 1_000_000
+    )),
     boolean_literal: $ => choice('true', 'false'),
 
     // Recursive Interpolation: "Hello ${name}"
     string_literal: $ => seq(
-      '"',
+      $.string_start,
       repeat(choice(
-        token.immediate(prec(1, /[^"\\$]+/)),
+        $.string_content,
         $.escape_sequence,
         $.interpolation
       )),
-      '"'
+      $.string_end
+    ),
+    // Triple-quoted multi-line strings: """..."""
+    multiline_string_literal: $ => seq(
+      $.multiline_string_start,
+      repeat(choice(
+        $.multiline_string_content,
+        $.escape_sequence,
+        $.interpolation
+      )),
+      $.multiline_string_end,
     ),
     interpolation: $ => seq('${', $._expression, '}'),
     escape_sequence: $ => token.immediate(seq('\\', /./)),
+
+    // Raw strings: r"..." (no escapes, no interpolation)
+    raw_string_literal: $ => seq(
+      $.raw_string_start,
+      optional($.raw_string_content),
+      $.raw_string_end
+    ),
+    // Raw hash strings: r#"..."# (can contain unescaped quotes)
+    raw_hash_string_literal: $ => seq(
+      $.raw_hash_string_start,
+      optional($.raw_hash_string_content),
+      $.raw_hash_string_end
+    ),
 
     // --- Identifiers ---
 
