@@ -64,6 +64,8 @@ module.exports = grammar({
     [$._expression, $.constructor_pattern],
     // named_argument vs record_field_init (both are identifier : expression)
     [$.named_argument, $.record_field_init],
+    // type_identifier in pattern could be nullary or start of constructor_pattern in matcher
+    [$._pattern, $.constructor_pattern],
   ],
 
   rules: {
@@ -74,7 +76,9 @@ module.exports = grammar({
       $.prelude_decl, // @prelude(script)
       $.import_decl,
       $._definition,
-      $.inline_test
+      $.spec_block,
+      $.inline_test,
+      $.describe_block
     ),
 
     // --- Declarations ---
@@ -147,6 +151,52 @@ module.exports = grammar({
       'effect', $.type_identifier, '{', repeat($.function_signature), '}'
     ),
 
+    // --- Specifications ---
+
+    // @spec divide
+    // @given numerator: Int, denominator: Int where denominator != 0
+    // @returns Int
+    // @ensures result * denominator <= numerator
+    spec_block: $ => seq(
+      repeat1($.spec_attribute),
+      $._definition
+    ),
+
+    spec_attribute: $ => choice(
+      $.spec_decl,
+      $.given_clause,
+      $.returns_clause,
+      $.requires_clause,
+      $.ensures_clause,
+      $.assume_clause,
+      $.pure_attribute,
+      $.total_attribute
+    ),
+
+    // @spec function_name
+    spec_decl: $ => seq('@spec', field('name', choice($.identifier, $.type_identifier))),
+
+    // @given x: Int, y: Int where x > 0
+    given_clause: $ => seq('@given', commaSep1($.param), optional(seq('where', field('condition', $._expression)))),
+
+    // @returns Type
+    returns_clause: $ => seq('@returns', field('type', $._type_expr)),
+
+    // @requires condition
+    requires_clause: $ => seq('@requires', field('condition', $._expression)),
+
+    // @ensures condition (may reference 'result')
+    ensures_clause: $ => seq('@ensures', field('condition', $._expression)),
+
+    // @assume condition
+    assume_clause: $ => seq('@assume', field('condition', $._expression)),
+
+    // @pure — function has no effects
+    pure_attribute: $ => '@pure',
+
+    // @total — function terminates on all inputs
+    total_attribute: $ => '@total',
+
     // --- Types ---
 
     _type_expr: $ => choice(
@@ -167,8 +217,9 @@ module.exports = grammar({
     generic_type: $ => seq($.type_identifier, '<', commaSep1($._type_expr), '>'),
     option_type: $ => prec.left(10, seq($._type_expr, '?')),
     tuple_type: $ => seq('(', commaSep($._type_expr), ')'),
-    record_type: $ => seq('{', commaSep($.record_field_def), '}'),
+    record_type: $ => seq('{', commaSep($.record_field_def), optional(seq(',', $.row_variable)), '}'),
     record_field_def: $ => seq($.identifier, ':', $._type_expr),
+    row_variable: $ => seq('..', $.identifier),
     function_type: $ => seq('(', commaSep($._type_expr), ')', '->', $._type_expr),
 
     effect_set: $ => seq('{', commaSep1($.type_identifier), '}'),
@@ -184,6 +235,7 @@ module.exports = grammar({
       $.if_expression,
       $.for_expression,
       $.with_expression,
+      $.handle_expression,
       $.binary_expression,
       $.unary_expression,
       $.try_expression,
@@ -201,11 +253,17 @@ module.exports = grammar({
       $.block,
       $.lambda,
       $.parenthesized_expression,
-      $.hole_expression
+      $.hole_expression,
+      $.expect_expression,
+      $.map_literal
     ),
 
     // [1, 2, 3]
     list_expression: $ => seq('[', commaSep($._expression), ']'),
+
+    // #{ key: value, ... }
+    map_literal: $ => seq('#{', commaSep($.map_entry), '}'),
+    map_entry: $ => seq(field('key', $._expression), ':', field('value', $._expression)),
 
     // x |> f
     pipe_expression: $ => prec.left(PREC.PIPE, seq($._expression, '|>', $._expression)),
@@ -224,7 +282,35 @@ module.exports = grammar({
     for_expression: $ => seq('for', $._pattern, 'in', $._expression, 'do', $._expression),
 
     // with Console.println! { body } — capture effect calls for testing
-    with_expression: $ => prec.right(seq('with', field('effect', $.field_expression), field('body', $.block))),
+    // with { Console: handler } body — effect handler map
+    with_expression: $ => prec.right(choice(
+      seq('with', field('effect', $.field_expression), field('body', $.block)),
+      seq('with', field('handlers', $.handler_map), field('body', $._expression)),
+    )),
+
+    handler_map: $ => seq('{', commaSep1($.handler_binding), optional(','), '}'),
+    handler_binding: $ => seq(field('effect', $.type_identifier), ':', field('handler', $._expression)),
+
+    // handle expr with { Effect.method!(args) -> resume(result) }
+    handle_expression: $ => prec.right(seq(
+      'handle',
+      field('body', $._expression),
+      'with',
+      '{',
+      repeat1($.handler_clause),
+      '}',
+    )),
+
+    handler_clause: $ => seq(
+      field('effect', $.type_identifier),
+      '.',
+      field('method', choice($.effect_identifier, $.identifier)),
+      '(',
+      commaSep($.identifier),
+      ')',
+      '->',
+      field('handler_body', $._expression),
+    ),
 
     // req.params.id or Log.info!
     field_expression: $ => prec.left(PREC.MEMBER, seq(
@@ -305,6 +391,57 @@ module.exports = grammar({
 
     where_block: $ => prec.right(seq('where', repeat1($.inline_test))),
     inline_test: $ => seq('test', $.string_literal, '=', $._expression),
+
+    // --- BDD Testing ---
+
+    describe_block: $ => seq(
+      choice('describe', 'context'),
+      field('name', $.string_literal),
+      '{',
+      repeat($._describe_item),
+      '}'
+    ),
+
+    _describe_item: $ => choice(
+      $.it_block,
+      $.describe_block,     // nested describe/context
+      $.before_each_block,
+      $.after_each_block,
+      $.inline_test,        // regular test blocks work inside describe
+      $._definition,        // helper functions
+      $.let_binding,        // shared bindings
+    ),
+
+    it_block: $ => seq(
+      'it',
+      optional(field('modifier', choice('.only', '.skip'))),
+      field('name', $.string_literal),
+      '=',
+      field('body', $._expression)
+    ),
+
+    before_each_block: $ => seq('before_each', '=', $._expression),
+    after_each_block: $ => seq('after_each', '=', $._expression),
+
+    // expect expression with matchers
+    expect_expression: $ => prec.right(seq(
+      'expect',
+      field('actual', $._expression),
+      field('matcher', $.matcher)
+    )),
+
+    matcher: $ => choice(
+      seq('to_equal', $._expression),
+      seq('to_be', $._pattern),
+      seq('to_contain', $._expression),
+      seq('to_have_length', $._expression),
+      'to_be_empty',
+      seq('to_start_with', $._expression),
+      seq('to_satisfy', $._expression),
+      'to_be_ok',
+      'to_be_some',
+      'to_be_none',
+    ),
 
     // --- Literals ---
 
