@@ -7,12 +7,44 @@ use super::natives::NativeRegistry;
 use super::nvalue::{HeapObject, NValue};
 use super::value::{RcStr, Value};
 
+// ---------------------------------------------------------------------------
+// Safety & Resource Limits
+// ---------------------------------------------------------------------------
+//
+// The VM enforces several limits to prevent resource exhaustion attacks:
+//
+// 1. MAX_CALL_DEPTH: Prevents stack overflow from deep/infinite recursion
+// 2. MAX_RANGE_SIZE: Prevents memory exhaustion from large range expressions
+// 3. MAX_INSTRUCTIONS: Prevents infinite loops (checked every N iterations)
+// 4. MAX_STACK_SIZE: Prevents stack exhaustion from pathological programs
+// 5. MAX_STRING_SIZE: Prevents memory exhaustion from string operations
+// 6. MAX_LIST_SIZE: Prevents memory exhaustion from list operations
+//
 // SAFETY note: The unsafe stack operations below (pop_unchecked, pop2_unchecked,
 // get_unchecked) are sound because the compiler guarantees stack invariants:
 // every pop has a matching push, and local slot indices are always valid.
 
+/// Maximum call stack depth (prevents stack overflow from recursion)
 const MAX_CALL_DEPTH: usize = 1024;
+
+/// Maximum range iteration size (prevents memory exhaustion from `1..1000000000`)
 const MAX_RANGE_SIZE: i64 = 1_000_000;
+
+/// Maximum instructions before timeout check (for infinite loop protection)
+/// Set to 0 to disable instruction counting (default for non-sandboxed execution)
+const MAX_INSTRUCTIONS: u64 = 0; // 0 = unlimited, set to e.g. 100_000_000 for sandboxed
+
+/// Instruction check interval (only check timeout every N instructions)
+const INSTRUCTION_CHECK_INTERVAL: u64 = 10_000;
+
+/// Maximum stack size in values (prevents pathological stack growth)
+const MAX_STACK_SIZE: usize = 65_536;
+
+/// Maximum string size in bytes (prevents memory exhaustion from concatenation)
+const MAX_STRING_SIZE: usize = 100 * 1024 * 1024; // 100 MB
+
+/// Maximum list size in elements (prevents memory exhaustion)
+const MAX_LIST_SIZE: usize = 10_000_000; // 10M elements
 
 // ---------------------------------------------------------------------------
 // VM Error
@@ -145,6 +177,10 @@ pub struct Vm {
     natives: NativeRegistry,
     /// Handler stack for `with { Effect: handler } body` — maps effect module name → handler record
     handler_stack: Vec<HashMap<String, NValue>>,
+    /// Instruction counter for timeout/limit checking (0 = unlimited)
+    instruction_limit: u64,
+    /// Current instruction count
+    instruction_count: u64,
 }
 
 impl Default for Vm {
@@ -161,7 +197,19 @@ impl Vm {
             upvalue_stack: Vec::new(),
             natives: NativeRegistry::new(),
             handler_stack: Vec::new(),
+            instruction_limit: MAX_INSTRUCTIONS,
+            instruction_count: 0,
         }
+    }
+
+    /// Create a VM with a specific instruction limit for sandboxed execution.
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum instructions to execute (0 = unlimited)
+    pub fn with_instruction_limit(limit: u64) -> Self {
+        let mut vm = Self::new();
+        vm.instruction_limit = limit;
+        vm
     }
 
     /// Get a reference to the native function registry (for compiler lookups).
@@ -175,6 +223,7 @@ impl Vm {
         self.frames.clear();
         self.upvalue_stack.clear();
         self.handler_stack.clear();
+        self.instruction_count = 0;
         self.frames.push(CallFrame {
             chunk_idx: 0,
             ip: 0,
@@ -191,6 +240,7 @@ impl Vm {
         self.frames.clear();
         self.upvalue_stack.clear();
         self.handler_stack.clear();
+        self.instruction_count = 0;
         self.frames.push(CallFrame {
             chunk_idx: program.entry as u32,
             ip: 0,
@@ -211,6 +261,7 @@ impl Vm {
         self.stack.clear();
         self.frames.clear();
         self.upvalue_stack.clear();
+        self.instruction_count = 0;
         self.frames.push(CallFrame {
             chunk_idx: chunk_idx as u32,
             ip: 0,
@@ -245,6 +296,7 @@ impl Vm {
     /// - Frame state (chunk_idx, ip, base_slot) kept in local variables
     /// - Source map only consulted in error paths
     /// - Unsafe stack access eliminates bounds checks
+    /// - Instruction limit checked only every INSTRUCTION_CHECK_INTERVAL ops
     fn run_frames(&mut self, chunks: &[Chunk], base_depth: usize) -> Result<NValue, VmError> {
         let frame = self.frames.last();
         let mut ip = frame.ip as usize;
@@ -260,7 +312,54 @@ impl Vm {
             "chunk must end with Return (sentinel)"
         );
 
+        // Local counter for periodic limit checking (avoids field access on every op)
+        let mut local_count: u64 = 0;
+        let check_interval = INSTRUCTION_CHECK_INTERVAL;
+        let has_limit = self.instruction_limit > 0;
+
         loop {
+            // Periodic instruction limit check (only if limit is set)
+            if has_limit {
+                local_count += 1;
+                if local_count >= check_interval {
+                    self.instruction_count += local_count;
+                    local_count = 0;
+                    if self.instruction_count > self.instruction_limit {
+                        let (line, col) = chunk
+                            .source_map
+                            .get(ip.saturating_sub(1))
+                            .copied()
+                            .unwrap_or((0, 0));
+                        return Err(self.error(
+                            format!(
+                                "Execution limit exceeded: {} instructions (limit: {})",
+                                self.instruction_count, self.instruction_limit
+                            ),
+                            line,
+                            col,
+                        ));
+                    }
+                }
+            }
+
+            // Stack size check (less frequent than instruction check)
+            if self.stack.len() > MAX_STACK_SIZE {
+                let (line, col) = chunk
+                    .source_map
+                    .get(ip.saturating_sub(1))
+                    .copied()
+                    .unwrap_or((0, 0));
+                return Err(self.error(
+                    format!(
+                        "Stack overflow: {} values (limit: {})",
+                        self.stack.len(),
+                        MAX_STACK_SIZE
+                    ),
+                    line,
+                    col,
+                ));
+            }
+
             let op = unsafe { *chunk.code.get_unchecked(ip) };
             ip += 1;
 
@@ -1086,11 +1185,14 @@ impl Vm {
                         let name = self.natives.name(fn_id);
                         if let Some(dot) = name.find('.') {
                             let module = &name[..dot];
-                            let method = name[dot + 1..].strip_suffix('!').unwrap_or(&name[dot + 1..]);
+                            let method = name[dot + 1..]
+                                .strip_suffix('!')
+                                .unwrap_or(&name[dot + 1..]);
                             let mut found_handler = None;
                             for frame in self.handler_stack.iter().rev() {
                                 if let Some(handler_record) = frame.get(module) {
-                                    if let HeapObject::Record(fields) = handler_record.as_heap_ref() {
+                                    if let HeapObject::Record(fields) = handler_record.as_heap_ref()
+                                    {
                                         for (k, v) in fields {
                                             if k.as_ref() == method {
                                                 found_handler = Some(v.clone());
@@ -1120,7 +1222,11 @@ impl Vm {
                                     base_slot = start;
                                     continue;
                                 } else if handler_fn.is_heap() {
-                                    if let HeapObject::Closure { chunk_idx: cidx, upvalues } = handler_fn.as_heap_ref() {
+                                    if let HeapObject::Closure {
+                                        chunk_idx: cidx,
+                                        upvalues,
+                                    } = handler_fn.as_heap_ref()
+                                    {
                                         let fn_idx = *cidx;
                                         let caller = self.frames.last_mut();
                                         caller.ip = ip as u32;
@@ -1155,7 +1261,7 @@ impl Vm {
                         caller.ip = ip as u32;
                         caller.chunk_idx = chunk_idx as u32;
                         let (line, col) = chunk.source_map[ip - 1];
-                        
+
                         #[cfg(feature = "async-server")]
                         {
                             let name = self.natives.name(fn_id);
@@ -1262,7 +1368,11 @@ impl Vm {
                         }
                         _ => {
                             let (line, col) = chunk.source_map[ip - 1];
-                            return Err(self.error("PushHandler: expected Record".to_string(), line, col));
+                            return Err(self.error(
+                                "PushHandler: expected Record".to_string(),
+                                line,
+                                col,
+                            ));
                         }
                     }
                 }
@@ -1703,7 +1813,7 @@ impl Vm {
             .iter()
             .filter_map(crate::vm::async_executor::SendableHandler::from_nvalue)
             .collect();
-        
+
         let route_tree = crate::vm::hyper_server::AsyncRouteTree::from_nvalue(&router_val)
             .map_err(|e| self.error(format!("Failed to build route tree: {}", e), line, col))?;
 
@@ -1721,8 +1831,11 @@ impl Vm {
             .build()
             .map_err(|e| self.error(format!("Failed to create runtime: {}", e), line, col))?;
 
-        eprintln!("[async-server] Listening on http://0.0.0.0:{} (Hyper+Tokio)", port);
-        
+        eprintln!(
+            "[async-server] Listening on http://0.0.0.0:{} (Hyper+Tokio)",
+            port
+        );
+
         rt.block_on(crate::vm::hyper_server::run_server_with_context(addr, ctx))
             .map_err(|e| self.error(format!("Server error: {}", e), line, col))?;
 

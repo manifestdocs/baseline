@@ -22,3 +22,8 @@ doc = false
 name = "interpret"
 path = "fuzz_targets/interpret.rs"
 doc = false
+
+[[bin]]
+name = "execute"
+path = "fuzz_targets/execute.rs"
+doc = false
