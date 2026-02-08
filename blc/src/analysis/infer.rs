@@ -543,6 +543,262 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
+    // --- Map operations ---
+
+    // Map.empty : () -> Map<K, V>
+    schemas.insert(
+        "Map.empty".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(vec![], Box::new(Type::Map(Box::new(k), Box::new(v))))
+            },
+        },
+    );
+
+    // Map.insert : (Map<K, V>, K, V) -> Map<K, V>
+    schemas.insert(
+        "Map.insert".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::Map(Box::new(k.clone()), Box::new(v.clone())),
+                        k.clone(),
+                        v.clone(),
+                    ],
+                    Box::new(Type::Map(Box::new(k), Box::new(v))),
+                )
+            },
+        },
+    );
+
+    // Map.get : (Map<K, V>, K) -> Option<V>
+    schemas.insert(
+        "Map.get".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Map(Box::new(k.clone()), Box::new(v.clone())), k],
+                    Box::new(Type::Enum(
+                        "Option".to_string(),
+                        vec![
+                            ("Some".to_string(), vec![v]),
+                            ("None".to_string(), vec![]),
+                        ],
+                    )),
+                )
+            },
+        },
+    );
+
+    // Map.remove : (Map<K, V>, K) -> Map<K, V>
+    schemas.insert(
+        "Map.remove".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Map(Box::new(k.clone()), Box::new(v.clone())), k.clone()],
+                    Box::new(Type::Map(Box::new(k), Box::new(v))),
+                )
+            },
+        },
+    );
+
+    // Map.contains : (Map<K, V>, K) -> Bool
+    schemas.insert(
+        "Map.contains".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Map(Box::new(k.clone()), Box::new(v)), k],
+                    Box::new(Type::Bool),
+                )
+            },
+        },
+    );
+
+    // Map.keys : (Map<K, V>) -> List<K>
+    schemas.insert(
+        "Map.keys".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Map(Box::new(k.clone()), Box::new(v))],
+                    Box::new(Type::List(Box::new(k))),
+                )
+            },
+        },
+    );
+
+    // Map.values : (Map<K, V>) -> List<V>
+    schemas.insert(
+        "Map.values".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Map(Box::new(k), Box::new(v.clone()))],
+                    Box::new(Type::List(Box::new(v))),
+                )
+            },
+        },
+    );
+
+    // Map.len : (Map<K, V>) -> Int
+    schemas.insert(
+        "Map.len".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let k = ctx.fresh_var();
+                let v = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Map(Box::new(k), Box::new(v))],
+                    Box::new(Type::Int),
+                )
+            },
+        },
+    );
+
+    // --- Set operations ---
+
+    // Set.empty : () -> Set<T>
+    schemas.insert(
+        "Set.empty".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(vec![], Box::new(Type::Set(Box::new(t))))
+            },
+        },
+    );
+
+    // Set.insert : (Set<T>, T) -> Set<T>
+    schemas.insert(
+        "Set.insert".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Set(Box::new(t.clone())), t.clone()],
+                    Box::new(Type::Set(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    // Set.remove : (Set<T>, T) -> Set<T>
+    schemas.insert(
+        "Set.remove".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Set(Box::new(t.clone())), t.clone()],
+                    Box::new(Type::Set(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    // Set.contains : (Set<T>, T) -> Bool
+    schemas.insert(
+        "Set.contains".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Set(Box::new(t.clone())), t],
+                    Box::new(Type::Bool),
+                )
+            },
+        },
+    );
+
+    // Set.union : (Set<T>, Set<T>) -> Set<T>
+    schemas.insert(
+        "Set.union".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Set(Box::new(t.clone())), Type::Set(Box::new(t.clone()))],
+                    Box::new(Type::Set(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    // Set.intersection : (Set<T>, Set<T>) -> Set<T>
+    schemas.insert(
+        "Set.intersection".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Set(Box::new(t.clone())), Type::Set(Box::new(t.clone()))],
+                    Box::new(Type::Set(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    // Set.len : (Set<T>) -> Int
+    schemas.insert(
+        "Set.len".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Set(Box::new(t))],
+                    Box::new(Type::Int),
+                )
+            },
+        },
+    );
+
+    // Set.from_list : (List<T>) -> Set<T>
+    schemas.insert(
+        "Set.from_list".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(t.clone()))],
+                    Box::new(Type::Set(Box::new(t))),
+                )
+            },
+        },
+    );
+
     schemas
 }
 

@@ -26,9 +26,11 @@ pub enum Type {
     Function(Vec<Type>, Box<Type>),
     List(Box<Type>),
     Struct(String, HashMap<String, Type>),  // Name, Fields
-    Record(HashMap<String, Type>),          // Anonymous record
+    Record(HashMap<String, Type>, Option<u32>), // Anonymous record, optional row var
     Tuple(Vec<Type>),                       // (T, U, ...)
     Enum(String, Vec<(String, Vec<Type>)>), // Name, [(VariantName, PayloadTypes)]
+    Map(Box<Type>, Box<Type>),             // Map<K, V>
+    Set(Box<Type>),                        // Set<T>
     Module(String),                         // Module/Effect namespace
     Var(u32),                               // Inference type variable
     Unknown,
@@ -52,7 +54,7 @@ impl std::fmt::Display for Type {
             }
             Type::List(inner) => write!(f, "List<{}>", inner),
             Type::Struct(name, _) => write!(f, "{}", name),
-            Type::Record(fields) => {
+            Type::Record(fields, row) => {
                 let mut sorted_fields: Vec<_> = fields.iter().collect();
                 sorted_fields.sort_by_key(|(k, _)| *k);
                 let fields_str = sorted_fields
@@ -60,7 +62,11 @@ impl std::fmt::Display for Type {
                     .map(|(k, v)| format!("{}: {}", k, v))
                     .collect::<Vec<_>>()
                     .join(", ");
-                write!(f, "{{ {} }}", fields_str)
+                if let Some(var) = row {
+                    write!(f, "{{ {}, ..r{} }}", fields_str, var)
+                } else {
+                    write!(f, "{{ {} }}", fields_str)
+                }
             }
             Type::Tuple(elems) => {
                 let elems_str = elems
@@ -95,6 +101,8 @@ impl std::fmt::Display for Type {
                     _ => write!(f, "{}", name),
                 }
             }
+            Type::Map(k, v) => write!(f, "Map<{}, {}>", k, v),
+            Type::Set(inner) => write!(f, "Set<{}>", inner),
             Type::Module(name) => write!(f, "Module({})", name),
             Type::Var(id) => write!(f, "?{}", id),
             Type::Unknown => write!(f, "<unknown>"),
@@ -773,6 +781,33 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
             true
         }
         (Type::List(ia), Type::List(ib)) => types_compatible(ia, ib),
+        (Type::Map(ka, va), Type::Map(kb, vb)) => {
+            types_compatible(ka, kb) && types_compatible(va, vb)
+        }
+        (Type::Set(ia), Type::Set(ib)) => types_compatible(ia, ib),
+        // Row polymorphism: open record { a: T, ..r } is compatible with any record
+        // that has at least those fields with compatible types
+        (Type::Record(fields_a, Some(_)), Type::Record(fields_b, _))
+        | (Type::Record(fields_b, _), Type::Record(fields_a, Some(_))) => {
+            // The open record's fields must all exist in the other record with compatible types
+            fields_a.iter().all(|(k, ta)| {
+                fields_b.get(k).map_or(false, |tb| types_compatible(ta, tb))
+            })
+        }
+        (Type::Record(fa, None), Type::Record(fb, None)) => {
+            // Closed records: exact field match
+            fa.len() == fb.len()
+                && fa.iter().all(|(k, ta)| {
+                    fb.get(k).map_or(false, |tb| types_compatible(ta, tb))
+                })
+        }
+        // Open record with Struct (structs have fixed fields)
+        (Type::Record(fields, Some(_)), Type::Struct(_, sfields))
+        | (Type::Struct(_, sfields), Type::Record(fields, Some(_))) => {
+            fields.iter().all(|(k, ta)| {
+                sfields.get(k).map_or(false, |tb| types_compatible(ta, tb))
+            })
+        }
         _ => false,
     }
 }
@@ -1095,6 +1130,20 @@ fn check_node_inner(
             Type::Unit
         }
         "prelude_decl" | "import_decl" => Type::Unit,
+        "spec_block" => {
+            // Walk into spec_block to type-check the wrapped definition
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "function_def" || child.kind() == "type_def" || child.kind() == "effect_def" {
+                    check_node(&child, source, file, symbols, diagnostics);
+                }
+                // spec_attribute children are ignored by the type checker
+            }
+            Type::Unit
+        }
+        "spec_attribute" | "spec_decl" | "given_clause" | "returns_clause"
+        | "requires_clause" | "ensures_clause" | "assume_clause"
+        | "pure_attribute" | "total_attribute" => Type::Unit,
         "try_expression" => {
             // expr? — unwraps Option<T> to T or Result<T,E> to T
             let inner = check_node(
@@ -1202,7 +1251,7 @@ fn check_node_inner(
 
                 // If it's a record, wrap it in a Struct with the name
                 let defined_type = match ty {
-                    Type::Record(fields) => Type::Struct(name.clone(), fields),
+                    Type::Record(fields, _) => Type::Struct(name.clone(), fields),
                     _ => ty,
                 };
 
@@ -1267,6 +1316,86 @@ fn check_node_inner(
         "inline_test" => {
             // Top-level inline test: test "name" = expr
             check_inline_test(node, source, file, symbols, diagnostics);
+            Type::Unit
+        }
+        "describe_block" => {
+            // BDD describe/context block — type-check all items within
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                check_node(&child, source, file, symbols, diagnostics);
+            }
+            Type::Unit
+        }
+        "it_block" => {
+            // BDD it block — body should be Bool (like inline_test)
+            if let Some(body) = node.child_by_field_name("body") {
+                let body_type = check_node(&body, source, file, symbols, diagnostics);
+                if body_type != Type::Bool && body_type != Type::Unknown {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_026".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &body),
+                        message: format!("Test expression must be Bool, found {}", body_type),
+                        context: "it block body should evaluate to true or false.".to_string(),
+                        suggestions: vec![],
+                    });
+                }
+            }
+            Type::Unit
+        }
+        "before_each_block" | "after_each_block" => {
+            // Hook expressions — type-check body
+            let count = node.named_child_count();
+            if count > 0 {
+                if let Some(expr) = node.named_child(count - 1) {
+                    check_node(&expr, source, file, symbols, diagnostics);
+                }
+            }
+            Type::Unit
+        }
+        "expect_expression" => {
+            // expect <actual> <matcher> — type-check actual, return Bool
+            if let Some(actual) = node.child_by_field_name("actual") {
+                check_node(&actual, source, file, symbols, diagnostics);
+            }
+            if let Some(matcher) = node.child_by_field_name("matcher") {
+                check_node(&matcher, source, file, symbols, diagnostics);
+            }
+            Type::Bool
+        }
+        "matcher" => {
+            // Matcher expressions — type-check any sub-expressions
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                check_node(&child, source, file, symbols, diagnostics);
+            }
+            Type::Bool
+        }
+        "map_literal" => {
+            // #{ key: value, ... } — infer Map<K, V> from entries
+            let mut key_type = Type::Unknown;
+            let mut val_type = Type::Unknown;
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                if child.kind() == "map_entry" {
+                    if let Some(k) = child.child_by_field_name("key") {
+                        let kt = check_node(&k, source, file, symbols, diagnostics);
+                        if key_type == Type::Unknown {
+                            key_type = kt;
+                        }
+                    }
+                    if let Some(v) = child.child_by_field_name("value") {
+                        let vt = check_node(&v, source, file, symbols, diagnostics);
+                        if val_type == Type::Unknown {
+                            val_type = vt;
+                        }
+                    }
+                }
+            }
+            Type::Map(Box::new(key_type), Box::new(val_type))
+        }
+        "map_entry" => {
+            // Handled within map_literal
             Type::Unit
         }
         "let_binding" => {
@@ -1606,6 +1735,22 @@ fn check_node_inner(
                 Type::Unknown
             }
         }
+        "record_expression" => {
+            // { x: 1, y: 2 } — anonymous record literal
+            let mut fields = std::collections::HashMap::new();
+            let count = node.named_child_count();
+            for i in 0..count {
+                let field_init = node.named_child(i).unwrap();
+                if field_init.kind() == "record_field_init" {
+                    let fname_node = field_init.child(0).unwrap();
+                    let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                    let fexpr_node = field_init.child(2).unwrap();
+                    let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
+                    fields.insert(fname, ftype);
+                }
+            }
+            Type::Record(fields, None)
+        }
         "record_update" => {
             // { ..base, field: newValue }
             // named_child(0) = base expression, named_child(1..) = record_field_init overrides
@@ -1649,7 +1794,7 @@ fn check_node_inner(
                     }
                     base_type.clone()
                 }
-                Type::Record(ref fields) => {
+                Type::Record(ref fields, _) => {
                     let count = node.named_child_count();
                     for i in 1..count {
                         let field_init = node.named_child(i).unwrap();
@@ -1725,7 +1870,7 @@ fn check_node_inner(
                         Type::Unknown
                     }
                 }
-                Type::Record(ref fields) => {
+                Type::Record(ref fields, _) => {
                     if let Some(ty) = fields.get(field_name) {
                         ty.clone()
                     } else {
@@ -2403,6 +2548,7 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
         }
         "record_type" => {
             let mut fields = HashMap::new();
+            let mut row_var = None;
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "record_field_def" {
@@ -2412,9 +2558,14 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                     let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
                     let ty = parse_type(&type_node, source, symbols);
                     fields.insert(name, ty);
+                } else if child.kind() == "row_variable" {
+                    // ..r — row variable for open record types
+                    // Use the InferCtx's next_var counter convention
+                    // For now, generate a unique var ID from the row variable's byte position
+                    row_var = Some(child.start_byte() as u32);
                 }
             }
-            Type::Record(fields)
+            Type::Record(fields, row_var)
         }
 
         "generic_type" => {
@@ -2427,6 +2578,18 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                     let arg = node.named_child(1).unwrap();
                     let inner = parse_type(&arg, source, symbols);
                     Type::List(Box::new(inner))
+                }
+                "Map" => {
+                    let key = node.named_child(1).unwrap();
+                    let val = node.named_child(2).unwrap();
+                    Type::Map(
+                        Box::new(parse_type(&key, source, symbols)),
+                        Box::new(parse_type(&val, source, symbols)),
+                    )
+                }
+                "Set" => {
+                    let arg = node.named_child(1).unwrap();
+                    Type::Set(Box::new(parse_type(&arg, source, symbols)))
                 }
                 "Option" => {
                     let arg = node.named_child(1).unwrap();

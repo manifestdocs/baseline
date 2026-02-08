@@ -1,8 +1,8 @@
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 /// Shared string type for cheap cloning.
-pub type RcStr = Rc<str>;
+pub type RcStr = Arc<str>;
 
 // ---------------------------------------------------------------------------
 // Value
@@ -18,22 +18,26 @@ pub enum Value {
     String(RcStr),
     Bool(bool),
     Unit,
-    List(Rc<Vec<Value>>),
+    List(Arc<Vec<Value>>),
     /// Ordered key-value pairs. Keys are shared strings (field names).
-    Record(Rc<Vec<(RcStr, Value)>>),
+    Record(Arc<Vec<(RcStr, Value)>>),
     /// Positional tuple.
-    Tuple(Rc<Vec<Value>>),
+    Tuple(Arc<Vec<Value>>),
     /// Tagged enum variant: (tag_name, optional payload).
-    Enum(RcStr, Rc<Value>),
+    Enum(RcStr, Arc<Value>),
     /// Named struct: type name + ordered key-value fields (e.g., Point { x: 1, y: 2 }).
-    Struct(RcStr, Rc<Vec<(RcStr, Value)>>),
+    Struct(RcStr, Arc<Vec<(RcStr, Value)>>),
     /// A compiled function — index into Program.chunks.
     Function(usize),
     /// A closure — function + captured upvalues.
     Closure {
         chunk_idx: usize,
-        upvalues: Rc<Vec<Value>>,
+        upvalues: Arc<Vec<Value>>,
     },
+    /// Map: ordered key-value pairs.
+    Map(Arc<Vec<(Value, Value)>>),
+    /// Set: unique elements.
+    Set(Arc<Vec<Value>>),
 }
 
 impl fmt::Display for Value {
@@ -85,6 +89,22 @@ impl fmt::Display for Value {
             }
             Value::Function(idx) => write!(f, "<fn:{}>", idx),
             Value::Closure { chunk_idx, .. } => write!(f, "<closure:{}>", chunk_idx),
+            Value::Map(entries) => {
+                let s = entries
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "#{{{}}}", s)
+            }
+            Value::Set(elems) => {
+                let s = elems
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                write!(f, "Set({})", s)
+            }
         }
     }
 }

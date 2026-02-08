@@ -26,13 +26,17 @@ impl Prelude {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure | Prelude::Core => &["Option", "Result", "String", "List", "Json"],
+            Prelude::Pure => &["Option", "Result", "String", "List", "Json"],
+            Prelude::Core => {
+                &["Option", "Result", "String", "List", "Map", "Set", "Json"]
+            }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Json", "Http", "Response", "Request",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Http", "Response",
+                "Request",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Json", "Http", "Response", "Request",
-                "Router",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Http", "Response",
+                "Request", "Router",
             ],
         }
     }
@@ -54,16 +58,18 @@ impl Prelude {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure | Prelude::Core => {
-                &["Option", "Result", "String", "List", "Json", "Math"]
+            Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Math"],
+            Prelude::Core => {
+                &["Option", "Result", "String", "List", "Map", "Set", "Json", "Math"]
             }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time",
-                "Random", "Env", "Fs", "Http", "Response", "Request",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Console",
+                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Json", "Math", "Console", "Log", "Time",
-                "Env", "Http", "Response", "Request", "Router", "Server", "Db", "Metrics",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Console",
+                "Log", "Time", "Env", "Http", "Response", "Request", "Router", "Server", "Db",
+                "Metrics",
             ],
         }
     }

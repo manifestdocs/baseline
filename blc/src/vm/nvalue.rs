@@ -12,7 +12,7 @@
 //!   Heap:     0xFFFE_PPPP_PPPP_PPPP  (P = pointer to Rc<HeapObject> inner data)
 
 use std::fmt;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use super::value::{RcStr, Value};
 
@@ -58,6 +58,10 @@ pub enum HeapObject {
         handler: NValue,
         remaining_mw: Vec<NValue>,
     },
+    /// Map: association list of (key, value) pairs.
+    Map(Vec<(NValue, NValue)>),
+    /// Set: unique elements.
+    Set(Vec<NValue>),
     /// Integers that don't fit in 48-bit signed range.
     BigInt(i64),
 }
@@ -171,6 +175,14 @@ impl NValue {
         Self::from_heap(HeapObject::Struct { name, fields })
     }
 
+    pub fn map(entries: Vec<(NValue, NValue)>) -> Self {
+        Self::from_heap(HeapObject::Map(entries))
+    }
+
+    pub fn set(elems: Vec<NValue>) -> Self {
+        Self::from_heap(HeapObject::Set(elems))
+    }
+
     pub fn closure(chunk_idx: usize, upvalues: Vec<NValue>) -> Self {
         Self::from_heap(HeapObject::Closure {
             chunk_idx,
@@ -184,8 +196,8 @@ impl NValue {
     }
 
     fn from_heap(obj: HeapObject) -> Self {
-        let rc = Rc::new(obj);
-        let ptr = Rc::into_raw(rc) as u64;
+        let rc = Arc::new(obj);
+        let ptr = Arc::into_raw(rc) as u64;
         debug_assert!(ptr & TAG_MASK == 0, "heap pointer exceeds 48 bits");
         NValue(TAG_HEAP | ptr)
     }
@@ -404,7 +416,7 @@ impl Clone for NValue {
         if self.is_heap() {
             let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
             unsafe {
-                Rc::increment_strong_count(ptr);
+                Arc::increment_strong_count(ptr);
             }
         }
         NValue(self.0)
@@ -419,7 +431,7 @@ impl Drop for NValue {
         if self.is_heap() {
             let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
             unsafe {
-                Rc::decrement_strong_count(ptr);
+                Arc::decrement_strong_count(ptr);
             }
         }
     }
@@ -500,6 +512,17 @@ impl fmt::Display for NValue {
                 HeapObject::NativeMwNext { .. } => {
                     write!(f, "<middleware-next>")
                 }
+                HeapObject::Map(entries) => {
+                    let s: Vec<String> = entries
+                        .iter()
+                        .map(|(k, v)| format!("{}: {}", k, v))
+                        .collect();
+                    write!(f, "#{{{}}}", s.join(", "))
+                }
+                HeapObject::Set(elems) => {
+                    let s: Vec<String> = elems.iter().map(|v| v.to_string()).collect();
+                    write!(f, "Set({})", s.join(", "))
+                }
                 HeapObject::BigInt(i) => write!(f, "{}", i),
             }
         }
@@ -553,6 +576,17 @@ impl NValue {
                 let nv: Vec<NValue> = upvalues.iter().map(NValue::from_value).collect();
                 NValue::closure(*chunk_idx, nv)
             }
+            Value::Map(entries) => {
+                let ne: Vec<(NValue, NValue)> = entries
+                    .iter()
+                    .map(|(k, v)| (NValue::from_value(k), NValue::from_value(v)))
+                    .collect();
+                NValue::map(ne)
+            }
+            Value::Set(elems) => {
+                let nv: Vec<NValue> = elems.iter().map(NValue::from_value).collect();
+                NValue::set(nv)
+            }
         }
     }
 
@@ -575,23 +609,23 @@ impl NValue {
         match self.as_heap_ref() {
             HeapObject::String(s) => Value::String(s.clone()),
             HeapObject::List(items) => {
-                Value::List(Rc::new(items.iter().map(|v| v.to_value()).collect()))
+                Value::List(Arc::new(items.iter().map(|v| v.to_value()).collect()))
             }
-            HeapObject::Record(fields) => Value::Record(Rc::new(
+            HeapObject::Record(fields) => Value::Record(Arc::new(
                 fields
                     .iter()
                     .map(|(k, v)| (k.clone(), v.to_value()))
                     .collect(),
             )),
             HeapObject::Tuple(items) => {
-                Value::Tuple(Rc::new(items.iter().map(|v| v.to_value()).collect()))
+                Value::Tuple(Arc::new(items.iter().map(|v| v.to_value()).collect()))
             }
             HeapObject::Enum { tag, payload } => {
-                Value::Enum(tag.clone(), Rc::new(payload.to_value()))
+                Value::Enum(tag.clone(), Arc::new(payload.to_value()))
             }
             HeapObject::Struct { name, fields } => Value::Struct(
                 name.clone(),
-                Rc::new(
+                Arc::new(
                     fields
                         .iter()
                         .map(|(k, v)| (k.clone(), v.to_value()))
@@ -603,10 +637,19 @@ impl NValue {
                 upvalues,
             } => Value::Closure {
                 chunk_idx: *chunk_idx,
-                upvalues: Rc::new(upvalues.iter().map(|v| v.to_value()).collect()),
+                upvalues: Arc::new(upvalues.iter().map(|v| v.to_value()).collect()),
             },
             HeapObject::NativeMwNext { .. } => Value::Unit,
             HeapObject::BigInt(i) => Value::Int(*i),
+            HeapObject::Map(entries) => Value::Map(Arc::new(
+                entries
+                    .iter()
+                    .map(|(k, v)| (k.to_value(), v.to_value()))
+                    .collect(),
+            )),
+            HeapObject::Set(elems) => {
+                Value::Set(Arc::new(elems.iter().map(|v| v.to_value()).collect()))
+            }
         }
     }
 }
