@@ -18,3 +18,19 @@
 ; Module declaration
 (module_decl
   (module_path) @name) @item
+
+; BDD describe/context blocks
+(describe_block
+  name: (string_literal) @name) @item
+
+; BDD it blocks
+(it_block
+  name: (string_literal) @name) @item
+
+; Spec blocks (show the spec name)
+(spec_decl
+  name: (_) @name) @item
+
+; Inline tests
+(inline_test
+  (string_literal) @name) @item

@@ -8,3 +8,8 @@
 (lambda
   "|" @open
   "|" @close)
+
+; Map literal
+(map_literal
+  "#{" @open
+  "}" @close)

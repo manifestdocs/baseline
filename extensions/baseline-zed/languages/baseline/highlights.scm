@@ -22,8 +22,10 @@
 
 ; Strings
 (string_literal) @string
+(multiline_string_literal) @string
+(raw_string_literal) @string
+(raw_hash_string_literal) @string
 (escape_sequence) @string.escape
-
 
 ; ============================================================================
 ; Types
@@ -52,6 +54,9 @@
   "in"
   "do"
   "test"
+  "not"
+  "with"
+  "handle"
 ] @keyword
 
 [
@@ -67,6 +72,83 @@
   "true"
   "false"
 ] @boolean
+
+; ============================================================================
+; BDD Testing
+; ============================================================================
+
+; describe / context blocks
+(describe_block
+  ["describe" "context"] @keyword.test)
+
+(describe_block
+  name: (string_literal) @string.special)
+
+; it blocks
+(it_block
+  "it" @keyword.test)
+
+(it_block
+  modifier: (_) @keyword.modifier)
+
+(it_block
+  name: (string_literal) @string.special)
+
+; Hooks
+(before_each_block
+  "before_each" @keyword.test)
+
+(after_each_block
+  "after_each" @keyword.test)
+
+; expect expression
+(expect_expression
+  "expect" @keyword.test)
+
+; Matchers
+(matcher
+  [
+    "to_equal"
+    "to_be"
+    "to_contain"
+    "to_have_length"
+    "to_be_empty"
+    "to_start_with"
+    "to_satisfy"
+    "to_be_ok"
+    "to_be_some"
+    "to_be_none"
+  ] @function.builtin)
+
+; Inline test keyword
+(inline_test
+  "test" @keyword.test)
+
+; ============================================================================
+; Spec / Contract Attributes
+; ============================================================================
+
+(spec_decl
+  "@spec" @attribute)
+
+(given_clause
+  "@given" @attribute)
+
+(returns_clause
+  "@returns" @attribute)
+
+(requires_clause
+  "@requires" @attribute)
+
+(ensures_clause
+  "@ensures" @attribute)
+
+(assume_clause
+  "@assume" @attribute)
+
+(pure_attribute) @attribute
+
+(total_attribute) @attribute
 
 ; ============================================================================
 ; Functions
@@ -117,6 +199,9 @@
 ; Wildcard pattern
 (wildcard_pattern) @variable.builtin
 
+; Hole expression
+(hole_expression) @keyword.special
+
 ; Record fields
 (record_field_def
   (identifier) @property)
@@ -158,6 +243,7 @@
   "|>"
   "?"
   ".."
+  "++"
 ] @operator
 
 (type_annotation
@@ -172,6 +258,10 @@
 (match_arm
   "->" @punctuation.delimiter)
 
+; Handler clause arrows
+(handler_clause
+  "->" @punctuation.delimiter)
+
 ; ============================================================================
 ; Punctuation
 ; ============================================================================
@@ -181,6 +271,10 @@
 "." @punctuation.delimiter
 "|" @punctuation.delimiter
 "=" @operator
+
+; Map literal opening
+(map_literal
+  "#{" @punctuation.bracket)
 
 ; String interpolation (must come AFTER generic punctuation to take priority)
 (interpolation
@@ -213,6 +307,20 @@
 (effect_set
   (type_identifier) @type.effect)
 
+; Handler expressions
+(handle_expression
+  "handle" @keyword
+  "with" @keyword)
+
+(handler_clause
+  effect: (type_identifier) @type.effect)
+
+(with_expression
+  "with" @keyword)
+
+(handler_binding
+  effect: (type_identifier) @type.effect)
+
 ; ============================================================================
 ; Sum types (variants)
 ; ============================================================================
@@ -236,3 +344,7 @@
 
 (import_decl
   "import" @keyword.import)
+
+; Import paths
+(import_path
+  (type_identifier) @module)
