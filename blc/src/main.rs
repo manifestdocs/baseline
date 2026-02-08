@@ -42,7 +42,7 @@ enum Commands {
         /// The file to run
         file: PathBuf,
 
-        /// Use the tree-walk interpreter instead of the bytecode VM
+        /// Use the legacy tree-walk interpreter (debug only, deprecated)
         #[arg(long)]
         interp: bool,
 
@@ -57,6 +57,10 @@ enum Commands {
         /// Use the LLVM JIT backend (requires --features llvm)
         #[arg(long)]
         llvm: bool,
+
+        /// Print heap allocation statistics after execution
+        #[arg(long)]
+        mem_stats: bool,
     },
 
     /// Run inline tests in a Baseline source file
@@ -68,7 +72,7 @@ enum Commands {
         #[arg(long)]
         json: bool,
 
-        /// Use the tree-walk interpreter instead of the bytecode VM
+        /// Use the legacy tree-walk interpreter (debug only, deprecated)
         #[arg(long)]
         interp: bool,
 
@@ -101,10 +105,47 @@ fn main() {
 
     match cli.command {
         Commands::Check { file, json, level } => {
+            // Parse verification level from command line
+            let ver_level: diagnostics::VerificationLevel = level.parse().unwrap_or_else(|e| {
+                eprintln!("{}", e);
+                std::process::exit(1);
+            });
+
             let mut result = check_file(&file);
+            // Update the verification level in the result
+            result.verification_level = ver_level.clone();
+            result.checked = match ver_level {
+                diagnostics::VerificationLevel::Types => vec!["types".to_string()],
+                diagnostics::VerificationLevel::Refinements => {
+                    vec!["types".to_string(), "refinements".to_string()]
+                }
+                diagnostics::VerificationLevel::Full => vec![
+                    "types".to_string(),
+                    "refinements".to_string(),
+                    "specs".to_string(),
+                    "smt".to_string(),
+                ],
+                diagnostics::VerificationLevel::Skip => vec!["types".to_string()],
+            };
+            result.unchecked = match ver_level {
+                diagnostics::VerificationLevel::Types => vec![
+                    "refinements".to_string(),
+                    "specs".to_string(),
+                    "smt".to_string(),
+                ],
+                diagnostics::VerificationLevel::Refinements => {
+                    vec!["specs".to_string(), "smt".to_string()]
+                }
+                diagnostics::VerificationLevel::Full => vec![],
+                diagnostics::VerificationLevel::Skip => vec![
+                    "refinements".to_string(),
+                    "specs".to_string(),
+                    "smt".to_string(),
+                ],
+            };
 
             // Run SMT verification at --level=full
-            if level == "full" {
+            if ver_level == diagnostics::VerificationLevel::Full {
                 let source = std::fs::read_to_string(&file).unwrap_or_default();
                 let mut parser = tree_sitter::Parser::new();
                 parser
@@ -112,8 +153,7 @@ fn main() {
                     .expect("Failed to load grammar");
                 if let Some(tree) = parser.parse(&source, None) {
                     let file_name = file.display().to_string();
-                    let smt_diags =
-                        blc::analysis::check_specs(&tree, &source, &file_name, 5000);
+                    let smt_diags = blc::analysis::check_specs(&tree, &source, &file_name, 5000);
                     let has_smt_errors = smt_diags
                         .iter()
                         .any(|d| d.severity == diagnostics::Severity::Error);
@@ -139,9 +179,11 @@ fn main() {
             interp,
             jit,
             llvm,
+            mem_stats,
             ..
         } => {
             if interp {
+                eprintln!("Warning: --interp is deprecated. The bytecode VM is the default and recommended backend.");
                 run_file(&file);
             } else if jit {
                 run_file_jit(&file);
@@ -149,6 +191,10 @@ fn main() {
                 run_file_llvm(&file);
             } else {
                 run_file_vm(&file);
+            }
+            if mem_stats {
+                let stats = vm::nvalue::alloc_stats();
+                eprintln!("[mem] {}", stats);
             }
         }
         Commands::Test {
@@ -375,7 +421,11 @@ fn run_file_llvm(file: &PathBuf) {
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
-    let type_map = if has_type_errors { None } else { Some(type_map) };
+    let type_map = if has_type_errors {
+        None
+    } else {
+        Some(type_map)
+    };
 
     let vm_instance = vm::vm::Vm::new();
     let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
@@ -408,7 +458,9 @@ fn run_file_llvm(file: &PathBuf) {
 #[cfg(not(feature = "llvm"))]
 fn run_file_llvm(_file: &PathBuf) {
     eprintln!("Error: LLVM support requires building with --features llvm");
-    eprintln!("  LLVM_SYS_181_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --features llvm --release");
+    eprintln!(
+        "  LLVM_SYS_181_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --features llvm --release"
+    );
     std::process::exit(1);
 }
 
@@ -593,9 +645,10 @@ fn run_main<'a>(
 fn check_file(path: &Path) -> CheckResult {
     match parse::parse_file(path) {
         Ok(result) => result,
-        Err(e) => CheckResult {
-            status: "failure".to_string(),
-            diagnostics: vec![diagnostics::Diagnostic {
+        Err(e) => {
+            let mut result = CheckResult::new(diagnostics::VerificationLevel::Types);
+            result.status = "failure".to_string();
+            result.diagnostics.push(diagnostics::Diagnostic {
                 code: "IO_001".to_string(),
                 severity: diagnostics::Severity::Error,
                 location: diagnostics::Location {
@@ -608,8 +661,9 @@ fn check_file(path: &Path) -> CheckResult {
                 message: format!("Failed to read file: {}", e),
                 context: "Could not open or read the specified file.".to_string(),
                 suggestions: vec![],
-            }],
-        },
+            });
+            result
+        }
     }
 }
 
@@ -685,7 +739,10 @@ fn print_test_results(result: &test_runner::TestSuiteResult) {
     if result.summary.skipped > 0 {
         println!(
             "\n{} tests: {} passed, {} failed, {} skipped",
-            result.summary.total, result.summary.passed, result.summary.failed, result.summary.skipped
+            result.summary.total,
+            result.summary.passed,
+            result.summary.failed,
+            result.summary.skipped
         );
     } else {
         println!(

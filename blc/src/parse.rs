@@ -9,7 +9,9 @@ use std::path::Path;
 use tree_sitter::Parser;
 use tree_sitter_baseline::LANGUAGE;
 
-use crate::diagnostics::{CheckResult, Diagnostic, Location, Severity, Suggestion};
+use crate::diagnostics::{
+    CheckResult, Diagnostic, Location, Severity, Suggestion, VerificationLevel,
+};
 use crate::resolver::ModuleLoader;
 
 /// Parse a Baseline source file and return check results.
@@ -65,10 +67,11 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
         "success".to_string()
     };
 
-    Ok(CheckResult {
-        status,
-        diagnostics,
-    })
+    // Default to refinements level (what we actually check)
+    let mut result = CheckResult::new(VerificationLevel::Refinements);
+    result.status = status;
+    result.diagnostics = diagnostics;
+    Ok(result)
 }
 
 /// Parse a source string and return check results (used by tests and API).
@@ -106,10 +109,11 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
         "success".to_string()
     };
 
-    CheckResult {
-        status,
-        diagnostics,
-    }
+    // Default to refinements level (what we actually check)
+    let mut result = CheckResult::new(VerificationLevel::Refinements);
+    result.status = status;
+    result.diagnostics = diagnostics;
+    result
 }
 
 /// Parse an integer literal that may use hex (0x), binary (0b), octal (0o),
@@ -175,6 +179,7 @@ fn collect_errors(
             suggestions: vec![Suggestion {
                 strategy: "insert".to_string(),
                 description: format!("Add missing {}", node.kind()),
+                confidence: None,
                 patch: None,
             }],
         });

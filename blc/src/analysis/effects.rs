@@ -362,6 +362,7 @@ fn check_transitive_effects(
                         Suggestion {
                             strategy: "escalate_capability".to_string(),
                             description: format!("Add {} to the function signature", effect),
+                            confidence: None,
                             patch: Some(patch),
                         },
                     ],
@@ -598,11 +599,13 @@ fn check_effectful_call(
                 Suggestion {
                     strategy: "escalate_capability".to_string(),
                     description: format!("Add {} to the function signature", required_effect),
+                    confidence: None,
                     patch: Some(patch),
                 },
                 Suggestion {
                     strategy: "remove_call".to_string(),
                     description: "Delete the unauthorized call".to_string(),
+                    confidence: None,
                     patch: Some(Patch {
                         start_line: start.row + 1,
                         original_text: Some(call_name.to_string()),
