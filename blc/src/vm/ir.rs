@@ -144,6 +144,8 @@ pub enum Expr {
         iterable: Box<Expr>,
         body: Box<Expr>,
     },
+    /// Typed hole (??) — runtime error if reached.
+    Hole,
 
     // -- Bindings --
     Let {
@@ -189,6 +191,7 @@ pub enum BinOp {
     Gt,
     Le,
     Ge,
+    ListConcat,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

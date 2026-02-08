@@ -173,9 +173,8 @@ impl<'a> Compiler<'a> {
         match kind {
             "integer_literal" => {
                 let text = self.node_text(node);
-                let val: i64 = text
-                    .parse()
-                    .map_err(|_| self.error(format!("Invalid integer: {}", text), node))?;
+                let val: i64 = crate::parse::parse_int_literal(&text)
+                    .ok_or_else(|| self.error(format!("Invalid integer: {}", text), node))?;
                 if val >= i16::MIN as i64 && val <= i16::MAX as i64 {
                     self.emit(Op::LoadSmallInt(val as i16), node);
                 } else {
@@ -197,8 +196,13 @@ impl<'a> Compiler<'a> {
                 let idx = self.chunk.add_constant(Value::Bool(val));
                 self.emit(Op::LoadConst(idx), node);
             }
-            "string_literal" => {
+            "string_literal" | "multiline_string_literal" => {
                 self.compile_string_literal(node)?;
+            }
+            "raw_string_literal" | "raw_hash_string_literal" => {
+                let content = self.raw_string_content(node);
+                let idx = self.chunk.add_constant(Value::String(content.into()));
+                self.emit(Op::LoadConst(idx), node);
             }
             "tuple_expression" => {
                 self.compile_tuple(node)?;
@@ -214,6 +218,11 @@ impl<'a> Compiler<'a> {
             }
             "for_expression" => {
                 self.compile_for(node)?;
+            }
+            "hole_expression" => {
+                let msg = "Typed hole (??) encountered at runtime";
+                let idx = self.chunk.add_constant(Value::String(msg.into()));
+                self.emit(Op::Halt(idx), node);
             }
             "range_expression" => {
                 self.compile_range(node)?;
@@ -586,7 +595,8 @@ impl<'a> Compiler<'a> {
                     end_jumps.push(self.emit(Op::Jump(0), arm));
                 }
                 "literal" | "integer_literal" | "float_literal" | "boolean_literal"
-                | "string_literal" => {
+                | "string_literal" | "multiline_string_literal"
+                | "raw_string_literal" | "raw_hash_string_literal" => {
                     // Duplicate subject, compile pattern, compare
                     self.emit(Op::GetLocal(subject_slot), arm);
                     self.compile_expression(pattern)?;
@@ -891,12 +901,13 @@ impl<'a> Compiler<'a> {
     /// Uses [`eval_const_binary`] for binary sub-expressions.
     fn try_eval_const(&self, node: &Node) -> Option<Value> {
         match node.kind() {
-            "integer_literal" => self.node_text(node).parse::<i64>().ok().map(Value::Int),
+            "integer_literal" => crate::parse::parse_int_literal(&self.node_text(node)).map(Value::Int),
             "float_literal" => self.node_text(node).parse::<f64>().ok().map(Value::Float),
             "boolean_literal" => Some(Value::Bool(self.node_text(node) == "true")),
-            "string_literal" if node.named_child_count() == 0 => {
-                let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
-                Some(Value::String(text.into()))
+            "string_literal" | "multiline_string_literal"
+                if !self.has_interpolation(node) =>
+            {
+                Some(Value::String(self.extract_string_text(node).into()))
             }
             "parenthesized_expression" | "literal" => {
                 node.named_child(0).and_then(|c| self.try_eval_const(&c))
@@ -999,6 +1010,7 @@ impl<'a> Compiler<'a> {
             "<=" => Op::Le,
             ">=" if both_int => Op::GeInt,
             ">=" => Op::Ge,
+            "++" => Op::ListConcat,
             _ => return Err(self.error(format!("Unknown binary operator: {}", op_text), node)),
         };
 
@@ -1045,44 +1057,25 @@ impl<'a> Compiler<'a> {
     // -----------------------------------------------------------------------
 
     fn compile_string_literal(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
-        let node_start = node.start_byte();
-        let node_end = node.end_byte();
-        let src = self.source.as_bytes();
-
         let mut parts: Vec<StringPart<'a>> = Vec::new();
-        let mut cursor = node_start + 1;
-        let content_end = node_end - 1;
 
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
-            let child_start = child.start_byte();
-            let child_end = child.end_byte();
-
-            if cursor < child_start {
-                let text = std::str::from_utf8(&src[cursor..child_start]).unwrap_or("");
-                if !text.is_empty() {
-                    parts.push(StringPart::Text(text.to_string()));
-                }
-            }
-
             match child.kind() {
-                "interpolation" => {
-                    parts.push(StringPart::Interpolation(child));
+                "string_content" | "multiline_string_content" => {
+                    let text = self.node_text(&child);
+                    if !text.is_empty() {
+                        parts.push(StringPart::Text(text));
+                    }
                 }
                 "escape_sequence" => {
                     let text = self.node_text(&child);
                     parts.push(StringPart::Text(unescape(&text)));
                 }
-                _ => {}
-            }
-
-            cursor = child_end;
-        }
-
-        if cursor < content_end {
-            let text = std::str::from_utf8(&src[cursor..content_end]).unwrap_or("");
-            if !text.is_empty() {
-                parts.push(StringPart::Text(text.to_string()));
+                "interpolation" => {
+                    parts.push(StringPart::Interpolation(child));
+                }
+                _ => {} // string_start, string_end, etc.
             }
         }
 
@@ -1124,6 +1117,48 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
+    /// Check if a string node contains interpolation children.
+    fn has_interpolation(&self, node: &Node) -> bool {
+        for i in 0..node.named_child_count() {
+            if let Some(child) = node.named_child(i) {
+                if child.kind() == "interpolation" {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Extract the text content of a string literal (no interpolation).
+    /// Handles escape sequences and content from both regular and multi-line strings.
+    fn extract_string_text(&self, node: &Node) -> String {
+        let mut result = String::new();
+        for i in 0..node.named_child_count() {
+            let child = node.named_child(i).unwrap();
+            match child.kind() {
+                "string_content" | "multiline_string_content" => {
+                    result.push_str(&self.node_text(&child));
+                }
+                "escape_sequence" => {
+                    result.push_str(&unescape(&self.node_text(&child)));
+                }
+                _ => {}
+            }
+        }
+        result
+    }
+
+    /// Extract content from raw_string_literal or raw_hash_string_literal.
+    fn raw_string_content(&self, node: &Node) -> String {
+        for i in 0..node.named_child_count() {
+            let child = node.named_child(i).unwrap();
+            if child.kind().contains("content") {
+                return child.utf8_text(self.source.as_bytes()).unwrap_or("").to_string();
+            }
+        }
+        String::new()
+    }
+
     // -----------------------------------------------------------------------
     // Program compilation
     // -----------------------------------------------------------------------
@@ -1163,10 +1198,6 @@ impl<'a> Compiler<'a> {
 
         // Second pass: compile each function body, replacing pre-allocated slots
         for (i, func_node) in func_defs.iter().enumerate() {
-            let body = func_node
-                .child_by_field_name("body")
-                .ok_or_else(|| self.error("Function missing body".into(), func_node))?;
-
             // Reset state for this function
             self.chunk = Chunk::new();
             self.locals.clear();
@@ -1176,15 +1207,7 @@ impl<'a> Compiler<'a> {
             let name_node = func_node.child_by_field_name("name").unwrap();
             self.current_fn_name = Some(self.node_text(&name_node));
 
-            // If body is a lambda, extract params and compile the inner body.
-            // Otherwise it's a zero-arg function — compile body directly.
-            if body.kind() == "lambda" {
-                self.compile_lambda_body(&body)?;
-            } else {
-                self.tail_position = true;
-                self.compile_expression(&body)?;
-                self.tail_position = false;
-            }
+            self.compile_function_body(func_node)?;
 
             self.current_fn_name = None;
             let chunk = self.finish_chunk();
@@ -1233,10 +1256,6 @@ impl<'a> Compiler<'a> {
 
         // Second pass: compile each function body
         for (i, func_node) in func_defs.iter().enumerate() {
-            let body = func_node
-                .child_by_field_name("body")
-                .ok_or_else(|| self.error("Function missing body".into(), func_node))?;
-
             self.chunk = Chunk::new();
             self.locals.clear();
             self.scope_depth = 0;
@@ -1245,13 +1264,7 @@ impl<'a> Compiler<'a> {
             let name_node = func_node.child_by_field_name("name").unwrap();
             self.current_fn_name = Some(self.node_text(&name_node));
 
-            if body.kind() == "lambda" {
-                self.compile_lambda_body(&body)?;
-            } else {
-                self.tail_position = true;
-                self.compile_expression(&body)?;
-                self.tail_position = false;
-            }
+            self.compile_function_body(func_node)?;
 
             self.current_fn_name = None;
             let chunk = self.finish_chunk();
@@ -1290,10 +1303,6 @@ impl<'a> Compiler<'a> {
 
             // Second pass: compile each function body
             for (i, func_node) in func_defs.iter().enumerate() {
-                let body = func_node
-                    .child_by_field_name("body")
-                    .ok_or_else(|| self.error("Function missing body".into(), func_node))?;
-
                 self.chunk = Chunk::new();
                 self.locals.clear();
                 self.scope_depth = 0;
@@ -1302,13 +1311,7 @@ impl<'a> Compiler<'a> {
                 let name_node = func_node.child_by_field_name("name").unwrap();
                 self.current_fn_name = Some(self.node_text(&name_node));
 
-                if body.kind() == "lambda" {
-                    self.compile_lambda_body(&body)?;
-                } else {
-                    self.tail_position = true;
-                    self.compile_expression(&body)?;
-                    self.tail_position = false;
-                }
+                self.compile_function_body(func_node)?;
 
                 self.current_fn_name = None;
                 let chunk = self.finish_chunk();
@@ -1421,36 +1424,29 @@ impl<'a> Compiler<'a> {
         }))
     }
 
-    /// Compile a lambda node's parameters and body into the current chunk.
-    /// Used by compile_program for function_def bodies.
-    fn compile_lambda_body(&mut self, lambda_node: &Node<'a>) -> Result<(), CompileError> {
-        let mut cursor = lambda_node.walk();
-        let children: Vec<Node<'a>> = lambda_node.named_children(&mut cursor).collect();
-
-        if children.is_empty() {
-            // Empty lambda `||` — no params, no body (just Unit)
-            let idx = self.chunk.add_constant(Value::Unit);
-            self.emit(Op::LoadConst(idx), lambda_node);
-            return Ok(());
+    /// Declare params from a function_def's param_list and compile its body.
+    fn compile_function_body(&mut self, func_node: &Node<'a>) -> Result<(), CompileError> {
+        // Declare params from param_list
+        if let Some(params) = func_node.child_by_field_name("params") {
+            let mut cursor = params.walk();
+            for param in params.named_children(&mut cursor) {
+                if param.kind() == "param"
+                    && let Some(name_node) = param.child_by_field_name("name")
+                {
+                    let name = self.node_text(&name_node);
+                    self.declare_local(&name);
+                }
+            }
         }
 
-        // All named children except the last are parameters, last is the body
-        let body = &children[children.len() - 1];
-        let params = &children[..children.len() - 1];
+        let body = func_node
+            .child_by_field_name("body")
+            .ok_or_else(|| self.error("Function missing body".into(), func_node))?;
 
-        for param in params {
-            let name = self.node_text(param);
-            self.declare_local(&name);
-        }
-
-        // The body of a named function is in tail position (for TCO)
-        let was_tail = self.tail_position;
-        if self.current_fn_name.is_some() {
-            self.tail_position = true;
-        }
-        let result = self.compile_expression(body);
-        self.tail_position = was_tail;
-        result
+        self.tail_position = true;
+        self.compile_expression(&body)?;
+        self.tail_position = false;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -2086,7 +2082,7 @@ mod tests {
 
     /// Helper: wrap expr in a function def, parse, compile the body, execute.
     fn eval_expr(expr: &str) -> Value {
-        let source = format!("x : () -> Unknown\nx = {}", expr);
+        let source = format!("fn x() = {}", expr);
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_baseline::LANGUAGE.into())
@@ -2399,10 +2395,8 @@ mod tests {
     #[test]
     fn compile_named_function_call() {
         let result = eval_program(
-            "double : Int -> Int\n\
-             double = |x| x * 2\n\
-             main : () -> Int\n\
-             main = double(5)",
+            "fn double(x: Int) -> Int = x * 2\n\
+                          fn main() -> Int = double(5)",
         );
         assert_eq!(result, Value::Int(10));
     }
@@ -2410,10 +2404,8 @@ mod tests {
     #[test]
     fn compile_two_arg_function() {
         let result = eval_program(
-            "add : (Int, Int) -> Int\n\
-             add = |a, b| a + b\n\
-             main : () -> Int\n\
-             main = add(3, 4)",
+            "fn add(a: Int, b: Int) -> Int = a + b\n\
+                          fn main() -> Int = add(3, 4)",
         );
         assert_eq!(result, Value::Int(7));
     }
@@ -2421,12 +2413,9 @@ mod tests {
     #[test]
     fn compile_chained_function_calls() {
         let result = eval_program(
-            "double : Int -> Int\n\
-             double = |x| x * 2\n\
-             inc : Int -> Int\n\
-             inc = |x| x + 1\n\
-             main : () -> Int\n\
-             main = inc(double(3))",
+            "fn double(x: Int) -> Int = x * 2\n\
+                          fn inc(x: Int) -> Int = x + 1\n\
+                          fn main() -> Int = inc(double(3))",
         );
         assert_eq!(result, Value::Int(7));
     }
@@ -2434,10 +2423,8 @@ mod tests {
     #[test]
     fn compile_recursive_function() {
         let result = eval_program(
-            "factorial : Int -> Int\n\
-             factorial = |n| if n <= 1 then 1 else n * factorial(n - 1)\n\
-             main : () -> Int\n\
-             main = factorial(5)",
+            "fn factorial(n: Int) -> Int = if n <= 1 then 1 else n * factorial(n - 1)\n\
+                          fn main() -> Int = factorial(5)",
         );
         assert_eq!(result, Value::Int(120));
     }
@@ -2445,10 +2432,8 @@ mod tests {
     #[test]
     fn compile_zero_arg_function() {
         let result = eval_program(
-            "answer : () -> Int\n\
-             answer = 42\n\
-             main : () -> Int\n\
-             main = answer()",
+            "fn answer() -> Int = 42\n\
+                          fn main() -> Int = answer()",
         );
         assert_eq!(result, Value::Int(42));
     }
@@ -2471,10 +2456,8 @@ mod tests {
     #[test]
     fn compile_lambda_passed_to_function() {
         let result = eval_program(
-            "apply : ((Int -> Int), Int) -> Int\n\
-             apply = |f, x| f(x)\n\
-             main : () -> Int\n\
-             main = apply(|x| x * 3, 5)",
+            "fn apply(f: (Int -> Int), x: Int) -> Int = f(x)\n\
+                          fn main() -> Int = apply(|x| x * 3, 5)",
         );
         assert_eq!(result, Value::Int(15));
     }
@@ -2484,10 +2467,8 @@ mod tests {
     #[test]
     fn compile_pipe_simple() {
         let result = eval_program(
-            "double : Int -> Int\n\
-             double = |x| x * 2\n\
-             main : () -> Int\n\
-             main = 5 |> double",
+            "fn double(x: Int) -> Int = x * 2\n\
+                          fn main() -> Int = 5 |> double",
         );
         assert_eq!(result, Value::Int(10));
     }
@@ -2495,12 +2476,9 @@ mod tests {
     #[test]
     fn compile_pipe_chain() {
         let result = eval_program(
-            "double : Int -> Int\n\
-             double = |x| x * 2\n\
-             inc : Int -> Int\n\
-             inc = |x| x + 1\n\
-             main : () -> Int\n\
-             main = 3 |> double |> inc",
+            "fn double(x: Int) -> Int = x * 2\n\
+                          fn inc(x: Int) -> Int = x + 1\n\
+                          fn main() -> Int = 3 |> double |> inc",
         );
         assert_eq!(result, Value::Int(7));
     }
@@ -2508,20 +2486,15 @@ mod tests {
     #[test]
     fn compile_pipe_with_call_args() {
         let result = eval_program(
-            "add : (Int, Int) -> Int\n\
-             add = |a, b| a + b\n\
-             main : () -> Int\n\
-             main = 3 |> add(4)",
+            "fn add(a: Int, b: Int) -> Int = a + b\n\
+                          fn main() -> Int = 3 |> add(4)",
         );
         assert_eq!(result, Value::Int(7));
     }
 
     #[test]
     fn compile_pipe_to_lambda() {
-        let result = eval_program(
-            "main : () -> Int\n\
-             main = 5 |> |x| x * 2",
-        );
+        let result = eval_program("fn main() -> Int = 5 |> |x| x * 2");
         assert_eq!(result, Value::Int(10));
     }
 
@@ -2542,10 +2515,11 @@ mod tests {
     #[test]
     fn compile_closure_returned_from_function() {
         let result = eval_program(
-            "make_adder : Int -> (Int -> Int)\n\
-             make_adder = |n| |x| n + x\n\
-             main : () -> Int\n\
-             main = {\n  let add5 = make_adder(5)\n  add5(3)\n}",
+            "fn make_adder(n: Int) -> (Int -> Int) = |x| n + x\n\
+                          fn main() -> Int = {\n\
+               let add5 = make_adder(5)\n\
+               add5(3)\n\
+             }",
         );
         assert_eq!(result, Value::Int(8));
     }
@@ -2553,10 +2527,11 @@ mod tests {
     #[test]
     fn compile_closure_as_callback() {
         let result = eval_program(
-            "apply : ((Int -> Int), Int) -> Int\n\
-             apply = |f, x| f(x)\n\
-             main : () -> Int\n\
-             main = {\n  let offset = 100\n  apply(|x| x + offset, 5)\n}",
+            "fn apply(f: (Int -> Int), x: Int) -> Int = f(x)\n\
+                          fn main() -> Int = {\n\
+               let offset = 100\n\
+               apply(|x| x + offset, 5)\n\
+             }",
         );
         assert_eq!(result, Value::Int(105));
     }
@@ -2697,8 +2672,11 @@ mod tests {
     #[test]
     fn compile_try_ok_unwraps() {
         let result = eval_program(
-            "main : () -> Unknown\n\
-             main = {\n  let x = Ok(42)\n  let v = x?\n  v + 1\n}",
+            "fn main() -> Unknown = {\n\
+               let x = Ok(42)\n\
+               let v = x?\n\
+               v + 1\n\
+             }",
         );
         assert_eq!(result, Value::Int(43));
     }
@@ -2706,8 +2684,11 @@ mod tests {
     #[test]
     fn compile_try_err_returns_early() {
         let result = eval_program(
-            "main : () -> Unknown\n\
-             main = {\n  let x = Err(\"oops\")\n  let v = x?\n  v + 1\n}",
+            "fn main() -> Unknown = {\n\
+               let x = Err(\"oops\")\n\
+               let v = x?\n\
+               v + 1\n\
+             }",
         );
         assert_eq!(
             result,
@@ -2976,7 +2957,7 @@ mod tests {
     fn fold_div_by_zero_not_folded() {
         // Division by zero should NOT be folded — it will be a runtime error
         // but the compilation should succeed (the error happens at runtime)
-        let source = "x : () -> Int\nx = 10 / 0";
+        let source = "fn x() -> Int = 10 / 0";
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&tree_sitter_baseline::LANGUAGE.into())
@@ -3003,11 +2984,9 @@ mod tests {
     fn tco_factorial_accumulator() {
         // Tail-recursive factorial with accumulator
         let source = r#"
-fact : (Int, Int) -> Int
-fact = |n, acc| if n <= 1 then acc else fact(n - 1, n * acc)
+fn fact(n: Int, acc: Int) -> Int = if n <= 1 then acc else fact(n - 1, n * acc)
 
-main : () -> Int
-main = fact(10, 1)
+fn main() -> Int = fact(10, 1)
 "#;
         assert_eq!(eval_program(source), Value::Int(3628800));
     }
@@ -3016,11 +2995,9 @@ main = fact(10, 1)
     fn tco_emits_tail_call_opcode() {
         // Verify the compiler actually emits TailCall for a self-recursive call
         let source = r#"
-countdown : (Int) -> Int
-countdown = |n| if n <= 0 then 0 else countdown(n - 1)
+fn countdown(n: Int) -> Int = if n <= 0 then 0 else countdown(n - 1)
 
-main : () -> Int
-main = countdown(5)
+fn main() -> Int = countdown(5)
 "#;
         let mut parser = tree_sitter::Parser::new();
         parser
@@ -3052,11 +3029,9 @@ main = countdown(5)
     fn tco_deep_recursion_no_overflow() {
         // Without TCO, 50,000 iterations would blow the 1024-frame call stack
         let source = r#"
-countdown : (Int) -> Int
-countdown = |n| if n <= 0 then 0 else countdown(n - 1)
+fn countdown(n: Int) -> Int = if n <= 0 then 0 else countdown(n - 1)
 
-main : () -> Int
-main = countdown(50000)
+fn main() -> Int = countdown(50000)
 "#;
         assert_eq!(eval_program(source), Value::Int(0));
     }
@@ -3066,11 +3041,9 @@ main = countdown(50000)
         // fib(n) = fib(n-1) + fib(n-2) is NOT tail recursive
         // (the + happens after the calls)
         let source = r#"
-fib : (Int) -> Int
-fib = |n| if n <= 1 then n else fib(n - 1) + fib(n - 2)
+fn fib(n: Int) -> Int = if n <= 1 then n else fib(n - 1) + fib(n - 2)
 
-main : () -> Int
-main = fib(10)
+fn main() -> Int = fib(10)
 "#;
         let mut parser = tree_sitter::Parser::new();
         parser
@@ -3106,15 +3079,13 @@ main = fib(10)
     fn tco_match_tail_position() {
         // Tail calls in match arms should be optimized
         let source = "\
-count : (Int, Int) -> Int\n\
-count = |n, acc| {\n\
+fn count(n: Int, acc: Int) -> Int = {\n\
   match n\n\
     0 -> acc\n\
     _ -> count(n - 1, acc + 1)\n\
 }\n\
 \n\
-main : () -> Int\n\
-main = count(100, 0)";
+fn main() -> Int = count(100, 0)";
         assert_eq!(eval_program(source), Value::Int(100));
     }
 }

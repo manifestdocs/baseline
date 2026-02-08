@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::nvalue::{HeapObject, NValue};
 use super::value::RcStr;
 
@@ -16,11 +18,15 @@ type SimpleFn = fn(&[NValue]) -> Result<NValue, NativeError>;
 struct NativeEntry {
     pub name: &'static str,
     pub func: SimpleFn,
+    /// Expected argument count (None = variadic/unchecked).
+    pub arity: Option<u8>,
 }
 
 /// Registry of native functions callable from bytecode via CallNative.
 pub struct NativeRegistry {
     entries: Vec<NativeEntry>,
+    /// Name → index for O(1) lookup during compilation.
+    name_index: HashMap<&'static str, u16>,
 }
 
 impl Default for NativeRegistry {
@@ -33,6 +39,7 @@ impl NativeRegistry {
     pub fn new() -> Self {
         let mut registry = NativeRegistry {
             entries: Vec::new(),
+            name_index: HashMap::new(),
         };
         registry.register_all();
         registry
@@ -40,34 +47,78 @@ impl NativeRegistry {
 
     /// Look up a native function ID by qualified name (e.g., "Console.println!").
     pub fn lookup(&self, name: &str) -> Option<u16> {
-        self.entries
-            .iter()
-            .position(|e| e.name == name)
-            .map(|i| i as u16)
+        self.name_index.get(name).copied()
     }
 
     /// Call a native function by ID.
     pub fn call(&self, id: u16, args: &[NValue]) -> Result<NValue, NativeError> {
-        let entry = &self.entries[id as usize];
+        let entry = self.entries.get(id as usize).ok_or_else(|| {
+            NativeError(format!("Invalid native function id: {}", id))
+        })?;
+        if let Some(arity) = entry.arity
+            && args.len() != arity as usize
+        {
+            return Err(NativeError(format!(
+                "{}: expected {} argument(s), got {}",
+                entry.name, arity, args.len()
+            )));
+        }
         (entry.func)(args)
     }
 
     /// Check if a function is a HOF (returns true for List.map, List.filter, etc.).
     pub fn is_hof(&self, id: u16) -> bool {
-        let name = self.entries[id as usize].name;
-        matches!(
-            name,
-            "List.map" | "List.filter" | "List.fold" | "List.find" | "Option.map" | "Result.map"
-        )
+        self.entries
+            .get(id as usize)
+            .map(|e| {
+                matches!(
+                    e.name,
+                    "List.map"
+                        | "List.filter"
+                        | "List.fold"
+                        | "List.find"
+                        | "Option.map"
+                        | "Result.map"
+                )
+            })
+            .unwrap_or(false)
+    }
+
+    /// Check if a function requires VM re-entrancy (server dispatch).
+    pub fn is_server_listen(&self, id: u16) -> bool {
+        self.entries
+            .get(id as usize)
+            .map(|e| matches!(e.name, "Server.listen!" | "Server.listen"))
+            .unwrap_or(false)
     }
 
     /// Get the function name by ID (for error messages).
     pub fn name(&self, id: u16) -> &str {
-        self.entries[id as usize].name
+        self.entries
+            .get(id as usize)
+            .map(|e| e.name)
+            .unwrap_or("<unknown>")
     }
 
     fn register(&mut self, name: &'static str, func: SimpleFn) {
-        self.entries.push(NativeEntry { name, func });
+        let idx = self.entries.len() as u16;
+        self.entries.push(NativeEntry {
+            name,
+            func,
+            arity: None,
+        });
+        self.name_index.insert(name, idx);
+    }
+
+    #[allow(dead_code)]
+    fn register_with_arity(&mut self, name: &'static str, func: SimpleFn, arity: u8) {
+        let idx = self.entries.len() as u16;
+        self.entries.push(NativeEntry {
+            name,
+            func,
+            arity: Some(arity),
+        });
+        self.name_index.insert(name, idx);
     }
 
     fn register_all(&mut self) {
@@ -159,6 +210,9 @@ impl NativeRegistry {
         self.register("Response.error", native_response_error);
         self.register("Response.status", native_response_status);
         self.register("Response.with_header", native_response_with_header);
+        self.register("Response.with_headers", native_response_with_headers);
+        self.register("Response.redirect", native_response_redirect);
+        self.register("Response.redirect_permanent", native_response_redirect_permanent);
 
         // -- Router --
         self.register("Router.new", native_router_new);
@@ -167,7 +221,23 @@ impl NativeRegistry {
         self.register("Router.post", native_router_post);
         self.register("Router.put", native_router_put);
         self.register("Router.delete", native_router_delete);
+        self.register("Router.patch", native_router_patch);
+        self.register("Router.options", native_router_options);
+        self.register("Router.head", native_router_head);
+        self.register("Router.any", native_router_any);
         self.register("Router.use", native_router_use);
+        self.register("Router.group", native_router_group);
+
+        // -- Request --
+        self.register("Request.header", native_request_header);
+        self.register("Request.method", native_request_method);
+        self.register("Request.body_json", native_request_body_json);
+        self.register("Request.with_state", native_request_with_state);
+        self.register("Request.state", native_request_state);
+
+        // -- Server (VM-reentrant, dispatched specially in vm.rs) --
+        self.register("Server.listen!", native_server_listen_placeholder);
+        self.register("Server.listen", native_server_listen_placeholder);
     }
 }
 
@@ -647,7 +717,7 @@ fn native_int_parse(args: &[NValue]) -> Result<NValue, NativeError> {
 // Json
 // ---------------------------------------------------------------------------
 
-fn serde_to_nvalue(value: serde_json::Value) -> NValue {
+pub(crate) fn serde_to_nvalue(value: serde_json::Value) -> NValue {
     match value {
         serde_json::Value::Null => NValue::enum_val("Null".into(), NValue::unit()),
         serde_json::Value::Bool(b) => NValue::bool(b),
@@ -674,7 +744,7 @@ fn serde_to_nvalue(value: serde_json::Value) -> NValue {
     }
 }
 
-fn nvalue_to_serde(value: &NValue) -> Result<serde_json::Value, NativeError> {
+pub(crate) fn nvalue_to_serde(value: &NValue) -> Result<serde_json::Value, NativeError> {
     if value.is_any_int() {
         return Ok(serde_json::json!(value.as_any_int()));
     }
@@ -799,20 +869,21 @@ fn native_response_ok(args: &[NValue]) -> Result<NValue, NativeError> {
 }
 
 fn native_response_json(args: &[NValue]) -> Result<NValue, NativeError> {
-    let body = match args[0].as_string() {
-        Some(s) => s,
+    // Accept String as-is, or auto-serialize any other value to JSON
+    let body_str: RcStr = match args[0].as_string() {
+        Some(s) => s.clone(),
         None => {
-            return Err(NativeError(format!(
-                "Response.json expects String body, got {}",
-                args[0]
-            )));
+            let serde_val = nvalue_to_serde(&args[0])?;
+            let json = serde_json::to_string(&serde_val)
+                .map_err(|e| NativeError(format!("Response.json: {}", e)))?;
+            RcStr::from(json.as_str())
         }
     };
     let headers = vec![NValue::tuple(vec![
         NValue::string("Content-Type".into()),
         NValue::string("application/json".into()),
     ])];
-    Ok(make_response(200, headers, body))
+    Ok(make_response(200, headers, &body_str))
 }
 
 fn native_response_created(args: &[NValue]) -> Result<NValue, NativeError> {
@@ -946,6 +1017,80 @@ fn native_response_with_header(args: &[NValue]) -> Result<NValue, NativeError> {
     Ok(NValue::record(new_fields))
 }
 
+/// Response.with_headers(resp, headers_list) -> Response
+/// Bulk-add headers from a list of (name, value) tuples.
+fn native_response_with_headers(args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Response.with_headers: expected Response record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let new_headers = match args[1].as_list() {
+        Some(l) => l.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Response.with_headers: expected List of headers, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
+    for (k, v) in &mut new_fields {
+        if &**k == "headers" {
+            let mut headers = match v.as_list() {
+                Some(list) => list.clone(),
+                None => Vec::new(),
+            };
+            headers.extend(new_headers);
+            *v = NValue::list(headers);
+            return Ok(NValue::record(new_fields));
+        }
+    }
+    new_fields.push(("headers".into(), NValue::list(new_headers)));
+    Ok(NValue::record(new_fields))
+}
+
+/// Response.redirect(url) -> Response with 302 and Location header.
+fn native_response_redirect(args: &[NValue]) -> Result<NValue, NativeError> {
+    let url = match args[0].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Response.redirect: expected String URL, got {}",
+                args[0]
+            )));
+        }
+    };
+    let headers = vec![NValue::tuple(vec![
+        NValue::string("Location".into()),
+        NValue::string(url),
+    ])];
+    Ok(make_response(302, headers, ""))
+}
+
+/// Response.redirect_permanent(url) -> Response with 301 and Location header.
+fn native_response_redirect_permanent(args: &[NValue]) -> Result<NValue, NativeError> {
+    let url = match args[0].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Response.redirect_permanent: expected String URL, got {}",
+                args[0]
+            )));
+        }
+    };
+    let headers = vec![NValue::tuple(vec![
+        NValue::string("Location".into()),
+        NValue::string(url),
+    ])];
+    Ok(make_response(301, headers, ""))
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -1031,6 +1176,61 @@ fn native_router_delete(args: &[NValue]) -> Result<NValue, NativeError> {
     router_add_route("DELETE", args)
 }
 
+fn native_router_patch(args: &[NValue]) -> Result<NValue, NativeError> {
+    router_add_route("PATCH", args)
+}
+
+fn native_router_options(args: &[NValue]) -> Result<NValue, NativeError> {
+    router_add_route("OPTIONS", args)
+}
+
+fn native_router_head(args: &[NValue]) -> Result<NValue, NativeError> {
+    router_add_route("HEAD", args)
+}
+
+/// Router.any(router, path, handler) — registers handler for ALL methods.
+fn native_router_any(args: &[NValue]) -> Result<NValue, NativeError> {
+    let methods = ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"];
+    let mut result = args[0].clone();
+    for method in &methods {
+        let fields = match result.as_record() {
+            Some(f) => f.clone(),
+            None => {
+                return Err(NativeError(format!(
+                    "Router.any: expected Router, got {}",
+                    result
+                )));
+            }
+        };
+        if args[1].as_string().is_none() {
+            return Err(NativeError(format!(
+                "Router.any: expected String path, got {}",
+                args[1]
+            )));
+        }
+        let route = NValue::record(vec![
+            ("handler".into(), args[2].clone()),
+            ("method".into(), NValue::string(RcStr::from(*method))),
+            ("path".into(), args[1].clone()),
+        ]);
+        let mut new_fields = Vec::new();
+        for (k, v) in fields.iter() {
+            if &**k == "routes" {
+                let mut routes = match v.as_list() {
+                    Some(list) => list.clone(),
+                    None => Vec::new(),
+                };
+                routes.push(route.clone());
+                new_fields.push((k.clone(), NValue::list(routes)));
+            } else {
+                new_fields.push((k.clone(), v.clone()));
+            }
+        }
+        result = NValue::record(new_fields);
+    }
+    Ok(result)
+}
+
 fn native_router_use(args: &[NValue]) -> Result<NValue, NativeError> {
     let fields = match args[0].as_record() {
         Some(f) => f,
@@ -1055,6 +1255,315 @@ fn native_router_use(args: &[NValue]) -> Result<NValue, NativeError> {
         }
     }
     Ok(NValue::record(new_fields))
+}
+
+// ---------------------------------------------------------------------------
+// Request
+// ---------------------------------------------------------------------------
+
+/// Request.header(req, name) -> Option<String>
+/// Case-insensitive header lookup from request record's headers list.
+fn native_request_header(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 2 {
+        return Err(NativeError(format!(
+            "Request.header expects 2 arguments (req, name), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.header: first arg must be Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let name = match args[1].as_string() {
+        Some(s) => s.to_string().to_lowercase(),
+        None => {
+            return Err(NativeError(format!(
+                "Request.header: second arg must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let headers = fields
+        .iter()
+        .find(|(k, _)| &**k == "headers")
+        .and_then(|(_, v)| v.as_list());
+
+    if let Some(headers) = headers {
+        for item in headers {
+            if item.is_heap() {
+                if let HeapObject::Tuple(pair) = item.as_heap_ref() {
+                    if pair.len() == 2 {
+                        if let Some(k) = pair[0].as_string() {
+                            if k.to_lowercase() == name {
+                                return Ok(NValue::enum_val("Some".into(), pair[1].clone()));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(NValue::enum_val("None".into(), NValue::unit()))
+}
+
+/// Request.method(req) -> String
+/// Extract the HTTP method from a request record.
+fn native_request_method(args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.method: expected Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    for (k, v) in fields.iter() {
+        if &**k == "method" {
+            return Ok(v.clone());
+        }
+    }
+    Ok(NValue::string("GET".into()))
+}
+
+/// Request.body_json(req) -> parsed JSON value (sugar for Json.parse(req.body)).
+fn native_request_body_json(args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.body_json: expected Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let body = fields
+        .iter()
+        .find(|(k, _)| &**k == "body")
+        .map(|(_, v)| v.clone())
+        .unwrap_or_else(|| NValue::string("".into()));
+
+    let body_str = match body.as_string() {
+        Some(s) => s.to_string(),
+        None => return Ok(NValue::enum_val("Err".into(), NValue::string("Request body is not a string".into()))),
+    };
+
+    if body_str.is_empty() {
+        return Ok(NValue::enum_val("Err".into(), NValue::string("Request body is empty".into())));
+    }
+
+    match serde_json::from_str::<serde_json::Value>(&body_str) {
+        Ok(value) => Ok(NValue::enum_val("Ok".into(), serde_to_nvalue(value))),
+        Err(e) => Ok(NValue::enum_val("Err".into(), NValue::string(format!("JSON parse error: {}", e).into()))),
+    }
+}
+
+/// Request.with_state(req, key, value) -> Request
+/// Add/update a field in the request's `state` sub-record.
+fn native_request_with_state(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 3 {
+        return Err(NativeError(format!(
+            "Request.with_state expects 3 arguments (req, key, value), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Request.with_state: first arg must be Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let key = match args[1].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Request.with_state: key must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let mut new_fields = fields;
+    // Find or create state sub-record
+    let mut state_fields: Vec<(RcStr, NValue)> = new_fields
+        .iter()
+        .find(|(k, _)| &**k == "state")
+        .and_then(|(_, v)| v.as_record())
+        .cloned()
+        .unwrap_or_default();
+
+    // Update or insert the key
+    let mut found = false;
+    for (k, v) in &mut state_fields {
+        if *k == key {
+            *v = args[2].clone();
+            found = true;
+            break;
+        }
+    }
+    if !found {
+        state_fields.push((key, args[2].clone()));
+    }
+
+    // Update the state field on the request
+    let mut state_updated = false;
+    for (k, v) in &mut new_fields {
+        if &**k == "state" {
+            *v = NValue::record(state_fields.clone());
+            state_updated = true;
+            break;
+        }
+    }
+    if !state_updated {
+        new_fields.push(("state".into(), NValue::record(state_fields)));
+    }
+
+    Ok(NValue::record(new_fields))
+}
+
+/// Request.state(req, key) -> Option<String>
+/// Read a value from the request's `state` sub-record.
+fn native_request_state(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 2 {
+        return Err(NativeError(format!(
+            "Request.state expects 2 arguments (req, key), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.state: first arg must be Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let key = match args[1].as_string() {
+        Some(s) => s,
+        None => {
+            return Err(NativeError(format!(
+                "Request.state: key must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let state = fields
+        .iter()
+        .find(|(k, _)| &**k == "state")
+        .and_then(|(_, v)| v.as_record());
+
+    if let Some(state_fields) = state {
+        for (k, v) in state_fields {
+            if &**k == &**key {
+                return Ok(NValue::enum_val("Some".into(), v.clone()));
+            }
+        }
+    }
+    Ok(NValue::enum_val("None".into(), NValue::unit()))
+}
+
+fn native_router_group(args: &[NValue]) -> Result<NValue, NativeError> {
+    // Router.group(router, prefix, sub_router)
+    if args.len() != 3 {
+        return Err(NativeError(format!(
+            "Router.group expects 3 arguments (router, prefix, sub_router), got {}",
+            args.len()
+        )));
+    }
+    let parent_fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Router.group: first arg must be Router, got {}",
+                args[0]
+            )));
+        }
+    };
+    let prefix = match args[1].as_string() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(NativeError(format!(
+                "Router.group: second arg must be String prefix, got {}",
+                args[1]
+            )));
+        }
+    };
+    let sub_fields = match args[2].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Router.group: third arg must be Router, got {}",
+                args[2]
+            )));
+        }
+    };
+
+    // Extract sub-router routes and prepend prefix to each path
+    let sub_routes: Vec<NValue> = sub_fields
+        .iter()
+        .find(|(k, _)| &**k == "routes")
+        .and_then(|(_, v)| v.as_list())
+        .cloned()
+        .unwrap_or_default();
+
+    let prefixed_routes: Vec<NValue> = sub_routes
+        .iter()
+        .filter_map(|route| {
+            let route_fields = route.as_record()?;
+            let mut new_fields: Vec<(RcStr, NValue)> = Vec::new();
+            for (k, v) in route_fields.iter() {
+                if &**k == "path" {
+                    if let Some(path) = v.as_string() {
+                        let prefixed = format!(
+                            "{}{}",
+                            prefix.trim_end_matches('/'),
+                            if path.starts_with('/') {
+                                path.to_string()
+                            } else {
+                                format!("/{}", path)
+                            }
+                        );
+                        new_fields.push((k.clone(), NValue::string(prefixed.into())));
+                    } else {
+                        new_fields.push((k.clone(), v.clone()));
+                    }
+                } else {
+                    new_fields.push((k.clone(), v.clone()));
+                }
+            }
+            Some(NValue::record(new_fields))
+        })
+        .collect();
+
+    // Merge into parent router's routes
+    let mut new_fields: Vec<(RcStr, NValue)> = Vec::new();
+    for (k, v) in parent_fields.iter() {
+        if &**k == "routes" {
+            let mut routes = v.as_list().cloned().unwrap_or_default();
+            routes.extend(prefixed_routes.clone());
+            new_fields.push((k.clone(), NValue::list(routes)));
+        } else {
+            new_fields.push((k.clone(), v.clone()));
+        }
+    }
+    Ok(NValue::record(new_fields))
+}
+
+fn native_server_listen_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
+    Err(NativeError(
+        "Server.listen! must be executed by VM, not called directly".into(),
+    ))
 }
 
 // ---------------------------------------------------------------------------

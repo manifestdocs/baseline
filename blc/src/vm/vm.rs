@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use super::chunk::{Chunk, Op, Program};
 use super::natives::NativeRegistry;
 use super::nvalue::{HeapObject, NValue};
-use super::value::Value;
+use super::value::{RcStr, Value};
 
 // SAFETY note: The unsafe stack operations below (pop_unchecked, pop2_unchecked,
 // get_unchecked) are sound because the compiler guarantees stack invariants:
@@ -80,8 +82,11 @@ impl FrameStack {
         // We only ever read indices < self.len, so uninit values are never observed.
         let frames = unsafe {
             let layout = std::alloc::Layout::new::<[CallFrame; MAX_CALL_DEPTH]>();
-            let ptr = std::alloc::alloc_zeroed(layout) as *mut [CallFrame; MAX_CALL_DEPTH];
-            Box::from_raw(ptr)
+            let ptr = std::alloc::alloc_zeroed(layout);
+            if ptr.is_null() {
+                std::alloc::handle_alloc_error(layout);
+            }
+            Box::from_raw(ptr as *mut [CallFrame; MAX_CALL_DEPTH])
         };
         Self { frames, len: 0 }
     }
@@ -149,7 +154,7 @@ impl Default for Vm {
 impl Vm {
     pub fn new() -> Self {
         Vm {
-            stack: Vec::with_capacity(256),
+            stack: Vec::with_capacity(4096),
             frames: FrameStack::new(),
             upvalue_stack: Vec::new(),
             natives: NativeRegistry::new(),
@@ -209,6 +214,18 @@ impl Vm {
         });
         let result = self.run(chunks)?;
         Ok(result.to_value())
+    }
+
+    /// Re-entrant call for a function or closure NValue.
+    /// Used by the server runtime to dispatch HTTP handlers from within a
+    /// running VM. Preserves existing VM state (stack, frames).
+    pub fn call_value(
+        &mut self,
+        func: &NValue,
+        args: &[NValue],
+        chunks: &[Chunk],
+    ) -> Result<NValue, VmError> {
+        self.call_nvalue(func, args, chunks, 0, 0)
     }
 
     /// Main dispatch loop — shared by execute and execute_program.
@@ -589,7 +606,16 @@ impl Vm {
                     let (idx_val, list_val) = self.pop2_fast();
                     if list_val.is_heap() && idx_val.is_any_int() {
                         if let HeapObject::List(items) = list_val.as_heap_ref() {
-                            let idx = idx_val.as_any_int() as usize;
+                            let idx_i64 = idx_val.as_any_int();
+                            if idx_i64 < 0 {
+                                let (line, col) = chunk.source_map[ip - 1];
+                                return Err(self.error(
+                                    format!("Negative index {} (len {})", idx_i64, items.len()),
+                                    line,
+                                    col,
+                                ));
+                            }
+                            let idx = idx_i64 as usize;
                             if idx >= items.len() {
                                 let (line, col) = chunk.source_map[ip - 1];
                                 return Err(self.error(
@@ -651,6 +677,16 @@ impl Vm {
                     let start = self.stack.len() - count;
                     let items: Vec<NValue> = self.stack.drain(start..).collect();
                     self.stack.push(NValue::list(items));
+                }
+
+                Op::ListConcat => {
+                    let right = self.stack.pop().unwrap();
+                    let left = self.stack.pop().unwrap();
+                    let r_items = right.as_list().unwrap();
+                    let l_items = left.as_list().unwrap();
+                    let mut result = l_items.clone();
+                    result.extend_from_slice(r_items);
+                    self.stack.push(NValue::list(result));
                 }
 
                 Op::MakeRecord(n) => {
@@ -1045,6 +1081,12 @@ impl Vm {
                         caller.chunk_idx = chunk_idx as u32;
                         let (line, col) = chunk.source_map[ip - 1];
                         self.dispatch_hof(fn_id, n, chunks, line, col)?;
+                    } else if self.natives.is_server_listen(fn_id) {
+                        let caller = self.frames.last_mut();
+                        caller.ip = ip as u32;
+                        caller.chunk_idx = chunk_idx as u32;
+                        let (line, col) = chunk.source_map[ip - 1];
+                        self.dispatch_server_listen(n, chunks, line, col)?;
                     } else {
                         let start = self.stack.len() - n;
                         let result = self.natives.call(fn_id, &self.stack[start..]);
@@ -1121,6 +1163,15 @@ impl Vm {
                     // Reset instruction pointer to beginning of current chunk
                     ip = 0;
                     continue;
+                }
+
+                Op::Halt(idx) => {
+                    let msg = match &chunk.constants[idx as usize] {
+                        Value::String(s) => s.to_string(),
+                        _ => "Runtime error".to_string(),
+                    };
+                    let (line, col) = chunk.source_map[ip - 1];
+                    return Err(self.error(msg, line, col));
                 }
 
                 Op::Return => {
@@ -1418,7 +1469,9 @@ impl Vm {
     }
 
     /// Call a bytecode function/closure with given arguments (NValue version).
-    fn call_nvalue(
+    ///
+    /// This is the main entry point for invoking Baseline functions from Rust.
+    pub fn call_nvalue(
         &mut self,
         func: &NValue,
         args: &[NValue],
@@ -1435,6 +1488,20 @@ impl Vm {
         }
         let base_depth = self.frames.len();
         let stack_base = self.stack.len();
+
+        // Intercept NativeMwNext: when middleware calls next(req), dispatch
+        // to the remaining middleware chain instead of bytecode execution.
+        if func.is_heap() {
+            if let HeapObject::NativeMwNext {
+                handler,
+                remaining_mw,
+            } = func.as_heap_ref()
+            {
+                let handler = handler.clone();
+                let remaining_mw = remaining_mw.clone();
+                return self.call_mw_next(&handler, &remaining_mw, args, chunks, line, col);
+            }
+        }
 
         let (ci, uv_idx) = if func.is_function() {
             (func.as_function(), u32::MAX)
@@ -1472,9 +1539,844 @@ impl Vm {
         Ok(result)
     }
 
+    /// Dispatch Server.listen!(router, port) — blocks in accept loop.
+    /// Spawns a thread pool for concurrent request handling.
+    fn dispatch_server_listen(
+        &mut self,
+        arg_count: usize,
+        chunks: &[Chunk],
+        line: usize,
+        col: usize,
+    ) -> Result<(), VmError> {
+        if arg_count != 2 {
+            return Err(self.error(
+                format!(
+                    "Server.listen! expects 2 arguments (router, port), got {}",
+                    arg_count
+                ),
+                line,
+                col,
+            ));
+        }
+        let port_val = self.pop(line, col)?;
+        let router_val = self.pop(line, col)?;
+
+        if !port_val.is_any_int() {
+            return Err(self.error(
+                format!("Server.listen! port must be Int, got {}", port_val),
+                line,
+                col,
+            ));
+        }
+        let port = port_val.as_any_int() as u16;
+
+        let router_fields = match router_val.as_record() {
+            Some(f) => f.clone(),
+            None => {
+                return Err(self.error(
+                    format!(
+                        "Server.listen! first argument must be a Router, got {}",
+                        router_val
+                    ),
+                    line,
+                    col,
+                ));
+            }
+        };
+
+        let routes: Vec<NValue> = router_fields
+            .iter()
+            .find(|(k, _)| &**k == "routes")
+            .and_then(|(_, v)| v.as_list())
+            .cloned()
+            .unwrap_or_default();
+
+        let middleware: Vec<NValue> = router_fields
+            .iter()
+            .find(|(k, _)| &**k == "middleware")
+            .and_then(|(_, v)| v.as_list())
+            .cloned()
+            .unwrap_or_default();
+
+        // Serialize route tree + middleware + chunks to thread-safe form
+        let sendable_routes = SendableRouteTree::from_nv_routes(&routes);
+        let sendable_mw: Vec<SendableHandler> = middleware
+            .iter()
+            .filter_map(SendableHandler::from_nvalue)
+            .collect();
+        let sendable_chunks = SendableChunks::from_chunks(chunks);
+
+        let addr = format!("0.0.0.0:{}", port);
+        let server = tiny_http::Server::http(&addr).map_err(|e| {
+            self.error(
+                format!("Failed to start server on {}: {}", addr, e),
+                line,
+                col,
+            )
+        })?;
+
+        let num_workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        eprintln!(
+            "[server] Listening on http://0.0.0.0:{} ({} workers)",
+            port, num_workers
+        );
+
+        let server = Arc::new(server);
+        let sendable_routes = Arc::new(sendable_routes);
+        let sendable_mw = Arc::new(sendable_mw);
+        let sendable_chunks = Arc::new(sendable_chunks);
+
+        let mut handles = Vec::with_capacity(num_workers);
+        for _ in 0..num_workers {
+            let server = Arc::clone(&server);
+            let s_routes = Arc::clone(&sendable_routes);
+            let s_mw = Arc::clone(&sendable_mw);
+            let s_chunks = Arc::clone(&sendable_chunks);
+
+            handles.push(std::thread::spawn(move || {
+                // Each thread gets its own VM + reconstructed NValue data
+                let mut vm = Vm::new();
+                let chunks = s_chunks.to_chunks();
+                let route_tree = s_routes.to_nv_radix_tree();
+                let middleware: Vec<NValue> = s_mw.iter().map(|h| h.to_nvalue()).collect();
+
+                for request in server.incoming_requests() {
+                    handle_request(&mut vm, request, &route_tree, &middleware, &chunks);
+                }
+            }));
+        }
+
+        // Block until all workers finish (server dropped = workers exit)
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        self.stack.push(NValue::unit());
+        Ok(())
+    }
+
+    /// Apply middleware chain for VM server dispatch.
+    /// Builds the chain inside-out: each middleware receives (request, next) where
+    /// next is a closure wrapping the remaining middleware + handler.
+    ///
+    /// This is the main entry point for invoking handlers with middleware from Rust.
+    pub fn apply_mw_chain(
+        &mut self,
+        middleware: &[NValue],
+        handler: &NValue,
+        request: &NValue,
+        chunks: &[Chunk],
+        line: usize,
+        col: usize,
+    ) -> Result<NValue, VmError> {
+        if middleware.is_empty() {
+            return self.call_nvalue(handler, &[request.clone()], chunks, line, col);
+        }
+
+        // Build the "next" chain inside-out: innermost = handler
+        // Each layer wraps: fn(req) => middleware[i](req, next_inner)
+        //
+        // We use NativeMwNext heap objects to carry the chain. When the
+        // middleware calls next(req), the VM intercepts it.
+        let current_mw = &middleware[0];
+        let remaining = &middleware[1..];
+
+        // Build next as a closure that, when called with (req), invokes the
+        // remaining middleware chain. We represent this as a NativeMwNext
+        // heap object that the VM call_nvalue can intercept.
+        let next = build_mw_next_nvalue(remaining, handler);
+
+        self.call_nvalue(current_mw, &[request.clone(), next], chunks, line, col)
+    }
+
+    /// Handle a call to a NativeMwNext value (middleware chain continuation).
+    fn call_mw_next(
+        &mut self,
+        handler: &NValue,
+        remaining_mw: &[NValue],
+        args: &[NValue],
+        chunks: &[Chunk],
+        line: usize,
+        col: usize,
+    ) -> Result<NValue, VmError> {
+        if args.is_empty() {
+            return Err(self.error(
+                "Middleware next() requires a request argument".into(),
+                line,
+                col,
+            ));
+        }
+        let request = &args[0];
+        self.apply_mw_chain(remaining_mw, handler, request, chunks, line, col)
+    }
+
     fn error(&self, message: String, line: usize, col: usize) -> VmError {
         VmError { message, line, col }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Middleware chain helper
+// ---------------------------------------------------------------------------
+
+/// Build a NativeMwNext NValue representing the continuation of a middleware chain.
+fn build_mw_next_nvalue(remaining_mw: &[NValue], handler: &NValue) -> NValue {
+    NValue::from_heap_obj(HeapObject::NativeMwNext {
+        handler: handler.clone(),
+        remaining_mw: remaining_mw.to_vec(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Thread-pool server: handle a single request
+// ---------------------------------------------------------------------------
+
+fn handle_request(
+    vm: &mut Vm,
+    mut request: tiny_http::Request,
+    route_tree: &NvRadixTree,
+    middleware: &[NValue],
+    chunks: &[Chunk],
+) {
+    let req_method = request.method().to_string();
+    let raw_url = request.url().to_string();
+    let mut req_body = String::new();
+    if let Err(e) = request.as_reader().read_to_string(&mut req_body) {
+        eprintln!("[server] Failed to read request body: {}", e);
+        let response = tiny_http::Response::from_string("Internal Server Error")
+            .with_status_code(tiny_http::StatusCode(500));
+        let _ = request.respond(response);
+        return;
+    }
+
+    let (req_path, query_record) = parse_url_query_nv(&raw_url);
+
+    let req_headers: Vec<NValue> = request
+        .headers()
+        .iter()
+        .map(|h| {
+            NValue::tuple(vec![
+                NValue::string(h.field.to_string().into()),
+                NValue::string(h.value.to_string().into()),
+            ])
+        })
+        .collect();
+
+    let req_record = NValue::record(vec![
+        ("body".into(), NValue::string(req_body.into())),
+        ("headers".into(), NValue::list(req_headers)),
+        ("method".into(), NValue::string(req_method.clone().into())),
+        ("params".into(), NValue::record(Vec::new())),
+        ("query".into(), query_record),
+        ("url".into(), NValue::string(raw_url.into())),
+    ]);
+
+    let (status, resp_headers, body) = match route_tree.find(&req_method, &req_path) {
+        Some((handler, params)) => {
+            let enriched = inject_params_nv(&req_record, params.as_slice());
+            let result = if middleware.is_empty() {
+                vm.call_nvalue(&handler, &[enriched], chunks, 0, 0)
+            } else {
+                vm.apply_mw_chain(middleware, &handler, &enriched, chunks, 0, 0)
+            };
+            match result {
+                Ok(val) => extract_response_nv(&val),
+                Err(e) => {
+                    eprintln!("[server] Handler error: {}", e);
+                    (500, Vec::new(), "Internal Server Error".to_string())
+                }
+            }
+        }
+        None => (404, Vec::new(), "Not Found".to_string()),
+    };
+
+    let mut response =
+        tiny_http::Response::from_string(&body).with_status_code(tiny_http::StatusCode(status));
+    for (name, value) in &resp_headers {
+        if let Ok(header) = tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes()) {
+            response = response.with_header(header);
+        }
+    }
+    let _ = request.respond(response);
+}
+
+// ---------------------------------------------------------------------------
+// Sendable types — thread-safe representations for cross-thread transfer
+// ---------------------------------------------------------------------------
+
+/// Thread-safe handler representation. Handlers are either plain functions
+/// (chunk index) or closures (chunk index + upvalue data).
+#[derive(Clone)]
+enum SendableHandler {
+    Function(usize),
+    Closure {
+        chunk_idx: usize,
+        upvalues: Vec<SendableValue>,
+    },
+}
+
+/// Thread-safe value representation using owned Strings instead of Rc<str>.
+#[derive(Clone)]
+enum SendableValue {
+    Int(i64),
+    Float(f64),
+    String(String),
+    Bool(bool),
+    Unit,
+    List(Vec<SendableValue>),
+    Record(Vec<(String, SendableValue)>),
+    Tuple(Vec<SendableValue>),
+    Enum {
+        tag: String,
+        payload: Box<SendableValue>,
+    },
+    Function(usize),
+}
+
+impl SendableValue {
+    fn from_nvalue(nv: &NValue) -> Self {
+        if nv.is_int() {
+            return SendableValue::Int(nv.as_int());
+        }
+        if nv.is_any_int() {
+            return SendableValue::Int(nv.as_any_int());
+        }
+        if nv.is_float() {
+            return SendableValue::Float(nv.as_float());
+        }
+        if nv.is_bool() {
+            return SendableValue::Bool(nv.as_bool());
+        }
+        if nv.is_unit() {
+            return SendableValue::Unit;
+        }
+        if nv.is_function() {
+            return SendableValue::Function(nv.as_function());
+        }
+        if nv.is_heap() {
+            match nv.as_heap_ref() {
+                HeapObject::String(s) => SendableValue::String(s.to_string()),
+                HeapObject::List(items) => {
+                    SendableValue::List(items.iter().map(SendableValue::from_nvalue).collect())
+                }
+                HeapObject::Record(fields) => SendableValue::Record(
+                    fields
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), SendableValue::from_nvalue(v)))
+                        .collect(),
+                ),
+                HeapObject::Tuple(items) => {
+                    SendableValue::Tuple(items.iter().map(SendableValue::from_nvalue).collect())
+                }
+                HeapObject::Enum { tag, payload } => SendableValue::Enum {
+                    tag: tag.to_string(),
+                    payload: Box::new(SendableValue::from_nvalue(payload)),
+                },
+                HeapObject::Closure { chunk_idx, .. } => SendableValue::Function(*chunk_idx),
+                HeapObject::BigInt(i) => SendableValue::Int(*i),
+                _ => SendableValue::Unit,
+            }
+        } else {
+            SendableValue::Unit
+        }
+    }
+
+    fn to_nvalue(&self) -> NValue {
+        match self {
+            SendableValue::Int(i) => NValue::int(*i),
+            SendableValue::Float(f) => NValue::float(*f),
+            SendableValue::String(s) => NValue::string(RcStr::from(s.as_str())),
+            SendableValue::Bool(b) => NValue::bool(*b),
+            SendableValue::Unit => NValue::unit(),
+            SendableValue::List(items) => {
+                NValue::list(items.iter().map(|v| v.to_nvalue()).collect())
+            }
+            SendableValue::Record(fields) => NValue::record(
+                fields
+                    .iter()
+                    .map(|(k, v)| (RcStr::from(k.as_str()), v.to_nvalue()))
+                    .collect(),
+            ),
+            SendableValue::Tuple(items) => {
+                NValue::tuple(items.iter().map(|v| v.to_nvalue()).collect())
+            }
+            SendableValue::Enum { tag, payload } => {
+                NValue::enum_val(RcStr::from(tag.as_str()), payload.to_nvalue())
+            }
+            SendableValue::Function(idx) => NValue::function(*idx),
+        }
+    }
+}
+
+impl SendableHandler {
+    fn from_nvalue(nv: &NValue) -> Option<Self> {
+        if nv.is_function() {
+            return Some(SendableHandler::Function(nv.as_function()));
+        }
+        if nv.is_heap() {
+            if let HeapObject::Closure {
+                chunk_idx,
+                upvalues,
+            } = nv.as_heap_ref()
+            {
+                return Some(SendableHandler::Closure {
+                    chunk_idx: *chunk_idx,
+                    upvalues: upvalues.iter().map(SendableValue::from_nvalue).collect(),
+                });
+            }
+        }
+        None
+    }
+
+    fn to_nvalue(&self) -> NValue {
+        match self {
+            SendableHandler::Function(idx) => NValue::function(*idx),
+            SendableHandler::Closure {
+                chunk_idx,
+                upvalues,
+            } => NValue::closure(*chunk_idx, upvalues.iter().map(|v| v.to_nvalue()).collect()),
+        }
+    }
+}
+
+// SAFETY: SendableHandler/SendableValue use only owned data (String, Vec, usize).
+unsafe impl Send for SendableHandler {}
+unsafe impl Sync for SendableHandler {}
+
+/// Thread-safe route tree node.
+struct SendableNode {
+    children: HashMap<String, SendableNode>,
+    param: Option<(String, Box<SendableNode>)>,
+    handlers: HashMap<String, SendableHandler>,
+}
+
+/// Thread-safe route tree built from NValue routes.
+struct SendableRouteTree {
+    root: SendableNode,
+}
+
+// SAFETY: SendableNode/SendableRouteTree contain only owned Strings and SendableHandlers.
+unsafe impl Send for SendableRouteTree {}
+unsafe impl Sync for SendableRouteTree {}
+
+impl SendableNode {
+    fn new() -> Self {
+        SendableNode {
+            children: HashMap::new(),
+            param: None,
+            handlers: HashMap::new(),
+        }
+    }
+
+    fn to_nv_node(&self) -> NvRadixNode {
+        let mut node = NvRadixNode::new();
+        for (seg, child) in &self.children {
+            node.children.insert(seg.clone(), child.to_nv_node());
+        }
+        if let Some((name, child)) = &self.param {
+            node.param = Some((name.clone(), Box::new(child.to_nv_node())));
+        }
+        for (method, handler) in &self.handlers {
+            node.handlers.insert(method.clone(), handler.to_nvalue());
+        }
+        node
+    }
+}
+
+impl SendableRouteTree {
+    fn from_nv_routes(routes: &[NValue]) -> Self {
+        let mut tree = SendableRouteTree {
+            root: SendableNode::new(),
+        };
+        for route in routes {
+            if let Some(fields) = route.as_record() {
+                let method = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "method")
+                    .and_then(|(_, v)| v.as_string())
+                    .map(|s| s.to_string());
+                let path = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "path")
+                    .and_then(|(_, v)| v.as_string())
+                    .map(|s| s.to_string());
+                let handler = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "handler")
+                    .and_then(|(_, v)| SendableHandler::from_nvalue(v));
+
+                if let (Some(m), Some(p), Some(h)) = (method, path, handler) {
+                    tree.insert(&m, &p, h);
+                }
+            }
+        }
+        tree
+    }
+
+    fn insert(&mut self, method: &str, path: &str, handler: SendableHandler) {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut node = &mut self.root;
+        for seg in &segments {
+            if let Some(name) = seg.strip_prefix(':') {
+                if node.param.is_none() {
+                    node.param = Some((name.to_string(), Box::new(SendableNode::new())));
+                }
+                node = node.param.as_mut().unwrap().1.as_mut();
+            } else {
+                node = node
+                    .children
+                    .entry(seg.to_string())
+                    .or_insert_with(SendableNode::new);
+            }
+        }
+        node.handlers.entry(method.to_string()).or_insert(handler);
+    }
+
+    fn to_nv_radix_tree(&self) -> NvRadixTree {
+        NvRadixTree {
+            root: self.root.to_nv_node(),
+        }
+    }
+}
+
+/// Thread-safe chunk representation using owned Strings instead of Rc<str>.
+struct SendableChunks {
+    chunks: Vec<SendableChunk>,
+}
+
+struct SendableChunk {
+    code: Vec<Op>,
+    constants: Vec<SendableValue>,
+    source_map: Vec<(usize, usize)>,
+}
+
+// SAFETY: SendableChunks contains only owned data (Vec<Op>, Vec<SendableValue>).
+unsafe impl Send for SendableChunks {}
+unsafe impl Sync for SendableChunks {}
+
+impl SendableChunks {
+    fn from_chunks(chunks: &[Chunk]) -> Self {
+        SendableChunks {
+            chunks: chunks
+                .iter()
+                .map(|c| SendableChunk {
+                    code: c.code.clone(),
+                    constants: c
+                        .constants
+                        .iter()
+                        .map(|v| SendableValue::from_nvalue(&NValue::from_value(v)))
+                        .collect(),
+                    source_map: c.source_map.clone(),
+                })
+                .collect(),
+        }
+    }
+
+    fn to_chunks(&self) -> Vec<Chunk> {
+        self.chunks
+            .iter()
+            .map(|sc| {
+                let constants: Vec<Value> = sc
+                    .constants
+                    .iter()
+                    .map(|sv| sv.to_nvalue().to_value())
+                    .collect();
+                Chunk::from_parts(sc.code.clone(), constants, sc.source_map.clone())
+            })
+            .collect()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NValue Radix Tree — segment-based trie for VM route matching
+// ---------------------------------------------------------------------------
+
+struct NvRadixNode {
+    children: HashMap<String, NvRadixNode>,
+    param: Option<(String, Box<NvRadixNode>)>,
+    handlers: HashMap<String, NValue>,
+}
+
+impl NvRadixNode {
+    fn new() -> Self {
+        NvRadixNode {
+            children: HashMap::new(),
+            param: None,
+            handlers: HashMap::new(),
+        }
+    }
+}
+
+struct NvRadixTree {
+    root: NvRadixNode,
+}
+
+#[allow(dead_code)]
+impl NvRadixTree {
+    fn new() -> Self {
+        NvRadixTree {
+            root: NvRadixNode::new(),
+        }
+    }
+
+    fn insert(&mut self, method: &str, path: &str, handler: NValue) {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut node = &mut self.root;
+
+        for seg in &segments {
+            if let Some(name) = seg.strip_prefix(':') {
+                if node.param.is_none() {
+                    node.param = Some((name.to_string(), Box::new(NvRadixNode::new())));
+                }
+                node = node.param.as_mut().unwrap().1.as_mut();
+            } else {
+                node = node
+                    .children
+                    .entry(seg.to_string())
+                    .or_insert_with(NvRadixNode::new);
+            }
+        }
+        node.handlers.entry(method.to_string()).or_insert(handler);
+    }
+
+    fn find(&self, method: &str, path: &str) -> Option<(NValue, SmallParams)> {
+        let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+        let mut params = SmallParams::new();
+        nv_find_in_node(&self.root, &segments, method, &mut params)
+    }
+
+    fn from_routes(routes: &[NValue]) -> Self {
+        let mut tree = Self::new();
+        for route in routes {
+            if let Some(fields) = route.as_record() {
+                let method = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "method")
+                    .and_then(|(_, v)| v.as_string())
+                    .map(|s| s.to_string());
+                let path = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "path")
+                    .and_then(|(_, v)| v.as_string())
+                    .map(|s| s.to_string());
+                let handler = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "handler")
+                    .map(|(_, v)| v.clone());
+
+                if let (Some(m), Some(p), Some(h)) = (method, path, handler) {
+                    tree.insert(&m, &p, h);
+                }
+            }
+        }
+        tree
+    }
+}
+
+/// Fixed-capacity parameter storage to avoid per-request Vec allocation.
+/// Most routes have fewer than 8 path parameters.
+const MAX_PARAMS: usize = 8;
+
+struct SmallParams {
+    data: [(String, String); MAX_PARAMS],
+    len: usize,
+}
+
+impl SmallParams {
+    fn new() -> Self {
+        SmallParams {
+            data: std::array::from_fn(|_| (String::new(), String::new())),
+            len: 0,
+        }
+    }
+
+    fn push(&mut self, name: String, value: String) -> bool {
+        if self.len < MAX_PARAMS {
+            self.data[self.len] = (name, value);
+            self.len += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn pop(&mut self) {
+        if self.len > 0 {
+            self.len -= 1;
+        }
+    }
+
+    fn as_slice(&self) -> &[(String, String)] {
+        &self.data[..self.len]
+    }
+
+    fn clone_data(&self) -> SmallParams {
+        let mut new = SmallParams::new();
+        for i in 0..self.len {
+            new.data[i] = self.data[i].clone();
+        }
+        new.len = self.len;
+        new
+    }
+}
+
+fn nv_find_in_node(
+    node: &NvRadixNode,
+    segments: &[&str],
+    method: &str,
+    params: &mut SmallParams,
+) -> Option<(NValue, SmallParams)> {
+    if segments.is_empty() {
+        return node
+            .handlers
+            .get(method)
+            .map(|h| (h.clone(), params.clone_data()));
+    }
+
+    let seg = segments[0];
+    let rest = &segments[1..];
+
+    if let Some(child) = node.children.get(seg) {
+        if let result @ Some(_) = nv_find_in_node(child, rest, method, params) {
+            return result;
+        }
+    }
+
+    if let Some((name, child)) = &node.param {
+        params.push(name.clone(), seg.to_string());
+        if let result @ Some(_) = nv_find_in_node(child, rest, method, params) {
+            return result;
+        }
+        params.pop();
+    }
+
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Server helpers for NValue-based request/response
+// ---------------------------------------------------------------------------
+
+fn parse_url_query_nv(url: &str) -> (String, NValue) {
+    let (path, query_str) = match url.split_once('?') {
+        Some((p, q)) => (p.to_string(), q),
+        None => (url.to_string(), ""),
+    };
+
+    let mut query_fields: Vec<(RcStr, NValue)> = Vec::new();
+    if !query_str.is_empty() {
+        for pair in query_str.split('&') {
+            if pair.is_empty() {
+                continue;
+            }
+            let (key, value) = match pair.split_once('=') {
+                Some((k, v)) => (k.to_string(), v.to_string()),
+                None => (pair.to_string(), String::new()),
+            };
+            query_fields.push((RcStr::from(key.as_str()), NValue::string(value.into())));
+        }
+    }
+
+    (path, NValue::record(query_fields))
+}
+
+fn inject_params_nv(req: &NValue, params: &[(String, String)]) -> NValue {
+    let fields = match req.as_record() {
+        Some(f) => f,
+        None => return req.clone(),
+    };
+    let param_fields: Vec<(RcStr, NValue)> = params
+        .iter()
+        .map(|(k, v)| {
+            (
+                RcStr::from(k.as_str()),
+                NValue::string(RcStr::from(v.as_str())),
+            )
+        })
+        .collect();
+
+    let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
+    for (k, v) in &mut new_fields {
+        if &**k == "params" {
+            *v = NValue::record(param_fields.clone());
+            return NValue::record(new_fields);
+        }
+    }
+    new_fields.push(("params".into(), NValue::record(param_fields)));
+    NValue::record(new_fields)
+}
+
+fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>, String) {
+    if value.is_heap() {
+        match value.as_heap_ref() {
+            HeapObject::Enum { tag, payload } if &**tag == "Ok" => {
+                return extract_response_nv(payload);
+            }
+            HeapObject::Enum { tag, payload } if &**tag == "Err" => {
+                return (500, Vec::new(), format!("{}", payload));
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(fields) = value.as_record() {
+        let has_status = fields.iter().any(|(k, _)| &**k == "status");
+        if has_status {
+            let status = fields
+                .iter()
+                .find(|(k, _)| &**k == "status")
+                .and_then(|(_, v)| {
+                    if v.is_any_int() {
+                        Some(v.as_any_int() as u16)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(200);
+
+            let body = fields
+                .iter()
+                .find(|(k, _)| &**k == "body")
+                .map(|(_, v)| match v.as_string() {
+                    Some(s) => s.to_string(),
+                    None => format!("{}", v),
+                })
+                .unwrap_or_default();
+
+            let headers = fields
+                .iter()
+                .find(|(k, _)| &**k == "headers")
+                .and_then(|(_, v)| v.as_list())
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(|item| {
+                            if item.is_heap() {
+                                if let HeapObject::Tuple(pair) = item.as_heap_ref() {
+                                    if pair.len() == 2 {
+                                        let k = pair[0].as_string()?.to_string();
+                                        let v = pair[1].as_string()?.to_string();
+                                        return Some((k, v));
+                                    }
+                                }
+                            }
+                            None
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            return (status, headers, body);
+        }
+    }
+
+    if let Some(s) = value.as_string() {
+        return (200, Vec::new(), s.to_string());
+    }
+
+    (200, Vec::new(), format!("{}", value))
 }
 
 // ---------------------------------------------------------------------------

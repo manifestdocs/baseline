@@ -209,13 +209,15 @@ impl<'a> Codegen<'a> {
                 for arg in args {
                     self.gen_expr(arg, span)?;
                 }
-                self.emit(Op::Call(args.len() as u8), span);
+                let argc = Self::checked_u8(args.len(), "arguments", span)?;
+                self.emit(Op::Call(argc), span);
             }
             Expr::TailCall { args, .. } => {
                 for arg in args {
                     self.gen_expr(arg, span)?;
                 }
-                self.emit(Op::TailCall(args.len() as u8), span);
+                let argc = Self::checked_u8(args.len(), "arguments", span)?;
+                self.emit(Op::TailCall(argc), span);
             }
 
             Expr::MakeEnum { tag, payload, .. } => {
@@ -229,7 +231,8 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::LoadConst(key_idx), span);
                     self.gen_expr(val, span)?;
                 }
-                self.emit(Op::MakeRecord(fields.len() as u16), span);
+                let count = Self::checked_u16(fields.len(), "struct fields", span)?;
+                self.emit(Op::MakeRecord(count), span);
                 let tag_idx = self.chunk.add_constant(Value::String(name.as_str().into()));
                 self.emit(Op::MakeStruct(tag_idx), span);
             }
@@ -238,7 +241,8 @@ impl<'a> Codegen<'a> {
                 for elem in elems {
                     self.gen_expr(elem, span)?;
                 }
-                self.emit(Op::MakeList(elems.len() as u16), span);
+                let count = Self::checked_u16(elems.len(), "list elements", span)?;
+                self.emit(Op::MakeList(count), span);
             }
             Expr::MakeRecord(fields, _) => {
                 for (key, val) in fields {
@@ -246,13 +250,15 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::LoadConst(key_idx), span);
                     self.gen_expr(val, span)?;
                 }
-                self.emit(Op::MakeRecord(fields.len() as u16), span);
+                let count = Self::checked_u16(fields.len(), "record fields", span)?;
+                self.emit(Op::MakeRecord(count), span);
             }
             Expr::MakeTuple(elems, _) => {
                 for elem in elems {
                     self.gen_expr(elem, span)?;
                 }
-                self.emit(Op::MakeTuple(elems.len() as u16), span);
+                let count = Self::checked_u16(elems.len(), "tuple elements", span)?;
+                self.emit(Op::MakeTuple(count), span);
             }
             Expr::MakeRange(start, end) => {
                 self.gen_expr(start, span)?;
@@ -266,7 +272,8 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::LoadConst(key_idx), span);
                     self.gen_expr(val, span)?;
                 }
-                self.emit(Op::UpdateRecord(updates.len() as u16), span);
+                let count = Self::checked_u16(updates.len(), "record update fields", span)?;
+                self.emit(Op::UpdateRecord(count), span);
             }
 
             Expr::GetField { object, field, .. } => {
@@ -302,6 +309,7 @@ impl<'a> Codegen<'a> {
                     BinOp::Le => Op::Le,
                     BinOp::Ge if both_int => Op::GeInt,
                     BinOp::Ge => Op::Ge,
+                    BinOp::ListConcat => Op::ListConcat,
                 };
                 self.emit(opcode, span);
             }
@@ -371,6 +379,12 @@ impl<'a> Codegen<'a> {
                 self.gen_for(binding, iterable, body, span)?;
             }
 
+            Expr::Hole => {
+                let msg = "Typed hole (??) encountered at runtime";
+                let idx = self.chunk.add_constant(Value::String(msg.into()));
+                self.emit(Op::Halt(idx), span);
+            }
+
             Expr::Let { pattern, value, .. } => {
                 self.gen_expr(value, span)?;
                 self.gen_let_pattern(pattern, span)?;
@@ -403,7 +417,8 @@ impl<'a> Codegen<'a> {
         // Search locals
         for (i, local) in self.locals.iter().enumerate().rev() {
             if local.name == name {
-                self.emit(Op::GetLocal(i as u16), span);
+                let slot = Self::checked_u16(i, "local variables", span)?;
+                self.emit(Op::GetLocal(slot), span);
                 return Ok(());
             }
         }
@@ -497,7 +512,9 @@ impl<'a> Codegen<'a> {
             for arg in args {
                 self.gen_expr(arg, span)?;
             }
-            self.emit(Op::CallDirect(chunk_idx as u16, args.len() as u8), span);
+            let ci = Self::checked_u16(chunk_idx, "function chunks", span)?;
+            let argc = Self::checked_u8(args.len(), "arguments", span)?;
+            self.emit(Op::CallDirect(ci, argc), span);
             Ok(())
         } else {
             // Fall back to variable lookup (might be a local/upvalue holding a function)
@@ -505,7 +522,8 @@ impl<'a> Codegen<'a> {
             for arg in args {
                 self.gen_expr(arg, span)?;
             }
-            self.emit(Op::Call(args.len() as u8), span);
+            let argc = Self::checked_u8(args.len(), "arguments", span)?;
+            self.emit(Op::Call(argc), span);
             Ok(())
         }
     }
@@ -522,7 +540,8 @@ impl<'a> Codegen<'a> {
             for arg in args {
                 self.gen_expr(arg, span)?;
             }
-            self.emit(Op::CallNative(fn_id, args.len() as u8), span);
+            let argc = Self::checked_u8(args.len(), "native arguments", span)?;
+            self.emit(Op::CallNative(fn_id, argc), span);
             Ok(())
         } else {
             Err(CodegenError {
@@ -698,7 +717,8 @@ impl<'a> Codegen<'a> {
         self.emit(Op::SetLocal(idx_slot), span);
         self.emit(Op::Pop, span);
 
-        let jump_back_dist = (self.chunk.code.len() - loop_start + 1) as u16;
+        let jump_back_dist =
+            Self::checked_u16(self.chunk.code.len() - loop_start + 1, "jump distance", span)?;
         self.emit(Op::JumpBack(jump_back_dist), span);
 
         self.chunk.patch_jump(exit_jump);
@@ -809,10 +829,9 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::GetUpvalue(uv.index as u8), span);
                 }
             }
-            self.emit(
-                Op::MakeClosure(chunk_idx as u16, captured.len() as u8),
-                span,
-            );
+            let ci = Self::checked_u16(chunk_idx, "function chunks", span)?;
+            let cap_count = Self::checked_u8(captured.len(), "captured upvalues", span)?;
+            self.emit(Op::MakeClosure(ci, cap_count), span);
         }
 
         Ok(())
@@ -961,6 +980,22 @@ impl<'a> Codegen<'a> {
     fn emit(&mut self, op: Op, span: &Span) -> usize {
         self.chunk.emit(op, span.line, span.col)
     }
+
+    fn checked_u16(val: usize, context: &str, span: &Span) -> Result<u16, CodegenError> {
+        u16::try_from(val).map_err(|_| CodegenError {
+            message: format!("Too many {} (max 65535, got {})", context, val),
+            line: span.line,
+            col: span.col,
+        })
+    }
+
+    fn checked_u8(val: usize, context: &str, span: &Span) -> Result<u8, CodegenError> {
+        u8::try_from(val).map_err(|_| CodegenError {
+            message: format!("Too many {} (max 255, got {})", context, val),
+            line: span.line,
+            col: span.col,
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -999,68 +1034,67 @@ mod tests {
 
     #[test]
     fn ir_pipeline_integer() {
-        let source = "main : () -> Int\nmain = 42";
+        let source = "fn main() -> Int = 42";
         assert_eq!(eval_via_ir(source), Value::Int(42));
     }
 
     #[test]
     fn ir_pipeline_arithmetic() {
-        let source = "main : () -> Int\nmain = 1 + 2 * 3";
+        let source = "fn main() -> Int = 1 + 2 * 3";
         assert_eq!(eval_via_ir(source), Value::Int(7));
     }
 
     #[test]
     fn ir_pipeline_const_fold() {
-        let source = "main : () -> Int\nmain = (2 + 3) * (4 - 1)";
+        let source = "fn main() -> Int = (2 + 3) * (4 - 1)";
         assert_eq!(eval_via_ir(source), Value::Int(15));
     }
 
     #[test]
     fn ir_pipeline_function_call() {
-        let source = "double : Int -> Int\ndouble = |x| x * 2\nmain : () -> Int\nmain = double(5)";
+        let source = "fn double(x: Int) -> Int = x * 2\nfn main() -> Int = double(5)";
         assert_eq!(eval_via_ir(source), Value::Int(10));
     }
 
     #[test]
     fn ir_pipeline_if_else() {
-        let source = "main : () -> Int\nmain = if true then 1 else 2";
+        let source = "fn main() -> Int = if true then 1 else 2";
         assert_eq!(eval_via_ir(source), Value::Int(1));
     }
 
     #[test]
     fn ir_pipeline_match() {
-        let source = "main : () -> Int\nmain = match 2\n  1 -> 10\n  2 -> 20\n  _ -> 99";
+        let source = "fn main() -> Int = match 2\n  1 -> 10\n  2 -> 20\n  _ -> 99";
         assert_eq!(eval_via_ir(source), Value::Int(20));
     }
 
     #[test]
     fn ir_pipeline_let_binding() {
-        let source = "main : () -> Int\nmain = {\n  let x = 10\n  x + 1\n}";
+        let source = "fn main() -> Int = {\n  let x = 10\n  x + 1\n}";
         assert_eq!(eval_via_ir(source), Value::Int(11));
     }
 
     #[test]
     fn ir_pipeline_lambda() {
-        let source = "main : () -> Int\nmain = {\n  let f = |x| x + 1\n  f(3)\n}";
+        let source = "fn main() -> Int = {\n  let f = |x| x + 1\n  f(3)\n}";
         assert_eq!(eval_via_ir(source), Value::Int(4));
     }
 
     #[test]
     fn ir_pipeline_closure() {
-        let source = "main : () -> Int\nmain = {\n  let x = 10\n  let f = |y| x + y\n  f(5)\n}";
+        let source = "fn main() -> Int = {\n  let x = 10\n  let f = |y| x + y\n  f(5)\n}";
         assert_eq!(eval_via_ir(source), Value::Int(15));
     }
 
     #[test]
     fn ir_pipeline_pipe() {
-        let source =
-            "double : Int -> Int\ndouble = |x| x * 2\nmain : () -> Int\nmain = 5 |> double";
+        let source = "fn double(x: Int) -> Int = x * 2\nfn main() -> Int = 5 |> double";
         assert_eq!(eval_via_ir(source), Value::Int(10));
     }
 
     #[test]
     fn ir_pipeline_enum_constructor() {
-        let source = "main : () -> Unknown\nmain = Some(42)";
+        let source = "fn main() -> Unknown = Some(42)";
         assert_eq!(
             eval_via_ir(source),
             Value::Enum("Some".into(), std::rc::Rc::new(Value::Int(42))),
@@ -1069,39 +1103,35 @@ mod tests {
 
     #[test]
     fn ir_pipeline_match_enum() {
-        let source = "main : () -> Int\nmain = match Some(42)\n  Some(v) -> v + 1\n  None -> 0";
+        let source = "fn main() -> Int = match Some(42)\n  Some(v) -> v + 1\n  None -> 0";
         assert_eq!(eval_via_ir(source), Value::Int(43));
     }
 
     #[test]
     fn ir_pipeline_string_interpolation() {
-        let source = "main : () -> String\nmain = \"count: ${42}\"";
+        let source = "fn main() -> String = \"count: ${42}\"";
         assert_eq!(eval_via_ir(source), Value::String("count: 42".into()));
     }
 
     #[test]
     fn ir_pipeline_recursive() {
         let source = "\
-factorial : Int -> Int
-factorial = |n| if n <= 1 then 1 else n * factorial(n - 1)
-main : () -> Int
-main = factorial(5)";
+fn factorial(n: Int) -> Int = if n <= 1 then 1 else n * factorial(n - 1)
+fn main() -> Int = factorial(5)";
         assert_eq!(eval_via_ir(source), Value::Int(120));
     }
 
     #[test]
     fn ir_pipeline_tco() {
         let source = "\
-countdown : Int -> Int
-countdown = |n| if n <= 0 then 0 else countdown(n - 1)
-main : () -> Int
-main = countdown(50000)";
+fn countdown(n: Int) -> Int = if n <= 0 then 0 else countdown(n - 1)
+fn main() -> Int = countdown(50000)";
         assert_eq!(eval_via_ir(source), Value::Int(0));
     }
 
     #[test]
     fn ir_pipeline_list() {
-        let source = "main : () -> Unknown\nmain = [1, 2, 3]";
+        let source = "fn main() -> Unknown = [1, 2, 3]";
         assert_eq!(
             eval_via_ir(source),
             Value::List(std::rc::Rc::new(vec![
@@ -1114,7 +1144,7 @@ main = countdown(50000)";
 
     #[test]
     fn ir_pipeline_record() {
-        let source = "main : () -> Unknown\nmain = { x: 1, y: 2 }";
+        let source = "fn main() -> Unknown = { x: 1, y: 2 }";
         assert_eq!(
             eval_via_ir(source),
             Value::Record(std::rc::Rc::new(vec![
@@ -1126,25 +1156,25 @@ main = countdown(50000)";
 
     #[test]
     fn ir_pipeline_native_call() {
-        let source = "main : () -> Int\nmain = String.length(\"hello\")";
+        let source = "fn main() -> Int = String.length(\"hello\")";
         assert_eq!(eval_via_ir(source), Value::Int(5));
     }
 
     #[test]
     fn ir_pipeline_pipe_native() {
-        let source = "main : () -> Int\nmain = \"hello\" |> String.length";
+        let source = "fn main() -> Int = \"hello\" |> String.length";
         assert_eq!(eval_via_ir(source), Value::Int(5));
     }
 
     #[test]
     fn ir_pipeline_try_ok() {
-        let source = "main : () -> Unknown\nmain = {\n  let x = Ok(42)\n  let v = x?\n  v + 1\n}";
+        let source = "fn main() -> Unknown = {\n  let x = Ok(42)\n  let v = x?\n  v + 1\n}";
         assert_eq!(eval_via_ir(source), Value::Int(43));
     }
 
     #[test]
     fn ir_pipeline_range() {
-        let source = "main : () -> Unknown\nmain = 1..4";
+        let source = "fn main() -> Unknown = 1..4";
         assert_eq!(
             eval_via_ir(source),
             Value::List(std::rc::Rc::new(vec![
@@ -1157,8 +1187,7 @@ main = countdown(50000)";
 
     #[test]
     fn ir_pipeline_record_update() {
-        let source =
-            "main : () -> Unknown\nmain = {\n  let r = { x: 1, y: 2 }\n  { ..r, x: 10 }\n}";
+        let source = "fn main() -> Unknown = {\n  let r = { x: 1, y: 2 }\n  { ..r, x: 10 }\n}";
         assert_eq!(
             eval_via_ir(source),
             Value::Record(std::rc::Rc::new(vec![
@@ -1170,25 +1199,25 @@ main = countdown(50000)";
 
     #[test]
     fn ir_pipeline_bool_and() {
-        let source = "main : () -> Boolean\nmain = true && false";
+        let source = "fn main() -> Boolean = true && false";
         assert_eq!(eval_via_ir(source), Value::Bool(false));
     }
 
     #[test]
     fn ir_pipeline_bool_or() {
-        let source = "main : () -> Boolean\nmain = false || true";
+        let source = "fn main() -> Boolean = false || true";
         assert_eq!(eval_via_ir(source), Value::Bool(true));
     }
 
     #[test]
     fn ir_pipeline_for_loop() {
-        let source = "main : () -> Unknown\nmain = for x in 1..4 do x + 1";
+        let source = "fn main() -> Unknown = for x in 1..4 do x + 1";
         assert_eq!(eval_via_ir(source), Value::Unit);
     }
 
     #[test]
     fn ir_pipeline_tuple() {
-        let source = "main : () -> Unknown\nmain = (1, 2, 3)";
+        let source = "fn main() -> Unknown = (1, 2, 3)";
         assert_eq!(
             eval_via_ir(source),
             Value::Tuple(std::rc::Rc::new(vec![
@@ -1201,17 +1230,15 @@ main = countdown(50000)";
 
     #[test]
     fn ir_pipeline_unit() {
-        let source = "main : () -> Unknown\nmain = ()";
+        let source = "fn main() -> Unknown = ()";
         assert_eq!(eval_via_ir(source), Value::Unit);
     }
 
     #[test]
     fn ir_pipeline_nested_closures() {
         let source = "\
-make_adder : Int -> (Int -> Int)
-make_adder = |n| |x| n + x
-main : () -> Int
-main = {
+fn make_adder(n: Int) -> (Int -> Int) = |x| n + x
+fn main() -> Int = {
   let add5 = make_adder(5)
   add5(3)
 }";
@@ -1220,7 +1247,7 @@ main = {
 
     #[test]
     fn ir_pipeline_hof_list_map() {
-        let source = "main : () -> Unknown\nmain = List.map([1, 2, 3], |x| x * 2)";
+        let source = "fn main() -> Unknown = List.map([1, 2, 3], |x| x * 2)";
         assert_eq!(
             eval_via_ir(source),
             Value::List(std::rc::Rc::new(vec![
@@ -1233,8 +1260,7 @@ main = {
 
     #[test]
     fn ir_pipeline_pipe_with_args() {
-        let source =
-            "add : (Int, Int) -> Int\nadd = |a, b| a + b\nmain : () -> Int\nmain = 3 |> add(4)";
+        let source = "fn add(a: Int, b: Int) -> Int = a + b\nfn main() -> Int = 3 |> add(4)";
         assert_eq!(eval_via_ir(source), Value::Int(7));
     }
 }

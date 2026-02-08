@@ -1,9 +1,13 @@
+#[cfg(feature = "async-server")]
+pub mod async_executor;
 pub mod chunk;
 pub mod codegen;
 pub mod compiler;
 pub mod ir;
 #[cfg(feature = "jit")]
 pub mod jit;
+#[cfg(feature = "llvm")]
+pub mod llvm_backend;
 pub mod lower;
 pub mod module_compiler;
 pub mod natives;

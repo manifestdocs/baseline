@@ -20,15 +20,15 @@ use super::value::{RcStr, Value};
 // Tag constants
 // ---------------------------------------------------------------------------
 
-const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-const TAG_THRESHOLD: u64 = 0xFFFA_0000_0000_0000; // values >= this are tagged
+pub const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+pub const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub const TAG_THRESHOLD: u64 = 0xFFFA_0000_0000_0000; // values >= this are tagged
 
-const TAG_INT: u64 = 0xFFFA_0000_0000_0000;
-const TAG_BOOL: u64 = 0xFFFB_0000_0000_0000;
-const TAG_UNIT: u64 = 0xFFFC_0000_0000_0000;
-const TAG_FUNC: u64 = 0xFFFD_0000_0000_0000;
-const TAG_HEAP: u64 = 0xFFFE_0000_0000_0000;
+pub const TAG_INT: u64 = 0xFFFA_0000_0000_0000;
+pub const TAG_BOOL: u64 = 0xFFFB_0000_0000_0000;
+pub const TAG_UNIT: u64 = 0xFFFC_0000_0000_0000;
+pub const TAG_FUNC: u64 = 0xFFFD_0000_0000_0000;
+pub const TAG_HEAP: u64 = 0xFFFE_0000_0000_0000;
 
 // ---------------------------------------------------------------------------
 // HeapObject — heap-allocated value variants
@@ -52,6 +52,12 @@ pub enum HeapObject {
         chunk_idx: usize,
         upvalues: Vec<NValue>,
     },
+    /// Middleware chain continuation: handler + remaining middleware.
+    /// When called with (request), invokes the remaining middleware chain.
+    NativeMwNext {
+        handler: NValue,
+        remaining_mw: Vec<NValue>,
+    },
     /// Integers that don't fit in 48-bit signed range.
     BigInt(i64),
 }
@@ -60,7 +66,44 @@ pub enum HeapObject {
 // NValue — 8-byte NaN-boxed value
 // ---------------------------------------------------------------------------
 
+#[repr(transparent)]
 pub struct NValue(u64);
+
+// -- Raw access (for JIT interop) --
+
+impl NValue {
+    /// Get the raw u64 bits of this NValue (for JIT).
+    #[inline(always)]
+    pub fn raw(&self) -> u64 {
+        self.0
+    }
+
+    /// Reconstruct an NValue from raw u64 bits (for JIT).
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure `bits` represents a valid NValue encoding.
+    /// For heap values, the caller must ensure the Rc refcount is correct.
+    #[inline(always)]
+    pub unsafe fn from_raw(bits: u64) -> Self {
+        NValue(bits)
+    }
+
+    /// Borrow an NValue from raw bits without taking ownership.
+    /// Creates a clone (bumping Rc refcount for heap values) and forgets the
+    /// temporary, so the caller's raw bits remain valid.
+    ///
+    /// # Safety
+    ///
+    /// Same as `from_raw`: bits must represent a valid NValue encoding.
+    #[inline(always)]
+    pub unsafe fn borrow_from_raw(bits: u64) -> Self {
+        let temp = unsafe { NValue::from_raw(bits) };
+        let cloned = temp.clone();
+        std::mem::forget(temp);
+        cloned
+    }
+}
 
 // -- Construction --
 
@@ -133,6 +176,11 @@ impl NValue {
             chunk_idx,
             upvalues,
         })
+    }
+
+    /// Public constructor for HeapObject variants (used by middleware chain builder).
+    pub fn from_heap_obj(obj: HeapObject) -> Self {
+        Self::from_heap(obj)
     }
 
     fn from_heap(obj: HeapObject) -> Self {
@@ -271,6 +319,16 @@ impl NValue {
         unsafe { &*ptr }
     }
 
+    /// Safely get heap reference, returning None if not a heap value.
+    #[inline]
+    pub fn as_heap_ref_checked(&self) -> Option<&HeapObject> {
+        if self.is_heap() {
+            Some(self.as_heap_ref())
+        } else {
+            None
+        }
+    }
+
     /// Extract string reference from a heap String.
     #[inline]
     pub fn as_string(&self) -> Option<&RcStr> {
@@ -315,6 +373,24 @@ impl NValue {
         }
         match self.as_heap_ref() {
             HeapObject::Enum { tag, payload } => Some((tag, payload)),
+            _ => None,
+        }
+    }
+
+    /// Extract string slice from a heap String.
+    #[inline]
+    pub fn as_str(&self) -> Option<&str> {
+        self.as_string().map(|s| s.as_ref())
+    }
+
+    /// Extract tuple items reference from a heap Tuple.
+    #[inline]
+    pub fn as_tuple(&self) -> Option<&Vec<NValue>> {
+        if !self.is_heap() {
+            return None;
+        }
+        match self.as_heap_ref() {
+            HeapObject::Tuple(items) => Some(items),
             _ => None,
         }
     }
@@ -421,6 +497,9 @@ impl fmt::Display for NValue {
                 HeapObject::Closure { chunk_idx, .. } => {
                     write!(f, "<closure:{}>", chunk_idx)
                 }
+                HeapObject::NativeMwNext { .. } => {
+                    write!(f, "<middleware-next>")
+                }
                 HeapObject::BigInt(i) => write!(f, "{}", i),
             }
         }
@@ -526,6 +605,7 @@ impl NValue {
                 chunk_idx: *chunk_idx,
                 upvalues: Rc::new(upvalues.iter().map(|v| v.to_value()).collect()),
             },
+            HeapObject::NativeMwNext { .. } => Value::Unit,
             HeapObject::BigInt(i) => Value::Int(*i),
         }
     }

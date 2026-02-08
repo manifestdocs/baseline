@@ -49,6 +49,10 @@ enum Commands {
         /// Use the Cranelift JIT compiler (requires --features jit)
         #[arg(long)]
         jit: bool,
+
+        /// Use the LLVM JIT backend (requires --features llvm)
+        #[arg(long)]
+        llvm: bool,
     },
 
     /// Run inline tests in a Baseline source file
@@ -99,12 +103,18 @@ fn main() {
             }
         }
         Commands::Run {
-            file, interp, jit, ..
+            file,
+            interp,
+            jit,
+            llvm,
+            ..
         } => {
             if interp {
                 run_file(&file);
             } else if jit {
                 run_file_jit(&file);
+            } else if llvm {
+                run_file_llvm(&file);
             } else {
                 run_file_vm(&file);
             }
@@ -278,17 +288,25 @@ fn run_file_jit(file: &PathBuf) {
     let mut optimized = ir_module;
     vm::optimize_ir::optimize(&mut optimized);
 
-    let jit_program = match vm::jit::compile(&optimized, false) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("JIT Error: {}", e);
-            std::process::exit(1);
-        }
-    };
+    let jit_program =
+        match vm::jit::compile_with_natives(&optimized, false, Some(vm_instance.natives())) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("JIT Error: {}", e);
+                std::process::exit(1);
+            }
+        };
 
-    match jit_program.run_entry() {
+    match jit_program.run_entry_nvalue() {
         Some(val) => {
-            println!("{}", val);
+            // Check for runtime errors stored in the thread-local error slot
+            if let Some(err) = vm::jit::jit_take_error() {
+                eprintln!("Runtime Error: {}", err);
+                std::process::exit(1);
+            }
+            if !val.is_unit() {
+                println!("{}", val);
+            }
         }
         None => {
             eprintln!("JIT Error: entry function was not compiled");
@@ -301,6 +319,61 @@ fn run_file_jit(file: &PathBuf) {
 fn run_file_jit(_file: &PathBuf) {
     eprintln!("Error: JIT support requires building with --features jit");
     eprintln!("  cargo build --features jit --release");
+    std::process::exit(1);
+}
+
+#[cfg(feature = "llvm")]
+fn run_file_llvm(file: &PathBuf) {
+    use tree_sitter::Parser;
+    use tree_sitter_baseline::LANGUAGE;
+
+    let source = std::fs::read_to_string(file).expect("Failed to read file");
+    let file_str = file.display().to_string();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load language");
+    let tree = parser.parse(&source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let has_type_errors = type_diags
+        .iter()
+        .any(|d| d.severity == diagnostics::Severity::Error);
+    let type_map = if has_type_errors { None } else { Some(type_map) };
+
+    let vm_instance = vm::vm::Vm::new();
+    let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
+    let ir_module = match lowerer.lower_module(&root) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Compile Error: {}", e.message);
+            std::process::exit(1);
+        }
+    };
+
+    let mut optimized = ir_module;
+    vm::optimize_ir::optimize(&mut optimized);
+
+    let trace = std::env::var("BLC_TRACE").is_ok();
+    let program = match vm::llvm_backend::compile(&optimized, trace) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("LLVM Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let result = program.run_entry();
+    if result != 0 {
+        println!("{}", result);
+    }
+}
+
+#[cfg(not(feature = "llvm"))]
+fn run_file_llvm(_file: &PathBuf) {
+    eprintln!("Error: LLVM support requires building with --features llvm");
+    eprintln!("  LLVM_SYS_181_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --features llvm --release");
     std::process::exit(1);
 }
 

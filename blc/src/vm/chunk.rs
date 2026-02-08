@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use super::value::Value;
 
 // ---------------------------------------------------------------------------
@@ -81,6 +83,8 @@ pub enum Op {
     ListLen,
     /// Pop N values from stack, push as List.
     MakeList(u16),
+    /// Pop two lists from stack, push concatenation.
+    ListConcat,
     /// Pop N key-value pairs from stack, push as Record.
     /// Keys are Value::String constants from the pool. Stack: [key0, val0, key1, val1, ...] → Record
     MakeRecord(u16),
@@ -145,12 +149,38 @@ pub enum Op {
     GetLocalLtIntJumpIfFalse(u16, i16, u16),
 
     // -- Termination --
+    /// Runtime error with message from constant pool.
+    Halt(u16),
     Return,
 }
 
 // ---------------------------------------------------------------------------
 // Chunk
 // ---------------------------------------------------------------------------
+
+/// Hashable key for constant pool deduplication.
+/// Covers the common constant types; Float/complex types fall through to linear scan.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ConstKey {
+    Int(i64),
+    String(super::value::RcStr),
+    Bool(bool),
+    Unit,
+    Function(usize),
+}
+
+impl ConstKey {
+    fn from_value(value: &Value) -> Option<Self> {
+        match value {
+            Value::Int(i) => Some(ConstKey::Int(*i)),
+            Value::String(s) => Some(ConstKey::String(s.clone())),
+            Value::Bool(b) => Some(ConstKey::Bool(*b)),
+            Value::Unit => Some(ConstKey::Unit),
+            Value::Function(idx) => Some(ConstKey::Function(*idx)),
+            _ => None, // Float, List, Record, etc. — rare in constant pools
+        }
+    }
+}
 
 /// A compiled unit of bytecode with its constant pool and debug info.
 #[derive(Debug, Default)]
@@ -159,11 +189,34 @@ pub struct Chunk {
     pub constants: Vec<Value>,
     /// Source locations: (line, col) per opcode index.
     pub source_map: Vec<(usize, usize)>,
+    /// Dedup index for O(1) constant pool lookups (common types only).
+    const_index: HashMap<ConstKey, u16>,
 }
 
 impl Chunk {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Reconstruct a chunk from pre-built parts (used by thread-pool server).
+    pub fn from_parts(
+        code: Vec<Op>,
+        constants: Vec<Value>,
+        source_map: Vec<(usize, usize)>,
+    ) -> Self {
+        // Rebuild the dedup index from constants
+        let mut const_index = HashMap::new();
+        for (i, v) in constants.iter().enumerate() {
+            if let Some(key) = ConstKey::from_value(v) {
+                const_index.entry(key).or_insert(i as u16);
+            }
+        }
+        Chunk {
+            code,
+            constants,
+            source_map,
+            const_index,
+        }
     }
 
     /// Emit an opcode, recording its source location.
@@ -176,13 +229,25 @@ impl Chunk {
 
     /// Add a constant to the pool, returning its index.
     /// Deduplicates: if an equal constant already exists, returns its index.
+    /// Uses a HashMap for O(1) lookup of common types (Int, String, Bool, Unit, Function).
     pub fn add_constant(&mut self, value: Value) -> u16 {
+        // Fast path: check the hash index for common types
+        if let Some(key) = ConstKey::from_value(&value) {
+            if let Some(&idx) = self.const_index.get(&key) {
+                return idx;
+            }
+            let idx = self.constants.len() as u16;
+            self.const_index.insert(key, idx);
+            self.constants.push(value);
+            return idx;
+        }
+        // Slow path: linear scan for Float, List, Record, etc.
         if let Some(idx) = self.constants.iter().position(|v| v == &value) {
             return idx as u16;
         }
-        let idx = self.constants.len();
+        let idx = self.constants.len() as u16;
         self.constants.push(value);
-        idx as u16
+        idx
     }
 
     /// Rewrite all chunk-index references by an offset.
@@ -219,13 +284,18 @@ impl Chunk {
     }
 
     /// Patch a jump instruction at `offset` with the correct jump distance.
+    /// Panics in debug mode if the offset doesn't point to a jump instruction.
     pub fn patch_jump(&mut self, offset: usize) {
-        let jump_dist = (self.code.len() - offset - 1) as u16;
+        let raw_dist = self.code.len() - offset - 1;
+        let jump_dist = u16::try_from(raw_dist)
+            .unwrap_or_else(|_| panic!("jump distance too large ({} > 65535)", raw_dist));
         match &mut self.code[offset] {
             Op::Jump(dist) => *dist = jump_dist,
             Op::JumpIfFalse(dist) => *dist = jump_dist,
             Op::JumpIfTrue(dist) => *dist = jump_dist,
-            _ => panic!("patch_jump called on non-jump op"),
+            other => {
+                debug_assert!(false, "patch_jump called on non-jump op: {:?}", other);
+            }
         }
     }
 }
@@ -339,6 +409,7 @@ impl Chunk {
                 | Op::EnumTag
                 | Op::EnumPayload
                 | Op::Concat
+                | Op::ListConcat
                 | Op::TupleGet(_)
                 | Op::GetField(_)
                 | Op::ListGet

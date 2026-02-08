@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 use crate::analysis::types::{Type, TypeMap};
@@ -34,6 +34,8 @@ pub struct Lowerer<'a> {
     natives: &'a NativeRegistry,
     /// Known top-level function names (for CallDirect resolution).
     functions: HashSet<String>,
+    /// Parameter names for known functions (for named argument resolution).
+    fn_params: HashMap<String, Vec<String>>,
     /// Name of the function currently being lowered (for TCO detection).
     current_fn_name: Option<String>,
     /// Whether the current expression is in tail position.
@@ -49,6 +51,7 @@ impl<'a> Lowerer<'a> {
             type_map,
             natives,
             functions: HashSet::new(),
+            fn_params: HashMap::new(),
             current_fn_name: None,
             tail_position: false,
             scopes: Vec::new(),
@@ -66,7 +69,7 @@ impl<'a> Lowerer<'a> {
 
     /// Lower a full source file into an IrModule.
     pub fn lower_module(&mut self, root: &Node) -> Result<IrModule, LowerError> {
-        // First pass: collect function names
+        // First pass: collect function names and parameter names
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
@@ -75,6 +78,8 @@ impl<'a> Lowerer<'a> {
             {
                 let name = self.node_text(&name_node);
                 self.functions.insert(name.clone());
+                let params = self.extract_param_names(&child);
+                self.fn_params.insert(name.clone(), params);
                 func_nodes.push((name, i));
             }
         }
@@ -146,33 +151,26 @@ impl<'a> Lowerer<'a> {
         let span = self.span(node);
         self.current_fn_name = Some(name.to_string());
 
-        let (params, body) = if body_node.kind() == "lambda" {
-            let mut cursor = body_node.walk();
-            let children: Vec<Node> = body_node.named_children(&mut cursor).collect();
-            if children.is_empty() {
-                (vec![], Expr::Unit)
-            } else {
-                let body_child = &children[children.len() - 1];
-                let params: Vec<String> = children[..children.len() - 1]
-                    .iter()
-                    .map(|n| self.node_text(n))
-                    .collect();
-
-                // Enter scope with params
-                let param_set: HashSet<String> = params.iter().cloned().collect();
-                self.scopes.push(param_set);
-                self.tail_position = true;
-                let body = self.lower_expression(body_child)?;
-                self.tail_position = false;
-                self.scopes.pop();
-                (params, body)
+        // Extract params from param_list
+        let mut params = Vec::new();
+        if let Some(param_list) = node.child_by_field_name("params") {
+            let mut cursor = param_list.walk();
+            for param in param_list.named_children(&mut cursor) {
+                if param.kind() == "param"
+                    && let Some(name_node) = param.child_by_field_name("name")
+                {
+                    params.push(self.node_text(&name_node));
+                }
             }
-        } else {
-            self.tail_position = true;
-            let body = self.lower_expression(&body_node)?;
-            self.tail_position = false;
-            (vec![], body)
-        };
+        }
+
+        // Enter scope with params and lower body
+        let param_set: HashSet<String> = params.iter().cloned().collect();
+        self.scopes.push(param_set);
+        self.tail_position = true;
+        let body = self.lower_expression(&body_node)?;
+        self.tail_position = false;
+        self.scopes.pop();
 
         self.current_fn_name = None;
 
@@ -220,12 +218,23 @@ impl<'a> Lowerer<'a> {
             "integer_literal" => self.lower_integer(node),
             "float_literal" => self.lower_float(node),
             "boolean_literal" => self.lower_boolean(node),
-            "string_literal" => self.lower_string_literal(node),
+            "string_literal" | "multiline_string_literal" => self.lower_string_literal(node),
+            "raw_string_literal" | "raw_hash_string_literal" => self.lower_raw_string(node),
             "tuple_expression" => self.lower_tuple(node),
             "unary_expression" => self.lower_unary(node),
             "binary_expression" => self.lower_binary(node),
             "identifier" => self.lower_identifier(node),
             "for_expression" => self.lower_for(node),
+            "hole_expression" => Ok(Expr::Hole),
+            "named_argument" => {
+                // Lower the expression part of a named argument
+                let count = node.named_child_count();
+                if count > 0 {
+                    self.lower_expression(&node.named_child(count - 1).unwrap())
+                } else {
+                    Ok(Expr::Unit)
+                }
+            }
             "range_expression" => self.lower_range(node),
             "lambda" => self.lower_lambda(node),
             "pipe_expression" => self.lower_pipe(node),
@@ -248,9 +257,8 @@ impl<'a> Lowerer<'a> {
 
     fn lower_integer(&self, node: &Node) -> Result<Expr, LowerError> {
         let text = self.node_text(node);
-        let val: i64 = text
-            .parse()
-            .map_err(|_| self.error(format!("Invalid integer: {}", text), node))?;
+        let val: i64 = crate::parse::parse_int_literal(&text)
+            .ok_or_else(|| self.error(format!("Invalid integer: {}", text), node))?;
         Ok(Expr::Int(val))
     }
 
@@ -272,47 +280,28 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     fn lower_string_literal(&mut self, node: &Node) -> Result<Expr, LowerError> {
-        let node_start = node.start_byte();
-        let node_end = node.end_byte();
-        let src = self.source.as_bytes();
-
         let mut parts: Vec<Expr> = Vec::new();
-        let mut cursor = node_start + 1; // skip opening quote
-        let content_end = node_end - 1; // skip closing quote
 
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
-            let child_start = child.start_byte();
-            let child_end = child.end_byte();
-
-            if cursor < child_start {
-                let text = std::str::from_utf8(&src[cursor..child_start]).unwrap_or("");
-                if !text.is_empty() {
-                    parts.push(Expr::String(text.to_string()));
-                }
-            }
-
             match child.kind() {
+                "string_content" | "multiline_string_content" => {
+                    let text = self.node_text(&child);
+                    if !text.is_empty() {
+                        parts.push(Expr::String(text));
+                    }
+                }
+                "escape_sequence" => {
+                    let text = self.node_text(&child);
+                    parts.push(Expr::String(unescape(&text)));
+                }
                 "interpolation" => {
                     let expr_node = child
                         .named_child(0)
                         .ok_or_else(|| self.error("Empty interpolation".into(), &child))?;
                     parts.push(self.lower_expression(&expr_node)?);
                 }
-                "escape_sequence" => {
-                    let text = self.node_text(&child);
-                    parts.push(Expr::String(unescape(&text)));
-                }
-                _ => {}
-            }
-
-            cursor = child_end;
-        }
-
-        if cursor < content_end {
-            let text = std::str::from_utf8(&src[cursor..content_end]).unwrap_or("");
-            if !text.is_empty() {
-                parts.push(Expr::String(text.to_string()));
+                _ => {} // string_start, string_end, etc.
             }
         }
 
@@ -320,11 +309,9 @@ impl<'a> Lowerer<'a> {
             return Ok(Expr::String(String::new()));
         }
 
-        // Check if there are any non-string parts (interpolations)
         let has_interpolation = parts.iter().any(|p| !matches!(p, Expr::String(_)));
 
         if !has_interpolation && parts.len() == 1 {
-            // Plain string, no interpolation
             return Ok(parts.into_iter().next().unwrap());
         }
 
@@ -333,6 +320,52 @@ impl<'a> Lowerer<'a> {
         } else {
             Ok(parts.into_iter().next().unwrap())
         }
+    }
+
+    fn lower_raw_string(&self, node: &Node) -> Result<Expr, LowerError> {
+        Ok(Expr::String(self.raw_string_content(node)))
+    }
+
+    /// Extract content from raw_string_literal or raw_hash_string_literal.
+    /// Children are [start, content?, end] — find the one with "content" in kind.
+    fn raw_string_content(&self, node: &Node) -> String {
+        for i in 0..node.named_child_count() {
+            let child = node.named_child(i).unwrap();
+            if child.kind().contains("content") {
+                return child.utf8_text(self.source.as_bytes()).unwrap_or("").to_string();
+            }
+        }
+        String::new()
+    }
+
+    /// Check if a string node contains interpolation children.
+    fn has_interpolation(&self, node: &Node) -> bool {
+        for i in 0..node.named_child_count() {
+            if let Some(child) = node.named_child(i) {
+                if child.kind() == "interpolation" {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Extract the text content of a string literal (no interpolation).
+    fn extract_string_content(&self, node: &Node) -> Expr {
+        let mut result = String::new();
+        for i in 0..node.named_child_count() {
+            let child = node.named_child(i).unwrap();
+            match child.kind() {
+                "string_content" | "multiline_string_content" => {
+                    result.push_str(&self.node_text(&child));
+                }
+                "escape_sequence" => {
+                    result.push_str(&unescape(&self.node_text(&child)));
+                }
+                _ => {}
+            }
+        }
+        Expr::String(result)
     }
 
     // -----------------------------------------------------------------------
@@ -449,6 +482,7 @@ impl<'a> Lowerer<'a> {
             ">" => BinOp::Gt,
             "<=" => BinOp::Le,
             ">=" => BinOp::Ge,
+            "++" => BinOp::ListConcat,
             _ => return Err(self.error(format!("Unknown binary operator: {}", op_text), node)),
         };
 
@@ -486,12 +520,16 @@ impl<'a> Lowerer<'a> {
 
     fn try_eval_const(&self, node: &Node) -> Option<Expr> {
         match node.kind() {
-            "integer_literal" => self.node_text(node).parse::<i64>().ok().map(Expr::Int),
+            "integer_literal" => crate::parse::parse_int_literal(&self.node_text(node)).map(Expr::Int),
             "float_literal" => self.node_text(node).parse::<f64>().ok().map(Expr::Float),
             "boolean_literal" => Some(Expr::Bool(self.node_text(node) == "true")),
-            "string_literal" if node.named_child_count() == 0 => {
-                let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
-                Some(Expr::String(text.into()))
+            "string_literal" | "multiline_string_literal"
+                if !self.has_interpolation(node) =>
+            {
+                Some(self.extract_string_content(node))
+            }
+            "raw_string_literal" | "raw_hash_string_literal" => {
+                Some(Expr::String(self.raw_string_content(node)))
             }
             "parenthesized_expression" | "literal" => {
                 node.named_child(0).and_then(|c| self.try_eval_const(&c))
@@ -674,7 +712,7 @@ impl<'a> Lowerer<'a> {
             "wildcard_pattern" => Ok(Pattern::Wildcard),
             "identifier" => Ok(Pattern::Var(self.node_text(node))),
             "literal" | "integer_literal" | "float_literal" | "boolean_literal"
-            | "string_literal" => {
+            | "string_literal" | "multiline_string_literal" | "raw_string_literal" | "raw_hash_string_literal" => {
                 let expr =
                     match node.kind() {
                         "integer_literal" => {
@@ -690,9 +728,11 @@ impl<'a> Lowerer<'a> {
                             })?)
                         }
                         "boolean_literal" => Expr::Bool(self.node_text(node) == "true"),
-                        "string_literal" => {
-                            let text = &self.source[node.start_byte() + 1..node.end_byte() - 1];
-                            Expr::String(text.into())
+                        "string_literal" | "multiline_string_literal" => {
+                            self.extract_string_content(node)
+                        }
+                        "raw_string_literal" | "raw_hash_string_literal" => {
+                            Expr::String(self.raw_string_content(node))
                         }
                         "literal" => {
                             let child = node
@@ -876,10 +916,7 @@ impl<'a> Lowerer<'a> {
         if callee.kind() == "identifier" {
             let callee_name = self.node_text(callee);
             if self.functions.contains(&callee_name) {
-                let mut args = Vec::new();
-                for arg in arg_nodes {
-                    args.push(self.lower_expression(arg)?);
-                }
+                let args = self.resolve_named_call_args(&callee_name.clone(), arg_nodes)?;
                 self.tail_position = was_tail;
                 return Ok(Expr::CallDirect {
                     name: callee_name,
@@ -1265,6 +1302,86 @@ impl<'a> Lowerer<'a> {
             col: node.start_position().column,
         }
     }
+
+    /// Extract parameter names from a function_def node.
+    fn extract_param_names(&self, func_def: &Node) -> Vec<String> {
+        let mut params = Vec::new();
+        if let Some(param_list) = func_def.child_by_field_name("params") {
+            let mut cursor = param_list.walk();
+            for child in param_list.named_children(&mut cursor) {
+                if child.kind() == "param" {
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                        params.push(self.node_text(&name_node));
+                    }
+                }
+            }
+        }
+        params
+    }
+
+    /// Resolve named arguments in call args, reordering by parameter names.
+    /// Returns args in positional order, or the original args if no named args present.
+    fn resolve_named_call_args(
+        &mut self,
+        fn_name: &str,
+        arg_nodes: &[Node],
+    ) -> Result<Vec<Expr>, LowerError> {
+        let has_named = arg_nodes.iter().any(|a| a.kind() == "named_argument");
+        if !has_named {
+            // All positional — lower as-is
+            let mut args = Vec::new();
+            for arg in arg_nodes {
+                args.push(self.lower_expression(arg)?);
+            }
+            return Ok(args);
+        }
+
+        let param_names = self.fn_params.get(fn_name).cloned().unwrap_or_default();
+
+        // Split into positional and named
+        let mut positional = Vec::new();
+        let mut named: Vec<(String, Node)> = Vec::new();
+        for arg in arg_nodes {
+            if arg.kind() == "named_argument" {
+                if let Some(name_node) = arg.child_by_field_name("name") {
+                    let name = self.node_text(&name_node);
+                    let count = arg.named_child_count();
+                    let expr_node = arg.named_child(count - 1).unwrap();
+                    named.push((name, expr_node));
+                }
+            } else {
+                positional.push(*arg);
+            }
+        }
+
+        // Build result array
+        let total = param_names.len().max(positional.len() + named.len());
+        let mut result: Vec<Option<Expr>> = vec![None; total];
+
+        // Place positional args
+        for (i, arg) in positional.iter().enumerate() {
+            result[i] = Some(self.lower_expression(arg)?);
+        }
+
+        // Place named args by matching parameter names
+        for (name, expr_node) in &named {
+            if let Some(pos) = param_names.iter().position(|p| p == name) {
+                result[pos] = Some(self.lower_expression(expr_node)?);
+            } else {
+                // Unknown param name — lower in order (type checker will catch it)
+                let lowered = self.lower_expression(expr_node)?;
+                if let Some(slot) = result.iter().position(|r| r.is_none()) {
+                    result[slot] = Some(lowered);
+                }
+            }
+        }
+
+        // Fill any remaining None slots with Unit
+        Ok(result
+            .into_iter()
+            .map(|r| r.unwrap_or(Expr::Unit))
+            .collect())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1344,7 +1461,7 @@ mod tests {
     }
 
     fn lower_expr(source: &str) -> Expr {
-        let wrapped = format!("x : () -> Unknown\nx = {}", source);
+        let wrapped = format!("fn x() -> Unknown = {}", source);
         let tree = parse(&wrapped);
         let root = tree.root_node();
         let func_def = root.named_child(0).unwrap();
@@ -1397,8 +1514,7 @@ mod tests {
     #[test]
     fn lower_pipe_desugars() {
         // x |> f desugars to a call
-        let source =
-            "double : Int -> Int\ndouble = |x| x * 2\nmain : () -> Int\nmain = 5 |> double";
+        let source = "fn double(x: Int) -> Int = x * 2\nfn main() -> Int = 5 |> double";
         let tree = parse(source);
         let root = tree.root_node();
         let natives = NativeRegistry::new();
@@ -1444,7 +1560,7 @@ mod tests {
 
     #[test]
     fn lower_module_basic() {
-        let source = "inc : Int -> Int\ninc = |x| x + 1\nmain : () -> Int\nmain = inc(5)";
+        let source = "fn inc(x: Int) -> Int = x + 1\nfn main() -> Int = inc(5)";
         let tree = parse(source);
         let root = tree.root_node();
         let natives = NativeRegistry::new();

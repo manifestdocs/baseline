@@ -4,9 +4,22 @@ use super::ir::{BinOp, Expr, IrModule, MatchArm, Pattern, UnaryOp};
 
 /// Run all IR optimization passes on the module.
 pub fn optimize(module: &mut IrModule) {
+    // Pass 1-2: Constant propagation + folding
+    for func in &mut module.functions {
+        func.body = propagate_and_fold(func.body.clone());
+    }
+    // Pass 3: Function inlining (with interleaved propagation)
+    inline_functions(module);
+    // Cleanup: dead let elimination + block simplification
+    for func in &mut module.functions {
+        func.body = eliminate_dead_lets(func.body.clone());
+        func.body = simplify_blocks(func.body.clone());
+    }
+    // Final: propagation + folding again (to fold across simplified blocks)
     for func in &mut module.functions {
         func.body = propagate_and_fold(func.body.clone());
         func.body = eliminate_dead_lets(func.body.clone());
+        func.body = simplify_blocks(func.body.clone());
     }
 }
 
@@ -238,7 +251,7 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
         }
 
         // Literals pass through unchanged
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit => expr,
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
     }
 }
 
@@ -288,6 +301,7 @@ fn fold_int_binop(op: BinOp, a: i64, b: i64) -> Option<Expr> {
         BinOp::Gt => Some(Expr::Bool(a > b)),
         BinOp::Le => Some(Expr::Bool(a <= b)),
         BinOp::Ge => Some(Expr::Bool(a >= b)),
+        BinOp::ListConcat => None,
     }
 }
 
@@ -304,6 +318,7 @@ fn fold_float_binop(op: BinOp, a: f64, b: f64) -> Option<Expr> {
         BinOp::Gt => Some(Expr::Bool(a > b)),
         BinOp::Le => Some(Expr::Bool(a <= b)),
         BinOp::Ge => Some(Expr::Bool(a >= b)),
+        BinOp::ListConcat => None,
     }
 }
 
@@ -337,7 +352,764 @@ fn try_fold_unaryop(op: UnaryOp, operand: &Expr) -> Option<Expr> {
 }
 
 // ---------------------------------------------------------------------------
-// Pass 3: Dead let elimination
+// Pass 3: Function inlining
+// ---------------------------------------------------------------------------
+
+/// Maximum node count for a function body to be considered for inlining.
+const INLINE_THRESHOLD: usize = 30;
+
+/// Maximum number of inlining iterations to handle chains (f calls g calls h).
+const INLINE_MAX_ROUNDS: usize = 3;
+
+/// Count the number of AST nodes in an expression (for inlining budget).
+fn expr_node_count(expr: &Expr) -> usize {
+    match expr {
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
+        | Expr::Var(_, _) => 1,
+        Expr::BinOp { lhs, rhs, .. } => 1 + expr_node_count(lhs) + expr_node_count(rhs),
+        Expr::UnaryOp { operand, .. } => 1 + expr_node_count(operand),
+        Expr::And(l, r) | Expr::Or(l, r) => 1 + expr_node_count(l) + expr_node_count(r),
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            1 + expr_node_count(condition)
+                + expr_node_count(then_branch)
+                + else_branch.as_ref().map_or(0, |e| expr_node_count(e))
+        }
+        Expr::CallDirect { args, .. }
+        | Expr::CallNative { args, .. }
+        | Expr::TailCall { args, .. } => {
+            1 + args.iter().map(expr_node_count).sum::<usize>()
+        }
+        Expr::CallIndirect { callee, args, .. } => {
+            1 + expr_node_count(callee) + args.iter().map(expr_node_count).sum::<usize>()
+        }
+        Expr::Let { value, .. } => 1 + expr_node_count(value),
+        Expr::Block(exprs, _) => exprs.iter().map(expr_node_count).sum::<usize>(),
+        Expr::Match { subject, arms, .. } => {
+            1 + expr_node_count(subject)
+                + arms.iter().map(|a| expr_node_count(&a.body)).sum::<usize>()
+        }
+        Expr::Lambda { body, .. } => 1 + expr_node_count(body),
+        Expr::MakeEnum { payload, .. } => 1 + expr_node_count(payload),
+        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
+            1 + fields.iter().map(|(_, v)| expr_node_count(v)).sum::<usize>()
+        }
+        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
+            items.iter().map(expr_node_count).sum::<usize>()
+        }
+        Expr::MakeRange(s, e) => 1 + expr_node_count(s) + expr_node_count(e),
+        Expr::UpdateRecord { base, updates, .. } => {
+            1 + expr_node_count(base)
+                + updates.iter().map(|(_, v)| expr_node_count(v)).sum::<usize>()
+        }
+        Expr::GetField { object, .. } => 1 + expr_node_count(object),
+        Expr::For { iterable, body, .. } => 1 + expr_node_count(iterable) + expr_node_count(body),
+        Expr::Try { expr, .. } => 1 + expr_node_count(expr),
+        Expr::Concat(parts) => parts.iter().map(expr_node_count).sum::<usize>(),
+    }
+}
+
+/// Check if an expression contains a call (direct or tail) to the named function.
+fn references_function(expr: &Expr, name: &str) -> bool {
+    match expr {
+        Expr::CallDirect {
+            name: n, args, ..
+        }
+        | Expr::TailCall {
+            name: n, args, ..
+        } => n == name || args.iter().any(|a| references_function(a, name)),
+        Expr::BinOp { lhs, rhs, .. } => {
+            references_function(lhs, name) || references_function(rhs, name)
+        }
+        Expr::UnaryOp { operand, .. } => references_function(operand, name),
+        Expr::And(l, r) | Expr::Or(l, r) => {
+            references_function(l, name) || references_function(r, name)
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            references_function(condition, name)
+                || references_function(then_branch, name)
+                || else_branch
+                    .as_ref()
+                    .is_some_and(|e| references_function(e, name))
+        }
+        Expr::Let { value, .. } => references_function(value, name),
+        Expr::Block(exprs, _) => exprs.iter().any(|e| references_function(e, name)),
+        Expr::Match { subject, arms, .. } => {
+            references_function(subject, name)
+                || arms.iter().any(|a| references_function(&a.body, name))
+        }
+        Expr::CallNative { args, .. } => args.iter().any(|a| references_function(a, name)),
+        Expr::CallIndirect { callee, args, .. } => {
+            references_function(callee, name)
+                || args.iter().any(|a| references_function(a, name))
+        }
+        Expr::Lambda { body, .. } => references_function(body, name),
+        Expr::MakeEnum { payload, .. } => references_function(payload, name),
+        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
+            fields.iter().any(|(_, v)| references_function(v, name))
+        }
+        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
+            items.iter().any(|e| references_function(e, name))
+        }
+        Expr::MakeRange(s, e) => references_function(s, name) || references_function(e, name),
+        Expr::UpdateRecord { base, updates, .. } => {
+            references_function(base, name)
+                || updates.iter().any(|(_, v)| references_function(v, name))
+        }
+        Expr::GetField { object, .. } => references_function(object, name),
+        Expr::For { iterable, body, .. } => {
+            references_function(iterable, name) || references_function(body, name)
+        }
+        Expr::Try { expr, .. } => references_function(expr, name),
+        Expr::Concat(parts) => parts.iter().any(|e| references_function(e, name)),
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
+        | Expr::Var(_, _) => false,
+    }
+}
+
+/// Rename all occurrences of variables in `rename_map` within an expression.
+fn rename_vars(expr: Expr, rename_map: &HashMap<String, String>) -> Expr {
+    match expr {
+        Expr::Var(name, ty) => {
+            if let Some(new_name) = rename_map.get(&name) {
+                Expr::Var(new_name.clone(), ty)
+            } else {
+                Expr::Var(name, ty)
+            }
+        }
+        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
+            op,
+            lhs: Box::new(rename_vars(*lhs, rename_map)),
+            rhs: Box::new(rename_vars(*rhs, rename_map)),
+            ty,
+        },
+        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
+            op,
+            operand: Box::new(rename_vars(*operand, rename_map)),
+            ty,
+        },
+        Expr::And(l, r) => Expr::And(
+            Box::new(rename_vars(*l, rename_map)),
+            Box::new(rename_vars(*r, rename_map)),
+        ),
+        Expr::Or(l, r) => Expr::Or(
+            Box::new(rename_vars(*l, rename_map)),
+            Box::new(rename_vars(*r, rename_map)),
+        ),
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ty,
+        } => Expr::If {
+            condition: Box::new(rename_vars(*condition, rename_map)),
+            then_branch: Box::new(rename_vars(*then_branch, rename_map)),
+            else_branch: else_branch.map(|e| Box::new(rename_vars(*e, rename_map))),
+            ty,
+        },
+        Expr::CallDirect { name, args, ty } => Expr::CallDirect {
+            name,
+            args: args
+                .into_iter()
+                .map(|a| rename_vars(a, rename_map))
+                .collect(),
+            ty,
+        },
+        Expr::TailCall { name, args, ty } => Expr::TailCall {
+            name,
+            args: args
+                .into_iter()
+                .map(|a| rename_vars(a, rename_map))
+                .collect(),
+            ty,
+        },
+        Expr::CallNative {
+            module,
+            method,
+            args,
+            ty,
+        } => Expr::CallNative {
+            module,
+            method,
+            args: args
+                .into_iter()
+                .map(|a| rename_vars(a, rename_map))
+                .collect(),
+            ty,
+        },
+        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
+            callee: Box::new(rename_vars(*callee, rename_map)),
+            args: args
+                .into_iter()
+                .map(|a| rename_vars(a, rename_map))
+                .collect(),
+            ty,
+        },
+        Expr::Let { pattern, value, ty } => {
+            let new_pattern = rename_pattern(*pattern, rename_map);
+            Expr::Let {
+                pattern: Box::new(new_pattern),
+                value: Box::new(rename_vars(*value, rename_map)),
+                ty,
+            }
+        }
+        Expr::Block(exprs, ty) => Expr::Block(
+            exprs
+                .into_iter()
+                .map(|e| rename_vars(e, rename_map))
+                .collect(),
+            ty,
+        ),
+        Expr::Match { subject, arms, ty } => Expr::Match {
+            subject: Box::new(rename_vars(*subject, rename_map)),
+            arms: arms
+                .into_iter()
+                .map(|arm| MatchArm {
+                    pattern: arm.pattern,
+                    body: rename_vars(arm.body, rename_map),
+                })
+                .collect(),
+            ty,
+        },
+        Expr::Lambda { params, body, ty } => {
+            // Lambda params shadow — don't rename inside if shadowed
+            let mut inner_map = rename_map.clone();
+            for p in &params {
+                inner_map.remove(p);
+            }
+            Expr::Lambda {
+                params,
+                body: Box::new(rename_vars(*body, &inner_map)),
+                ty,
+            }
+        }
+        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
+            tag,
+            payload: Box::new(rename_vars(*payload, rename_map)),
+            ty,
+        },
+        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
+            name,
+            fields: fields
+                .into_iter()
+                .map(|(k, v)| (k, rename_vars(v, rename_map)))
+                .collect(),
+            ty,
+        },
+        Expr::MakeList(items, ty) => Expr::MakeList(
+            items
+                .into_iter()
+                .map(|e| rename_vars(e, rename_map))
+                .collect(),
+            ty,
+        ),
+        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k, rename_vars(v, rename_map)))
+                .collect(),
+            ty,
+        ),
+        Expr::MakeTuple(items, ty) => Expr::MakeTuple(
+            items
+                .into_iter()
+                .map(|e| rename_vars(e, rename_map))
+                .collect(),
+            ty,
+        ),
+        Expr::MakeRange(s, e) => Expr::MakeRange(
+            Box::new(rename_vars(*s, rename_map)),
+            Box::new(rename_vars(*e, rename_map)),
+        ),
+        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
+            base: Box::new(rename_vars(*base, rename_map)),
+            updates: updates
+                .into_iter()
+                .map(|(k, v)| (k, rename_vars(v, rename_map)))
+                .collect(),
+            ty,
+        },
+        Expr::GetField { object, field, ty } => Expr::GetField {
+            object: Box::new(rename_vars(*object, rename_map)),
+            field,
+            ty,
+        },
+        Expr::For {
+            binding,
+            iterable,
+            body,
+        } => {
+            let mut inner_map = rename_map.clone();
+            inner_map.remove(&binding);
+            Expr::For {
+                binding,
+                iterable: Box::new(rename_vars(*iterable, rename_map)),
+                body: Box::new(rename_vars(*body, &inner_map)),
+            }
+        }
+        Expr::Try { expr, ty } => Expr::Try {
+            expr: Box::new(rename_vars(*expr, rename_map)),
+            ty,
+        },
+        Expr::Concat(parts) => Expr::Concat(
+            parts
+                .into_iter()
+                .map(|e| rename_vars(e, rename_map))
+                .collect(),
+        ),
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
+    }
+}
+
+fn rename_pattern(pattern: Pattern, rename_map: &HashMap<String, String>) -> Pattern {
+    match pattern {
+        Pattern::Var(name) => {
+            if let Some(new_name) = rename_map.get(&name) {
+                Pattern::Var(new_name.clone())
+            } else {
+                Pattern::Var(name)
+            }
+        }
+        other => other,
+    }
+}
+
+/// Inline eligible function calls within the module.
+/// Runs multiple rounds to handle chains (f→g→h).
+fn inline_functions(module: &mut IrModule) {
+    // Build a map of inlineable functions: name → (params, body)
+    // A function is inlineable if:
+    //   1. Body size <= INLINE_THRESHOLD
+    //   2. Not self-recursive (no CallDirect/TailCall to self)
+    let inlineable: HashMap<String, (Vec<String>, Expr)> = module
+        .functions
+        .iter()
+        .filter(|f| {
+            let size = expr_node_count(&f.body);
+            size <= INLINE_THRESHOLD && !references_function(&f.body, &f.name)
+        })
+        .map(|f| (f.name.clone(), (f.params.clone(), f.body.clone())))
+        .collect();
+
+    if inlineable.is_empty() {
+        return;
+    }
+
+    let mut counter: usize = 0;
+
+    for round in 0..INLINE_MAX_ROUNDS {
+        let mut changed = false;
+        for func in &mut module.functions {
+            let new_body = inline_expr(func.body.clone(), &inlineable, &mut counter);
+            if !exprs_equal(&func.body, &new_body) {
+                func.body = new_body;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+        // After inlining, re-run propagation + folding to simplify
+        if round < INLINE_MAX_ROUNDS - 1 {
+            for func in &mut module.functions {
+                func.body = propagate_and_fold(func.body.clone());
+            }
+        }
+    }
+}
+
+/// Inline eligible calls within an expression.
+fn inline_expr(
+    expr: Expr,
+    inlineable: &HashMap<String, (Vec<String>, Expr)>,
+    counter: &mut usize,
+) -> Expr {
+    match expr {
+        Expr::CallDirect { name, args, ty } => {
+            let args: Vec<Expr> = args
+                .into_iter()
+                .map(|a| inline_expr(a, inlineable, counter))
+                .collect();
+
+            if let Some((params, body)) = inlineable.get(&name)
+                && params.len() == args.len()
+            {
+                // Build let bindings with fresh names
+                let mut stmts = Vec::new();
+                let mut rename_map = HashMap::new();
+                for (param, arg) in params.iter().zip(args) {
+                    let fresh = format!("__inl_{}_{}", param, *counter);
+                    *counter += 1;
+                    rename_map.insert(param.clone(), fresh.clone());
+                    stmts.push(Expr::Let {
+                        pattern: Box::new(Pattern::Var(fresh)),
+                        value: Box::new(arg),
+                        ty: None,
+                    });
+                }
+                let inlined_body = rename_vars(body.clone(), &rename_map);
+                stmts.push(inlined_body);
+                return Expr::Block(stmts, ty);
+            }
+            Expr::CallDirect { name, args, ty }
+        }
+        // Recurse into subexpressions
+        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
+            op,
+            lhs: Box::new(inline_expr(*lhs, inlineable, counter)),
+            rhs: Box::new(inline_expr(*rhs, inlineable, counter)),
+            ty,
+        },
+        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
+            op,
+            operand: Box::new(inline_expr(*operand, inlineable, counter)),
+            ty,
+        },
+        Expr::And(l, r) => Expr::And(
+            Box::new(inline_expr(*l, inlineable, counter)),
+            Box::new(inline_expr(*r, inlineable, counter)),
+        ),
+        Expr::Or(l, r) => Expr::Or(
+            Box::new(inline_expr(*l, inlineable, counter)),
+            Box::new(inline_expr(*r, inlineable, counter)),
+        ),
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ty,
+        } => Expr::If {
+            condition: Box::new(inline_expr(*condition, inlineable, counter)),
+            then_branch: Box::new(inline_expr(*then_branch, inlineable, counter)),
+            else_branch: else_branch.map(|e| Box::new(inline_expr(*e, inlineable, counter))),
+            ty,
+        },
+        Expr::Let { pattern, value, ty } => Expr::Let {
+            pattern,
+            value: Box::new(inline_expr(*value, inlineable, counter)),
+            ty,
+        },
+        Expr::Block(exprs, ty) => Expr::Block(
+            exprs
+                .into_iter()
+                .map(|e| inline_expr(e, inlineable, counter))
+                .collect(),
+            ty,
+        ),
+        Expr::Match { subject, arms, ty } => Expr::Match {
+            subject: Box::new(inline_expr(*subject, inlineable, counter)),
+            arms: arms
+                .into_iter()
+                .map(|arm| MatchArm {
+                    pattern: arm.pattern,
+                    body: inline_expr(arm.body, inlineable, counter),
+                })
+                .collect(),
+            ty,
+        },
+        Expr::TailCall { name, args, ty } => Expr::TailCall {
+            name,
+            args: args
+                .into_iter()
+                .map(|a| inline_expr(a, inlineable, counter))
+                .collect(),
+            ty,
+        },
+        Expr::CallNative {
+            module,
+            method,
+            args,
+            ty,
+        } => Expr::CallNative {
+            module,
+            method,
+            args: args
+                .into_iter()
+                .map(|a| inline_expr(a, inlineable, counter))
+                .collect(),
+            ty,
+        },
+        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
+            callee: Box::new(inline_expr(*callee, inlineable, counter)),
+            args: args
+                .into_iter()
+                .map(|a| inline_expr(a, inlineable, counter))
+                .collect(),
+            ty,
+        },
+        Expr::Lambda { params, body, ty } => Expr::Lambda {
+            params,
+            body: Box::new(inline_expr(*body, inlineable, counter)),
+            ty,
+        },
+        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
+            tag,
+            payload: Box::new(inline_expr(*payload, inlineable, counter)),
+            ty,
+        },
+        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
+            name,
+            fields: fields
+                .into_iter()
+                .map(|(k, v)| (k, inline_expr(v, inlineable, counter)))
+                .collect(),
+            ty,
+        },
+        Expr::MakeList(items, ty) => Expr::MakeList(
+            items
+                .into_iter()
+                .map(|e| inline_expr(e, inlineable, counter))
+                .collect(),
+            ty,
+        ),
+        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k, inline_expr(v, inlineable, counter)))
+                .collect(),
+            ty,
+        ),
+        Expr::MakeTuple(items, ty) => Expr::MakeTuple(
+            items
+                .into_iter()
+                .map(|e| inline_expr(e, inlineable, counter))
+                .collect(),
+            ty,
+        ),
+        Expr::MakeRange(s, e) => Expr::MakeRange(
+            Box::new(inline_expr(*s, inlineable, counter)),
+            Box::new(inline_expr(*e, inlineable, counter)),
+        ),
+        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
+            base: Box::new(inline_expr(*base, inlineable, counter)),
+            updates: updates
+                .into_iter()
+                .map(|(k, v)| (k, inline_expr(v, inlineable, counter)))
+                .collect(),
+            ty,
+        },
+        Expr::GetField { object, field, ty } => Expr::GetField {
+            object: Box::new(inline_expr(*object, inlineable, counter)),
+            field,
+            ty,
+        },
+        Expr::For {
+            binding,
+            iterable,
+            body,
+        } => Expr::For {
+            binding,
+            iterable: Box::new(inline_expr(*iterable, inlineable, counter)),
+            body: Box::new(inline_expr(*body, inlineable, counter)),
+        },
+        Expr::Try { expr, ty } => Expr::Try {
+            expr: Box::new(inline_expr(*expr, inlineable, counter)),
+            ty,
+        },
+        Expr::Concat(parts) => Expr::Concat(
+            parts
+                .into_iter()
+                .map(|e| inline_expr(e, inlineable, counter))
+                .collect(),
+        ),
+        // Literals pass through
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
+        | Expr::Var(_, _) => expr,
+    }
+}
+
+/// Shallow structural equality check (for detecting if inlining changed anything).
+fn exprs_equal(a: &Expr, b: &Expr) -> bool {
+    // Use debug representation for a quick check
+    format!("{:?}", a) == format!("{:?}", b)
+}
+
+// ---------------------------------------------------------------------------
+// Pass 4: Block simplification
+// ---------------------------------------------------------------------------
+
+/// Simplify blocks: remove non-final Unit expressions, flatten nested blocks,
+/// unwrap single-element blocks.
+fn simplify_blocks(expr: Expr) -> Expr {
+    match expr {
+        Expr::Block(exprs, ty) => {
+            // Recursively simplify children first
+            let mut simplified: Vec<Expr> = Vec::new();
+            for e in exprs {
+                let e = simplify_blocks(e);
+                // Flatten nested blocks
+                if let Expr::Block(inner, _) = e {
+                    simplified.extend(inner);
+                } else {
+                    simplified.push(e);
+                }
+            }
+            // Remove non-final Unit expressions
+            if simplified.len() > 1 {
+                let last = simplified.pop().unwrap();
+                simplified.retain(|e| !matches!(e, Expr::Unit));
+                simplified.push(last);
+            }
+            // Unwrap single-element blocks
+            if simplified.len() == 1 {
+                return simplified.into_iter().next().unwrap();
+            }
+            Expr::Block(simplified, ty)
+        }
+        // Recurse into all other expression types
+        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
+            op,
+            lhs: Box::new(simplify_blocks(*lhs)),
+            rhs: Box::new(simplify_blocks(*rhs)),
+            ty,
+        },
+        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
+            op,
+            operand: Box::new(simplify_blocks(*operand)),
+            ty,
+        },
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ty,
+        } => Expr::If {
+            condition: Box::new(simplify_blocks(*condition)),
+            then_branch: Box::new(simplify_blocks(*then_branch)),
+            else_branch: else_branch.map(|e| Box::new(simplify_blocks(*e))),
+            ty,
+        },
+        Expr::Let { pattern, value, ty } => Expr::Let {
+            pattern,
+            value: Box::new(simplify_blocks(*value)),
+            ty,
+        },
+        Expr::CallDirect { name, args, ty } => Expr::CallDirect {
+            name,
+            args: args.into_iter().map(simplify_blocks).collect(),
+            ty,
+        },
+        Expr::TailCall { name, args, ty } => Expr::TailCall {
+            name,
+            args: args.into_iter().map(simplify_blocks).collect(),
+            ty,
+        },
+        Expr::CallNative {
+            module,
+            method,
+            args,
+            ty,
+        } => Expr::CallNative {
+            module,
+            method,
+            args: args.into_iter().map(simplify_blocks).collect(),
+            ty,
+        },
+        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
+            callee: Box::new(simplify_blocks(*callee)),
+            args: args.into_iter().map(simplify_blocks).collect(),
+            ty,
+        },
+        Expr::And(l, r) => Expr::And(
+            Box::new(simplify_blocks(*l)),
+            Box::new(simplify_blocks(*r)),
+        ),
+        Expr::Or(l, r) => Expr::Or(
+            Box::new(simplify_blocks(*l)),
+            Box::new(simplify_blocks(*r)),
+        ),
+        Expr::Match { subject, arms, ty } => Expr::Match {
+            subject: Box::new(simplify_blocks(*subject)),
+            arms: arms
+                .into_iter()
+                .map(|arm| MatchArm {
+                    pattern: arm.pattern,
+                    body: simplify_blocks(arm.body),
+                })
+                .collect(),
+            ty,
+        },
+        Expr::Lambda { params, body, ty } => Expr::Lambda {
+            params,
+            body: Box::new(simplify_blocks(*body)),
+            ty,
+        },
+        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
+            tag,
+            payload: Box::new(simplify_blocks(*payload)),
+            ty,
+        },
+        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
+            name,
+            fields: fields
+                .into_iter()
+                .map(|(k, v)| (k, simplify_blocks(v)))
+                .collect(),
+            ty,
+        },
+        Expr::MakeList(items, ty) => {
+            Expr::MakeList(items.into_iter().map(simplify_blocks).collect(), ty)
+        }
+        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
+            fields
+                .into_iter()
+                .map(|(k, v)| (k, simplify_blocks(v)))
+                .collect(),
+            ty,
+        ),
+        Expr::MakeTuple(items, ty) => {
+            Expr::MakeTuple(items.into_iter().map(simplify_blocks).collect(), ty)
+        }
+        Expr::MakeRange(s, e) => Expr::MakeRange(
+            Box::new(simplify_blocks(*s)),
+            Box::new(simplify_blocks(*e)),
+        ),
+        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
+            base: Box::new(simplify_blocks(*base)),
+            updates: updates
+                .into_iter()
+                .map(|(k, v)| (k, simplify_blocks(v)))
+                .collect(),
+            ty,
+        },
+        Expr::GetField { object, field, ty } => Expr::GetField {
+            object: Box::new(simplify_blocks(*object)),
+            field,
+            ty,
+        },
+        Expr::For {
+            binding,
+            iterable,
+            body,
+        } => Expr::For {
+            binding,
+            iterable: Box::new(simplify_blocks(*iterable)),
+            body: Box::new(simplify_blocks(*body)),
+        },
+        Expr::Try { expr, ty } => Expr::Try {
+            expr: Box::new(simplify_blocks(*expr)),
+            ty,
+        },
+        Expr::Concat(parts) => {
+            Expr::Concat(parts.into_iter().map(simplify_blocks).collect())
+        }
+        // Leaves pass through
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
+        | Expr::Var(_, _) => expr,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pass 5: Dead let elimination
 // ---------------------------------------------------------------------------
 
 /// Remove `let` bindings whose variables are never referenced.
@@ -443,7 +1215,7 @@ fn count_var_uses(expr: &Expr, counts: &mut HashMap<String, usize>) {
                 count_var_uses(p, counts);
             }
         }
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit => {}
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => {}
     }
 }
 
@@ -580,7 +1352,7 @@ mod tests {
 
     #[test]
     fn constant_propagation_simple() {
-        // let x = 10; x + 5 → let x = 10; 15
+        // let x = 10; x + 5 → 15 (after propagation + dead let + simplification)
         let body = Expr::Block(
             vec![
                 Expr::Let {
@@ -601,12 +1373,11 @@ mod tests {
         let mut module = make_module(body);
         optimize(&mut module);
 
-        // The second expression should now be Int(15)
-        if let Expr::Block(exprs, _) = &module.functions[0].body {
-            assert!(matches!(exprs[1], Expr::Int(15)));
-        } else {
-            panic!("Expected Block");
-        }
+        assert!(
+            matches!(module.functions[0].body, Expr::Int(15)),
+            "Expected Int(15), got: {:?}",
+            module.functions[0].body
+        );
     }
 
     #[test]
@@ -655,7 +1426,7 @@ mod tests {
 
     #[test]
     fn dead_let_elimination() {
-        // let x = 10; 42 → Unit; 42  (x is never used)
+        // let x = 10; 42 → 42 (x is never used, dead let removed, block simplified)
         let body = Expr::Block(
             vec![
                 Expr::Let {
@@ -671,19 +1442,17 @@ mod tests {
         let mut module = make_module(body);
         optimize(&mut module);
 
-        if let Expr::Block(exprs, _) = &module.functions[0].body {
-            // Dead let should be replaced with Unit
-            assert!(matches!(exprs[0], Expr::Unit));
-            assert!(matches!(exprs[1], Expr::Int(42)));
-        } else {
-            panic!("Expected Block");
-        }
+        assert!(
+            matches!(module.functions[0].body, Expr::Int(42)),
+            "Expected Int(42), got: {:?}",
+            module.functions[0].body
+        );
     }
 
     #[test]
     fn propagation_does_not_cross_scopes() {
         // let x = 10; { let x = 20; x } + x
-        // Inner x should resolve to 20, outer x should resolve to 10
+        // Inner x=20, outer x=10 → 20 + 10 → 30
         let body = Expr::Block(
             vec![
                 Expr::Let {
@@ -714,24 +1483,12 @@ mod tests {
         let mut module = make_module(body);
         optimize(&mut module);
 
-        // The rhs Var("x") should be propagated to Int(10) (outer scope)
-        // The inner block's Var("x") should be propagated to Int(20) (inner scope)
-        if let Expr::Block(exprs, _) = &module.functions[0].body {
-            if let Expr::BinOp { rhs, lhs, .. } = &exprs[1] {
-                // rhs should be outer x = 10
-                assert!(matches!(**rhs, Expr::Int(10)));
-                // lhs is a Block; its last expr should be inner x = 20
-                if let Expr::Block(inner, _) = &**lhs {
-                    assert!(matches!(inner[1], Expr::Int(20)));
-                } else {
-                    panic!("Expected inner Block");
-                }
-            } else {
-                panic!("Expected BinOp");
-            }
-        } else {
-            panic!("Expected Block");
-        }
+        // After propagation + folding + dead let + block simplification: Int(30)
+        assert!(
+            matches!(module.functions[0].body, Expr::Int(30)),
+            "Expected Int(30), got: {:?}",
+            module.functions[0].body
+        );
     }
 
     #[test]
@@ -812,11 +1569,11 @@ mod tests {
         let mut module = make_module(body);
         optimize(&mut module);
 
-        if let Expr::Block(exprs, _) = &module.functions[0].body {
-            assert!(matches!(exprs[2], Expr::Int(6)));
-        } else {
-            panic!("Expected Block");
-        }
+        assert!(
+            matches!(module.functions[0].body, Expr::Int(6)),
+            "Expected Int(6), got: {:?}",
+            module.functions[0].body
+        );
     }
 
     #[test]
@@ -850,5 +1607,294 @@ mod tests {
         let mut module = make_module(body);
         optimize(&mut module);
         assert!(matches!(module.functions[0].body, Expr::Bool(false)));
+    }
+
+    // -- Inlining tests --
+
+    fn make_two_func_module(
+        caller_body: Expr,
+        callee_name: &str,
+        callee_params: Vec<&str>,
+        callee_body: Expr,
+    ) -> IrModule {
+        IrModule {
+            functions: vec![
+                IrFunction {
+                    name: "main".into(),
+                    params: vec![],
+                    body: caller_body,
+                    ty: None,
+                    span: dummy_span(),
+                },
+                IrFunction {
+                    name: callee_name.into(),
+                    params: callee_params.into_iter().map(String::from).collect(),
+                    body: callee_body,
+                    ty: None,
+                    span: dummy_span(),
+                },
+            ],
+            entry: 0,
+        }
+    }
+
+    #[test]
+    fn inline_simple_wrapper() {
+        // callee: fn double(x) = x + x
+        // caller: main() = double(5)
+        // After inlining: main() = Block([let __x = 5, __x + __x]) → folded to 10
+        let caller = Expr::CallDirect {
+            name: "double".into(),
+            args: vec![Expr::Int(5)],
+            ty: None,
+        };
+        let callee_body = Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Var("x".into(), None)),
+            rhs: Box::new(Expr::Var("x".into(), None)),
+            ty: None,
+        };
+
+        let mut module = make_two_func_module(caller, "double", vec!["x"], callee_body);
+        optimize(&mut module);
+
+        // After inlining + constant propagation, result should be Int(10)
+        let body = &module.functions[0].body;
+        assert!(
+            matches!(body, Expr::Int(10)),
+            "Expected Int(10) after inlining, got: {:?}",
+            body
+        );
+    }
+
+    #[test]
+    fn inline_multi_param_function() {
+        // callee: fn add(a, b) = a + b
+        // caller: main() = add(3, 4)
+        let caller = Expr::CallDirect {
+            name: "add".into(),
+            args: vec![Expr::Int(3), Expr::Int(4)],
+            ty: None,
+        };
+        let callee_body = Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Var("a".into(), None)),
+            rhs: Box::new(Expr::Var("b".into(), None)),
+            ty: None,
+        };
+
+        let mut module = make_two_func_module(caller, "add", vec!["a", "b"], callee_body);
+        optimize(&mut module);
+
+        assert!(
+            matches!(module.functions[0].body, Expr::Int(7)),
+            "Expected Int(7), got: {:?}",
+            module.functions[0].body
+        );
+    }
+
+    #[test]
+    fn no_inline_recursive_function() {
+        // callee: fn count(n) = if n <= 0 then 0 else count(n - 1)
+        // Should NOT be inlined because it's recursive
+        let caller = Expr::CallDirect {
+            name: "count".into(),
+            args: vec![Expr::Int(10)],
+            ty: None,
+        };
+        let callee_body = Expr::If {
+            condition: Box::new(Expr::BinOp {
+                op: BinOp::Le,
+                lhs: Box::new(Expr::Var("n".into(), None)),
+                rhs: Box::new(Expr::Int(0)),
+                ty: None,
+            }),
+            then_branch: Box::new(Expr::Int(0)),
+            else_branch: Some(Box::new(Expr::CallDirect {
+                name: "count".into(),
+                args: vec![Expr::BinOp {
+                    op: BinOp::Sub,
+                    lhs: Box::new(Expr::Var("n".into(), None)),
+                    rhs: Box::new(Expr::Int(1)),
+                    ty: None,
+                }],
+                ty: None,
+            })),
+            ty: None,
+        };
+
+        let mut module = make_two_func_module(caller, "count", vec!["n"], callee_body);
+        optimize(&mut module);
+
+        // Should still be a CallDirect (not inlined)
+        assert!(
+            matches!(module.functions[0].body, Expr::CallDirect { .. }),
+            "Recursive function should not be inlined, got: {:?}",
+            module.functions[0].body
+        );
+    }
+
+    #[test]
+    fn no_inline_tail_recursive_function() {
+        // callee: fn loop(n) = TailCall loop(n - 1)
+        // Should NOT be inlined
+        let caller = Expr::CallDirect {
+            name: "loop_fn".into(),
+            args: vec![Expr::Int(10)],
+            ty: None,
+        };
+        let callee_body = Expr::TailCall {
+            name: "loop_fn".into(),
+            args: vec![Expr::BinOp {
+                op: BinOp::Sub,
+                lhs: Box::new(Expr::Var("n".into(), None)),
+                rhs: Box::new(Expr::Int(1)),
+                ty: None,
+            }],
+            ty: None,
+        };
+
+        let mut module = make_two_func_module(caller, "loop_fn", vec!["n"], callee_body);
+        optimize(&mut module);
+
+        assert!(
+            matches!(module.functions[0].body, Expr::CallDirect { .. }),
+            "Tail-recursive function should not be inlined"
+        );
+    }
+
+    #[test]
+    fn inline_preserves_variable_scoping() {
+        // callee: fn inc(x) = x + 1
+        // caller: main() = let x = 100; inc(x)
+        // After inlining, the inlined 'x' should not shadow the outer 'x'
+        let caller = Expr::Block(
+            vec![
+                Expr::Let {
+                    pattern: Box::new(Pattern::Var("x".into())),
+                    value: Box::new(Expr::Int(100)),
+                    ty: None,
+                },
+                Expr::CallDirect {
+                    name: "inc".into(),
+                    args: vec![Expr::Var("x".into(), None)],
+                    ty: None,
+                },
+            ],
+            None,
+        );
+        let callee_body = Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Var("x".into(), None)),
+            rhs: Box::new(Expr::Int(1)),
+            ty: None,
+        };
+
+        let mut module = make_two_func_module(caller, "inc", vec!["x"], callee_body);
+        optimize(&mut module);
+
+        // After inlining + propagation: should be Int(101)
+        let body = &module.functions[0].body;
+        match body {
+            Expr::Block(exprs, _) => {
+                let last = exprs.last().unwrap();
+                assert!(
+                    matches!(last, Expr::Int(101)),
+                    "Expected Int(101), got: {:?}",
+                    last
+                );
+            }
+            Expr::Int(101) => {} // Also acceptable if fully simplified
+            other => panic!("Expected Block or Int(101), got: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn inline_chain() {
+        // f(x) = x + 1, g(x) = f(x) + f(x)
+        // main() = g(5) → should inline g, then inline f inside g → 12
+        let module = IrModule {
+            functions: vec![
+                IrFunction {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Expr::CallDirect {
+                        name: "g".into(),
+                        args: vec![Expr::Int(5)],
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+                IrFunction {
+                    name: "f".into(),
+                    params: vec!["x".into()],
+                    body: Expr::BinOp {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::Var("x".into(), None)),
+                        rhs: Box::new(Expr::Int(1)),
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+                IrFunction {
+                    name: "g".into(),
+                    params: vec!["x".into()],
+                    body: Expr::BinOp {
+                        op: BinOp::Add,
+                        lhs: Box::new(Expr::CallDirect {
+                            name: "f".into(),
+                            args: vec![Expr::Var("x".into(), None)],
+                            ty: None,
+                        }),
+                        rhs: Box::new(Expr::CallDirect {
+                            name: "f".into(),
+                            args: vec![Expr::Var("x".into(), None)],
+                            ty: None,
+                        }),
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+            ],
+            entry: 0,
+        };
+
+        let mut module = module;
+        optimize(&mut module);
+
+        // g(5) → f(5) + f(5) → (5+1) + (5+1) → 12
+        assert!(
+            matches!(module.functions[0].body, Expr::Int(12)),
+            "Expected Int(12) after chain inlining, got: {:?}",
+            module.functions[0].body
+        );
+    }
+
+    #[test]
+    fn expr_size_counts_correctly() {
+        assert_eq!(expr_node_count(&Expr::Int(1)), 1);
+        assert_eq!(
+            expr_node_count(&Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(Expr::Int(1)),
+                rhs: Box::new(Expr::Int(2)),
+                ty: None,
+            }),
+            3
+        );
+    }
+
+    #[test]
+    fn is_recursive_detects_self_call() {
+        let body = Expr::CallDirect {
+            name: "f".into(),
+            args: vec![],
+            ty: None,
+        };
+        assert!(references_function(&body, "f"));
+        assert!(!references_function(&body, "g"));
     }
 }
