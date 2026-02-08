@@ -1,0 +1,14 @@
+@prelude(core)
+
+// Negative test: string refinement violations
+// Expected errors: REF_002
+
+type Email = String where String.matches(self, "^[^@]+@[^@]+\.[^@]+$")
+
+type ShortName = String where String.length(self) >= 1 && String.length(self) <= 10
+
+fn check_violations() -> () = {
+  let bad_email : Email = "not-an-email"
+  let empty_name : ShortName = ""
+  let long_name : ShortName = "this name is way too long"
+}

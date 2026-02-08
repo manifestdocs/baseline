@@ -33,6 +33,7 @@ pub enum Type {
     Set(Box<Type>),                        // Set<T>
     Module(String),                         // Module/Effect namespace
     Var(u32),                               // Inference type variable
+    Refined(Box<Type>, String),             // Refined type: base type + alias name
     Unknown,
 }
 
@@ -105,6 +106,7 @@ impl std::fmt::Display for Type {
             Type::Set(inner) => write!(f, "Set<{}>", inner),
             Type::Module(name) => write!(f, "Module({})", name),
             Type::Var(id) => write!(f, "?{}", id),
+            Type::Refined(_, name) => write!(f, "{}", name),
             Type::Unknown => write!(f, "<unknown>"),
         }
     }
@@ -758,6 +760,15 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
 /// Check if two types are compatible, treating Unknown as a wildcard.
 /// Same-named Enums check payload types recursively for generic enforcement.
 fn types_compatible(a: &Type, b: &Type) -> bool {
+    // Unwrap refined types to their base for compatibility checks
+    let a = match a {
+        Type::Refined(base, _) => base.as_ref(),
+        other => other,
+    };
+    let b = match b {
+        Type::Refined(base, _) => base.as_ref(),
+        other => other,
+    };
     if a == b {
         return true;
     }
@@ -1249,9 +1260,17 @@ fn check_node_inner(
             } else {
                 let ty = parse_type(&def_node_candidate, source, symbols);
 
+                // Check for refinement clause (e.g., `type Email = String where ...`)
+                let has_refinement = {
+                    let mut cursor2 = node.walk();
+                    node.children(&mut cursor2)
+                        .any(|c| c.kind() == "refinement_clause")
+                };
+
                 // If it's a record, wrap it in a Struct with the name
                 let defined_type = match ty {
                     Type::Record(fields, _) => Type::Struct(name.clone(), fields),
+                    _ if has_refinement => Type::Refined(Box::new(ty), name.clone()),
                     _ => ty,
                 };
 
@@ -1491,6 +1510,7 @@ fn check_node_inner(
                         suggestions: vec![Suggestion {
                             strategy: "rewrite".to_string(),
                             description: "Use pipe operator |> instead of nested calls".to_string(),
+                            confidence: None,
                             patch: None,
                         }],
                     });
@@ -2346,6 +2366,7 @@ fn check_node_inner(
                     suggestions: vec![Suggestion {
                         strategy: "replace".to_string(),
                         description: "Use List.map() for transformations".to_string(),
+                        confidence: None,
                         patch: None,
                     }],
                 });
@@ -2923,6 +2944,7 @@ fn check_match_exhaustiveness(
             Suggestion {
                 strategy: "add_missing_arms".to_string(),
                 description: format!("Add arms for {}", missing_str),
+                confidence: None,
                 patch: Some(Patch {
                     start_line: insert_line,
                     original_text: None,
@@ -2939,6 +2961,7 @@ fn check_match_exhaustiveness(
             Suggestion {
                 strategy: "add_wildcard".to_string(),
                 description: "Add a wildcard '_' arm".to_string(),
+                confidence: None,
                 patch: Some(Patch {
                     start_line: insert_line,
                     original_text: None,

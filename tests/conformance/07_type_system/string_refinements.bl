@@ -1,0 +1,17 @@
+@prelude(core)
+
+// Conformance: string refinement types
+
+type Email = String where String.matches(self, "^[^@]+@[^@]+\.[^@]+$")
+
+type ShortName = String where String.length(self) >= 1 && String.length(self) <= 50
+
+type HttpsUrl = String where String.starts_with(self, "https://")
+
+fn check_valid() -> () = {
+  let email : Email = "user@example.com"
+  let name : ShortName = "Alice"
+  let url : HttpsUrl = "https://example.com"
+}
+
+test "valid string refinements" = true
