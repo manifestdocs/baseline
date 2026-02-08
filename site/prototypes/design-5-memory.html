@@ -1,0 +1,814 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline -- Layer by Layer</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    :root {
+      --bg: #141210;
+      --bg-layer-1: #1a1714;
+      --bg-layer-2: #201c18;
+      --bg-layer-3: #28231d;
+      --bg-warm: #1e1a15;
+      --surface: #252019;
+      --border: #332c22;
+      --border-warm: #4a3f30;
+      --text: #d4cec4;
+      --text-bright: #ede8df;
+      --text-secondary: #a09484;
+      --text-dim: #6b604f;
+      --wood: #a16207;
+      --wood-light: #ca8a04;
+      --wood-dim: #78350f;
+      --silver: #d4d4d8;
+      --silver-dim: #a1a1aa;
+      --stone: #78716c;
+      --code-bg: #0e0c09;
+      --code-border: #2a2418;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* Back link */
+    .back-link {
+      position: fixed;
+      top: 20px;
+      left: 24px;
+      z-index: 100;
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      text-decoration: none;
+      padding: 8px 14px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: rgba(20,18,16,0.9);
+      backdrop-filter: blur(8px);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .back-link:hover { color: var(--wood); border-color: var(--wood); }
+    .back-link:focus-visible { outline: 2px solid var(--wood); outline-offset: 2px; }
+
+    /* Minimal floating nav */
+    nav {
+      position: fixed;
+      top: 0;
+      right: 0;
+      z-index: 90;
+      display: flex;
+      align-items: center;
+      padding: 20px 24px;
+      gap: 24px;
+    }
+    nav a {
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.04em;
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--wood-light); }
+    nav a:focus-visible { outline: 2px solid var(--wood); outline-offset: 4px; }
+
+    /* ========== HERO -- THE FIRST MEMORY ========== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 120px 24px 100px;
+      position: relative;
+    }
+
+    /* Warm atmospheric haze */
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 40%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 500px;
+      height: 300px;
+      background: radial-gradient(ellipse, rgba(161,98,7,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .hero-epigraph {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      max-width: 440px;
+      line-height: 1.8;
+      margin-bottom: 48px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-epigraph::before {
+      content: '';
+      display: block;
+      width: 40px;
+      height: 1px;
+      background: var(--wood-dim);
+      margin: 0 auto 20px;
+    }
+
+    .hero-title {
+      font-size: clamp(3rem, 10vw, 7rem);
+      font-weight: 300;
+      letter-spacing: 0.08em;
+      color: var(--text-bright);
+      line-height: 1;
+      margin-bottom: 20px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-title strong {
+      font-weight: 700;
+      color: var(--wood-light);
+    }
+
+    .hero-subtitle {
+      font-size: clamp(0.95rem, 1.8vw, 1.15rem);
+      color: var(--text-secondary);
+      max-width: 500px;
+      line-height: 1.8;
+      position: relative;
+      z-index: 1;
+    }
+
+    /* ========== MEMORY LAYERS -- SCROLLING SECTIONS ========== */
+    .layer {
+      padding: 100px 24px;
+      position: relative;
+    }
+
+    .layer::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1px;
+      height: 60px;
+      background: linear-gradient(to bottom, transparent, var(--border-warm));
+    }
+
+    .layer-inner {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .layer-1 { background: var(--bg-layer-1); }
+    .layer-2 { background: var(--bg-layer-2); }
+    .layer-3 { background: var(--bg-layer-3); }
+
+    .layer-number {
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--wood-dim);
+      margin-bottom: 24px;
+      text-align: center;
+    }
+
+    .layer-title {
+      font-size: clamp(1.5rem, 3.5vw, 2.2rem);
+      font-weight: 300;
+      letter-spacing: 0.01em;
+      color: var(--text-bright);
+      text-align: center;
+      margin-bottom: 8px;
+    }
+
+    .layer-title em {
+      font-style: italic;
+      font-family: Georgia, 'Times New Roman', serif;
+      color: var(--wood-light);
+    }
+
+    .layer-quote {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .layer-prose {
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+      line-height: 1.8;
+      text-align: center;
+      max-width: 580px;
+      margin: 0 auto 40px;
+    }
+
+    /* Code blocks within layers */
+    .memory-code {
+      background: var(--code-bg);
+      border: 1px solid var(--code-border);
+      border-radius: 2px;
+      overflow: hidden;
+      max-width: 640px;
+      margin: 0 auto;
+    }
+
+    .memory-code-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 18px;
+      border-bottom: 1px solid var(--code-border);
+    }
+
+    .memory-code-title {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--wood);
+    }
+
+    .memory-code-file {
+      font-size: 0.6rem;
+      color: var(--text-dim);
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
+    }
+
+    .memory-code pre {
+      padding: 24px 18px;
+      overflow-x: auto;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
+      font-size: 0.8rem;
+      line-height: 1.8;
+      color: var(--text);
+      tab-size: 2;
+    }
+
+    .memory-code code { font-family: inherit; }
+
+    /* Syntax highlighting -- warm intimate palette */
+    .kw { color: #ca8a04; font-weight: 600; }
+    .type { color: #d4d4d8; }
+    .str { color: #86efac; }
+    .comment { color: #4a3f30; font-style: italic; }
+    .effect { color: #e2a336; }
+    .op { color: #8a7e6c; }
+    .fn { color: #d4cec4; }
+    .num { color: #c4b5fd; }
+    .punct { color: #5c5042; }
+    .param { color: #b8ae9e; }
+    .annot { color: #d97706; }
+
+    /* ========== FEATURES -- ARCHAEOLOGICAL GRID ========== */
+    .features {
+      padding: 100px 24px;
+      background: var(--bg-warm);
+    }
+
+    .features-inner {
+      max-width: 800px;
+      margin: 0 auto;
+    }
+
+    .features-label {
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--wood-dim);
+      text-align: center;
+      margin-bottom: 12px;
+    }
+
+    .features-title {
+      font-size: clamp(1.5rem, 3vw, 2rem);
+      font-weight: 300;
+      color: var(--text-bright);
+      text-align: center;
+      margin-bottom: 48px;
+      letter-spacing: 0.01em;
+    }
+
+    .features-list {
+      list-style: none;
+    }
+
+    .feature-item {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 4px;
+      padding: 20px 0;
+      border-top: 1px solid var(--border);
+    }
+
+    @media (min-width: 500px) {
+      .feature-item {
+        grid-template-columns: 180px 1fr;
+        gap: 24px;
+      }
+    }
+
+    .feature-name {
+      font-size: 0.88rem;
+      font-weight: 600;
+      color: var(--text-bright);
+    }
+
+    .feature-desc {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      line-height: 1.6;
+    }
+
+    /* ========== TARGETS ========== */
+    .targets {
+      padding: 80px 24px;
+    }
+
+    .targets-inner {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .targets-title {
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      color: var(--wood-dim);
+      text-align: center;
+      margin-bottom: 32px;
+    }
+
+    .target-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .target-label {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .target-value {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--wood-light);
+    }
+
+    /* ========== INFLUENCES ========== */
+    .influences {
+      padding: 60px 24px;
+      text-align: center;
+    }
+
+    .influences-label {
+      font-size: 0.6rem;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .influences-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 6px 20px;
+    }
+
+    .influences-row span {
+      font-size: 0.82rem;
+      color: var(--text-dim);
+    }
+
+    /* ========== GET STARTED ========== */
+    .get-started {
+      padding: 120px 24px;
+      text-align: center;
+      position: relative;
+    }
+
+    .get-started::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 1px;
+      height: 80px;
+      background: linear-gradient(to bottom, transparent, var(--wood-dim));
+    }
+
+    .gs-inner {
+      max-width: 560px;
+      margin: 0 auto;
+    }
+
+    .gs-epigraph {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      margin-bottom: 32px;
+    }
+
+    .gs-title {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 300;
+      letter-spacing: 0.01em;
+      color: var(--text-bright);
+      margin-bottom: 16px;
+    }
+
+    .gs-title strong {
+      font-weight: 700;
+      color: var(--wood-light);
+    }
+
+    .gs-desc {
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+      line-height: 1.8;
+      margin-bottom: 40px;
+    }
+
+    .cta-row {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 32px;
+      background: var(--wood);
+      color: var(--bg);
+      font-weight: 700;
+      font-size: 0.88rem;
+      text-decoration: none;
+      border: none;
+      border-radius: 2px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.15s;
+      min-height: 48px;
+    }
+    .btn-primary:hover { background: var(--wood-light); transform: translateY(-1px); }
+    .btn-primary:focus-visible { outline: 2px solid var(--wood-light); outline-offset: 3px; }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 32px;
+      background: transparent;
+      color: var(--text-secondary);
+      font-weight: 600;
+      font-size: 0.88rem;
+      text-decoration: none;
+      border: 1px solid var(--border);
+      border-radius: 2px;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+      min-height: 48px;
+    }
+    .btn-secondary:hover { border-color: var(--wood); color: var(--wood-light); }
+    .btn-secondary:focus-visible { outline: 2px solid var(--wood); outline-offset: 3px; }
+
+    /* ========== FOOTER ========== */
+    footer {
+      padding: 40px 24px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+
+    .footer-tagline {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      opacity: 0.6;
+      margin-bottom: 8px;
+    }
+
+    .footer-copy {
+      font-size: 0.72rem;
+      color: var(--text-dim);
+    }
+
+    .footer-copy a {
+      color: var(--wood-dim);
+      text-decoration: none;
+    }
+    .footer-copy a:hover { color: var(--wood-light); }
+    .footer-copy a:focus-visible { outline: 2px solid var(--wood); outline-offset: 2px; }
+
+    /* ========== DIVIDER ========== */
+    .divider {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 24px;
+    }
+
+    .divider-line {
+      flex: 1;
+      max-width: 120px;
+      height: 1px;
+      background: var(--border);
+    }
+
+    .divider-dot {
+      width: 4px;
+      height: 4px;
+      border-radius: 50%;
+      background: var(--wood-dim);
+      margin: 0 16px;
+    }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link" aria-label="Back to design options">Back to designs</a>
+
+  <nav aria-label="Primary navigation">
+    <a href="#layers">Layers</a>
+    <a href="#features">Features</a>
+    <a href="#start">Get Started</a>
+  </nav>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-epigraph">
+        Every program is an archaeology of intention --
+        layers of meaning, built one truth at a time.
+      </div>
+      <h1 id="hero-title" class="hero-title">Base<strong>line</strong></h1>
+      <p class="hero-subtitle">
+        A strongly typed, effect-based programming language.
+        Code, like memory, builds meaning layer by layer.
+        Each type a truth. Each effect a boundary. Each line a foundation.
+      </p>
+    </section>
+
+    <!-- LAYER 1: THE TYPE -->
+    <section class="layer layer-1" id="layers" aria-labelledby="layer-1-title">
+      <div class="layer-inner">
+        <div class="layer-number">Layer One</div>
+        <h2 id="layer-1-title" class="layer-title">The Type Is the <em>Spec</em></h2>
+        <p class="layer-quote">"The first memory. The foundation on which everything is built."</p>
+        <p class="layer-prose">
+          In Baseline, types are not annotations -- they are proofs.
+          A Port is not an Int. It is an Int proven to be within bounds.
+          The compiler does not trust. It verifies.
+        </p>
+        <div class="memory-code">
+          <div class="memory-code-header">
+            <span class="memory-code-title">Refinement Types</span>
+            <span class="memory-code-file">types.bl</span>
+          </div>
+          <pre><code><span class="kw">type</span> <span class="type">Port</span> <span class="op">=</span> <span class="type">Int</span> <span class="kw">where</span> <span class="num">1</span> <span class="op">&lt;=</span> <span class="param">self</span> <span class="op">&lt;=</span> <span class="num">65535</span>
+
+<span class="fn">listen</span> <span class="op">:</span> <span class="type">Port</span> <span class="op">-></span> <span class="effect">{Net}</span> <span class="type">Server</span>
+<span class="fn">listen</span> <span class="op">=</span> <span class="op">|</span><span class="param">port</span><span class="op">|</span>
+  <span class="comment">// port is GUARANTEED to be 1-65535 here</span>
+  <span class="comment">// No defensive coding needed</span>
+  <span class="op">...</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <div class="divider" aria-hidden="true">
+      <div class="divider-line"></div>
+      <div class="divider-dot"></div>
+      <div class="divider-line"></div>
+    </div>
+
+    <!-- LAYER 2: THE EFFECT -->
+    <section class="layer layer-2" aria-labelledby="layer-2-title">
+      <div class="layer-inner">
+        <div class="layer-number">Layer Two</div>
+        <h2 id="layer-2-title" class="layer-title">Effects Are <em>Data</em></h2>
+        <p class="layer-quote">"Deeper now. What you are permitted to touch."</p>
+        <p class="layer-prose">
+          Every side effect is an explicit capability. A function that logs declares it.
+          A function that reads a database declares it. Attempt to access something
+          undeclared? The compiler stops you. The effect system is a security boundary.
+        </p>
+        <div class="memory-code">
+          <div class="memory-code-header">
+            <span class="memory-code-title">Effect-Based Security</span>
+            <span class="memory-code-file">sandbox.bl</span>
+          </div>
+          <pre><code><span class="fn">agent_task!</span> <span class="op">:</span> <span class="type">Input</span> <span class="op">-></span> <span class="effect">{Log, Db.read}</span> <span class="type">Output</span>
+<span class="fn">agent_task!</span> <span class="op">=</span> <span class="op">|</span><span class="param">input</span><span class="op">|</span>
+  <span class="effect">Log</span><span class="punct">.</span><span class="fn">info!</span><span class="punct">(</span><span class="str">"Processing ${input}"</span><span class="punct">)</span>
+  <span class="kw">let</span> <span class="param">data</span> <span class="op">=</span> <span class="effect">Db</span><span class="punct">.</span><span class="fn">query!</span><span class="punct">(</span><span class="str">"SELECT * FROM items"</span><span class="punct">)</span>
+  <span class="comment">// Fs.delete!("important.txt")</span>
+  <span class="comment">// COMPILE ERROR: Fs not in effect set</span>
+  <span class="fn">transform</span><span class="punct">(</span><span class="param">data</span><span class="punct">)</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <div class="divider" aria-hidden="true">
+      <div class="divider-line"></div>
+      <div class="divider-dot"></div>
+      <div class="divider-line"></div>
+    </div>
+
+    <!-- LAYER 3: THE ORIGIN -->
+    <section class="layer layer-3" aria-labelledby="layer-3-title">
+      <div class="layer-inner">
+        <div class="layer-number">Layer Three</div>
+        <h2 id="layer-3-title" class="layer-title"><em>LLM</em>-Native</h2>
+        <p class="layer-quote">"The deepest layer. The one that explains why."</p>
+        <p class="layer-prose">
+          Baseline is designed for an era where machines write code and humans verify it.
+          Unambiguous syntax means LLMs generate correct code more often.
+          The effect system means AI agents can only access what you explicitly allow.
+          Trust, but verify -- at compile time.
+        </p>
+        <div class="memory-code">
+          <div class="memory-code-header">
+            <span class="memory-code-title">Hello World</span>
+            <span class="memory-code-file">hello.bl</span>
+          </div>
+          <pre><code><span class="annot">@prelude</span><span class="punct">(</span><span class="param">script</span><span class="punct">)</span>
+
+<span class="fn">greet</span> <span class="op">:</span> <span class="type">String</span> <span class="op">-></span> <span class="type">String</span>
+<span class="fn">greet</span> <span class="op">=</span> <span class="op">|</span><span class="param">name</span><span class="op">|</span> <span class="str">"Hello, ${name}!"</span>
+
+<span class="fn">main!</span> <span class="op">:</span> <span class="type">()</span> <span class="op">-></span> <span class="effect">{Console}</span> <span class="type">()</span>
+<span class="fn">main!</span> <span class="op">=</span> <span class="punct">{</span>
+  <span class="effect">Console</span><span class="punct">.</span><span class="fn">print!</span><span class="punct">(</span><span class="fn">greet</span><span class="punct">(</span><span class="str">"World"</span><span class="punct">))</span>
+<span class="punct">}</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <div class="divider" aria-hidden="true">
+      <div class="divider-line"></div>
+      <div class="divider-dot"></div>
+      <div class="divider-line"></div>
+    </div>
+
+    <!-- ADDITIONAL CODE -->
+    <section class="layer" aria-labelledby="more-code-title">
+      <div class="layer-inner">
+        <div class="layer-number">Composition</div>
+        <h2 id="more-code-title" class="layer-title">Data <em>Flows</em></h2>
+        <p class="layer-prose">
+          Pipe operators compose transformations naturally. Each step is a function.
+          The data flows left to right, building meaning with each transformation.
+        </p>
+        <div class="memory-code">
+          <div class="memory-code-header">
+            <span class="memory-code-title">Pipe Composition</span>
+            <span class="memory-code-file">pipes.bl</span>
+          </div>
+          <pre><code><span class="kw">let</span> <span class="param">chained</span> <span class="op">=</span> <span class="param">nums</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span> <span class="op">|</span><span class="param">x</span><span class="op">|</span> <span class="param">x</span> <span class="op">*</span> <span class="num">2</span><span class="punct">)</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">filter</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span> <span class="param">is_even</span><span class="punct">)</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">fold</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span> <span class="num">0</span><span class="punct">,</span> <span class="op">|</span><span class="param">acc</span><span class="punct">,</span> <span class="param">x</span><span class="op">|</span> <span class="param">acc</span> <span class="op">+</span> <span class="param">x</span><span class="punct">)</span></code></pre>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="features" id="features" aria-labelledby="features-title">
+      <div class="features-inner">
+        <div class="features-label">What Has Been Built</div>
+        <h2 id="features-title" class="features-title">The Full Excavation</h2>
+        <ul class="features-list" role="list">
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">Refinement Types</h3>
+            <p class="feature-desc">Value constraints encoded in the type system and proven at compile time. No runtime checks needed.</p>
+          </li>
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">Algebraic Effects</h3>
+            <p class="feature-desc">Side effects tracked as explicit capabilities in type signatures. Console, Http, Fs -- declared and enforced.</p>
+          </li>
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">Pattern Matching</h3>
+            <p class="feature-desc">Exhaustive match expressions for sum types. Every case handled. No surprises at runtime.</p>
+          </li>
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">Pipe Operator</h3>
+            <p class="feature-desc">Left-to-right data transformation with |>. Composable, readable, predictable.</p>
+          </li>
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">ML-Style Syntax</h3>
+            <p class="feature-desc">name : Sig = body. Every function declares its contract. Types and effects are front and center.</p>
+          </li>
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">Sum Types</h3>
+            <p class="feature-desc">Discriminated unions for domain modeling. Result, Option, and custom variants for precise data shapes.</p>
+          </li>
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">Records</h3>
+            <p class="feature-desc">Structural data types with named fields, dot access, and type-safe construction.</p>
+          </li>
+          <li class="feature-item" role="listitem">
+            <h3 class="feature-name">Security Sandbox</h3>
+            <p class="feature-desc">The effect system doubles as a capability sandbox. AI agents and plugins access only what you grant.</p>
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- TARGETS -->
+    <section class="targets" aria-labelledby="targets-title">
+      <div class="targets-inner">
+        <h2 id="targets-title" class="targets-title">Performance Targets</h2>
+        <div class="target-row">
+          <span class="target-label">Compilation</span>
+          <span class="target-value">&lt;200ms</span>
+        </div>
+        <div class="target-row">
+          <span class="target-label">Runtime performance</span>
+          <span class="target-value">Within 10% of C</span>
+        </div>
+        <div class="target-row">
+          <span class="target-label">Binary size</span>
+          <span class="target-value">&lt;5MB</span>
+        </div>
+        <div class="target-row">
+          <span class="target-label">WebAssembly</span>
+          <span class="target-value">Supported</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- INFLUENCES -->
+    <section class="influences" aria-label="Language influences">
+      <div class="influences-label">Built on the Shoulders of</div>
+      <div class="influences-row">
+        <span>ML / OCaml</span>
+        <span>Rust</span>
+        <span>Koka</span>
+        <span>Liquid Haskell</span>
+        <span>Elm</span>
+        <span>F#</span>
+      </div>
+    </section>
+
+    <!-- GET STARTED -->
+    <section class="get-started" id="start" aria-labelledby="gs-title">
+      <div class="gs-inner">
+        <p class="gs-epigraph">"A good memory builds the foundation. The rest follows."</p>
+        <h2 id="gs-title" class="gs-title">Begin the <strong>Excavation</strong></h2>
+        <p class="gs-desc">
+          Baseline is in active development. Like examining a memory,
+          each layer reveals more. Explore the examples, follow the project,
+          and help uncover the future of verified programming.
+        </p>
+        <div class="cta-row">
+          <a href="https://github.com/baseline-lang" class="btn-primary">View on GitHub</a>
+          <a href="#layers" class="btn-secondary">Revisit the Layers</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p class="footer-tagline">Code, like memory, builds meaning layer by layer.</p>
+    <p class="footer-copy">
+      Baseline Programming Language &middot; <a href="index.html">Design Concepts</a>
+    </p>
+  </footer>
+</body>
+</html>

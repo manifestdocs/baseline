@@ -1,0 +1,825 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline -- The Verification</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+      .scanline { display: none; }
+    }
+
+    :root {
+      --bg: #000000;
+      --surface: #060a10;
+      --surface-alt: #0a1018;
+      --border: #152030;
+      --border-bright: #1e3a5f;
+      --text: #c8d6e5;
+      --text-bright: #e8f0fa;
+      --text-dim: #4a6580;
+      --blue: #93c5fd;
+      --blue-bright: #bfdbfe;
+      --blue-dim: #1e40af;
+      --white: #ffffff;
+      --code-bg: #040810;
+      --answer-bg: #080e18;
+    }
+
+    body {
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Consolas', 'Liberation Mono', monospace;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.7;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+      position: relative;
+    }
+
+    /* Scan lines overlay */
+    .scanline {
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      pointer-events: none;
+      background: repeating-linear-gradient(
+        0deg,
+        transparent,
+        transparent 2px,
+        rgba(0, 0, 0, 0.06) 2px,
+        rgba(0, 0, 0, 0.06) 4px
+      );
+    }
+
+    /* Back link */
+    .back-link {
+      position: fixed;
+      top: 16px;
+      left: 20px;
+      z-index: 100;
+      font-size: 0.7rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      text-decoration: none;
+      padding: 6px 12px;
+      border: 1px solid var(--border);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .back-link:hover { color: var(--blue); border-color: var(--blue-dim); }
+    .back-link:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      right: 0;
+      z-index: 90;
+      display: flex;
+      align-items: center;
+      padding: 16px 20px;
+      gap: 24px;
+    }
+    nav a {
+      font-size: 0.7rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      text-decoration: none;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--blue); }
+    nav a:focus-visible { outline: 2px solid var(--blue); outline-offset: 4px; }
+
+    /* ========== HERO ========== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 100px 24px 80px;
+      position: relative;
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-bright), transparent);
+    }
+
+    .prompt-marker {
+      font-size: 0.65rem;
+      color: var(--text-dim);
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      margin-bottom: 24px;
+    }
+
+    .prompt-marker::before {
+      content: '> ';
+      color: var(--blue-dim);
+    }
+
+    .hero-title {
+      font-size: clamp(3rem, 10vw, 8rem);
+      font-weight: 700;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--white);
+      line-height: 1;
+      margin-bottom: 24px;
+    }
+
+    .hero-subtitle {
+      font-size: clamp(0.85rem, 1.5vw, 1rem);
+      color: var(--text-dim);
+      max-width: 550px;
+      margin-bottom: 40px;
+      line-height: 1.8;
+    }
+
+    .hero-interlinked {
+      font-size: 0.75rem;
+      color: var(--blue-dim);
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+      opacity: 0.6;
+    }
+
+    /* ========== Q&A SECTIONS ========== */
+    .qa-section {
+      padding: 80px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .qa-pair {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    @media (min-width: 768px) {
+      .qa-pair {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .question {
+      padding: 40px 32px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-right: none;
+      border-bottom: 1px solid var(--border);
+    }
+
+    @media (min-width: 768px) {
+      .question {
+        border-right: 1px solid var(--border);
+        border-bottom: none;
+        padding: 60px 48px;
+      }
+    }
+
+    .q-label {
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .q-label::before {
+      content: 'Q: ';
+      color: var(--blue-dim);
+    }
+
+    .q-text {
+      font-size: clamp(1.2rem, 2.5vw, 1.8rem);
+      font-weight: 400;
+      color: var(--white);
+      line-height: 1.4;
+      letter-spacing: 0.01em;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    .q-sub {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+      margin-top: 12px;
+      line-height: 1.6;
+    }
+
+    .answer {
+      padding: 40px 32px;
+      background: var(--answer-bg);
+    }
+
+    @media (min-width: 768px) {
+      .answer { padding: 60px 48px; }
+    }
+
+    .a-label {
+      font-size: 0.6rem;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--blue-dim);
+      margin-bottom: 16px;
+    }
+
+    .a-label::before {
+      content: 'A: ';
+    }
+
+    .answer pre {
+      overflow-x: auto;
+      font-size: 0.8rem;
+      line-height: 1.8;
+      color: var(--text);
+      tab-size: 2;
+    }
+
+    .answer code {
+      font-family: inherit;
+    }
+
+    .a-explanation {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+      margin-top: 20px;
+      padding-top: 16px;
+      border-top: 1px solid var(--border);
+      line-height: 1.7;
+    }
+
+    /* Syntax highlighting -- cold palette */
+    .kw { color: #93c5fd; font-weight: 600; }
+    .type { color: #bfdbfe; }
+    .str { color: #6ee7b7; }
+    .comment { color: #334155; font-style: italic; }
+    .effect { color: #7dd3fc; }
+    .op { color: #94a3b8; }
+    .fn { color: #e2e8f0; }
+    .num { color: #a5b4fc; }
+    .punct { color: #475569; }
+    .param { color: #cbd5e1; }
+    .annot { color: #818cf8; }
+
+    /* ========== PRINCIPLES ========== */
+    .principles {
+      padding: 100px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .principles-inner {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .principles-header {
+      text-align: center;
+      margin-bottom: 64px;
+    }
+
+    .principles-title {
+      font-size: 0.65rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--blue);
+      margin-bottom: 8px;
+    }
+
+    .principles-sub {
+      font-size: 0.8rem;
+      color: var(--text-dim);
+    }
+
+    .principle-row {
+      display: grid;
+      grid-template-columns: 48px 1fr;
+      gap: 16px;
+      padding: 32px 0;
+      border-top: 1px solid var(--border);
+      align-items: start;
+    }
+
+    .p-num {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: var(--blue-dim);
+      line-height: 1;
+      padding-top: 4px;
+    }
+
+    .p-content h3 {
+      font-size: 1rem;
+      color: var(--white);
+      font-weight: 600;
+      margin-bottom: 6px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    .p-content p {
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+    }
+
+    /* ========== FEATURES ========== */
+    .features {
+      padding: 100px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .features-inner {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .features-title {
+      font-size: 0.65rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--blue);
+      text-align: center;
+      margin-bottom: 48px;
+    }
+
+    .feature-list {
+      columns: 1;
+      column-gap: 40px;
+    }
+
+    @media (min-width: 640px) {
+      .feature-list { columns: 2; }
+    }
+
+    .feature-item {
+      padding: 16px 0;
+      border-bottom: 1px solid var(--border);
+      break-inside: avoid;
+    }
+
+    .feature-name {
+      font-size: 0.82rem;
+      color: var(--text-bright);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .feature-name::before {
+      content: '> ';
+      color: var(--blue-dim);
+    }
+
+    .feature-desc {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      line-height: 1.6;
+      padding-left: 18px;
+    }
+
+    /* ========== TARGETS ========== */
+    .targets {
+      padding: 80px 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .targets-inner {
+      max-width: 700px;
+      margin: 0 auto;
+    }
+
+    .targets-title {
+      font-size: 0.65rem;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--blue);
+      text-align: center;
+      margin-bottom: 40px;
+    }
+
+    .target-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 14px 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .target-label {
+      font-size: 0.78rem;
+      color: var(--text-dim);
+    }
+
+    .target-value {
+      font-size: 0.9rem;
+      color: var(--blue);
+      font-weight: 700;
+    }
+
+    /* ========== GET STARTED ========== */
+    .get-started {
+      padding: 120px 24px;
+      text-align: center;
+    }
+
+    .get-started-inner {
+      max-width: 600px;
+      margin: 0 auto;
+    }
+
+    .gs-prompt {
+      font-size: 0.7rem;
+      color: var(--text-dim);
+      letter-spacing: 0.15em;
+      margin-bottom: 24px;
+    }
+
+    .gs-prompt::before {
+      content: '> ';
+      color: var(--blue-dim);
+    }
+
+    .gs-title {
+      font-size: clamp(1.5rem, 4vw, 2.5rem);
+      color: var(--white);
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      margin-bottom: 16px;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    }
+
+    .gs-desc {
+      font-size: 0.85rem;
+      color: var(--text-dim);
+      line-height: 1.7;
+      margin-bottom: 40px;
+    }
+
+    .cta-row {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      display: inline-block;
+      padding: 12px 32px;
+      background: var(--blue);
+      color: var(--bg);
+      font-family: inherit;
+      font-size: 0.78rem;
+      font-weight: 700;
+      text-decoration: none;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      transition: background 0.2s, transform 0.15s;
+      min-height: 48px;
+      min-width: 48px;
+      display: inline-flex;
+      align-items: center;
+    }
+    .btn-primary:hover { background: var(--blue-bright); transform: translateY(-1px); }
+    .btn-primary:focus-visible { outline: 2px solid var(--white); outline-offset: 3px; }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      padding: 12px 32px;
+      background: transparent;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.78rem;
+      font-weight: 600;
+      text-decoration: none;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      border: 1px solid var(--border-bright);
+      transition: border-color 0.2s, color 0.2s;
+      min-height: 48px;
+      min-width: 48px;
+    }
+    .btn-secondary:hover { border-color: var(--blue); color: var(--blue); }
+    .btn-secondary:focus-visible { outline: 2px solid var(--blue); outline-offset: 3px; }
+
+    /* ========== FOOTER ========== */
+    footer {
+      padding: 40px 24px;
+      text-align: center;
+      border-top: 1px solid var(--border);
+    }
+
+    .footer-interlinked {
+      font-size: 0.7rem;
+      color: var(--blue-dim);
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+      opacity: 0.5;
+    }
+
+    .footer-copy {
+      font-size: 0.68rem;
+      color: var(--text-dim);
+    }
+
+    .footer-copy a {
+      color: var(--text-dim);
+      text-decoration: none;
+    }
+    .footer-copy a:hover { color: var(--blue); }
+    .footer-copy a:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+
+    /* ========== INTERLINKED DIVIDER ========== */
+    .interlinked {
+      padding: 40px 24px;
+      text-align: center;
+      font-size: 0.6rem;
+      letter-spacing: 0.4em;
+      text-transform: uppercase;
+      color: var(--blue-dim);
+      opacity: 0.3;
+    }
+  </style>
+</head>
+<body>
+  <div class="scanline" aria-hidden="true"></div>
+  <a href="index.html" class="back-link" aria-label="Back to design options">Back to designs</a>
+
+  <nav aria-label="Primary navigation">
+    <a href="#test">The Test</a>
+    <a href="#features">Features</a>
+    <a href="#start">Get Started</a>
+  </nav>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="prompt-marker">Verification sequence initiated</div>
+      <h1 id="hero-title" class="hero-title">BASELINE</h1>
+      <p class="hero-subtitle">
+        A strongly typed, effect-based programming language.<br>
+        The type system verifies your code. The effects track your capabilities.<br>
+        Prove what is real.
+      </p>
+      <div class="hero-interlinked" aria-hidden="true">Verified at every level</div>
+    </section>
+
+    <!-- Q&A: Principles as interrogation -->
+    <section id="test" aria-label="The Baseline Test -- Core Principles">
+
+      <!-- Question 1: Types -->
+      <div class="qa-section">
+        <div class="qa-pair">
+          <div class="question">
+            <div class="q-label">Interrogator</div>
+            <h2 class="q-text">What do your types tell you?</h2>
+            <p class="q-sub">Recite your baseline. What is a Port? What is truth encoded in syntax?</p>
+          </div>
+          <div class="answer">
+            <div class="a-label">Response</div>
+            <pre><code><span class="kw">type</span> <span class="type">Port</span> <span class="op">=</span> <span class="type">Int</span> <span class="kw">where</span> <span class="num">1</span> <span class="op">&lt;=</span> <span class="param">self</span> <span class="op">&lt;=</span> <span class="num">65535</span>
+
+<span class="fn">listen</span> <span class="op">:</span> <span class="type">Port</span> <span class="op">-></span> <span class="effect">{Net}</span> <span class="type">Server</span>
+<span class="fn">listen</span> <span class="op">=</span> <span class="op">|</span><span class="param">port</span><span class="op">|</span>
+  <span class="comment">// port is GUARANTEED to be 1-65535 here</span>
+  <span class="comment">// No defensive coding needed</span>
+  <span class="op">...</span></code></pre>
+            <p class="a-explanation">
+              <strong>The type is the spec.</strong> Refinement types encode value constraints
+              directly. A Port is not an Int -- it is an Int proven to be within bounds.
+              The compiler verifies. No runtime checks. No exceptions. No doubt.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="interlinked" aria-hidden="true">Verified</div>
+
+      <!-- Question 2: Effects -->
+      <div class="qa-section">
+        <div class="qa-pair">
+          <div class="question">
+            <div class="q-label">Interrogator</div>
+            <h2 class="q-text">What are you permitted to do?</h2>
+            <p class="q-sub">State your capabilities. What effects are in your set? What happens when you exceed them?</p>
+          </div>
+          <div class="answer">
+            <div class="a-label">Response</div>
+            <pre><code><span class="fn">agent_task!</span> <span class="op">:</span> <span class="type">Input</span> <span class="op">-></span> <span class="effect">{Log, Db.read}</span> <span class="type">Output</span>
+<span class="fn">agent_task!</span> <span class="op">=</span> <span class="op">|</span><span class="param">input</span><span class="op">|</span>
+  <span class="effect">Log</span><span class="punct">.</span><span class="fn">info!</span><span class="punct">(</span><span class="str">"Processing ${input}"</span><span class="punct">)</span>
+  <span class="kw">let</span> <span class="param">data</span> <span class="op">=</span> <span class="effect">Db</span><span class="punct">.</span><span class="fn">query!</span><span class="punct">(</span><span class="str">"SELECT * FROM items"</span><span class="punct">)</span>
+  <span class="comment">// Fs.delete!("important.txt")</span>
+  <span class="comment">// COMPILE ERROR: Fs not in effect set</span>
+  <span class="fn">transform</span><span class="punct">(</span><span class="param">data</span><span class="punct">)</span></code></pre>
+            <p class="a-explanation">
+              <strong>Effects are data.</strong> Every side effect is an explicit capability.
+              A function that can log and read declares <code>{Log, Db.read}</code>.
+              Attempt to delete a file? The compiler stops you. The effect system
+              is a security sandbox -- for humans and AI agents alike.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="interlinked" aria-hidden="true">Established</div>
+
+      <!-- Question 3: LLM-Native -->
+      <div class="qa-section">
+        <div class="qa-pair">
+          <div class="question">
+            <div class="q-label">Interrogator</div>
+            <h2 class="q-text">Were you made for this?</h2>
+            <p class="q-sub">Recite. A language built for machines to write and humans to verify. Show me.</p>
+          </div>
+          <div class="answer">
+            <div class="a-label">Response</div>
+            <pre><code><span class="annot">@prelude</span><span class="punct">(</span><span class="param">script</span><span class="punct">)</span>
+
+<span class="fn">greet</span> <span class="op">:</span> <span class="type">String</span> <span class="op">-></span> <span class="type">String</span>
+<span class="fn">greet</span> <span class="op">=</span> <span class="op">|</span><span class="param">name</span><span class="op">|</span> <span class="str">"Hello, ${name}!"</span>
+
+<span class="fn">main!</span> <span class="op">:</span> <span class="type">()</span> <span class="op">-></span> <span class="effect">{Console}</span> <span class="type">()</span>
+<span class="fn">main!</span> <span class="op">=</span> <span class="punct">{</span>
+  <span class="effect">Console</span><span class="punct">.</span><span class="fn">print!</span><span class="punct">(</span><span class="fn">greet</span><span class="punct">(</span><span class="str">"World"</span><span class="punct">))</span>
+<span class="punct">}</span></code></pre>
+            <p class="a-explanation">
+              <strong>LLM-native.</strong> Unambiguous syntax with no overloaded semantics.
+              Every function signature is its contract. Every effect is its permission.
+              Machines generate the code. The compiler verifies it. Humans approve.
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <div class="interlinked" aria-hidden="true">Confirmed</div>
+    </section>
+
+    <!-- ADDITIONAL CODE -->
+    <section class="qa-section" aria-label="More code examples">
+      <div class="qa-pair">
+        <div class="question">
+          <div class="q-label">Interrogator</div>
+          <h2 class="q-text">How do you compose?</h2>
+          <p class="q-sub">Show me data flowing. Transformation. Reduction. The pipeline.</p>
+        </div>
+        <div class="answer">
+          <div class="a-label">Response</div>
+          <pre><code><span class="kw">let</span> <span class="param">chained</span> <span class="op">=</span> <span class="param">nums</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span> <span class="op">|</span><span class="param">x</span><span class="op">|</span> <span class="param">x</span> <span class="op">*</span> <span class="num">2</span><span class="punct">)</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">filter</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span> <span class="param">is_even</span><span class="punct">)</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">fold</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span> <span class="num">0</span><span class="punct">,</span> <span class="op">|</span><span class="param">acc</span><span class="punct">,</span> <span class="param">x</span><span class="op">|</span> <span class="param">acc</span> <span class="op">+</span> <span class="param">x</span><span class="punct">)</span></code></pre>
+          <p class="a-explanation">
+            Pipe operators compose transformations left to right. Each step is a function.
+            The data flows. Map, filter, fold -- the eternal sequence.
+          </p>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRINCIPLES -->
+    <section class="principles" id="principles" aria-labelledby="principles-title">
+      <div class="principles-inner">
+        <div class="principles-header">
+          <h2 id="principles-title" class="principles-title">Three Constants</h2>
+          <p class="principles-sub">The axioms of the language. Recite.</p>
+        </div>
+
+        <div class="principle-row">
+          <div class="p-num">1</div>
+          <div class="p-content">
+            <h3>The type is the spec</h3>
+            <p>Types encode correctness using refinements. A type is not documentation -- it is proof. The compiler enforces what humans intend.</p>
+          </div>
+        </div>
+
+        <div class="principle-row">
+          <div class="p-num">2</div>
+          <div class="p-content">
+            <h3>Effects are data</h3>
+            <p>Side effects are explicit capabilities tracked in signatures. Pure functions have no effects. Effectful functions declare them. The boundary is the type.</p>
+          </div>
+        </div>
+
+        <div class="principle-row">
+          <div class="p-num">3</div>
+          <div class="p-content">
+            <h3>LLM-native</h3>
+            <p>Designed for machine generation with unambiguous syntax. AI agents are sandboxed by effects -- they can only access what you grant. Verification is automatic.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="features" id="features" aria-labelledby="features-title">
+      <div class="features-inner">
+        <h2 id="features-title" class="features-title">Capabilities</h2>
+        <div class="feature-list" role="list">
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">Refinement Types</div>
+            <div class="feature-desc">Encode value constraints in types. Prove correctness at compile time.</div>
+          </div>
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">Algebraic Effects</div>
+            <div class="feature-desc">Track side effects in type signatures. Console, Http, Fs -- explicit capabilities.</div>
+          </div>
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">Pattern Matching</div>
+            <div class="feature-desc">Exhaustive match for sum types. No missed cases. No runtime surprises.</div>
+          </div>
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">Pipe Operator</div>
+            <div class="feature-desc">Compose with |>. Data flows left to right, clear and predictable.</div>
+          </div>
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">ML-Style Syntax</div>
+            <div class="feature-desc">name : Sig = body. Functions declare their contracts up front.</div>
+          </div>
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">Sum Types</div>
+            <div class="feature-desc">Discriminated unions for domain modeling. Result, Option, and custom variants.</div>
+          </div>
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">Records</div>
+            <div class="feature-desc">Structural data types. Named fields, dot access, type-safe construction.</div>
+          </div>
+          <div class="feature-item" role="listitem">
+            <div class="feature-name">Security Sandbox</div>
+            <div class="feature-desc">Effect system as capability sandbox. AI agents, plugins -- controlled access.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TARGETS -->
+    <section class="targets" aria-labelledby="targets-title">
+      <div class="targets-inner">
+        <h2 id="targets-title" class="targets-title">Performance Baseline</h2>
+        <div class="target-row">
+          <span class="target-label">Compilation</span>
+          <span class="target-value">&lt;200ms</span>
+        </div>
+        <div class="target-row">
+          <span class="target-label">Runtime performance</span>
+          <span class="target-value">Within 10% of C</span>
+        </div>
+        <div class="target-row">
+          <span class="target-label">Binary size</span>
+          <span class="target-value">&lt;5MB</span>
+        </div>
+        <div class="target-row">
+          <span class="target-label">WebAssembly</span>
+          <span class="target-value">Supported</span>
+        </div>
+        <div class="target-row">
+          <span class="target-label">Influences</span>
+          <span class="target-value">ML, Rust, Koka, F#</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- GET STARTED -->
+    <section class="get-started" id="start" aria-labelledby="gs-title">
+      <div class="get-started-inner">
+        <div class="gs-prompt">Verification complete. Your baseline is</div>
+        <h2 id="gs-title" class="gs-title">Established</h2>
+        <p class="gs-desc">
+          Baseline is in active development. The test continues.
+          Explore the examples, follow the project, help define
+          what it means to write verified code.
+        </p>
+        <div class="cta-row">
+          <a href="https://github.com/baseline-lang" class="btn-primary">View on GitHub</a>
+          <a href="#test" class="btn-secondary">Retake the Test</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-interlinked">Verified . Established . Confirmed</div>
+    <p class="footer-copy">
+      Baseline Programming Language &middot; <a href="index.html">Design Concepts</a>
+    </p>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,1187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline -- Types are the specification</title>
+  <style>
+    /* ================================================================
+       BASELINE HOMEPAGE -- Mid-Century Minimal
+       Grid: Golden ratio (1:1.618) proportions throughout
+       Palette: Black and white only
+       Typography: Helvetica Neue / system sans-serif
+       Influences: Vignelli, Muller-Brockmann, Paul Rand
+       ================================================================ */
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    :root {
+      /* Golden ratio type scale: base 17px
+         17 * 1.618 = 27.5   (h4 / lead)
+         27.5 * 1.618 = 44.5 (h3)
+         44.5 * 1.618 = 72   (h2)
+         72 * 1.618 = 116    (h1)
+         17 / 1.618 = 10.5   (small / caption)
+         10.5 / 1.618 = 6.5  (micro)
+      */
+      --fs-micro: 0.65rem;
+      --fs-small: 0.76rem;
+      --fs-body: 1rem;
+      --fs-lead: 1.618rem;
+      --fs-h3: 2.618rem;
+      --fs-h2: clamp(2.4rem, 5vw, 4.236rem);
+      --fs-h1: clamp(3.2rem, 8vw, 6.854rem);
+
+      /* Golden ratio spacing scale
+         Base unit: 8px
+         8 * 1.618 = 13
+         13 * 1.618 = 21
+         21 * 1.618 = 34
+         34 * 1.618 = 55
+         55 * 1.618 = 89
+      */
+      --sp-1: 8px;
+      --sp-2: 13px;
+      --sp-3: 21px;
+      --sp-4: 34px;
+      --sp-5: 55px;
+      --sp-6: 89px;
+      --sp-7: 144px;
+
+      --black: #000000;
+      --white: #ffffff;
+      --gray-1: #111111;
+      --gray-2: #333333;
+      --gray-3: #666666;
+      --gray-4: #999999;
+      --gray-5: #cccccc;
+      --gray-6: #e5e5e5;
+      --gray-7: #f5f5f5;
+
+      --sans: 'Helvetica Neue', Helvetica, Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
+
+      --measure: 38em;
+      --page-max: 1200px;
+      --page-pad: clamp(20px, 5vw, 80px);
+    }
+
+    html {
+      font-size: 17px;
+    }
+
+    body {
+      font-family: var(--sans);
+      background: var(--white);
+      color: var(--gray-1);
+      line-height: 1.618;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+
+    ::selection {
+      background: var(--black);
+      color: var(--white);
+    }
+
+    /* ================================================================
+       LAYOUT
+       ================================================================ */
+
+    .page {
+      max-width: var(--page-max);
+      margin: 0 auto;
+      padding: 0 var(--page-pad);
+    }
+
+    section {
+      padding: var(--sp-7) 0;
+    }
+
+    /* ================================================================
+       TYPOGRAPHY
+       ================================================================ */
+
+    h1, h2, h3, h4 {
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.1;
+    }
+
+    h1 { font-size: var(--fs-h1); }
+    h2 { font-size: var(--fs-h2); margin-bottom: var(--sp-4); }
+    h3 { font-size: var(--fs-h3); margin-bottom: var(--sp-3); }
+
+    p {
+      max-width: var(--measure);
+      margin-bottom: 1.2em;
+      color: var(--gray-2);
+    }
+
+    .lead {
+      font-size: var(--fs-lead);
+      line-height: 1.5;
+      color: var(--gray-2);
+      max-width: 32em;
+    }
+
+    small, .caption {
+      font-size: var(--fs-small);
+      color: var(--gray-4);
+      letter-spacing: 0.01em;
+    }
+
+    .overline {
+      font-size: var(--fs-small);
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--gray-4);
+      display: block;
+      margin-bottom: var(--sp-2);
+    }
+
+    /* ================================================================
+       LINKS & BUTTONS
+       ================================================================ */
+
+    a {
+      color: var(--black);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      text-decoration-thickness: 1px;
+      transition: opacity 0.15s ease;
+    }
+    a:hover { opacity: 0.6; }
+    a:focus-visible {
+      outline: 2px solid var(--black);
+      outline-offset: 4px;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: var(--sp-2) var(--sp-4);
+      font-family: var(--sans);
+      font-size: var(--fs-body);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-decoration: none;
+      min-height: 48px;
+      min-width: 48px;
+      border: 2px solid var(--black);
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .btn-primary {
+      background: var(--black);
+      color: var(--white);
+    }
+    .btn-primary:hover {
+      background: var(--gray-2);
+      opacity: 1;
+    }
+    .btn-primary:focus-visible {
+      outline: 2px solid var(--black);
+      outline-offset: 4px;
+    }
+
+    .btn-secondary {
+      background: var(--white);
+      color: var(--black);
+    }
+    .btn-secondary:hover {
+      background: var(--gray-7);
+      opacity: 1;
+    }
+    .btn-secondary:focus-visible {
+      outline: 2px solid var(--black);
+      outline-offset: 4px;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: var(--sp-2);
+      flex-wrap: wrap;
+    }
+
+    /* ================================================================
+       HORIZONTAL RULE -- Geometric divider
+       ================================================================ */
+
+    .divider {
+      border: none;
+      border-top: 2px solid var(--black);
+      width: var(--sp-5);
+      margin: 0;
+    }
+
+    .divider-full {
+      border: none;
+      border-top: 1px solid var(--gray-6);
+      width: 100%;
+      margin: 0;
+    }
+
+    /* ================================================================
+       NAV
+       ================================================================ */
+
+    .site-nav {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: var(--sp-3) 0;
+      border-bottom: 1px solid var(--gray-6);
+    }
+
+    .site-nav .wordmark {
+      font-size: var(--fs-lead);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      text-decoration: none;
+      color: var(--black);
+    }
+    .site-nav .wordmark:hover { opacity: 1; }
+
+    .nav-links {
+      display: flex;
+      gap: var(--sp-4);
+      list-style: none;
+    }
+
+    .nav-links a {
+      font-size: var(--fs-small);
+      font-weight: 500;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      text-decoration: none;
+      color: var(--gray-3);
+    }
+    .nav-links a:hover { color: var(--black); opacity: 1; }
+
+    @media (max-width: 640px) {
+      .nav-links { gap: var(--sp-3); }
+    }
+
+    /* ================================================================
+       HERO
+       ================================================================ */
+
+    .hero {
+      padding: var(--sp-7) 0 var(--sp-6);
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--sp-5);
+    }
+
+    .hero-text {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-4);
+    }
+
+    .hero h1 {
+      max-width: 14em;
+    }
+
+    .hero-code {
+      background: var(--gray-1);
+      color: var(--gray-6);
+      padding: var(--sp-4) var(--sp-4);
+      font-family: var(--mono);
+      font-size: clamp(0.76rem, 1.4vw, 0.88rem);
+      line-height: 1.7;
+      overflow-x: auto;
+      border: none;
+    }
+
+    .hero-code .kw { color: #ffffff; font-weight: 600; }
+    .hero-code .type { color: #cccccc; }
+    .hero-code .str { color: #aaaaaa; }
+    .hero-code .comment { color: #666666; font-style: italic; }
+    .hero-code .effect { color: #ffffff; font-weight: 600; }
+    .hero-code .op { color: #888888; }
+    .hero-code .fn { color: #dddddd; }
+    .hero-code .num { color: #cccccc; }
+    .hero-code .punct { color: #777777; }
+
+    @media (min-width: 900px) {
+      .hero {
+        /* Golden ratio split: ~61.8% text, ~38.2% code */
+        grid-template-columns: 61.8% 1fr;
+        align-items: start;
+        gap: var(--sp-5);
+      }
+    }
+
+    /* ================================================================
+       BENEFITS GRID
+       ================================================================ */
+
+    .benefits {
+      padding: var(--sp-7) 0;
+    }
+
+    .benefits-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--sp-5);
+      margin-top: var(--sp-5);
+    }
+
+    @media (min-width: 700px) {
+      .benefits-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    .benefit {
+      border-top: 2px solid var(--black);
+      padding-top: var(--sp-3);
+    }
+
+    .benefit h3 {
+      font-size: var(--fs-lead);
+      margin-bottom: var(--sp-2);
+    }
+
+    .benefit p {
+      font-size: var(--fs-body);
+      color: var(--gray-3);
+      line-height: 1.618;
+    }
+
+    /* ================================================================
+       CODE EXAMPLES
+       ================================================================ */
+
+    .examples {
+      padding: var(--sp-7) 0;
+    }
+
+    .example-set {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-6);
+      margin-top: var(--sp-5);
+    }
+
+    .example {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--sp-4);
+    }
+
+    @media (min-width: 900px) {
+      .example {
+        /* Golden ratio: 38.2% explanation, 61.8% code */
+        grid-template-columns: 38.2% 1fr;
+        align-items: start;
+      }
+    }
+
+    .example-text h3 {
+      font-size: var(--fs-lead);
+      margin-bottom: var(--sp-2);
+    }
+
+    .example-text p {
+      font-size: var(--fs-body);
+      color: var(--gray-3);
+    }
+
+    pre {
+      background: var(--gray-7);
+      border: 1px solid var(--gray-6);
+      padding: var(--sp-3) var(--sp-4);
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.7;
+      overflow-x: auto;
+      tab-size: 2;
+      color: var(--gray-1);
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+    }
+
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: var(--gray-7);
+      padding: 1px 5px;
+    }
+
+    /* Syntax highlighting -- grayscale only */
+    .kw { font-weight: 600; color: var(--black); }
+    .type { color: var(--gray-2); }
+    .str { color: var(--gray-3); }
+    .comment { color: var(--gray-4); font-style: italic; }
+    .effect { font-weight: 600; color: var(--gray-2); }
+    .op { color: var(--gray-3); }
+    .fn { color: var(--gray-1); }
+    .num { color: var(--gray-2); }
+    .punct { color: var(--gray-4); }
+    .annot { font-weight: 600; color: var(--gray-3); }
+
+    /* ================================================================
+       FEATURE GRID
+       ================================================================ */
+
+    .features {
+      padding: var(--sp-7) 0;
+    }
+
+    .feature-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+      margin-top: var(--sp-5);
+      border-top: 2px solid var(--black);
+    }
+
+    @media (min-width: 700px) {
+      .feature-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+    }
+
+    @media (min-width: 1000px) {
+      .feature-grid {
+        grid-template-columns: 1fr 1fr 1fr;
+      }
+    }
+
+    .feature-item {
+      padding: var(--sp-3) var(--sp-3) var(--sp-3) 0;
+      border-bottom: 1px solid var(--gray-6);
+    }
+
+    .feature-item dt {
+      font-weight: 700;
+      font-size: var(--fs-body);
+      margin-bottom: 4px;
+    }
+
+    .feature-item dd {
+      font-size: var(--fs-small);
+      color: var(--gray-3);
+      line-height: 1.5;
+    }
+
+    @media (min-width: 700px) {
+      .feature-item {
+        padding-right: var(--sp-4);
+      }
+    }
+
+    /* ================================================================
+       COMPARISON TABLE
+       ================================================================ */
+
+    .comparison {
+      padding: var(--sp-7) 0;
+    }
+
+    .comparison-table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin-top: var(--sp-5);
+    }
+
+    .comparison-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: var(--fs-body);
+      min-width: 560px;
+    }
+
+    .comparison-table thead {
+      border-top: 2px solid var(--black);
+      border-bottom: 2px solid var(--black);
+    }
+
+    .comparison-table th {
+      font-weight: 700;
+      text-align: left;
+      padding: var(--sp-2) var(--sp-3) var(--sp-2) 0;
+      font-size: var(--fs-small);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .comparison-table tbody {
+      border-bottom: 2px solid var(--black);
+    }
+
+    .comparison-table td {
+      padding: var(--sp-2) var(--sp-3) var(--sp-2) 0;
+      vertical-align: top;
+      border-bottom: 1px solid var(--gray-6);
+      font-size: 0.92rem;
+    }
+
+    .comparison-table td:first-child {
+      font-weight: 600;
+      white-space: nowrap;
+      color: var(--black);
+    }
+
+    .comparison-table .col-old {
+      color: var(--gray-4);
+    }
+
+    .comparison-table .col-new {
+      color: var(--gray-1);
+    }
+
+    /* ================================================================
+       GETTING STARTED
+       ================================================================ */
+
+    .getting-started {
+      padding: var(--sp-7) 0;
+    }
+
+    .install-steps {
+      margin-top: var(--sp-5);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-4);
+      max-width: var(--measure);
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: var(--sp-4) 1fr;
+      gap: var(--sp-3);
+      align-items: start;
+    }
+
+    .step-number {
+      font-size: var(--fs-lead);
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--black);
+    }
+
+    .step-content h3 {
+      font-size: var(--fs-body);
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .step-content pre {
+      margin-top: var(--sp-1);
+    }
+
+    .step-content p {
+      font-size: var(--fs-body);
+      color: var(--gray-3);
+      margin-bottom: var(--sp-1);
+    }
+
+    /* ================================================================
+       INFLUENCES
+       ================================================================ */
+
+    .influences {
+      padding: var(--sp-7) 0;
+    }
+
+    .influence-list {
+      margin-top: var(--sp-5);
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--sp-2) var(--sp-5);
+      list-style: none;
+    }
+
+    .influence-list li {
+      font-size: var(--fs-body);
+      color: var(--gray-3);
+    }
+
+    .influence-list li strong {
+      color: var(--black);
+      font-weight: 700;
+    }
+
+    /* ================================================================
+       CTA / FOOTER
+       ================================================================ */
+
+    .cta-section {
+      padding: var(--sp-7) 0;
+      text-align: left;
+    }
+
+    .cta-section h2 {
+      margin-bottom: var(--sp-3);
+    }
+
+    .cta-section p {
+      margin-bottom: var(--sp-4);
+    }
+
+    .site-footer {
+      border-top: 1px solid var(--gray-6);
+      padding: var(--sp-4) 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: var(--sp-3);
+    }
+
+    .site-footer p {
+      font-size: var(--fs-small);
+      color: var(--gray-4);
+      margin: 0;
+    }
+
+    .footer-links {
+      display: flex;
+      gap: var(--sp-4);
+      list-style: none;
+    }
+
+    .footer-links a {
+      font-size: var(--fs-small);
+      color: var(--gray-4);
+      text-decoration: none;
+    }
+    .footer-links a:hover { color: var(--black); }
+
+    /* ================================================================
+       GEOMETRIC ACCENT -- Muller-Brockmann inspired grid marker
+       ================================================================ */
+
+    .geo-mark {
+      display: block;
+      width: var(--sp-5);
+      height: var(--sp-5);
+      background: var(--black);
+    }
+
+    /* ================================================================
+       RESPONSIVE ADJUSTMENTS
+       ================================================================ */
+
+    @media (max-width: 640px) {
+      html { font-size: 15px; }
+
+      section { padding: var(--sp-6) 0; }
+
+      .hero { padding: var(--sp-6) 0 var(--sp-5); }
+
+      .site-nav {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--sp-2);
+      }
+
+      .step {
+        grid-template-columns: 1fr;
+      }
+
+      .step-number {
+        font-size: var(--fs-body);
+      }
+    }
+
+    /* ================================================================
+       PRINT
+       ================================================================ */
+
+    @media print {
+      body { font-size: 11pt; }
+      .hero-code { border: 1px solid var(--gray-4); }
+      .btn { border: 1px solid var(--black); }
+      nav, .btn-group { display: none; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ============================================================
+       NAVIGATION
+       ============================================================ -->
+  <div class="page">
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="#" class="wordmark" aria-label="Baseline home">Baseline</a>
+      <ul class="nav-links" role="list">
+        <li><a href="#benefits">Why</a></li>
+        <li><a href="#examples">Examples</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#start">Install</a></li>
+        <li><a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md">Spec</a></li>
+        <li><a href="https://github.com/baseline-lang">GitHub</a></li>
+      </ul>
+    </nav>
+  </div>
+
+  <main>
+
+    <!-- ============================================================
+         HERO
+         ============================================================ -->
+    <div class="page">
+      <section class="hero" aria-labelledby="hero-heading">
+        <div class="hero-text">
+          <span class="overline">v0.1 -- Bootstrap</span>
+          <h1 id="hero-heading">The type is the specification.</h1>
+          <p class="lead">
+            A statically typed, effect-aware language where types encode correctness,
+            side effects are explicit capabilities, and the compiler proves the rest.
+          </p>
+          <div class="btn-group">
+            <a href="#start" class="btn btn-primary">Get Started</a>
+            <a href="https://github.com/baseline-lang" class="btn btn-secondary">View on GitHub</a>
+          </div>
+        </div>
+        <div class="hero-code" role="img" aria-label="Baseline code example showing a typed function with effects, pattern matching, and pipe operator">
+          <pre><code><span class="comment">// Types encode your intent.</span>
+<span class="comment">// Effects constrain your dependencies.</span>
+
+<span class="kw">type</span> <span class="type">Port</span> <span class="op">=</span> <span class="type">Int</span> <span class="kw">where</span> <span class="fn">self</span> <span class="op">&gt;</span> <span class="num">0</span> <span class="op">and</span> <span class="fn">self</span> <span class="op">&lt;=</span> <span class="num">65535</span>
+
+<span class="fn">serve!</span> <span class="op">:</span> <span class="type">Port</span> <span class="op">-&gt;</span> <span class="effect">{Console, Http}</span> <span class="type">()</span>
+<span class="fn">serve!</span> <span class="op">=</span> <span class="op">|</span><span class="fn">port</span><span class="op">|</span> <span class="punct">{</span>
+  <span class="type">Console</span><span class="punct">.</span><span class="fn">println!</span><span class="punct">(</span><span class="str">"Listening on ${port}"</span><span class="punct">)</span>
+  <span class="type">Router</span><span class="punct">.</span><span class="fn">new</span><span class="punct">()</span>
+    <span class="op">|&gt;</span> <span class="type">Router</span><span class="punct">.</span><span class="fn">get</span><span class="punct">(</span><span class="str">"/users"</span><span class="punct">,</span> <span class="fn">list_users</span><span class="punct">)</span>
+    <span class="op">|&gt;</span> <span class="type">Router</span><span class="punct">.</span><span class="fn">post</span><span class="punct">(</span><span class="str">"/users"</span><span class="punct">,</span> <span class="fn">create_user</span><span class="punct">)</span>
+    <span class="op">|&gt;</span> <span class="type">Router</span><span class="punct">.</span><span class="fn">listen!</span><span class="punct">(</span><span class="fn">port</span><span class="punct">)</span>
+<span class="punct">}</span></code></pre>
+        </div>
+      </section>
+    </div>
+
+    <div class="page"><hr class="divider-full" /></div>
+
+    <!-- ============================================================
+         BENEFITS
+         ============================================================ -->
+    <div class="page">
+      <section class="benefits" id="benefits" aria-labelledby="benefits-heading">
+        <span class="overline">Why Baseline</span>
+        <h2 id="benefits-heading">Correct by construction.</h2>
+        <div class="benefits-grid">
+
+          <div class="benefit">
+            <h3>Effects are capabilities</h3>
+            <p>
+              A function typed <code>{Console, Http}</code> can print and make HTTP
+              calls, and nothing else. Side effects are declared in type signatures
+              and enforced by the compiler. No dependency can access the filesystem
+              unless you grant it <code>{Fs}</code>. The default is no access.
+            </p>
+          </div>
+
+          <div class="benefit">
+            <h3>Refinement types</h3>
+            <p>
+              <code>type Port = Int where self > 0</code> proves constraints at compile
+              time, not at runtime. Define what valid data looks like once. The compiler
+              checks every use. No defensive re-validation. No scattered checks.
+              No "someone else must have validated this" assumptions.
+            </p>
+          </div>
+
+          <div class="benefit">
+            <h3>No null, no exceptions</h3>
+            <p>
+              <code>Option&lt;T&gt;</code> and <code>Result&lt;T, E&gt;</code> are the
+              only error paths. Pattern matching is exhaustive -- the compiler rejects
+              code that leaves a branch unhandled. If a function can fail, its signature
+              says so. If it returns a value, that value exists.
+            </p>
+          </div>
+
+          <div class="benefit">
+            <h3>One way to do each thing</h3>
+            <p>
+              One syntax for errors, one for effects, one for data transformation.
+              Pipes over nesting. Combinators over loops. Interpolation over
+              concatenation. Fewer choices means fewer mistakes -- and code that
+              every team member and every LLM reads the same way.
+            </p>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+    <div class="page"><hr class="divider-full" /></div>
+
+    <!-- ============================================================
+         CODE EXAMPLES
+         ============================================================ -->
+    <div class="page">
+      <section class="examples" id="examples" aria-labelledby="examples-heading">
+        <span class="overline">Code</span>
+        <h2 id="examples-heading">See it in action.</h2>
+        <div class="example-set">
+
+          <!-- Example 1: Pattern matching + Sum types -->
+          <div class="example">
+            <div class="example-text">
+              <h3>Pattern matching</h3>
+              <p>
+                Exhaustive by default. The compiler rejects unhandled branches.
+                Model your domain with sum types and let the type system ensure
+                every case is covered. No fall-through, no forgotten edge cases.
+              </p>
+            </div>
+            <pre><code><span class="kw">type</span> <span class="type">Connection</span> <span class="op">=</span>
+  <span class="op">|</span> <span class="type">Disconnected</span>
+  <span class="op">|</span> <span class="type">Connected</span><span class="punct">(</span><span class="type">Socket</span><span class="punct">)</span>
+  <span class="op">|</span> <span class="type">Error</span><span class="punct">(</span><span class="type">String</span><span class="punct">)</span>
+
+<span class="fn">handle</span> <span class="op">:</span> <span class="type">Connection</span> <span class="op">-&gt;</span> <span class="type">String</span>
+<span class="fn">handle</span> <span class="op">=</span> <span class="op">|</span><span class="fn">conn</span><span class="op">|</span> <span class="kw">match</span> <span class="fn">conn</span>
+  <span class="type">Disconnected</span>      <span class="op">-&gt;</span> <span class="str">"reconnecting"</span>
+  <span class="type">Connected</span><span class="punct">(</span><span class="fn">socket</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="str">"active"</span>
+  <span class="type">Error</span><span class="punct">(</span><span class="fn">msg</span><span class="punct">)</span>       <span class="op">-&gt;</span> <span class="str">"failed: ${msg}"</span></code></pre>
+          </div>
+
+          <!-- Example 2: Pipes + data transformation -->
+          <div class="example">
+            <div class="example-text">
+              <h3>Pipes and transforms</h3>
+              <p>
+                The pipe operator <code>|&gt;</code> chains transformations left to right.
+                Data flow reads like prose. Combinators replace loops for
+                filtering, mapping, and folding -- keeping logic pure and composable.
+              </p>
+            </div>
+            <pre><code><span class="fn">active_users</span> <span class="op">:</span> <span class="type">List&lt;User&gt;</span> <span class="op">-&gt;</span> <span class="type">List&lt;String&gt;</span>
+<span class="fn">active_users</span> <span class="op">=</span> <span class="op">|</span><span class="fn">users</span><span class="op">|</span>
+  <span class="fn">users</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">filter</span><span class="punct">(|</span><span class="fn">u</span><span class="op">|</span> <span class="fn">u</span><span class="punct">.</span><span class="fn">active</span> <span class="op">==</span> <span class="kw">true</span><span class="punct">)</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(|</span><span class="fn">u</span><span class="op">|</span> <span class="fn">u</span><span class="punct">.</span><span class="fn">name</span><span class="punct">)</span>
+
+<span class="fn">total_age</span> <span class="op">:</span> <span class="type">List&lt;User&gt;</span> <span class="op">-&gt;</span> <span class="type">Int</span>
+<span class="fn">total_age</span> <span class="op">=</span> <span class="op">|</span><span class="fn">users</span><span class="op">|</span>
+  <span class="fn">users</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(|</span><span class="fn">u</span><span class="op">|</span> <span class="fn">u</span><span class="punct">.</span><span class="fn">age</span><span class="punct">)</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">fold</span><span class="punct">(</span><span class="num">0</span><span class="punct">,</span> <span class="op">|</span><span class="fn">acc</span><span class="punct">,</span> <span class="fn">x</span><span class="op">|</span> <span class="fn">acc</span> <span class="op">+</span> <span class="fn">x</span><span class="punct">)</span></code></pre>
+          </div>
+
+          <!-- Example 3: Effects + error handling -->
+          <div class="example">
+            <div class="example-text">
+              <h3>Tracked effects</h3>
+              <p>
+                Every side effect is declared in the type signature.
+                <code>{Http, Console}</code> means this function can fetch data
+                and print, and nothing else. The <code>?</code> operator propagates
+                errors. Pure functions need no effect annotation at all.
+              </p>
+            </div>
+            <pre><code><span class="fn">fetch_user!</span> <span class="op">:</span> <span class="type">Int</span> <span class="op">-&gt;</span> <span class="effect">{Http, Console}</span> <span class="type">Result</span>
+<span class="fn">fetch_user!</span> <span class="op">=</span> <span class="op">|</span><span class="fn">id</span><span class="op">|</span> <span class="punct">{</span>
+  <span class="type">Console</span><span class="punct">.</span><span class="fn">println!</span><span class="punct">(</span><span class="str">"Fetching user ${id}"</span><span class="punct">)</span>
+  <span class="kw">let</span> <span class="fn">response</span> <span class="op">=</span> <span class="type">Http</span><span class="punct">.</span><span class="fn">get!</span><span class="punct">(</span><span class="str">"/users/${id}"</span><span class="punct">)</span><span class="op">?</span>
+  <span class="kw">match</span> <span class="fn">response</span><span class="punct">.</span><span class="fn">status</span>
+    <span class="num">200</span> <span class="op">-&gt;</span> <span class="type">Ok</span><span class="punct">(</span><span class="fn">response</span><span class="punct">.</span><span class="fn">body</span><span class="punct">)</span>
+    <span class="num">404</span> <span class="op">-&gt;</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"User not found"</span><span class="punct">)</span>
+    <span class="fn">_</span>   <span class="op">-&gt;</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Unexpected: ${response.status}"</span><span class="punct">)</span>
+<span class="punct">}</span></code></pre>
+          </div>
+
+          <!-- Example 4: Inline tests -->
+          <div class="example">
+            <div class="example-text">
+              <h3>Inline tests</h3>
+              <p>
+                Tests live next to the code they verify, using <code>where</code> blocks.
+                The compiler runs them with <code>blc test</code>. Functions and their
+                tests are always in sync because they share the same file and scope.
+              </p>
+            </div>
+            <pre><code><span class="fn">add</span> <span class="op">:</span> <span class="punct">(</span><span class="type">Int</span><span class="punct">,</span> <span class="type">Int</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="type">Int</span>
+<span class="fn">add</span> <span class="op">=</span> <span class="op">|</span><span class="fn">a</span><span class="punct">,</span> <span class="fn">b</span><span class="op">|</span> <span class="fn">a</span> <span class="op">+</span> <span class="fn">b</span>
+  <span class="kw">where</span>
+    <span class="kw">test</span> <span class="str">"adds positive numbers"</span> <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="num">3</span>
+    <span class="kw">test</span> <span class="str">"handles zero"</span>          <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">0</span><span class="punct">,</span> <span class="num">5</span><span class="punct">)</span> <span class="op">==</span> <span class="num">5</span>
+    <span class="kw">test</span> <span class="str">"handles negatives"</span>     <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="op">-</span><span class="num">1</span><span class="punct">,</span> <span class="num">1</span><span class="punct">)</span> <span class="op">==</span> <span class="num">0</span>
+
+<span class="fn">safe_divide</span> <span class="op">:</span> <span class="punct">(</span><span class="type">Int</span><span class="punct">,</span> <span class="type">Int</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="type">Result</span>
+<span class="fn">safe_divide</span> <span class="op">=</span> <span class="op">|</span><span class="fn">a</span><span class="punct">,</span> <span class="fn">b</span><span class="op">|</span>
+  <span class="kw">if</span> <span class="fn">b</span> <span class="op">==</span> <span class="num">0</span> <span class="kw">then</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Division by zero"</span><span class="punct">)</span>
+  <span class="kw">else</span> <span class="type">Ok</span><span class="punct">(</span><span class="fn">a</span> <span class="op">/</span> <span class="fn">b</span><span class="punct">)</span>
+  <span class="kw">where</span>
+    <span class="kw">test</span> <span class="str">"divides"</span>  <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">10</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Ok</span><span class="punct">(</span><span class="num">5</span><span class="punct">)</span>
+    <span class="kw">test</span> <span class="str">"by zero"</span>  <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">0</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Division by zero"</span><span class="punct">)</span></code></pre>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+    <div class="page"><hr class="divider-full" /></div>
+
+    <!-- ============================================================
+         FEATURE LIST
+         ============================================================ -->
+    <div class="page">
+      <section class="features" id="features" aria-labelledby="features-heading">
+        <span class="overline">Features</span>
+        <h2 id="features-heading">Language at a glance.</h2>
+        <dl class="feature-grid">
+
+          <div class="feature-item">
+            <dt>Algebraic Effects</dt>
+            <dd>Side effects declared in type signatures and enforced by the compiler. Built-in: Console, Http, Fs, Log, Time.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Refinement Types</dt>
+            <dd><code>Int where self > 0</code> proves constraints at compile time. Parse, don't validate.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Pattern Matching</dt>
+            <dd>Exhaustive matches on sum types, records, lists, and tuples. Guards, or-patterns, destructuring.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Pipe Operator</dt>
+            <dd><code>|&gt;</code> chains data transformations left to right. The compiler warns against deeply nested calls.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Sum Types</dt>
+            <dd>Model domain variants precisely. <code>Option&lt;T&gt;</code> and <code>Result&lt;T, E&gt;</code> are built-in.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Records</dt>
+            <dd>Named fields, dot access, update syntax, structural typing with row polymorphism.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Inline Tests</dt>
+            <dd><code>where test "name" = expr</code> keeps tests alongside the code they verify.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>ML-Style Functions</dt>
+            <dd><code>name : Sig = body</code>. Lambdas with <code>|x| expr</code>. Type inference for locals.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Modules</dt>
+            <dd><code>@module Name</code> with explicit imports. Prelude levels from none to server.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>Error Propagation</dt>
+            <dd>The <code>?</code> operator propagates errors. <code>match</code> for explicit handling. No try/catch.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>JSON Diagnostics</dt>
+            <dd>All compiler output is structured JSON. LLMs self-correct against machine-readable errors.</dd>
+          </div>
+
+          <div class="feature-item">
+            <dt>LLM-Native Design</dt>
+            <dd>Unambiguous syntax, constrained solution space, structured errors. Designed for machine generation.</dd>
+          </div>
+
+        </dl>
+      </section>
+    </div>
+
+    <div class="page"><hr class="divider-full" /></div>
+
+    <!-- ============================================================
+         COMPARISON
+         ============================================================ -->
+    <div class="page">
+      <section class="comparison" id="comparison" aria-labelledby="comparison-heading">
+        <span class="overline">Positioning</span>
+        <h2 id="comparison-heading">What changes.</h2>
+        <p class="lead">
+          Baseline synthesizes proven ideas from ML, Rust, Koka, Liquid Haskell,
+          and Elm. The combination is new. The ingredients are battle-tested.
+        </p>
+        <div class="comparison-table-wrap" role="region" aria-label="Feature comparison table" tabindex="0">
+          <table class="comparison-table">
+            <thead>
+              <tr>
+                <th scope="col">Concern</th>
+                <th scope="col">Status Quo</th>
+                <th scope="col">Baseline</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>Error handling</td>
+                <td class="col-old">Exceptions, null, unchecked tuples</td>
+                <td class="col-new">Result&lt;T, E&gt; and Option&lt;T&gt; only. Exhaustive matching.</td>
+              </tr>
+              <tr>
+                <td>Side effects</td>
+                <td class="col-old">Implicit, unconstrained, invisible</td>
+                <td class="col-new">Declared in type signatures. Compiler-enforced.</td>
+              </tr>
+              <tr>
+                <td>Validation</td>
+                <td class="col-old">Scattered runtime checks, defensive code</td>
+                <td class="col-new">Refinement types prove constraints at compile time.</td>
+              </tr>
+              <tr>
+                <td>AI code gen</td>
+                <td class="col-old">Best-effort, validate with tests</td>
+                <td class="col-new">Types constrain correctness. Effects sandbox access.</td>
+              </tr>
+              <tr>
+                <td>Code style</td>
+                <td class="col-old">Many ways, style guides, linter wars</td>
+                <td class="col-new">One way to do each thing. Compiler-enforced.</td>
+              </tr>
+              <tr>
+                <td>Testing</td>
+                <td class="col-old">Separate files, separate frameworks</td>
+                <td class="col-new">Inline tests with <code>where</code> blocks. Always in sync.</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+
+    <div class="page"><hr class="divider-full" /></div>
+
+    <!-- ============================================================
+         GETTING STARTED
+         ============================================================ -->
+    <div class="page">
+      <section class="getting-started" id="start" aria-labelledby="start-heading">
+        <span class="overline">Get Started</span>
+        <h2 id="start-heading">Up and running.</h2>
+        <div class="install-steps">
+
+          <div class="step">
+            <div class="step-number" aria-hidden="true">1</div>
+            <div class="step-content">
+              <h3>Install</h3>
+              <pre><code>brew install baseline-lang/tap/blc</code></pre>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number" aria-hidden="true">2</div>
+            <div class="step-content">
+              <h3>Write</h3>
+              <p>Create <code>hello.bl</code>:</p>
+              <pre><code><span class="annot">@prelude</span><span class="punct">(</span><span class="fn">script</span><span class="punct">)</span>
+
+<span class="fn">greet</span> <span class="op">:</span> <span class="type">String</span> <span class="op">-&gt;</span> <span class="type">String</span>
+<span class="fn">greet</span> <span class="op">=</span> <span class="op">|</span><span class="fn">name</span><span class="op">|</span> <span class="str">"Hello, ${name}!"</span>
+
+<span class="fn">main!</span> <span class="op">:</span> <span class="punct">()</span> <span class="op">-&gt;</span> <span class="effect">{Console}</span> <span class="punct">()</span>
+<span class="fn">main!</span> <span class="op">=</span> <span class="punct">{</span>
+  <span class="kw">let</span> <span class="fn">message</span> <span class="op">=</span> <span class="fn">greet</span><span class="punct">(</span><span class="str">"World"</span><span class="punct">)</span>
+  <span class="type">Console</span><span class="punct">.</span><span class="fn">print!</span><span class="punct">(</span><span class="fn">message</span><span class="punct">)</span>
+<span class="punct">}</span></code></pre>
+            </div>
+          </div>
+
+          <div class="step">
+            <div class="step-number" aria-hidden="true">3</div>
+            <div class="step-content">
+              <h3>Run</h3>
+              <pre><code>blc run hello.bl
+<span class="comment"># Hello, World!</span>
+
+blc check hello.bl --json
+<span class="comment"># {"status": "ok", "diagnostics": []}</span></code></pre>
+            </div>
+          </div>
+
+        </div>
+      </section>
+    </div>
+
+    <div class="page"><hr class="divider-full" /></div>
+
+    <!-- ============================================================
+         INFLUENCES
+         ============================================================ -->
+    <div class="page">
+      <section class="influences" id="influences" aria-labelledby="influences-heading">
+        <span class="overline">Influences</span>
+        <h2 id="influences-heading">Standing on shoulders.</h2>
+        <p>
+          Baseline draws from decades of programming language research.
+          Each influence contributes a specific, well-understood idea.
+        </p>
+        <ul class="influence-list" role="list">
+          <li><strong>ML / OCaml</strong> -- type inference, pattern matching, algebraic data types</li>
+          <li><strong>Rust</strong> -- error handling, tooling quality</li>
+          <li><strong>Koka</strong> -- algebraic effects</li>
+          <li><strong>Liquid Haskell</strong> -- refinement types</li>
+          <li><strong>Elm</strong> -- friendly errors, simplicity</li>
+          <li><strong>F#</strong> -- pragmatic functional programming</li>
+        </ul>
+      </section>
+    </div>
+
+    <div class="page"><hr class="divider-full" /></div>
+
+    <!-- ============================================================
+         CTA
+         ============================================================ -->
+    <div class="page">
+      <section class="cta-section">
+        <h2>Start building.</h2>
+        <p>
+          The compiler, grammar, and core type system are functional.
+          Baseline is in active development and accepting contributors.
+        </p>
+        <div class="btn-group">
+          <a href="https://github.com/baseline-lang" class="btn btn-primary">View on GitHub</a>
+          <a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md" class="btn btn-secondary">Read the Specification</a>
+        </div>
+      </section>
+    </div>
+
+  </main>
+
+  <!-- ============================================================
+       FOOTER
+       ============================================================ -->
+  <div class="page">
+    <footer class="site-footer">
+      <p>Baseline Programming Language</p>
+      <ul class="footer-links" role="list">
+        <li><a href="https://github.com/baseline-lang">GitHub</a></li>
+        <li><a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md">Specification</a></li>
+        <li><a href="index.html">Design Concepts</a></li>
+      </ul>
+    </footer>
+  </div>
+
+</body>
+</html>

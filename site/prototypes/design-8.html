@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Baseline Programming Language</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,700;1,400&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="baseline-grid-overlay"></div>
+
+    <div class="container">
+        <header class="hero">
+            <h1 class="title">Ba<span class="kern-tight">s</span>eline<span class="accent-point">.</span></h1>
+            <p class="subtitle">A fast, verifiable, LLM-native programming language.</p>
+            <div class="hero-ornament">❦</div>
+            <p class="intro-text">
+                The invisible foundation for probabilistic software.
+            </p>
+            <nav class="cta-nav">
+                <a href="#philosophy" class="btn-text">Philosophy</a>
+                <span class="separator">·</span>
+                <a href="#spec" class="btn-text">The Specification</a>
+            </nav>
+        </header>
+
+        <hr class="section-break">
+
+        <section id="philosophy" class="typography-hook">
+            <div class="side-note">
+                <span class="side-note-marker">¶</span> The Typographic Analogy
+            </div>
+            <h2>The Invisible Foundation</h2>
+            <p class="lead">
+                In typography, the <span class="term-highlight">baseline</span> is the invisible line upon which most letters sit and below which descenders extend. It is the fundamental constraint that provides rhythm, order, and legibility to text. Without it, language dissolves into chaos.
+            </p>
+            <p>
+                In the era of AI-generated code, the Baseline programming language serves the same function. It provides the rigid, mathematical structure necessary to constrain the probabilistic output of Large Language Models, turning unpredictable generation into verifiable software.
+            </p>
+        </section>
+
+        <section class="pillars">
+            <div class="pillar">
+                <h3>I. The Type is the Spec</h3>
+                <p>Types encode enough information that correctness is verified, tests are generated, and documentation is accurate. We parse; we do not validate.</p>
+            </div>
+            <div class="pillar">
+                <h3>II. Effects are Data</h3>
+                <p>Side effects are explicit capabilities, tracked and mockable. Pure functions are the default; effects are opt-in permissions.</p>
+            </div>
+            <div class="pillar">
+                <h3>III. LLM-Native</h3>
+                <p>Designed for machine generation. Syntax is unambiguous, errors are structured JSON, and the verification loop is automated.</p>
+            </div>
+        </section>
+
+        <hr class="section-break icon-break">✻</hr>
+
+        <section id="spec" class="core-principles">
+            <h2>Principles in Practice</h2>
+
+            <article class="principle-block">
+                <div class="principle-text">
+                    <h3>Constraining the Solution Space</h3>
+                    <p>Traditional languages offer unlimited ways to err. Baseline uses refinement types to mathematically constrain boundaries, eliminating entire classes of hallucinated bugs.</p>
+                </div>
+                <div class="code-display">
+<pre><code><span class="comment">// The type IS the specification.</span>
+<span class="keyword">type</span> <span class="type-def">Port</span> = <span class="type">Int</span> <span class="keyword">where</span> 1 <= self <= 65535
+
+listen : <span class="type-def">Port</span> -> {<span class="effect">Net</span>} <span class="type">Server</span>
+listen = |port|
+  <span class="comment">// port is GUARANTEED to be 1-65535 here.</span>
+  <span class="comment">// No defensive coding needed.</span>
+  ...</code></pre>
+                    <div class="caption">Fig 1. Refinement types as boundary constraints.</div>
+                </div>
+            </article>
+
+            <article class="principle-block alt-layout">
+                <div class="principle-text">
+                    <h3>Capability-Based Security</h3>
+                    <p>Agents cannot hallucinate I/O. Side effects are treated as data capabilities. An agent without the <code>Fs</code> effect capability physically cannot access the filesystem.</p>
+                </div>
+                <div class="code-display">
+<pre><code>agent_task! : <span class="type">Input</span> -> {<span class="effect">Log</span>, <span class="effect">Db</span>.read} <span class="type">Output</span>
+agent_task! = |input|
+  <span class="effect-call">Log.info!</span>(<span class="string">"Processing ${input}"</span>)
+  <span class="keyword">let</span> data = <span class="effect-call">Db.query!</span>(<span class="string">"SELECT * FROM items"</span>)
+
+  <span class="comment">// COMPILE ERROR: Fs not in effect set</span>
+  <span class="comment">// Fs.delete!("important.txt")</span>
+
+  transform(data)</code></pre>
+                    <div class="caption">Fig 2. Explicit effect tracking provides a security sandbox.</div>
+                </div>
+            </article>
+        </section>
+
+        <hr class="section-break icon-break">✻</hr>
+
+        <section class="loop-section">
+            <h2>The Neurosymbolic Feedback Loop</h2>
+            <p>Baseline is architected to close the gap between probabilistic LLM generation and formal verification. It turns the compiler into a deterministic verifier for the AI agent.</p>
+
+            <div class="loop-diagram">
+                <div class="stage">
+                    <span class="stage-num">1</span>
+                    <h4>Prompt</h4>
+                    <p>Agent receives type signature with refinements.</p>
+                </div>
+                <div class="arrow">→</div>
+                <div class="stage">
+                    <span class="stage-num">2</span>
+                    <h4>Generation</h4>
+                    <p>Agent generates Baseline code.</p>
+                </div>
+                <div class="arrow">→</div>
+                <div class="stage">
+                    <span class="stage-num">3</span>
+                    <h4>Verification</h4>
+                    <p>Compiler checks code against SMT solvers.</p>
+                </div>
+                <div class="arrow lb-arrow">↴</div>
+                <div class="stage bottom-stage">
+                    <span class="stage-num">5</span>
+                    <h4>Repair</h4>
+                    <p>Agent fixes code based on structured feedback.</p>
+                </div>
+                <div class="arrow lt-arrow">←</div>
+                <div class="stage bottom-stage failure-stage">
+                    <span class="stage-num">4</span>
+                    <h4>Feedback</h4>
+                    <p>Compiler provides specific counter-examples.</p>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <div class="footer-ornament">❦</div>
+            <p>Baseline Language Specification. Version 0.1.0 — Draft.</p>
+            <nav class="footer-nav">
+                <a href="#">Read the Full Specification</a>
+                <a href="#">Read the Vision Document</a>
+            </nav>
+        </footer>
+    </div>
+</body>
+</html>

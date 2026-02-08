@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline -- At the Edge of Something Vast</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    :root {
+      --bg: #fef7ed;
+      --bg-warm: #fef3c7;
+      --bg-panel: #fffbf0;
+      --bg-dark: #1c1007;
+      --surface: #ffffff;
+      --border: #e8d5b0;
+      --border-dark: #c9a96e;
+      --text: #292014;
+      --text-secondary: #6b5635;
+      --text-dim: #9a8560;
+      --amber: #f59e0b;
+      --amber-bright: #fbbf24;
+      --amber-dark: #92400e;
+      --gold: #d97706;
+      --brown: #78350f;
+      --code-bg: #1a1308;
+      --code-border: #332a16;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* Back link */
+    .back-link {
+      position: fixed;
+      top: 20px;
+      left: 24px;
+      z-index: 100;
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 4px;
+      background: rgba(254,247,237,0.9);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .back-link:hover { color: var(--amber-dark); border-color: var(--amber); }
+    .back-link:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      right: 0;
+      left: 0;
+      z-index: 90;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      padding: 18px 24px;
+      background: rgba(254,247,237,0.7);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid rgba(232,213,176,0.5);
+    }
+    nav a {
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-decoration: none;
+      margin-left: 28px;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--amber-dark); }
+    nav a:focus-visible { outline: 2px solid var(--amber); outline-offset: 4px; }
+
+    /* ========== HERO ========== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: 120px 24px 80px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    /* Golden horizon gradient */
+    .hero::before {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 50%;
+      background: linear-gradient(to top, rgba(251,191,36,0.08) 0%, transparent 100%);
+      pointer-events: none;
+    }
+
+    /* Horizon line */
+    .hero::after {
+      content: '';
+      position: absolute;
+      bottom: 30%;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-dark), var(--amber), var(--border-dark), transparent);
+      opacity: 0.3;
+      pointer-events: none;
+    }
+
+    .hero-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .hero-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--amber-dark);
+      margin-bottom: 20px;
+    }
+
+    .hero-title {
+      font-size: clamp(3.5rem, 12vw, 10rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 0.9;
+      color: var(--brown);
+      margin-bottom: 24px;
+    }
+
+    .hero-title .light {
+      color: var(--amber);
+    }
+
+    .hero-desc {
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--text-secondary);
+      max-width: 560px;
+      line-height: 1.7;
+      margin-bottom: 40px;
+    }
+
+    .hero-cta {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 32px;
+      background: var(--amber-dark);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.15s;
+      min-height: 48px;
+    }
+    .btn-primary:hover { background: var(--brown); transform: translateY(-1px); }
+    .btn-primary:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+    .btn-outline {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 32px;
+      background: transparent;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-decoration: none;
+      border: 1px solid var(--border-dark);
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+      min-height: 48px;
+    }
+    .btn-outline:hover { border-color: var(--amber); color: var(--amber-dark); }
+    .btn-outline:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+    /* ========== PRINCIPLES -- PANORAMIC PANELS ========== */
+    .principles {
+      padding: 100px 24px;
+      background: var(--bg-warm);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .principles-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--amber-dark);
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.5rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--brown);
+      margin-bottom: 48px;
+    }
+
+    .panels-row {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2px;
+      background: var(--border);
+    }
+
+    @media (min-width: 768px) {
+      .panels-row { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    .panel {
+      background: var(--bg-panel);
+      padding: 40px 32px;
+    }
+
+    .panel-number {
+      font-size: 2rem;
+      font-weight: 800;
+      color: var(--amber);
+      opacity: 0.4;
+      margin-bottom: 16px;
+      line-height: 1;
+    }
+
+    .panel-title {
+      font-size: 1.05rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 8px;
+    }
+
+    .panel-desc {
+      font-size: 0.88rem;
+      color: var(--text-secondary);
+      line-height: 1.65;
+    }
+
+    /* ========== CODE SECTION ========== */
+    .code-section {
+      padding: 100px 24px;
+    }
+
+    .code-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    /* Solar panel grid -- modular code blocks */
+    .solar-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 2px;
+      background: var(--code-border);
+    }
+
+    @media (min-width: 768px) {
+      .solar-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .solar-cell.wide {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .solar-grid {
+        grid-template-columns: repeat(3, 1fr);
+      }
+      .solar-cell.wide {
+        grid-column: span 2;
+      }
+    }
+
+    .solar-cell {
+      background: var(--code-bg);
+      overflow: hidden;
+    }
+
+    .solar-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 20px;
+      border-bottom: 1px solid var(--code-border);
+    }
+
+    .solar-title {
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--amber);
+    }
+
+    .solar-file {
+      font-size: 0.62rem;
+      color: #6b5a3a;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
+    }
+
+    .solar-cell pre {
+      padding: 20px;
+      overflow-x: auto;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
+      font-size: 0.78rem;
+      line-height: 1.75;
+      color: #e8dcc8;
+      tab-size: 2;
+    }
+
+    .solar-cell code { font-family: inherit; }
+
+    /* Syntax highlighting -- warm earth tones */
+    .kw { color: #f59e0b; font-weight: 600; }
+    .type { color: #fbbf24; }
+    .str { color: #86efac; }
+    .comment { color: #5c4f38; font-style: italic; }
+    .effect { color: #fcd34d; }
+    .op { color: #c9a96e; }
+    .fn { color: #e8dcc8; }
+    .num { color: #c4b5fd; }
+    .punct { color: #6b5a3a; }
+    .param { color: #d4c4a8; }
+    .annot { color: #fb923c; }
+
+    /* ========== FEATURES GRID -- SOLAR PANELS ========== */
+    .features {
+      padding: 100px 24px;
+      background: var(--bg-warm);
+      border-top: 1px solid var(--border);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .features-inner {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    .module-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 2px;
+      background: var(--border);
+    }
+
+    @media (min-width: 640px) {
+      .module-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    @media (min-width: 900px) {
+      .module-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    .module-cell {
+      background: var(--bg-panel);
+      padding: 28px 24px;
+    }
+
+    .module-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 6px;
+    }
+
+    .module-desc {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+
+    /* ========== TARGETS ========== */
+    .targets {
+      padding: 80px 24px;
+    }
+
+    .targets-inner {
+      max-width: 1000px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 2px;
+      background: var(--border);
+    }
+
+    @media (min-width: 640px) {
+      .targets-inner { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    .target-cell {
+      background: var(--bg-panel);
+      padding: 32px 24px;
+      text-align: center;
+    }
+
+    .target-value {
+      font-size: 1.8rem;
+      font-weight: 800;
+      color: var(--amber-dark);
+      letter-spacing: -0.02em;
+    }
+
+    .target-label {
+      font-size: 0.72rem;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    /* ========== INFLUENCES ========== */
+    .influences {
+      padding: 60px 24px;
+      text-align: center;
+    }
+
+    .influences-label {
+      font-size: 0.62rem;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .influences-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 8px 20px;
+    }
+
+    .influences-row span {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+    }
+
+    /* ========== GET STARTED ========== */
+    .get-started {
+      padding: 120px 24px;
+      background: var(--bg-dark);
+      color: #e8dcc8;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .get-started::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, var(--amber), transparent);
+    }
+
+    /* Warm horizon glow */
+    .get-started::after {
+      content: '';
+      position: absolute;
+      bottom: -100px;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 800px;
+      height: 300px;
+      background: radial-gradient(ellipse, rgba(245,158,11,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .gs-inner {
+      max-width: 700px;
+      margin: 0 auto;
+      text-align: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .gs-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: var(--amber);
+      margin-bottom: 20px;
+    }
+
+    .gs-title {
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      font-weight: 800;
+      letter-spacing: -0.03em;
+      color: var(--amber-bright);
+      margin-bottom: 16px;
+    }
+
+    .gs-desc {
+      font-size: 1rem;
+      color: #9a8560;
+      line-height: 1.7;
+      margin-bottom: 40px;
+    }
+
+    .gs-cta {
+      display: flex;
+      justify-content: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn-gold {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 36px;
+      background: var(--amber);
+      color: var(--bg-dark);
+      font-weight: 700;
+      font-size: 0.9rem;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.15s;
+      min-height: 48px;
+    }
+    .btn-gold:hover { background: var(--amber-bright); transform: translateY(-1px); }
+    .btn-gold:focus-visible { outline: 2px solid var(--amber-bright); outline-offset: 3px; }
+
+    .btn-dark-outline {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 36px;
+      background: transparent;
+      color: #9a8560;
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-decoration: none;
+      border: 1px solid #332a16;
+      cursor: pointer;
+      transition: border-color 0.2s, color 0.2s;
+      min-height: 48px;
+    }
+    .btn-dark-outline:hover { border-color: var(--amber); color: var(--amber); }
+    .btn-dark-outline:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+
+    /* ========== FOOTER ========== */
+    footer {
+      padding: 40px 24px;
+      background: var(--bg-dark);
+      text-align: center;
+      border-top: 1px solid #1a1308;
+    }
+
+    .footer-tagline {
+      font-family: Georgia, 'Times New Roman', serif;
+      font-style: italic;
+      font-size: 0.82rem;
+      color: #6b5a3a;
+      margin-bottom: 8px;
+    }
+
+    .footer-copy {
+      font-size: 0.72rem;
+      color: #5c4f38;
+    }
+
+    .footer-copy a {
+      color: var(--amber-dark);
+      text-decoration: none;
+    }
+    .footer-copy a:hover { color: var(--amber); }
+    .footer-copy a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link" aria-label="Back to design options">Back to designs</a>
+
+  <nav aria-label="Primary navigation">
+    <a href="#principles">Principles</a>
+    <a href="#code">Code</a>
+    <a href="#features">Features</a>
+    <a href="#start">Get Started</a>
+  </nav>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-inner">
+        <div class="hero-label">A Language at the Edge</div>
+        <h1 id="hero-title" class="hero-title">Base<span class="light">line</span></h1>
+        <p class="hero-desc">
+          Strongly typed. Effect-tracked. Verified at compile time.
+          Standing at the boundary between what code promises and what it proves.
+        </p>
+        <div class="hero-cta">
+          <a href="https://github.com/baseline-lang" class="btn-primary">View on GitHub</a>
+          <a href="#code" class="btn-outline">See Examples</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- PRINCIPLES -->
+    <section class="principles" id="principles" aria-labelledby="principles-title">
+      <div class="principles-inner">
+        <div class="section-label">Core Principles</div>
+        <h2 id="principles-title" class="section-title">Three pillars. One foundation.</h2>
+        <div class="panels-row" role="list">
+          <div class="panel" role="listitem">
+            <div class="panel-number" aria-hidden="true">01</div>
+            <h3 class="panel-title">The Type Is the Spec</h3>
+            <p class="panel-desc">
+              Types encode correctness using refinements. A Port is not just an Int --
+              it is an integer between 1 and 65535, proven at compile time.
+              The type carries the truth.
+            </p>
+          </div>
+          <div class="panel" role="listitem">
+            <div class="panel-number" aria-hidden="true">02</div>
+            <h3 class="panel-title">Effects Are Data</h3>
+            <p class="panel-desc">
+              Side effects are explicit capabilities tracked in type signatures.
+              Console, Http, Fs -- each is declared, each is enforced.
+              The boundary is the type.
+            </p>
+          </div>
+          <div class="panel" role="listitem">
+            <div class="panel-number" aria-hidden="true">03</div>
+            <h3 class="panel-title">LLM-Native</h3>
+            <p class="panel-desc">
+              Designed for machine generation with unambiguous syntax.
+              AI agents are sandboxed by the effect system -- they can only
+              access what you explicitly grant.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CODE -->
+    <section class="code-section" id="code" aria-labelledby="code-title">
+      <div class="code-inner">
+        <div class="section-label">Code</div>
+        <h2 id="code-title" class="section-title">Modular. Clear. Verified.</h2>
+
+        <div class="solar-grid">
+          <div class="solar-cell">
+            <div class="solar-header">
+              <span class="solar-title">Hello World</span>
+              <span class="solar-file">hello.bl</span>
+            </div>
+            <pre><code><span class="annot">@prelude</span><span class="punct">(</span><span class="param">script</span><span class="punct">)</span>
+
+<span class="fn">greet</span> <span class="op">:</span> <span class="type">String</span> <span class="op">-></span> <span class="type">String</span>
+<span class="fn">greet</span> <span class="op">=</span> <span class="op">|</span><span class="param">name</span><span class="op">|</span> <span class="str">"Hello, ${name}!"</span>
+
+<span class="fn">main!</span> <span class="op">:</span> <span class="type">()</span> <span class="op">-></span> <span class="effect">{Console}</span> <span class="type">()</span>
+<span class="fn">main!</span> <span class="op">=</span> <span class="punct">{</span>
+  <span class="effect">Console</span><span class="punct">.</span><span class="fn">print!</span><span class="punct">(</span><span class="fn">greet</span><span class="punct">(</span><span class="str">"World"</span><span class="punct">))</span>
+<span class="punct">}</span></code></pre>
+          </div>
+
+          <div class="solar-cell">
+            <div class="solar-header">
+              <span class="solar-title">Refinement Types</span>
+              <span class="solar-file">types.bl</span>
+            </div>
+            <pre><code><span class="kw">type</span> <span class="type">Port</span> <span class="op">=</span> <span class="type">Int</span> <span class="kw">where</span> <span class="num">1</span> <span class="op">&lt;=</span> <span class="param">self</span> <span class="op">&lt;=</span> <span class="num">65535</span>
+
+<span class="fn">listen</span> <span class="op">:</span> <span class="type">Port</span> <span class="op">-></span> <span class="effect">{Net}</span> <span class="type">Server</span>
+<span class="fn">listen</span> <span class="op">=</span> <span class="op">|</span><span class="param">port</span><span class="op">|</span>
+  <span class="comment">// port is GUARANTEED</span>
+  <span class="comment">// to be 1-65535 here</span>
+  <span class="op">...</span></code></pre>
+          </div>
+
+          <div class="solar-cell">
+            <div class="solar-header">
+              <span class="solar-title">Pipe Composition</span>
+              <span class="solar-file">pipes.bl</span>
+            </div>
+            <pre><code><span class="kw">let</span> <span class="param">chained</span> <span class="op">=</span> <span class="param">nums</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span>
+    <span class="op">|</span><span class="param">x</span><span class="op">|</span> <span class="param">x</span> <span class="op">*</span> <span class="num">2</span><span class="punct">)</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">filter</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span>
+    <span class="param">is_even</span><span class="punct">)</span>
+  <span class="op">|></span> <span class="op">|</span><span class="param">xs</span><span class="op">|</span> <span class="type">List</span><span class="punct">.</span><span class="fn">fold</span><span class="punct">(</span><span class="param">xs</span><span class="punct">,</span>
+    <span class="num">0</span><span class="punct">,</span> <span class="op">|</span><span class="param">acc</span><span class="punct">,</span> <span class="param">x</span><span class="op">|</span> <span class="param">acc</span> <span class="op">+</span> <span class="param">x</span><span class="punct">)</span></code></pre>
+          </div>
+
+          <div class="solar-cell wide">
+            <div class="solar-header">
+              <span class="solar-title">Effect-Based Security</span>
+              <span class="solar-file">sandbox.bl</span>
+            </div>
+            <pre><code><span class="fn">agent_task!</span> <span class="op">:</span> <span class="type">Input</span> <span class="op">-></span> <span class="effect">{Log, Db.read}</span> <span class="type">Output</span>
+<span class="fn">agent_task!</span> <span class="op">=</span> <span class="op">|</span><span class="param">input</span><span class="op">|</span>
+  <span class="effect">Log</span><span class="punct">.</span><span class="fn">info!</span><span class="punct">(</span><span class="str">"Processing ${input}"</span><span class="punct">)</span>
+  <span class="kw">let</span> <span class="param">data</span> <span class="op">=</span> <span class="effect">Db</span><span class="punct">.</span><span class="fn">query!</span><span class="punct">(</span><span class="str">"SELECT * FROM items"</span><span class="punct">)</span>
+  <span class="comment">// Fs.delete!("important.txt")  // COMPILE ERROR: Fs not in effect set</span>
+  <span class="fn">transform</span><span class="punct">(</span><span class="param">data</span><span class="punct">)</span></code></pre>
+          </div>
+
+          <div class="solar-cell">
+            <div class="solar-header">
+              <span class="solar-title">HTTP Server</span>
+              <span class="solar-file">server.bl</span>
+            </div>
+            <pre><code><span class="annot">@prelude</span><span class="punct">(</span><span class="param">server</span><span class="punct">)</span>
+
+<span class="fn">build_app</span> <span class="op">:</span> <span class="type">()</span> <span class="op">-></span> <span class="type">Router</span>
+<span class="fn">build_app</span> <span class="op">=</span> <span class="op">||</span> <span class="punct">{</span>
+  <span class="type">Router</span><span class="punct">.</span><span class="fn">new</span><span class="punct">()</span>
+    <span class="op">|></span> <span class="type">Router</span><span class="punct">.</span><span class="fn">get</span><span class="punct">(</span><span class="str">"/hello"</span><span class="punct">,</span>
+      <span class="param">hello_handler</span><span class="punct">)</span>
+    <span class="op">|></span> <span class="type">Router</span><span class="punct">.</span><span class="fn">post</span><span class="punct">(</span><span class="str">"/echo"</span><span class="punct">,</span>
+      <span class="param">echo_handler</span><span class="punct">)</span>
+<span class="punct">}</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="features" id="features" aria-labelledby="features-title">
+      <div class="features-inner">
+        <div class="section-label">Capabilities</div>
+        <h2 id="features-title" class="section-title">Built for the horizon</h2>
+        <div class="module-grid" role="list">
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">Refinement Types</h3>
+            <p class="module-desc">Value constraints encoded and proven at compile time</p>
+          </div>
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">Algebraic Effects</h3>
+            <p class="module-desc">Side effects as explicit, tracked capabilities</p>
+          </div>
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">Pattern Matching</h3>
+            <p class="module-desc">Exhaustive matches for algebraic data types</p>
+          </div>
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">Pipe Operator</h3>
+            <p class="module-desc">Left-to-right data composition with |></p>
+          </div>
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">ML-Style Syntax</h3>
+            <p class="module-desc">name : Sig = body -- contracts first</p>
+          </div>
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">Sum Types</h3>
+            <p class="module-desc">Discriminated unions for domain modeling</p>
+          </div>
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">Records</h3>
+            <p class="module-desc">Structural types, named fields, dot access</p>
+          </div>
+          <div class="module-cell" role="listitem">
+            <h3 class="module-title">Security Sandbox</h3>
+            <p class="module-desc">Effect-based capability control for AI agents</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TARGETS -->
+    <section aria-labelledby="targets-heading" style="padding: 80px 24px;">
+      <div style="max-width: 1200px; margin: 0 auto;">
+        <div class="section-label">Performance</div>
+        <h2 id="targets-heading" class="section-title">Engineered for scale</h2>
+      </div>
+      <div class="targets-inner">
+        <div class="target-cell">
+          <div class="target-value">&lt;200ms</div>
+          <div class="target-label">Compilation</div>
+        </div>
+        <div class="target-cell">
+          <div class="target-value">~C</div>
+          <div class="target-label">Runtime (within 10%)</div>
+        </div>
+        <div class="target-cell">
+          <div class="target-value">&lt;5MB</div>
+          <div class="target-label">Binary Size</div>
+        </div>
+        <div class="target-cell">
+          <div class="target-value">WASM</div>
+          <div class="target-label">Target Support</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- INFLUENCES -->
+    <section class="influences" aria-label="Language influences">
+      <div class="influences-label">Influenced By</div>
+      <div class="influences-row">
+        <span>ML / OCaml</span>
+        <span>Rust</span>
+        <span>Koka</span>
+        <span>Liquid Haskell</span>
+        <span>Elm</span>
+        <span>F#</span>
+      </div>
+    </section>
+
+    <!-- GET STARTED -->
+    <section class="get-started" id="start" aria-labelledby="gs-title">
+      <div class="gs-inner">
+        <div class="gs-label">The Horizon Awaits</div>
+        <h2 id="gs-title" class="gs-title">Build at the Edge</h2>
+        <p class="gs-desc">
+          Baseline is in active development. Like the sea wall stretching to the horizon,
+          we are building something vast. Explore the examples, follow the project,
+          and help define verified programming.
+        </p>
+        <div class="gs-cta">
+          <a href="https://github.com/baseline-lang" class="btn-gold">View on GitHub</a>
+          <a href="#code" class="btn-dark-outline">Explore Code</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p class="footer-tagline">Standing at the edge of something vast.</p>
+    <p class="footer-copy">
+      Baseline Programming Language &middot; <a href="index.html">Design Concepts</a>
+    </p>
+  </footer>
+</body>
+</html>

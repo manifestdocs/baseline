@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline -- A Language for Connected Systems</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    :root {
+      --bg: #fffff8;
+      --text: #111111;
+      --text-light: #555555;
+      --text-lighter: #888888;
+      --red: #a00000;
+      --red-light: #c44;
+      --rule: #c8c8b8;
+      --rule-light: #e0e0d8;
+      --code-bg: #f4f4ec;
+      --sidenote-text: #666666;
+      --serif: Georgia, 'Times New Roman', 'Palatino Linotype', 'Book Antiqua', Palatino, serif;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
+    }
+
+    html {
+      font-size: 15px;
+    }
+
+    body {
+      font-family: var(--serif);
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.72;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+
+    ::selection {
+      background: rgba(160, 0, 0, 0.15);
+    }
+
+    /* ========== TUFTE LAYOUT ========== */
+
+    .tufte-page {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 0 5%;
+    }
+
+    article {
+      padding-top: 60px;
+      padding-bottom: 100px;
+      counter-reset: sidenote-counter;
+    }
+
+    section {
+      margin-bottom: 3rem;
+    }
+
+    /* Body text: 55% column, leaving 45% for sidenotes */
+    .body-text {
+      width: 55%;
+      position: relative;
+    }
+
+    @media (max-width: 1100px) {
+      .body-text { width: 70%; }
+    }
+
+    @media (max-width: 768px) {
+      .body-text { width: 100%; }
+    }
+
+    p {
+      margin-bottom: 1.1em;
+      hanging-punctuation: first last;
+    }
+
+    /* ========== LINKS ========== */
+    a {
+      color: var(--red);
+      text-decoration: none;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.15s;
+    }
+    a:hover { border-bottom-color: var(--red); }
+    a:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+
+    /* ========== BACK LINK ========== */
+    .back-link {
+      position: fixed;
+      top: 20px;
+      left: 24px;
+      z-index: 100;
+      font-family: var(--serif);
+      font-size: 0.8rem;
+      color: var(--text-lighter);
+      letter-spacing: 0.04em;
+      padding: 6px 12px;
+      border: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+      background: var(--bg);
+    }
+    .back-link:hover { color: var(--red); border-color: var(--red); border-bottom-color: var(--red); }
+
+    /* ========== HEADER ========== */
+    .page-header {
+      padding: 80px 0 48px;
+      border-bottom: 1px solid var(--rule);
+      margin-bottom: 3.5rem;
+    }
+
+    .page-header .overline {
+      font-size: 0.8rem;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--text-lighter);
+      margin-bottom: 12px;
+      display: block;
+      font-family: var(--serif);
+    }
+
+    h1 {
+      font-family: var(--serif);
+      font-size: clamp(2.6rem, 6vw, 4rem);
+      font-weight: 400;
+      letter-spacing: -0.01em;
+      line-height: 1.1;
+      color: var(--red);
+      margin-bottom: 16px;
+    }
+
+    .page-header .subtitle {
+      font-size: 1.1rem;
+      color: var(--text-light);
+      line-height: 1.72;
+      max-width: 33em;
+      margin-bottom: 28px;
+    }
+
+    .cta-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      padding: 10px 24px;
+      background: var(--red);
+      color: var(--bg);
+      font-family: var(--serif);
+      font-size: 0.88rem;
+      text-decoration: none;
+      border: none;
+      border-bottom: none;
+      letter-spacing: 0.02em;
+      transition: background 0.2s;
+      min-height: 44px;
+    }
+    .btn-primary:hover { background: var(--red-light); border-bottom: none; }
+    .btn-primary:focus-visible { outline: 2px solid var(--text); outline-offset: 3px; }
+
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      padding: 10px 24px;
+      background: transparent;
+      color: var(--text);
+      font-family: var(--serif);
+      font-size: 0.88rem;
+      text-decoration: none;
+      border: 1px solid var(--rule);
+      border-bottom: 1px solid var(--rule);
+      letter-spacing: 0.02em;
+      transition: border-color 0.2s, color 0.2s;
+      min-height: 44px;
+    }
+    .btn-secondary:hover { border-color: var(--red); color: var(--red); }
+    .btn-secondary:focus-visible { outline: 2px solid var(--red); outline-offset: 3px; }
+
+    /* ========== HEADINGS ========== */
+    h2 {
+      font-family: var(--serif);
+      font-size: 1.65rem;
+      font-weight: 400;
+      font-style: italic;
+      color: var(--text);
+      margin-bottom: 1rem;
+      margin-top: 0.5rem;
+    }
+
+    h3 {
+      font-family: var(--serif);
+      font-size: 1.05rem;
+      font-weight: 400;
+      font-style: italic;
+      color: var(--text);
+      margin-bottom: 0.4rem;
+      margin-top: 1.8rem;
+    }
+
+    /* Section numbers */
+    .section-num {
+      font-family: var(--serif);
+      font-size: 0.82rem;
+      font-weight: 400;
+      color: var(--text-lighter);
+      display: block;
+      margin-bottom: 2px;
+    }
+
+    /* ========== SIDENOTES ========== */
+    .sidenote,
+    .marginnote {
+      float: right;
+      clear: right;
+      margin-right: -48%;
+      width: 43%;
+      margin-top: 0.3rem;
+      margin-bottom: 1.4rem;
+      font-size: 0.82rem;
+      line-height: 1.55;
+      color: var(--sidenote-text);
+      position: relative;
+    }
+
+    .sidenote { counter-increment: sidenote-counter; }
+
+    .sidenote::before {
+      content: counter(sidenote-counter);
+      font-size: 0.7rem;
+      position: relative;
+      top: -0.3em;
+      color: var(--red);
+      margin-right: 4px;
+      font-weight: 600;
+    }
+
+    /* Sidenote reference number in body text */
+    .sidenote-ref {
+      font-size: 0.7rem;
+      position: relative;
+      top: -0.35em;
+      color: var(--red);
+      font-weight: 600;
+      margin-left: 1px;
+    }
+
+    .sidenote-ref::after {
+      counter-increment: sidenote-counter;
+      content: counter(sidenote-counter);
+    }
+
+    .sidenote code,
+    .marginnote code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      color: var(--text);
+      background: var(--code-bg);
+      padding: 0 3px;
+    }
+
+    /* Mobile: sidenotes become block notes */
+    @media (max-width: 1100px) {
+      .sidenote,
+      .marginnote {
+        float: none;
+        display: block;
+        margin: 1.2rem 0;
+        width: 100%;
+        padding: 14px 18px;
+        background: var(--code-bg);
+        border-left: 3px solid var(--rule);
+        font-size: 0.88rem;
+      }
+    }
+
+    /* ========== MARGIN FIGURES ========== */
+    .margin-figure {
+      float: right;
+      clear: right;
+      margin-right: -48%;
+      width: 43%;
+      margin-top: 0.3rem;
+      margin-bottom: 2rem;
+    }
+
+    .margin-figure pre {
+      background: var(--code-bg);
+      border: 1px solid var(--rule-light);
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.72rem;
+      line-height: 1.6;
+      color: var(--text);
+      tab-size: 2;
+    }
+
+    .margin-figure figcaption {
+      font-size: 0.78rem;
+      color: var(--sidenote-text);
+      margin-top: 6px;
+      line-height: 1.5;
+      font-style: italic;
+    }
+
+    @media (max-width: 1100px) {
+      .margin-figure {
+        float: none;
+        width: 100%;
+        margin: 1.5rem 0;
+      }
+      .margin-figure pre { font-size: 0.78rem; }
+    }
+
+    /* ========== FULL-WIDTH FIGURES ========== */
+    .full-width {
+      width: 100%;
+      margin: 2rem 0;
+      clear: both;
+    }
+
+    .full-width pre {
+      background: var(--code-bg);
+      border: 1px solid var(--rule-light);
+      padding: 20px 24px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 0.8rem;
+      line-height: 1.65;
+      color: var(--text);
+      tab-size: 2;
+    }
+
+    .full-width figcaption {
+      font-size: 0.82rem;
+      color: var(--sidenote-text);
+      margin-top: 8px;
+      line-height: 1.5;
+      font-style: italic;
+    }
+
+    /* ========== INLINE CODE ========== */
+    code {
+      font-family: var(--mono);
+      font-size: 0.85em;
+      color: var(--text);
+      background: var(--code-bg);
+      padding: 1px 4px;
+    }
+
+    pre code {
+      background: none;
+      padding: 0;
+      color: var(--text);
+      font-size: inherit;
+    }
+
+    /* ========== SYNTAX HIGHLIGHTING (restrained, bookish) ========== */
+    .kw { color: var(--red); }
+    .type { color: #1a5276; }
+    .str { color: #2e7d32; }
+    .comment { color: var(--text-lighter); font-style: italic; }
+    .effect { color: #6a1b9a; }
+    .op { color: var(--text-light); }
+    .fn { color: var(--text); }
+    .num { color: #0d47a1; }
+    .punct { color: var(--text-lighter); }
+    .param { color: var(--text); }
+    .annot { color: #4a148c; }
+
+    /* ========== EPIGRAPH ========== */
+    .epigraph {
+      margin: 0 0 2rem;
+      padding: 0;
+      width: 55%;
+    }
+
+    .epigraph blockquote {
+      font-style: italic;
+      color: var(--text-light);
+      margin-bottom: 0.4em;
+      font-size: 1rem;
+      line-height: 1.65;
+    }
+
+    .epigraph .attribution {
+      font-style: normal;
+      font-size: 0.82rem;
+      color: var(--text-lighter);
+    }
+
+    @media (max-width: 768px) {
+      .epigraph { width: 100%; }
+    }
+
+    /* ========== DATA TABLE (Tufte minimal: top, header, bottom rules only) ========== */
+    .data-table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      margin: 1.5rem 0 2rem;
+      clear: both;
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+      line-height: 1.5;
+    }
+
+    .data-table thead {
+      border-top: 2px solid var(--text);
+      border-bottom: 1px solid var(--text);
+    }
+
+    .data-table thead th {
+      font-weight: 400;
+      font-style: italic;
+      color: var(--text);
+      text-align: left;
+      padding: 8px 16px 8px 0;
+      font-size: 0.88rem;
+    }
+
+    .data-table tbody {
+      border-bottom: 2px solid var(--text);
+    }
+
+    .data-table tbody td {
+      padding: 6px 16px 6px 0;
+      vertical-align: top;
+    }
+
+    .data-table tbody td:first-child {
+      font-style: italic;
+      color: var(--text);
+      white-space: nowrap;
+    }
+
+    .data-table .col-old {
+      color: var(--text-lighter);
+    }
+
+    .data-table .col-new {
+      color: var(--text);
+    }
+
+    /* Alternating light background for readability (Tufte-approved subtle banding) */
+    .data-table tbody tr:nth-child(even) {
+      background: rgba(0,0,0,0.018);
+    }
+
+    /* ========== SMALL MULTIPLES ========== */
+    .small-multiples {
+      display: flex;
+      gap: 2.5rem;
+      flex-wrap: wrap;
+      margin: 1.5rem 0 1.5rem;
+      clear: both;
+    }
+
+    .datum {
+      min-width: 80px;
+    }
+
+    .datum-value {
+      font-family: var(--serif);
+      font-size: 1.5rem;
+      font-weight: 400;
+      color: var(--red);
+      line-height: 1.2;
+    }
+
+    .datum-label {
+      font-size: 0.78rem;
+      color: var(--text-lighter);
+      margin-top: 2px;
+    }
+
+    /* ========== FEATURE LIST ========== */
+    .feature-list {
+      list-style: none;
+      margin: 1.2rem 0;
+      clear: both;
+    }
+
+    .feature-list li {
+      padding: 6px 0;
+      border-bottom: 1px solid var(--rule-light);
+      display: flex;
+      gap: 16px;
+      align-items: baseline;
+      font-size: 0.92rem;
+    }
+
+    .feature-list li:last-child {
+      border-bottom: none;
+    }
+
+    .feature-name {
+      font-style: italic;
+      color: var(--text);
+      white-space: nowrap;
+      min-width: 160px;
+    }
+
+    .feature-desc {
+      color: var(--text-light);
+      line-height: 1.55;
+    }
+
+    @media (max-width: 640px) {
+      .feature-list li {
+        flex-direction: column;
+        gap: 2px;
+      }
+      .feature-name { min-width: 0; }
+    }
+
+    /* ========== SECTION DIVIDERS ========== */
+    .section-divider {
+      border: none;
+      margin: 3rem 0;
+      clear: both;
+    }
+
+    /* Fleuron / section break */
+    .section-divider::after {
+      content: '\2766';
+      display: block;
+      text-align: center;
+      font-size: 1.2rem;
+      color: var(--rule);
+    }
+
+    /* ========== FOOTER ========== */
+    .page-footer {
+      border-top: 1px solid var(--rule);
+      padding: 32px 0;
+      font-size: 0.82rem;
+      color: var(--text-lighter);
+      clear: both;
+    }
+
+    .page-footer a {
+      color: var(--text-lighter);
+    }
+    .page-footer a:hover { color: var(--red); }
+
+    /* ========== STRONG / EM ========== */
+    strong { color: var(--text); font-weight: 600; }
+
+    /* ========== CLEARFIX ========== */
+    .clearfix::after {
+      content: '';
+      display: table;
+      clear: both;
+    }
+
+    /* ========== NEWTHOUGHT (Tufte's small-caps leading text) ========== */
+    .newthought {
+      font-variant: small-caps;
+      font-size: 1.1em;
+      letter-spacing: 0.03em;
+    }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link" aria-label="Back to design options">Back to designs</a>
+
+  <div class="tufte-page">
+    <article>
+      <!-- HEADER -->
+      <header class="page-header body-text">
+        <span class="overline">A Language for Connected Systems</span>
+        <h1>Baseline</h1>
+        <p class="subtitle">
+          Types encode your intent. Effects constrain your dependencies. The compiler
+          proves the rest. A language for services, systems, and the code that
+          machines write on your behalf.
+        </p>
+        <div class="cta-row">
+          <a href="https://github.com/baseline-lang" class="btn-primary">View on GitHub</a>
+          <a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md" class="btn-secondary">Read the Specification</a>
+        </div>
+      </header>
+
+      <main>
+
+        <!-- ==================== 1. THE PROBLEM ==================== -->
+        <section id="problems" aria-labelledby="s1-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">1.</span>
+            <h2 id="s1-heading">Structural Failures</h2>
+          </div>
+
+          <div class="epigraph">
+            <blockquote>
+              A doctor can bury his mistakes, but an architect can only advise
+              his clients to plant vines.
+            </blockquote>
+            <p class="attribution">&mdash; Frank Lloyd Wright</p>
+          </div>
+
+          <div class="body-text clearfix">
+            <h3>Every failure path is visible</h3>
+
+            <span class="sidenote">
+              A load-bearing wall looks identical to a partition wall until you remove it.
+              Null, unchecked exceptions, and implicit <code>nil</code> are the partition walls
+              of programming&thinsp;&mdash;&thinsp;they look harmless until the structure collapses at runtime.
+            </span>
+
+            <p>
+              <span class="newthought">Baseline eliminates</span> null, exceptions, and silent failures.
+              <code>Result&lt;T,&thinsp;E&gt;</code> and <code>Option&lt;T&gt;</code> are the only error
+              paths. Pattern matching is exhaustive&thinsp;&mdash;&thinsp;the compiler rejects code that leaves any
+              branch unhandled. If a function can fail, its signature says so. If it returns a
+              value, that value exists.
+            </p>
+
+            <p>
+              Other languages offer variations on this theme but undermine it in practice. Go returns
+              <code>(value, error)</code> tuples but lets you ignore the error. Java introduced checked
+              exceptions but made them so cumbersome that developers catch-and-swallow by reflex.
+              Baseline makes the safe path the only path.
+            </p>
+          </div>
+
+          <div class="body-text clearfix">
+            <h3>One language, not two</h3>
+
+            <figure class="margin-figure" aria-label="Async as an effect">
+              <pre><code><span class="comment">// Async is an effect, not a color</span>
+<span class="fn">fetch_all!</span> <span class="op">:</span> <span class="type">List&lt;Url&gt;</span> <span class="op">&rarr;</span> <span class="effect">{Http, Async}</span> <span class="type">List&lt;Response&gt;</span>
+<span class="fn">fetch_all!</span> <span class="op">=</span> <span class="op">|</span><span class="param">urls</span><span class="op">|</span>
+  <span class="param">urls</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(|</span><span class="param">url</span><span class="op">|</span> <span class="fn">spawn!</span><span class="punct">(||</span> <span class="type">Http</span><span class="punct">.</span><span class="fn">get!</span><span class="punct">(</span><span class="param">url</span><span class="punct">)))</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(</span><span class="type">Fiber</span><span class="punct">.</span><span class="fn">await!</span><span class="punct">)</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;1. &ensp;Direct-style code. <code>{Async}</code> appears in the effect set,
+                not in the function&rsquo;s return type. No <code>.await</code>, no <code>Promise&lt;T&gt;</code>.
+              </figcaption>
+            </figure>
+
+            <p>
+              <span class="newthought">Async in Baseline</span> is an effect, not a function color.
+              Write direct-style code. Declare <code>{Async}</code> in the effect set. The same
+              function works synchronously or asynchronously depending on which handler is provided
+              at the call site. No <code>.await</code>, no <code>Promise&lt;T&gt;</code>, no split
+              between sync and async worlds.
+            </p>
+
+            <p>
+              This matters because the sync/async divide is architectural debt. It doubles
+              the API surface of every library that touches I/O. It forces callers to choose
+              a color before they know what they need. Baseline removes the choice by removing
+              the distinction.
+            </p>
+          </div>
+
+          <div class="body-text clearfix">
+            <h3>Effects are capabilities, not surprises</h3>
+
+            <span class="sidenote">
+              In materials science, a composite&rsquo;s failure mode depends on its weakest interface.
+              In software, that interface is the dependency with unconstrained capabilities.
+              The npm <code>event-stream</code> incident (2018) exploited this: a transitive
+              dependency gained access to the filesystem, network, and user data because
+              nothing in the language restricted it.
+            </span>
+
+            <p>
+              <span class="newthought">A function typed</span>
+              <code>{Console,&thinsp;Http}</code> can print and make HTTP calls&thinsp;&mdash;&thinsp;and nothing
+              else. Effects in Baseline are capabilities declared in type signatures and enforced
+              by the compiler. A dependency cannot access the filesystem unless you grant it
+              <code>{Fs}</code>. It cannot open a socket unless you grant <code>{Http}</code>.
+            </p>
+
+            <p>
+              This is a strict improvement over every mainstream language. Rust enforces memory
+              safety but places no constraints on I/O. Go, Python, and JavaScript impose none at all.
+              Baseline treats side effects as a first-class security boundary.
+            </p>
+          </div>
+        </section>
+
+        <hr class="section-divider" />
+
+        <!-- ==================== 2. CONNECTED SYSTEMS ==================== -->
+        <section id="systems" aria-labelledby="s2-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">2.</span>
+            <h2 id="s2-heading">HTTP as a Language Primitive</h2>
+          </div>
+
+          <div class="body-text clearfix">
+            <p>
+              <span class="newthought">Routes, parameters,</span> return types, and error cases
+              are part of the type system. Your API contract is checked at compile time, not
+              validated at runtime by middleware. No OpenAPI sidecar. No schema drift between
+              your spec and your code. They are the same artifact.
+            </p>
+
+            <figure class="full-width" aria-label="First-class API specification">
+              <pre><code><span class="annot">@api</span> <span class="type">UserApi</span>
+
+<span class="kw">type</span> <span class="type">Endpoints</span> <span class="op">=</span> <span class="punct">{</span>
+  <span class="annot">@route</span> <span class="str">"GET /users"</span>
+  <span class="annot">@returns</span> <span class="type">List&lt;User&gt;</span>
+  <span class="fn">list_users</span><span class="punct">,</span>
+
+  <span class="annot">@route</span> <span class="str">"GET /users/:id"</span>
+  <span class="annot">@param</span> <span class="param">id</span><span class="op">:</span> <span class="type">Int</span> <span class="annot">@positive</span>
+  <span class="annot">@returns</span> <span class="type">User</span>
+  <span class="annot">@error</span> <span class="num">404</span> <span class="type">NotFound</span>
+  <span class="fn">get_user</span><span class="punct">,</span>
+
+  <span class="annot">@route</span> <span class="str">"POST /users"</span>
+  <span class="annot">@body</span> <span class="type">UserCreate</span>
+  <span class="annot">@returns</span> <span class="type">User</span>
+  <span class="annot">@error</span> <span class="num">400</span> <span class="type">ValidationError</span>
+  <span class="fn">create_user</span><span class="punct">,</span>
+<span class="punct">}</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;2. &ensp;A complete API specification in the type system. The compiler
+                knows every route, parameter constraint, return type, and error case.
+              </figcaption>
+            </figure>
+          </div>
+
+          <div class="body-text clearfix">
+            <h3>Validate once, trust everywhere</h3>
+
+            <figure class="margin-figure" aria-label="Boundary parsing pattern">
+              <pre><code><span class="fn">handle_request!</span> <span class="op">:</span> <span class="type">RawRequest</span> <span class="op">&rarr;</span> <span class="effect">{Http, Db}</span> <span class="type">Response</span>
+<span class="fn">handle_request!</span> <span class="op">=</span> <span class="op">|</span><span class="param">raw</span><span class="op">|</span>
+  <span class="kw">let</span> <span class="param">request</span> <span class="op">=</span> <span class="type">Request</span><span class="punct">.</span><span class="fn">parse</span><span class="punct">(</span><span class="param">raw</span><span class="punct">)</span><span class="op">?</span>
+  <span class="kw">let</span> <span class="param">user_id</span> <span class="op">=</span> <span class="type">UserId</span><span class="punct">.</span><span class="fn">parse</span><span class="punct">(</span><span class="param">request</span><span class="punct">.</span><span class="param">user_id</span><span class="punct">)</span><span class="op">?</span>
+  <span class="kw">let</span> <span class="param">email</span> <span class="op">=</span> <span class="type">Email</span><span class="punct">.</span><span class="fn">parse</span><span class="punct">(</span><span class="param">request</span><span class="punct">.</span><span class="param">email</span><span class="punct">)</span><span class="op">?</span>
+  <span class="fn">process!</span><span class="punct">(</span><span class="param">user_id</span><span class="punct">,</span> <span class="param">email</span><span class="punct">)</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;3. &ensp;Raw input enters through parsing functions that return
+                refined types. Internal code operates on values whose constraints are proven.
+              </figcaption>
+            </figure>
+
+            <p>
+              <span class="newthought"><code>UserId.parse</code> returns</span> a <code>UserId</code>&thinsp;&mdash;&thinsp;guaranteed
+              positive. <code>Email.parse</code> returns an <code>Email</code>&thinsp;&mdash;&thinsp;guaranteed
+              well-formed. Once data crosses the boundary, internal functions receive refined types.
+              No defensive re-validation. No scattered checks. No &ldquo;someone else must have
+              validated this&rdquo; assumptions.
+            </p>
+
+            <p>
+              The type system makes those assumptions provably correct. A function that accepts
+              a <code>UserId</code> knows&thinsp;&mdash;&thinsp;by construction&thinsp;&mdash;&thinsp;that the value is valid.
+            </p>
+          </div>
+
+          <div class="body-text clearfix">
+            <h3>Compositional routing</h3>
+
+            <figure class="margin-figure" aria-label="Router pipe composition">
+              <pre><code><span class="fn">build_app</span> <span class="op">:</span> <span class="type">()</span> <span class="op">&rarr;</span> <span class="type">Router</span>
+<span class="fn">build_app</span> <span class="op">=</span> <span class="op">||</span> <span class="punct">{</span>
+  <span class="type">Router</span><span class="punct">.</span><span class="fn">new</span><span class="punct">()</span>
+    <span class="op">|&gt;</span> <span class="type">Router</span><span class="punct">.</span><span class="fn">get</span><span class="punct">(</span><span class="str">"/hello"</span><span class="punct">,</span> <span class="param">hello_handler</span><span class="punct">)</span>
+    <span class="op">|&gt;</span> <span class="type">Router</span><span class="punct">.</span><span class="fn">post</span><span class="punct">(</span><span class="str">"/echo"</span><span class="punct">,</span> <span class="param">echo_handler</span><span class="punct">)</span>
+    <span class="op">|&gt;</span> <span class="type">Router</span><span class="punct">.</span><span class="fn">get</span><span class="punct">(</span><span class="str">"/users"</span><span class="punct">,</span> <span class="param">list_users</span><span class="punct">)</span>
+    <span class="op">|&gt;</span> <span class="type">Router</span><span class="punct">.</span><span class="fn">post</span><span class="punct">(</span><span class="str">"/users"</span><span class="punct">,</span> <span class="param">create_user</span><span class="punct">)</span>
+<span class="punct">}</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;4. &ensp;Routes compose via the pipe operator. The router is a value,
+                not a global configuration object.
+              </figcaption>
+            </figure>
+
+            <p>
+              <span class="newthought">The router is a value,</span> not a global configuration object.
+              Build it by composing functions with <code>|&gt;</code>. Split it across modules.
+              Type-check it like any other code. Middleware is function composition&thinsp;&mdash;&thinsp;no
+              separate plugin system, no decorator magic, no framework lock-in.
+            </p>
+          </div>
+        </section>
+
+        <hr class="section-divider" />
+
+        <!-- ==================== 3. CONCURRENCY ==================== -->
+        <section id="concurrency" aria-labelledby="s3-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">3.</span>
+            <h2 id="s3-heading">Concurrency That Cannot Leak</h2>
+          </div>
+
+          <div class="body-text clearfix">
+            <figure class="margin-figure" aria-label="Structured concurrency">
+              <pre><code><span class="fn">process!</span> <span class="op">:</span> <span class="type">List&lt;Item&gt;</span> <span class="op">&rarr;</span> <span class="effect">{Async}</span> <span class="type">List&lt;Result&gt;</span>
+<span class="fn">process!</span> <span class="op">=</span> <span class="op">|</span><span class="param">items</span><span class="op">|</span>
+  <span class="fn">scope!</span> <span class="op">|</span><span class="param">s</span><span class="op">|</span>
+    <span class="kw">for</span> <span class="param">item</span> <span class="kw">in</span> <span class="param">items</span> <span class="kw">do</span>
+      <span class="param">s</span><span class="punct">.</span><span class="fn">spawn!</span><span class="punct">(||</span> <span class="fn">process_item!</span><span class="punct">(</span><span class="param">item</span><span class="punct">))</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;5. &ensp;Scoped fibers. All spawned work completes or cancels
+                before the scope exits. Initial stack: 2&thinsp;KB, growable.
+              </figcaption>
+            </figure>
+
+            <p>
+              <span class="newthought">Every spawned fiber</span> is scoped to its parent. Parents
+              wait for children. If any fiber fails, its siblings are cancelled. No fire-and-forget
+              tasks. No orphaned coroutines. No resource cleanup callbacks. The structure of
+              your concurrency mirrors the structure of your code.
+            </p>
+
+            <h3>Parallel combinators</h3>
+
+            <span class="sidenote">
+              Same code, different runtimes. On native: thread pool with work-stealing.
+              On browser WASM: single-threaded event loop. On edge workers: async I/O.
+              The scheduler adapts; the code does not change.
+            </span>
+
+            <p>
+              <code>parallel!</code> runs tasks concurrently and collects all results.
+              <code>race!</code> returns the first and cancels the rest. Declare <code>{Async}</code>
+              in the effect set. The runtime handles scheduling.
+            </p>
+
+            <figure class="full-width" aria-label="Parallel and race combinators">
+              <pre><code><span class="comment">// Fan out: run all tasks, collect all results</span>
+<span class="kw">let</span> <span class="param">results</span> <span class="op">=</span> <span class="fn">parallel!</span><span class="punct">([</span>
+  <span class="op">||</span> <span class="fn">fetch_users!</span><span class="punct">(),</span>
+  <span class="op">||</span> <span class="fn">fetch_posts!</span><span class="punct">(),</span>
+  <span class="op">||</span> <span class="fn">fetch_comments!</span><span class="punct">(),</span>
+<span class="punct">])</span>
+
+<span class="comment">// Race: first to finish wins, others are cancelled</span>
+<span class="kw">let</span> <span class="param">fastest</span> <span class="op">=</span> <span class="fn">race!</span><span class="punct">([</span>
+  <span class="op">||</span> <span class="fn">fetch_from_primary!</span><span class="punct">(),</span>
+  <span class="op">||</span> <span class="fn">fetch_from_replica!</span><span class="punct">(),</span>
+<span class="punct">])</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;6. &ensp;Parallel combinators require no setup. Declare <code>{Async}</code>
+                in the effect set and the runtime provides scheduling.
+              </figcaption>
+            </figure>
+          </div>
+
+          <div class="body-text clearfix">
+            <h3>Channels and select</h3>
+
+            <figure class="margin-figure" aria-label="Bounded channels">
+              <pre><code><span class="kw">let</span> <span class="punct">(</span><span class="param">tx</span><span class="punct">,</span> <span class="param">rx</span><span class="punct">)</span> <span class="op">=</span> <span class="type">Channel</span><span class="punct">.</span><span class="fn">bounded</span><span class="op">&lt;</span><span class="type">Int</span><span class="op">&gt;</span><span class="punct">(</span><span class="num">100</span><span class="punct">)</span>
+
+<span class="fn">spawn!</span> <span class="op">||</span>
+  <span class="kw">for</span> <span class="param">i</span> <span class="kw">in</span> <span class="num">1</span><span class="op">..</span><span class="num">1000</span> <span class="kw">do</span>
+    <span class="param">tx</span><span class="punct">.</span><span class="fn">send!</span><span class="punct">(</span><span class="param">i</span><span class="punct">)</span>
+  <span class="param">tx</span><span class="punct">.</span><span class="fn">close!</span><span class="punct">()</span>
+
+<span class="kw">select!</span>
+  <span class="fn">recv!</span><span class="punct">(</span><span class="param">rx1</span><span class="punct">)</span> <span class="kw">as</span> <span class="param">msg</span> <span class="op">&rarr;</span> <span class="fn">handle_a!</span><span class="punct">(</span><span class="param">msg</span><span class="punct">)</span>
+  <span class="fn">recv!</span><span class="punct">(</span><span class="param">rx2</span><span class="punct">)</span> <span class="kw">as</span> <span class="param">msg</span> <span class="op">&rarr;</span> <span class="fn">handle_b!</span><span class="punct">(</span><span class="param">msg</span><span class="punct">)</span>
+  <span class="kw">after</span> <span class="num">5</span><span class="punct">.</span><span class="param">seconds</span> <span class="op">&rarr;</span> <span class="fn">timeout!</span><span class="punct">()</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;7. &ensp;Bounded channels with backpressure.
+                <code>select!</code> multiplexes across channels with timeout support.
+              </figcaption>
+            </figure>
+
+            <p>
+              <span class="newthought">Channels are typed</span> and bounded. Senders block when the
+              buffer is full&thinsp;&mdash;&thinsp;no unbounded memory growth. <code>select!</code> multiplexes
+              across channels with timeout support. The type system prevents sending an <code>Int</code>
+              on a <code>String</code> channel.
+            </p>
+          </div>
+        </section>
+
+        <hr class="section-divider" />
+
+        <!-- ==================== 4. AGENTIC AGE ==================== -->
+        <section id="agentic" aria-labelledby="s4-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">4.</span>
+            <h2 id="s4-heading">A Language Machines Can Reason About</h2>
+          </div>
+
+          <div class="body-text clearfix">
+            <span class="sidenote">
+              A topographic map works because every contour line means one thing. Baseline&rsquo;s
+              type signatures work the same way: one notation for errors (<code>Result</code>),
+              one for effects (the effect set), one for API contracts (<code>@api</code>).
+              Fewer valid interpretations means fewer hallucinated implementations.
+            </span>
+
+            <p>
+              <span class="newthought">The type signature</span> <em>is</em> the specification. One way to
+              handle errors. One way to express side effects. One way to define APIs. When an LLM
+              generates Baseline code, the constrained solution space reduces ambiguity to near zero.
+              If the types check, the implementation is correct by construction.
+            </p>
+
+            <figure class="margin-figure" aria-label="Effect system as sandbox">
+              <pre><code><span class="fn">agent_task!</span> <span class="op">:</span> <span class="type">Input</span> <span class="op">&rarr;</span> <span class="effect">{Log, Db.read}</span> <span class="type">Output</span>
+<span class="fn">agent_task!</span> <span class="op">=</span> <span class="op">|</span><span class="param">input</span><span class="op">|</span>
+  <span class="effect">Log</span><span class="punct">.</span><span class="fn">info!</span><span class="punct">(</span><span class="str">"Processing ${input}"</span><span class="punct">)</span>
+  <span class="kw">let</span> <span class="param">data</span> <span class="op">=</span> <span class="effect">Db</span><span class="punct">.</span><span class="fn">query!</span><span class="punct">(</span><span class="str">"SELECT * FROM items"</span><span class="punct">)</span>
+  <span class="comment">// Fs.delete!("important.txt")</span>
+  <span class="comment">// COMPILE ERROR: Fs not in effect set</span>
+  <span class="fn">transform</span><span class="punct">(</span><span class="param">data</span><span class="punct">)</span></code></pre>
+              <figcaption>
+                Fig.&thinsp;8. &ensp;The effect set <code>{Log, Db.read}</code> is a compiler-enforced
+                sandbox. The agent can log and query&thinsp;&mdash;&thinsp;it cannot delete files, make network calls,
+                or access the filesystem.
+              </figcaption>
+            </figure>
+
+            <p>
+              The effect system makes AI-generated code auditable at a glance.
+              <code>{Log,&thinsp;Db.read}</code> means the function can log and query&thinsp;&mdash;&thinsp;it
+              cannot delete files, open sockets, or touch the filesystem. This is compiler-enforced,
+              not convention. You grant capabilities explicitly; the default is no access.
+            </p>
+
+            <span class="sidenote">
+              The compiler closes the loop:
+              LLM generates &rarr; <code>blc check --json</code> &rarr;
+              structured errors &rarr; LLM fixes &rarr; repeat until clean.
+              The type system is the test suite for structural correctness.
+            </span>
+
+            <p>
+              Structured JSON diagnostics enable automated self-correction. The LLM generates code,
+              the compiler returns machine-readable errors, the LLM applies targeted fixes.
+              Each iteration narrows toward a correct implementation. The type system does the
+              verification; tests cover behavior.
+            </p>
+          </div>
+        </section>
+
+        <hr class="section-divider" />
+
+        <!-- ==================== 5. COMPARISON ==================== -->
+        <section id="comparison" aria-labelledby="s5-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">5.</span>
+            <h2 id="s5-heading">What Changes</h2>
+          </div>
+
+          <div class="full-width">
+            <div class="data-table-wrap" role="region" aria-label="Comparison table" tabindex="0">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th scope="col" style="width: 140px;">Concern</th>
+                    <th scope="col">Status quo</th>
+                    <th scope="col">Baseline</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Error handling</td>
+                    <td class="col-old">Exceptions, null, unchecked tuples</td>
+                    <td class="col-new">Result&lt;T, E&gt; and Option&lt;T&gt; only. Exhaustive matching.</td>
+                  </tr>
+                  <tr>
+                    <td>Side effects</td>
+                    <td class="col-old">Implicit, unconstrained, invisible</td>
+                    <td class="col-new">Declared in type signatures, enforced by compiler</td>
+                  </tr>
+                  <tr>
+                    <td>Async</td>
+                    <td class="col-old">Function coloring, two worlds</td>
+                    <td class="col-new">Direct style. Async is an effect, not a return type.</td>
+                  </tr>
+                  <tr>
+                    <td>API contracts</td>
+                    <td class="col-old">OpenAPI YAML + runtime validation</td>
+                    <td class="col-new">Type-checked @api specs. Code and contract are one.</td>
+                  </tr>
+                  <tr>
+                    <td>Memory safety</td>
+                    <td class="col-old">Borrow checker or GC</td>
+                    <td class="col-new">Regions + Perceus RC. No annotations. No pauses.</td>
+                  </tr>
+                  <tr>
+                    <td>AI code gen</td>
+                    <td class="col-old">Best-effort, validate with tests</td>
+                    <td class="col-new">Types constrain correctness, effects sandbox access</td>
+                  </tr>
+                  <tr>
+                    <td>Concurrency</td>
+                    <td class="col-old">Thread pools, executor config, leaked tasks</td>
+                    <td class="col-new">Scoped fibers. parallel!/race! combinators. No leaks.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <hr class="section-divider" />
+
+        <!-- ==================== 6. FEATURES ==================== -->
+        <section id="features" aria-labelledby="s6-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">6.</span>
+            <h2 id="s6-heading">Language Features</h2>
+            <p>
+              <span class="newthought">Every feature</span> exists because it eliminates a class
+              of bugs or removes a category of boilerplate. Nothing is incidental.
+            </p>
+          </div>
+
+          <ul class="feature-list body-text">
+            <li>
+              <span class="feature-name">Refinement Types</span>
+              <span class="feature-desc"><code>Port = Int where 1 &lt;= self &lt;= 65535</code>. Value constraints proven at compile time, not checked at runtime.</span>
+            </li>
+            <li>
+              <span class="feature-name">Algebraic Effects</span>
+              <span class="feature-desc">Side effects declared in type signatures, enforced by the compiler. Read the signature, know the capabilities.</span>
+            </li>
+            <li>
+              <span class="feature-name">Pattern Matching</span>
+              <span class="feature-desc">Exhaustive by default. The compiler rejects unhandled branches. No fall-through.</span>
+            </li>
+            <li>
+              <span class="feature-name">Pipe Operator</span>
+              <span class="feature-desc"><code>|&gt;</code> chains transformations left to right. Data flow reads like prose.</span>
+            </li>
+            <li>
+              <span class="feature-name">Sum Types</span>
+              <span class="feature-desc">Model domain variants precisely. No stringly-typed enums, no sentinel values.</span>
+            </li>
+            <li>
+              <span class="feature-name">Records</span>
+              <span class="feature-desc">Named fields, dot access, structural typing. Construction is type-safe by default.</span>
+            </li>
+            <li>
+              <span class="feature-name">First-Class HTTP</span>
+              <span class="feature-desc">Routes, parameters, status codes, and error cases checked at compile time.</span>
+            </li>
+            <li>
+              <span class="feature-name">Structured Concurrency</span>
+              <span class="feature-desc">Scoped fibers, parallel combinators, bounded channels. Leaks are compile errors.</span>
+            </li>
+            <li>
+              <span class="feature-name">Region Memory</span>
+              <span class="feature-desc">Arena allocation with O(1) deallocation. No GC pauses. No lifetime annotations.</span>
+            </li>
+            <li>
+              <span class="feature-name">WebAssembly</span>
+              <span class="feature-desc">Primary target. One binary runs on edge, browser, or server.</span>
+            </li>
+            <li>
+              <span class="feature-name">Security Sandbox</span>
+              <span class="feature-desc">Effect system as capability boundary. AI-generated code runs with declared permissions only.</span>
+            </li>
+            <li>
+              <span class="feature-name">JSON Diagnostics</span>
+              <span class="feature-desc">Machine-readable compiler output. LLMs self-correct against structured errors.</span>
+            </li>
+          </ul>
+        </section>
+
+        <hr class="section-divider" />
+
+        <!-- ==================== 7. PERFORMANCE ==================== -->
+        <section id="performance" aria-labelledby="s7-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">7.</span>
+            <h2 id="s7-heading">Performance Targets</h2>
+            <p>
+              <span class="newthought">Fast to compile,</span> fast to start, fast to run.
+              Designed for services that cold-start in milliseconds and run for months.
+            </p>
+
+            <div class="small-multiples">
+              <div class="datum">
+                <div class="datum-value">&lt;200ms</div>
+                <div class="datum-label">Compilation</div>
+              </div>
+              <div class="datum">
+                <div class="datum-value">~C</div>
+                <div class="datum-label">Runtime (within 10%)</div>
+              </div>
+              <div class="datum">
+                <div class="datum-value">&lt;5MB</div>
+                <div class="datum-label">Binary size</div>
+              </div>
+              <div class="datum">
+                <div class="datum-value">WASM</div>
+                <div class="datum-label">Primary target</div>
+              </div>
+            </div>
+
+            <span class="sidenote">
+              Memory safety without a garbage collector: Perceus reference counting
+              with region-based arena allocation. Request-scoped data deallocates in O(1).
+              Regions are inferred from lexical scopes&thinsp;&mdash;&thinsp;no lifetime annotations.
+            </span>
+
+            <p>
+              Baseline synthesizes proven ideas: ML-family type inference and algebraic data types,
+              Koka&rsquo;s algebraic effects, Liquid Haskell&rsquo;s refinement types, Rust&rsquo;s
+              error handling discipline, and Elm&rsquo;s commitment to clear diagnostics.
+              The combination is new. The ingredients are battle-tested.
+            </p>
+          </div>
+        </section>
+
+        <hr class="section-divider" />
+
+        <!-- ==================== 8. GET STARTED ==================== -->
+        <section id="start" aria-labelledby="s8-heading" class="clearfix">
+          <div class="body-text">
+            <span class="section-num">8.</span>
+            <h2 id="s8-heading">Start Building</h2>
+            <p>
+              The compiler, grammar, and core type system are functional.
+              Baseline is in active development and accepting contributors.
+            </p>
+            <div class="cta-row">
+              <a href="https://github.com/baseline-lang" class="btn-primary">View on GitHub</a>
+              <a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md" class="btn-secondary">Read the Specification</a>
+            </div>
+          </div>
+        </section>
+
+      </main>
+
+      <footer class="page-footer body-text">
+        Baseline Programming Language &middot; <a href="index.html">Design Concepts</a>
+      </footer>
+    </article>
+  </div>
+</body>
+</html>

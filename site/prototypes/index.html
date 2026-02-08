@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline -- Design Concepts</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #08090a;
+      --surface: #111318;
+      --surface-hover: #191c22;
+      --border: #23272f;
+      --text: #e4e4e7;
+      --text-muted: #71717a;
+      --accent: #f97316;
+      --accent-dim: #c2410c;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition: none !important; animation: none !important; }
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* Header */
+    header {
+      padding: 48px 0 0;
+      text-align: center;
+    }
+
+    .logo {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 32px;
+    }
+
+    h1 {
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      line-height: 1.15;
+      margin-bottom: 20px;
+    }
+
+    h1 .highlight {
+      color: var(--accent);
+    }
+
+    .subtitle {
+      font-size: clamp(1rem, 2vw, 1.2rem);
+      color: var(--text-muted);
+      max-width: 640px;
+      margin: 0 auto 16px;
+      line-height: 1.7;
+    }
+
+    .tagline {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      font-style: italic;
+      font-size: 0.95rem;
+      color: var(--accent-dim);
+      margin-bottom: 64px;
+      opacity: 0.8;
+    }
+
+    /* Designs Grid */
+    .designs-heading {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 24px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .designs-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      padding-bottom: 80px;
+    }
+
+    @media (min-width: 640px) {
+      .designs-grid { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (min-width: 900px) {
+      .designs-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    .design-card {
+      display: block;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 28px 24px;
+      text-decoration: none;
+      color: inherit;
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.15s ease;
+    }
+
+    .design-card:hover {
+      background: var(--surface-hover);
+      border-color: var(--accent-dim);
+      transform: translateY(-2px);
+    }
+
+    .design-card:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .card-number {
+      font-size: 0.7rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 8px;
+    }
+
+    .card-title {
+      font-size: 1.25rem;
+      font-weight: 600;
+      margin-bottom: 8px;
+      letter-spacing: -0.01em;
+    }
+
+    .card-desc {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    .card-palette {
+      display: flex;
+      gap: 6px;
+      margin-top: 16px;
+    }
+
+    .swatch {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,0.1);
+    }
+
+    /* Footer */
+    footer {
+      text-align: center;
+      padding: 32px 0;
+      border-top: 1px solid var(--border);
+      color: var(--text-muted);
+      font-size: 0.8rem;
+    }
+
+    footer a {
+      color: var(--accent);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      text-decoration: underline;
+    }
+
+    footer a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header class="container">
+      <div class="logo">Baseline Language</div>
+      <h1>Homepage <span class="highlight">Design Concepts</span></h1>
+      <p class="subtitle">
+        Nine distinct visual approaches for the Baseline programming language homepage.
+        Each is a complete, standalone design with a distinct visual atmosphere and thematic direction.
+      </p>
+      <p class="tagline">The type is the spec. Effects are data. Designed for the era of machine-generated code.</p>
+    </header>
+
+    <section class="container" aria-label="Design options">
+      <h2 class="designs-heading">Choose a Design</h2>
+
+      <div class="designs-grid">
+        <a href="index-production.html" class="design-card" style="border-color: var(--accent); grid-column: 1 / -1;">
+          <div class="card-number">Production</div>
+          <h3 class="card-title">Production Homepage</h3>
+          <p class="card-desc">The production homepage for baseline-lang.org. Based on Dark Bringhurst with sticky nav, outcome-first structure, hero code block, heritage section, audience cards, and compiler experience showcase.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#0e0c0a"></span>
+            <span class="swatch" style="background:#c48a60"></span>
+            <span class="swatch" style="background:#e8e0d4"></span>
+            <span class="swatch" style="background:#2a2622"></span>
+          </div>
+        </a>
+
+        <a href="design-1-monolith.html" class="design-card">
+          <div class="card-number">Design 01</div>
+          <h3 class="card-title">The Monolith</h3>
+          <p class="card-desc">Brutalist structures, enormous typography, warm amber atmospheric glow. Imposing architecture, engineered precision, otherworldly scale.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#0a0a0a"></span>
+            <span class="swatch" style="background:#f97316"></span>
+            <span class="swatch" style="background:#fbbf24"></span>
+            <span class="swatch" style="background:#1c1917"></span>
+          </div>
+        </a>
+
+        <a href="design-2-baseline-test.html" class="design-card">
+          <div class="card-number">Design 02</div>
+          <h3 class="card-title">The Baseline Test</h3>
+          <p class="card-desc">Terminal interrogation aesthetic. Call-and-response rhythm. Cold blue-white text on black. Scan lines. Every question answered by code.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#000000"></span>
+            <span class="swatch" style="background:#93c5fd"></span>
+            <span class="swatch" style="background:#ffffff"></span>
+            <span class="swatch" style="background:#1e3a5f"></span>
+          </div>
+        </a>
+
+        <a href="design-3-hologram.html" class="design-card">
+          <div class="card-number">Design 03</div>
+          <h3 class="card-title">The Hologram</h3>
+          <p class="card-desc">Translucent, ethereal, layered. Glass-like containers with subtle refractions. Digital becoming tangible. Light taking shape.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#f0f4ff"></span>
+            <span class="swatch" style="background:#8b5cf6"></span>
+            <span class="swatch" style="background:#ec4899"></span>
+            <span class="swatch" style="background:#06b6d4"></span>
+          </div>
+        </a>
+
+        <a href="design-4-sea-wall.html" class="design-card">
+          <div class="card-number">Design 04</div>
+          <h3 class="card-title">The Sea Wall</h3>
+          <p class="card-desc">Vast panoramic layout. Warm golden light. Features like solar panels -- grid-based, modular, repeating. Standing at the edge of something vast.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#fef3c7"></span>
+            <span class="swatch" style="background:#f59e0b"></span>
+            <span class="swatch" style="background:#92400e"></span>
+            <span class="swatch" style="background:#fbbf24"></span>
+          </div>
+        </a>
+
+        <a href="design-5-memory.html" class="design-card">
+          <div class="card-number">Design 05</div>
+          <h3 class="card-title">The Memory</h3>
+          <p class="card-desc">Intimate vertical storytelling. Warm wood tones and cool tech. Organic typography, natural textures. Code, like memory, builds meaning layer by layer.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#1c1917"></span>
+            <span class="swatch" style="background:#a16207"></span>
+            <span class="swatch" style="background:#d4d4d8"></span>
+            <span class="swatch" style="background:#78716c"></span>
+          </div>
+        </a>
+        <a href="design-6-systems.html" class="design-card">
+          <div class="card-number">Design 06</div>
+          <h3 class="card-title">The Systems Pitch</h3>
+          <p class="card-desc">Technical sales pitch. Why Baseline fixes what other languages got wrong -- for connected systems, concurrency, HTTP-native APIs, and the agentic age of AI-assisted development.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#000000"></span>
+            <span class="swatch" style="background:#93c5fd"></span>
+            <span class="swatch" style="background:#1e40af"></span>
+            <span class="swatch" style="background:#152030"></span>
+          </div>
+        </a>
+        <a href="design-7-tufte.html" class="design-card">
+          <div class="card-number">Design 07</div>
+          <h3 class="card-title">The Tufte</h3>
+          <p class="card-desc">Information-dense long-form design inspired by Edward Tufte. Sidenotes, margin figures, minimal decoration. The content is the interface -- every pixel conveys information.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#000000"></span>
+            <span class="swatch" style="background:#93c5fd"></span>
+            <span class="swatch" style="background:#c8d6e5"></span>
+            <span class="swatch" style="background:#4a6580"></span>
+          </div>
+        </a>
+        <a href="design-8-bringhurst.html" class="design-card">
+          <div class="card-number">Design 08</div>
+          <h3 class="card-title">The Bringhurst</h3>
+          <p class="card-desc">Cream paper, deep red title, Georgia serif, fleuron dividers. Edward Tufte information design on Robert Bringhurst's color palette. Typography exists to honor content.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#fffff8"></span>
+            <span class="swatch" style="background:#a00000"></span>
+            <span class="swatch" style="background:#111111"></span>
+            <span class="swatch" style="background:#888888"></span>
+          </div>
+        </a>
+        <a href="design-9-dark-bringhurst.html" class="design-card">
+          <div class="card-number">Design 09</div>
+          <h3 class="card-title">The Dark Bringhurst</h3>
+          <p class="card-desc">Near-black, warm copper accents, cream text. The version 3.0 cover palette -- Tufte information design in Bringhurst's own colors. Typographic elegance in darkness.</p>
+          <div class="card-palette" aria-hidden="true">
+            <span class="swatch" style="background:#0e0c0a"></span>
+            <span class="swatch" style="background:#c48a60"></span>
+            <span class="swatch" style="background:#e8e0d4"></span>
+            <span class="swatch" style="background:#2a2622"></span>
+          </div>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="container">
+    <p>Baseline is a strongly typed, effect-based programming language. <a href="https://github.com/baseline-lang">GitHub</a></p>
+  </footer>
+</body>
+</html>

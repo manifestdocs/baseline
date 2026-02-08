@@ -1,0 +1,12 @@
+# Cloudflare Pages headers configuration
+# https://developers.cloudflare.com/pages/configuration/headers/
+
+# Immutable assets (hashed filenames) - cache forever
+/_app/immutable/*
+  Cache-Control: public, immutable, max-age=31536000
+
+# Security headers for all responses
+/*
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: DENY
+  Referrer-Policy: strict-origin-when-cross-origin

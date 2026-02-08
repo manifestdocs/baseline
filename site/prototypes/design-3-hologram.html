@@ -1,0 +1,836 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline -- Digital Becoming Tangible</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    :root {
+      --bg: #f0f2f8;
+      --bg-glass: rgba(255, 255, 255, 0.55);
+      --bg-glass-strong: rgba(255, 255, 255, 0.75);
+      --bg-code: rgba(20, 10, 40, 0.92);
+      --surface: #ffffff;
+      --border-glass: rgba(255, 255, 255, 0.5);
+      --border-subtle: rgba(139, 92, 246, 0.15);
+      --text: #1e1b2e;
+      --text-secondary: #5b5675;
+      --text-dim: #8b83a0;
+      --purple: #8b5cf6;
+      --purple-light: #a78bfa;
+      --purple-dim: #6d28d9;
+      --pink: #ec4899;
+      --pink-light: #f472b6;
+      --cyan: #06b6d4;
+      --cyan-light: #22d3ee;
+      --gradient-hero: linear-gradient(135deg, #ddd6fe 0%, #fce7f3 30%, #cffafe 60%, #e0e7ff 100%);
+      --gradient-accent: linear-gradient(135deg, #8b5cf6, #ec4899, #06b6d4);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* Back link */
+    .back-link {
+      position: fixed;
+      top: 20px;
+      left: 24px;
+      z-index: 100;
+      font-size: 0.72rem;
+      font-weight: 500;
+      letter-spacing: 0.06em;
+      color: var(--text-dim);
+      text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 20px;
+      background: var(--bg-glass);
+      backdrop-filter: blur(12px);
+      border: 1px solid var(--border-glass);
+      transition: color 0.2s, border-color 0.2s;
+    }
+    .back-link:hover { color: var(--purple); border-color: var(--purple-light); }
+    .back-link:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+
+    /* Navigation */
+    nav {
+      position: fixed;
+      top: 0;
+      right: 0;
+      left: 0;
+      z-index: 90;
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      padding: 18px 24px;
+      background: rgba(240, 242, 248, 0.6);
+      backdrop-filter: blur(16px);
+    }
+    nav a {
+      font-size: 0.78rem;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-decoration: none;
+      margin-left: 28px;
+      transition: color 0.2s;
+    }
+    nav a:hover { color: var(--purple); }
+    nav a:focus-visible { outline: 2px solid var(--purple); outline-offset: 4px; }
+
+    /* ========== HERO ========== */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 120px 24px 80px;
+      position: relative;
+      background: var(--gradient-hero);
+      overflow: hidden;
+    }
+
+    /* Floating orbs */
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: 15%;
+      left: 10%;
+      width: 400px;
+      height: 400px;
+      background: radial-gradient(circle, rgba(139,92,246,0.15) 0%, transparent 70%);
+      border-radius: 50%;
+      filter: blur(60px);
+      pointer-events: none;
+    }
+
+    .hero::after {
+      content: '';
+      position: absolute;
+      bottom: 10%;
+      right: 5%;
+      width: 350px;
+      height: 350px;
+      background: radial-gradient(circle, rgba(236,72,153,0.12) 0%, transparent 70%);
+      border-radius: 50%;
+      filter: blur(60px);
+      pointer-events: none;
+    }
+
+    .hero-badge {
+      display: inline-block;
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--purple);
+      background: var(--bg-glass);
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--border-glass);
+      border-radius: 20px;
+      padding: 6px 18px;
+      margin-bottom: 32px;
+      position: relative;
+      z-index: 1;
+    }
+
+    .hero-title {
+      font-size: clamp(3.5rem, 10vw, 7rem);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 0.95;
+      margin-bottom: 24px;
+      position: relative;
+      z-index: 1;
+      background: var(--gradient-accent);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      font-size: clamp(1.05rem, 2vw, 1.3rem);
+      color: var(--text-secondary);
+      max-width: 560px;
+      line-height: 1.7;
+      position: relative;
+      z-index: 1;
+      margin-bottom: 40px;
+    }
+
+    .hero-cta-row {
+      display: flex;
+      gap: 14px;
+      flex-wrap: wrap;
+      justify-content: center;
+      position: relative;
+      z-index: 1;
+    }
+
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 32px;
+      background: var(--purple);
+      color: #fff;
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-decoration: none;
+      border-radius: 12px;
+      border: none;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.15s, box-shadow 0.2s;
+      min-height: 48px;
+      box-shadow: 0 4px 20px rgba(139,92,246,0.3);
+    }
+    .btn-primary:hover {
+      background: var(--purple-dim);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 28px rgba(139,92,246,0.4);
+    }
+    .btn-primary:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; }
+
+    .btn-glass {
+      display: inline-flex;
+      align-items: center;
+      padding: 14px 32px;
+      background: var(--bg-glass);
+      backdrop-filter: blur(8px);
+      color: var(--text);
+      font-weight: 600;
+      font-size: 0.9rem;
+      text-decoration: none;
+      border-radius: 12px;
+      border: 1px solid var(--border-glass);
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+      min-height: 48px;
+    }
+    .btn-glass:hover { background: var(--bg-glass-strong); border-color: var(--purple-light); }
+    .btn-glass:focus-visible { outline: 2px solid var(--purple); outline-offset: 3px; }
+
+    /* ========== GLASS CARD ========== */
+    .glass-card {
+      background: var(--bg-glass-strong);
+      backdrop-filter: blur(16px);
+      border: 1px solid var(--border-glass);
+      border-radius: 20px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.06);
+    }
+
+    /* ========== PRINCIPLES ========== */
+    .principles {
+      padding: 100px 24px;
+      position: relative;
+    }
+
+    .principles-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .section-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--purple);
+      text-align: center;
+      margin-bottom: 12px;
+    }
+
+    .section-title {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      text-align: center;
+      margin-bottom: 56px;
+      color: var(--text);
+    }
+
+    .principles-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 20px;
+    }
+
+    @media (min-width: 768px) {
+      .principles-grid { grid-template-columns: repeat(3, 1fr); }
+    }
+
+    .principle-card {
+      padding: 36px 28px;
+    }
+
+    .principle-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.3rem;
+      font-weight: 800;
+      margin-bottom: 20px;
+      color: white;
+    }
+
+    .principle-icon.purple { background: linear-gradient(135deg, #8b5cf6, #7c3aed); }
+    .principle-icon.pink { background: linear-gradient(135deg, #ec4899, #db2777); }
+    .principle-icon.cyan { background: linear-gradient(135deg, #06b6d4, #0891b2); }
+
+    .principle-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    .principle-desc {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      line-height: 1.65;
+    }
+
+    /* ========== CODE EXAMPLES ========== */
+    .code-section {
+      padding: 80px 24px 100px;
+      position: relative;
+    }
+
+    .code-section::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 600px;
+      height: 600px;
+      background: radial-gradient(circle, rgba(6,182,212,0.06) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .code-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .code-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 24px;
+    }
+
+    @media (min-width: 768px) {
+      .code-grid { grid-template-columns: repeat(2, 1fr); }
+      .code-card.wide { grid-column: 1 / -1; max-width: 700px; margin: 0 auto; width: 100%; }
+    }
+
+    .code-card {
+      border-radius: 16px;
+      overflow: hidden;
+      border: 1px solid var(--border-subtle);
+      background: var(--bg-code);
+      box-shadow: 0 8px 40px rgba(0,0,0,0.12);
+    }
+
+    .code-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 20px;
+      background: rgba(30, 20, 50, 0.6);
+      border-bottom: 1px solid rgba(139,92,246,0.15);
+    }
+
+    .code-card-title {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--purple-light);
+    }
+
+    .code-card-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--cyan);
+      opacity: 0.6;
+    }
+
+    .code-card pre {
+      padding: 24px 20px;
+      overflow-x: auto;
+      font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Menlo', 'Consolas', monospace;
+      font-size: 0.8rem;
+      line-height: 1.75;
+      color: #e2e0ea;
+      tab-size: 2;
+    }
+
+    .code-card code { font-family: inherit; }
+
+    /* Syntax highlighting -- holographic palette */
+    .kw { color: #c084fc; font-weight: 600; }
+    .type { color: #67e8f9; }
+    .str { color: #86efac; }
+    .comment { color: #4a4560; font-style: italic; }
+    .effect { color: #f0abfc; }
+    .op { color: #94a3b8; }
+    .fn { color: #e0ddf0; }
+    .num { color: #fda4af; }
+    .punct { color: #585270; }
+    .param { color: #c4b5fd; }
+    .annot { color: #f9a8d4; }
+
+    /* ========== FEATURES ========== */
+    .features {
+      padding: 100px 24px;
+      position: relative;
+    }
+
+    .features::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 1px;
+      background: linear-gradient(90deg, transparent, var(--border-subtle), transparent);
+    }
+
+    .features-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+
+    .features-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    @media (min-width: 768px) {
+      .features-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    .feature-item {
+      padding: 28px 20px;
+      text-align: center;
+    }
+
+    .feature-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin: 0 auto 14px;
+    }
+
+    .feature-dot.c1 { background: var(--purple); }
+    .feature-dot.c2 { background: var(--pink); }
+    .feature-dot.c3 { background: var(--cyan); }
+    .feature-dot.c4 { background: linear-gradient(135deg, var(--purple), var(--pink)); }
+
+    .feature-title {
+      font-size: 0.88rem;
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .feature-desc {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+      line-height: 1.55;
+    }
+
+    /* ========== TARGETS ========== */
+    .targets {
+      padding: 80px 24px;
+    }
+
+    .targets-inner {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+
+    .targets-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 16px;
+    }
+
+    @media (min-width: 640px) {
+      .targets-grid { grid-template-columns: repeat(4, 1fr); }
+    }
+
+    .target-item {
+      text-align: center;
+      padding: 28px 16px;
+    }
+
+    .target-value {
+      font-size: 1.6rem;
+      font-weight: 800;
+      background: var(--gradient-accent);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .target-label {
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    /* ========== INFLUENCES ========== */
+    .influences {
+      padding: 40px 24px 60px;
+      text-align: center;
+    }
+
+    .influences-label {
+      font-size: 0.65rem;
+      font-weight: 600;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      margin-bottom: 16px;
+    }
+
+    .influences-row {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 6px 16px;
+    }
+
+    .influences-row span {
+      font-size: 0.82rem;
+      color: var(--text-secondary);
+      padding: 4px 12px;
+      background: var(--bg-glass);
+      border-radius: 16px;
+      border: 1px solid var(--border-glass);
+    }
+
+    /* ========== GET STARTED ========== */
+    .get-started {
+      padding: 100px 24px 120px;
+      text-align: center;
+      position: relative;
+    }
+
+    .get-started::before {
+      content: '';
+      position: absolute;
+      bottom: 20%;
+      left: 50%;
+      transform: translateX(-50%);
+      width: 500px;
+      height: 300px;
+      background: radial-gradient(circle, rgba(139,92,246,0.08) 0%, transparent 70%);
+      pointer-events: none;
+    }
+
+    .gs-card {
+      max-width: 640px;
+      margin: 0 auto;
+      padding: 56px 40px;
+      text-align: center;
+    }
+
+    .gs-title {
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin-bottom: 16px;
+      background: var(--gradient-accent);
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .gs-desc {
+      font-size: 1rem;
+      color: var(--text-secondary);
+      line-height: 1.7;
+      margin-bottom: 36px;
+    }
+
+    .gs-cta-row {
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      flex-wrap: wrap;
+    }
+
+    /* ========== FOOTER ========== */
+    footer {
+      padding: 40px 24px;
+      text-align: center;
+      border-top: 1px solid rgba(139,92,246,0.1);
+    }
+
+    .footer-tagline {
+      font-size: 0.82rem;
+      color: var(--text-dim);
+      margin-bottom: 8px;
+      font-style: italic;
+    }
+
+    .footer-copy {
+      font-size: 0.72rem;
+      color: var(--text-dim);
+    }
+
+    .footer-copy a {
+      color: var(--purple);
+      text-decoration: none;
+    }
+    .footer-copy a:hover { text-decoration: underline; }
+    .footer-copy a:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+  </style>
+</head>
+<body>
+  <a href="index.html" class="back-link" aria-label="Back to design options">Back to designs</a>
+
+  <nav aria-label="Primary navigation">
+    <a href="#principles">Principles</a>
+    <a href="#code">Code</a>
+    <a href="#features">Features</a>
+    <a href="#start">Get Started</a>
+  </nav>
+
+  <main>
+    <!-- HERO -->
+    <section class="hero" aria-labelledby="hero-title">
+      <span class="hero-badge">Programming Language</span>
+      <h1 id="hero-title" class="hero-title">Baseline</h1>
+      <p class="hero-subtitle">
+        A strongly typed, effect-based language where types encode correctness,
+        effects track capabilities, and the compiler proves what is real.
+      </p>
+      <div class="hero-cta-row">
+        <a href="https://github.com/baseline-lang" class="btn-primary">View on GitHub</a>
+        <a href="#code" class="btn-glass">See Examples</a>
+      </div>
+    </section>
+
+    <!-- PRINCIPLES -->
+    <section class="principles" id="principles" aria-labelledby="principles-title">
+      <div class="principles-inner">
+        <div class="section-label">Core Principles</div>
+        <h2 id="principles-title" class="section-title">Three Axioms of Verification</h2>
+        <div class="principles-grid">
+          <div class="principle-card glass-card">
+            <div class="principle-icon purple" aria-hidden="true">T</div>
+            <h3 class="principle-title">The Type Is the Spec</h3>
+            <p class="principle-desc">
+              Types encode correctness using refinements. A Port is not just an Int --
+              it is proven to be within valid bounds at compile time. The type is the truth.
+            </p>
+          </div>
+          <div class="principle-card glass-card">
+            <div class="principle-icon pink" aria-hidden="true">E</div>
+            <h3 class="principle-title">Effects Are Data</h3>
+            <p class="principle-desc">
+              Side effects are explicit capabilities tracked in type signatures.
+              Console, Http, Fs -- each declared, each enforced. Pure by default.
+            </p>
+          </div>
+          <div class="principle-card glass-card">
+            <div class="principle-icon cyan" aria-hidden="true">L</div>
+            <h3 class="principle-title">LLM-Native</h3>
+            <p class="principle-desc">
+              Designed for machine generation with unambiguous syntax.
+              The effect system sandboxes AI agents -- they access only what you grant.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- CODE -->
+    <section class="code-section" id="code" aria-labelledby="code-title">
+      <div class="code-inner">
+        <div class="section-label">See It In Action</div>
+        <h2 id="code-title" class="section-title">Expressive, Verified, Beautiful</h2>
+        <div class="code-grid">
+          <div class="code-card">
+            <div class="code-card-header">
+              <span class="code-card-title">Hello World</span>
+              <span class="code-card-dot" aria-hidden="true"></span>
+            </div>
+            <pre><code><span class="annot">@prelude</span><span class="punct">(</span><span class="param">script</span><span class="punct">)</span>
+
+<span class="fn">greet</span> <span class="op">:</span> <span class="type">String</span> <span class="op">-></span> <span class="type">String</span>
+<span class="fn">greet</span> <span class="op">=</span> <span class="op">|</span><span class="param">name</span><span class="op">|</span> <span class="str">"Hello, ${name}!"</span>
+
+<span class="fn">main!</span> <span class="op">:</span> <span class="type">()</span> <span class="op">-></span> <span class="effect">{Console}</span> <span class="type">()</span>
+<span class="fn">main!</span> <span class="op">=</span> <span class="punct">{</span>
+  <span class="effect">Console</span><span class="punct">.</span><span class="fn">print!</span><span class="punct">(</span><span class="fn">greet</span><span class="punct">(</span><span class="str">"World"</span><span class="punct">))</span>
+<span class="punct">}</span></code></pre>
+          </div>
+
+          <div class="code-card">
+            <div class="code-card-header">
+              <span class="code-card-title">Refinement Types</span>
+              <span class="code-card-dot" aria-hidden="true"></span>
+            </div>
+            <pre><code><span class="kw">type</span> <span class="type">Port</span> <span class="op">=</span> <span class="type">Int</span> <span class="kw">where</span> <span class="num">1</span> <span class="op">&lt;=</span> <span class="param">self</span> <span class="op">&lt;=</span> <span class="num">65535</span>
+
+<span class="fn">listen</span> <span class="op">:</span> <span class="type">Port</span> <span class="op">-></span> <span class="effect">{Net}</span> <span class="type">Server</span>
+<span class="fn">listen</span> <span class="op">=</span> <span class="op">|</span><span class="param">port</span><span class="op">|</span>
+  <span class="comment">// port is GUARANTEED to be</span>
+  <span class="comment">// 1-65535 here</span>
+  <span class="comment">// No defensive coding needed</span>
+  <span class="op">...</span></code></pre>
+          </div>
+
+          <div class="code-card wide">
+            <div class="code-card-header">
+              <span class="code-card-title">Effect-Based Security</span>
+              <span class="code-card-dot" aria-hidden="true"></span>
+            </div>
+            <pre><code><span class="fn">agent_task!</span> <span class="op">:</span> <span class="type">Input</span> <span class="op">-></span> <span class="effect">{Log, Db.read}</span> <span class="type">Output</span>
+<span class="fn">agent_task!</span> <span class="op">=</span> <span class="op">|</span><span class="param">input</span><span class="op">|</span>
+  <span class="effect">Log</span><span class="punct">.</span><span class="fn">info!</span><span class="punct">(</span><span class="str">"Processing ${input}"</span><span class="punct">)</span>
+  <span class="kw">let</span> <span class="param">data</span> <span class="op">=</span> <span class="effect">Db</span><span class="punct">.</span><span class="fn">query!</span><span class="punct">(</span><span class="str">"SELECT * FROM items"</span><span class="punct">)</span>
+  <span class="comment">// Fs.delete!("important.txt")  // COMPILE ERROR: Fs not in effect set</span>
+  <span class="fn">transform</span><span class="punct">(</span><span class="param">data</span><span class="punct">)</span></code></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FEATURES -->
+    <section class="features" id="features" aria-labelledby="features-title">
+      <div class="features-inner">
+        <div class="section-label">Language Features</div>
+        <h2 id="features-title" class="section-title">Everything You Need</h2>
+        <div class="features-grid" role="list">
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c1" aria-hidden="true"></div>
+            <h3 class="feature-title">Refinement Types</h3>
+            <p class="feature-desc">Value constraints proven at compile time</p>
+          </div>
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c2" aria-hidden="true"></div>
+            <h3 class="feature-title">Algebraic Effects</h3>
+            <p class="feature-desc">Tracked side effects as capabilities</p>
+          </div>
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c3" aria-hidden="true"></div>
+            <h3 class="feature-title">Pattern Matching</h3>
+            <p class="feature-desc">Exhaustive matches, no missed cases</p>
+          </div>
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c4" aria-hidden="true"></div>
+            <h3 class="feature-title">Pipe Operator</h3>
+            <p class="feature-desc">Left-to-right data transformation</p>
+          </div>
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c2" aria-hidden="true"></div>
+            <h3 class="feature-title">ML-Style Syntax</h3>
+            <p class="feature-desc">Clean contracts: name : Sig = body</p>
+          </div>
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c3" aria-hidden="true"></div>
+            <h3 class="feature-title">Sum Types</h3>
+            <p class="feature-desc">Discriminated unions for domain modeling</p>
+          </div>
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c1" aria-hidden="true"></div>
+            <h3 class="feature-title">Records</h3>
+            <p class="feature-desc">Structural types with named fields</p>
+          </div>
+          <div class="feature-item glass-card" role="listitem">
+            <div class="feature-dot c4" aria-hidden="true"></div>
+            <h3 class="feature-title">Security Sandbox</h3>
+            <p class="feature-desc">Effect-based capability control for AI</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TARGETS -->
+    <section class="targets" aria-labelledby="targets-title">
+      <div class="targets-inner">
+        <div class="section-label">Performance</div>
+        <h2 id="targets-title" class="section-title">Fast by Design</h2>
+        <div class="targets-grid">
+          <div class="target-item glass-card">
+            <div class="target-value">&lt;200ms</div>
+            <div class="target-label">Compilation</div>
+          </div>
+          <div class="target-item glass-card">
+            <div class="target-value">~C</div>
+            <div class="target-label">Runtime (within 10%)</div>
+          </div>
+          <div class="target-item glass-card">
+            <div class="target-value">&lt;5MB</div>
+            <div class="target-label">Binary Size</div>
+          </div>
+          <div class="target-item glass-card">
+            <div class="target-value">WASM</div>
+            <div class="target-label">Target Support</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- INFLUENCES -->
+    <section class="influences" aria-label="Language influences">
+      <div class="influences-label">Standing on the Shoulders of</div>
+      <div class="influences-row">
+        <span>ML / OCaml</span>
+        <span>Rust</span>
+        <span>Koka</span>
+        <span>Liquid Haskell</span>
+        <span>Elm</span>
+        <span>F#</span>
+      </div>
+    </section>
+
+    <!-- GET STARTED -->
+    <section class="get-started" id="start" aria-labelledby="gs-title">
+      <div class="gs-card glass-card">
+        <h2 id="gs-title" class="gs-title">Materialize Your Ideas</h2>
+        <p class="gs-desc">
+          Baseline is in active development. The language is taking shape --
+          abstract ideas becoming working code. Explore the examples, follow the project,
+          and help shape the future of verified programming.
+        </p>
+        <div class="gs-cta-row">
+          <a href="https://github.com/baseline-lang" class="btn-primary">View on GitHub</a>
+          <a href="#code" class="btn-glass">Explore Examples</a>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <p class="footer-tagline">Digital becoming tangible. Code becoming truth.</p>
+    <p class="footer-copy">
+      Baseline Programming Language &middot; <a href="index.html">Design Concepts</a>
+    </p>
+  </footer>
+</body>
+</html>

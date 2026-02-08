@@ -1,0 +1,927 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Baseline Programming Language</title>
+
+  <!-- Skeleton CSS Framework -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/skeleton/2.0.4/skeleton.min.css"
+        integrity="sha512-EZLkOqwILORob+p0BXZc+Vm3RgJBOe1Ber/VFEHpBzVTG2NzfH8eFVsbJNu3AFOZU1CqV/Qlah8CWTI3yAlUA=="
+        crossorigin="anonymous" referrerpolicy="no-referrer">
+
+  <style>
+    /* ================================================================
+       BASELINE HOMEPAGE -- Dark Minimal, Skeleton Grid
+       Palette: Near-black background, warm whites, restrained syntax color
+       Typography: Helvetica Neue / system sans-serif
+       ================================================================ */
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
+
+    :root {
+      /* Spacing scale */
+      --sp-1: 8px;
+      --sp-2: 13px;
+      --sp-3: 21px;
+      --sp-4: 34px;
+      --sp-5: 55px;
+      --sp-6: 89px;
+
+      /* Dark palette */
+      --bg: #0a0a0a;
+      --bg-subtle: #111111;
+      --bg-muted: #1a1a1a;
+
+      --fg: #e8e4df;
+      --fg-muted: #a09a93;
+      --fg-dim: #807a74;
+      --fg-faint: #3d3a37;
+
+      /* Syntax colors */
+      --syn-keyword: #d4c5a0;
+      --syn-type: #8da5b8;
+      --syn-string: #8fad8b;
+      --syn-comment: #827d79;
+      --syn-effect: #b09fd1;
+      --syn-operator: #908a85;
+      --syn-function: #d6d2cc;
+      --syn-number: #7ca5c4;
+      --syn-punctuation: #827d79;
+      --syn-annotation: #c4a87a;
+
+      --focus-ring: #8da5b8;
+
+      --sans: 'Helvetica Neue', Helvetica, Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
+
+      --nav-width: 180px;
+    }
+
+    /* ================================================================
+       SKELETON OVERRIDES -- dark theme
+       ================================================================ */
+
+    html { font-size: 17px; }
+
+    body {
+      font-family: var(--sans);
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.618;
+      font-size: 1rem;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+      text-rendering: optimizeLegibility;
+    }
+
+    ::selection {
+      background: var(--fg);
+      color: var(--bg);
+    }
+
+    /* Override Skeleton's typography */
+    h1, h2, h3, h4, h5, h6 {
+      font-family: var(--sans);
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: var(--fg);
+    }
+
+    h2 { font-size: clamp(1.8rem, 4vw, 2.618rem); margin-bottom: var(--sp-4); }
+    h3 { font-size: 1.618rem; margin-bottom: var(--sp-2); }
+
+    p {
+      max-width: 38em;
+      margin-bottom: 1.2em;
+      color: var(--fg-muted);
+    }
+
+    .overline {
+      font-size: 0.76rem;
+      font-weight: 700;
+      letter-spacing: 0.15em;
+      text-transform: uppercase;
+      color: var(--fg-dim);
+      display: block;
+      margin-bottom: var(--sp-2);
+    }
+
+    /* Override Skeleton's container for wider content */
+    .container {
+      max-width: 1200px;
+    }
+
+    /* ================================================================
+       SITE LAYOUT -- Left nav + main content
+       ================================================================ */
+
+    .site-layout {
+      display: grid;
+      grid-template-columns: var(--nav-width) 1fr;
+      min-height: 100vh;
+    }
+
+    /* ================================================================
+       LEFT NAV
+       ================================================================ */
+
+    .site-nav {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: var(--sp-5) var(--sp-4) var(--sp-4) var(--sp-4);
+      border-right: 1px solid var(--fg-faint);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-5);
+      overflow-y: auto;
+    }
+
+    .wordmark {
+      font-family: var(--sans);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--fg);
+      text-decoration: none;
+    }
+    .wordmark:hover { text-decoration: none; }
+
+    .site-nav .wordmark {
+      font-size: 1.3rem;
+    }
+
+    .nav-links {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-2);
+      list-style: none;
+      margin-bottom: 0;
+    }
+
+    .nav-links a {
+      font-size: 0.76rem;
+      font-weight: 500;
+      letter-spacing: 0.03em;
+      text-decoration: none;
+      color: var(--fg-dim);
+      transition: color 0.15s;
+    }
+    .nav-links a:hover { color: var(--fg); }
+    .nav-links a:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 4px;
+    }
+
+    .nav-footer {
+      margin-top: auto;
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-1);
+    }
+
+    .nav-footer a {
+      font-size: 0.65rem;
+      color: var(--fg-dim);
+      text-decoration: none;
+    }
+    .nav-footer a:hover { color: var(--fg); }
+
+    /* ================================================================
+       MAIN CONTENT
+       ================================================================ */
+
+    .site-main {
+      padding: var(--sp-5) var(--sp-5) var(--sp-6) var(--sp-6);
+    }
+
+    section {
+      margin-bottom: var(--sp-6);
+    }
+
+    /* ================================================================
+       LINKS & BUTTONS -- Override Skeleton
+       ================================================================ */
+
+    a {
+      color: var(--fg);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+      text-decoration-thickness: 1px;
+      text-decoration-color: var(--fg-dim);
+      transition: text-decoration-color 0.15s ease;
+    }
+    a:hover { color: var(--fg); text-decoration-color: var(--fg); }
+    a:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 4px;
+    }
+
+    .button,
+    button {
+      font-family: var(--sans);
+      font-size: 0.76rem;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      text-decoration: none;
+      height: 36px;
+      line-height: 36px;
+      padding: 0 var(--sp-3);
+      border: 1px solid var(--fg-faint);
+      border-radius: 0;
+      color: var(--fg);
+      background: transparent;
+      text-transform: none;
+      transition: background 0.15s ease, border-color 0.15s ease;
+    }
+
+    .button-primary,
+    button.button-primary {
+      background: var(--fg);
+      color: var(--bg);
+      border-color: var(--fg);
+    }
+    .button-primary:hover { background: #ffffff; border-color: #ffffff; color: var(--bg); }
+
+    .button:hover {
+      border-color: var(--fg-muted);
+      background: var(--bg-subtle);
+      color: var(--fg);
+    }
+
+    .button:focus-visible,
+    .button-primary:focus-visible {
+      outline: 2px solid var(--focus-ring);
+      outline-offset: 4px;
+    }
+
+    .btn-group {
+      display: flex;
+      gap: var(--sp-2);
+      flex-wrap: wrap;
+    }
+
+    /* ================================================================
+       HERO
+       ================================================================ */
+
+    .hero {
+      margin-bottom: var(--sp-6);
+    }
+
+    .hero .wordmark {
+      font-size: clamp(4rem, 10vw, 7rem);
+      line-height: 0.95;
+      margin-bottom: var(--sp-5);
+    }
+
+    .hero-pillar {
+      border-top: 1px solid var(--fg-faint);
+      padding-top: var(--sp-3);
+    }
+
+    .hero-pillar em {
+      display: block;
+      font-style: normal;
+      font-weight: 600;
+      color: var(--fg);
+      font-size: 1rem;
+      margin-bottom: 6px;
+    }
+
+    .hero-pillar span {
+      font-size: 1rem;
+      line-height: 1.6;
+      color: var(--fg-muted);
+    }
+
+    /* ================================================================
+       CODE -- no boxes, no backgrounds
+       ================================================================ */
+
+    pre {
+      background: none;
+      border: none;
+      padding: var(--sp-2) 0;
+      font-family: var(--mono);
+      font-size: 0.82rem;
+      line-height: 1.8;
+      overflow-x: auto;
+      tab-size: 2;
+      color: var(--fg);
+      border-radius: 0;
+      margin-bottom: 0;
+    }
+
+    pre code { background: none; padding: 0; border-radius: 0; }
+
+    code {
+      font-family: var(--mono);
+      font-size: 0.88em;
+      background: none;
+      padding: 0;
+      color: var(--syn-type);
+      border: none;
+      border-radius: 0;
+    }
+
+    /* Syntax highlighting */
+    .kw { font-weight: 600; color: var(--syn-keyword); }
+    .type { color: var(--syn-type); }
+    .str { color: var(--syn-string); }
+    .comment { color: var(--syn-comment); font-style: italic; }
+    .effect { font-weight: 600; color: var(--syn-effect); }
+    .op { color: var(--syn-operator); }
+    .fn { color: var(--syn-function); }
+    .num { color: var(--syn-number); }
+    .punct { color: var(--syn-punctuation); }
+    .annot { font-weight: 600; color: var(--syn-annotation); }
+
+    /* ================================================================
+       BENEFITS GRID -- Skeleton row/columns
+       ================================================================ */
+
+    .benefit {
+      border-top: 1px solid var(--fg-faint);
+      padding-top: var(--sp-3);
+      margin-bottom: var(--sp-4);
+    }
+
+    .benefit h3 {
+      font-size: 1.2rem;
+      margin-bottom: var(--sp-1);
+    }
+
+    .benefit p {
+      font-size: 1rem;
+      color: var(--fg-muted);
+      line-height: 1.618;
+    }
+
+    /* ================================================================
+       CODE EXAMPLES -- Skeleton row/columns
+       ================================================================ */
+
+    .example-set {
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-6);
+      margin-top: var(--sp-4);
+    }
+
+    .example-text p {
+      font-size: 1rem;
+      color: var(--fg-muted);
+    }
+
+    /* ================================================================
+       FEATURE GRID -- Skeleton row/columns
+       ================================================================ */
+
+    .feature-grid-wrap {
+      margin-top: var(--sp-4);
+      border-top: 1px solid var(--fg-faint);
+    }
+
+    .feature-item {
+      padding: var(--sp-3) 0;
+      border-bottom: 1px solid var(--fg-faint);
+    }
+
+    .feature-item dt {
+      font-weight: 700;
+      font-size: 1rem;
+      margin-bottom: 4px;
+      color: var(--fg);
+    }
+
+    .feature-item dd {
+      font-size: 0.76rem;
+      color: var(--fg-muted);
+      line-height: 1.5;
+      margin-left: 0;
+    }
+
+    /* ================================================================
+       GETTING STARTED
+       ================================================================ */
+
+    .install-steps {
+      margin-top: var(--sp-4);
+      display: flex;
+      flex-direction: column;
+      gap: var(--sp-4);
+    }
+
+    .step-number {
+      font-size: 1.618rem;
+      font-weight: 700;
+      line-height: 1.1;
+      color: var(--fg-dim);
+    }
+
+    .step-content h3 {
+      font-size: 1rem;
+      font-weight: 700;
+      margin-bottom: 6px;
+    }
+
+    .step-content pre { margin-top: var(--sp-1); }
+
+    .step-content p {
+      font-size: 1rem;
+      color: var(--fg-muted);
+      margin-bottom: var(--sp-1);
+    }
+
+    /* ================================================================
+       CTA / FOOTER
+       ================================================================ */
+
+    .cta-section h2 { margin-bottom: var(--sp-3); }
+    .cta-section p { margin-bottom: var(--sp-4); }
+
+    .site-footer {
+      border-top: 1px solid var(--fg-faint);
+      padding: var(--sp-4) 0;
+      font-size: 0.76rem;
+      color: var(--fg-dim);
+    }
+
+    /* ================================================================
+       MOBILE -- collapse to single column
+       ================================================================ */
+
+    @media (max-width: 768px) {
+      .site-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .site-nav {
+        position: static;
+        height: auto;
+        flex-direction: row;
+        align-items: center;
+        flex-wrap: wrap;
+        padding: var(--sp-3) var(--sp-3);
+        border-right: none;
+        border-bottom: 1px solid var(--fg-faint);
+        gap: var(--sp-3);
+      }
+
+      .nav-links {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: var(--sp-2) var(--sp-3);
+      }
+
+      .nav-footer { display: none; }
+
+      .site-main {
+        padding: var(--sp-4) var(--sp-3) var(--sp-6) var(--sp-3);
+      }
+
+      .hero .wordmark {
+        font-size: clamp(3rem, 12vw, 5rem);
+      }
+    }
+
+    @media (max-width: 480px) {
+      html { font-size: 15px; }
+    }
+
+    /* ================================================================
+       PRINT
+       ================================================================ */
+
+    @media print {
+      body { font-size: 11pt; background: white; color: black; }
+      .site-nav { display: none; }
+      .site-layout { grid-template-columns: 1fr; }
+      pre { color: black; }
+      .button { border: 1px solid black; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="site-layout">
+
+    <!-- ============================================================
+         LEFT NAV
+         ============================================================ -->
+    <nav class="site-nav" aria-label="Primary navigation">
+      <a href="#" class="wordmark" aria-label="Baseline home">Baseline</a>
+      <ul class="nav-links" role="list">
+        <li><a href="#benefits">Why</a></li>
+        <li><a href="#examples">Examples</a></li>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#start">Install</a></li>
+        <li><a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md">Spec</a></li>
+      </ul>
+      <div class="nav-footer">
+        <a href="https://github.com/baseline-lang">GitHub</a>
+        <a href="index.html">Design Concepts</a>
+      </div>
+    </nav>
+
+    <!-- ============================================================
+         MAIN CONTENT
+         ============================================================ -->
+    <main class="site-main">
+      <div class="container">
+
+        <!-- HERO -->
+        <section class="hero" aria-labelledby="hero-heading">
+          <h1 id="hero-heading" class="wordmark">Baseline</h1>
+          <div class="row">
+            <div class="four columns">
+              <div class="hero-pillar">
+                <em>The type is the spec.</em>
+                <span>Correctness is provable, not hopeful.</span>
+              </div>
+            </div>
+            <div class="four columns">
+              <div class="hero-pillar">
+                <em>Effects are data.</em>
+                <span>Side effects are capabilities, not surprises.</span>
+              </div>
+            </div>
+            <div class="four columns">
+              <div class="hero-pillar">
+                <em>Built for humans and machines.</em>
+                <span>Generate it, compile it, trust it.</span>
+              </div>
+            </div>
+          </div>
+          <div class="btn-group" style="margin-top: var(--sp-4);">
+            <a href="#start" class="button button-primary">Get Started</a>
+            <a href="https://github.com/baseline-lang" class="button">View on GitHub</a>
+          </div>
+        </section>
+
+        <!-- BENEFITS -->
+        <section id="benefits" aria-labelledby="benefits-heading">
+          <span class="overline">Why Baseline</span>
+          <h2 id="benefits-heading">Correct by construction.</h2>
+          <div class="row">
+            <div class="six columns">
+              <div class="benefit">
+                <h3>Effects are capabilities</h3>
+                <p>
+                  A function typed <code>{Console, Http}</code> can print and make HTTP
+                  calls, and nothing else. Side effects are declared in type signatures
+                  and enforced by the compiler. No dependency can access the filesystem
+                  unless you grant it <code>{Fs}</code>. The default is no access.
+                </p>
+              </div>
+            </div>
+            <div class="six columns">
+              <div class="benefit">
+                <h3>Refinement types</h3>
+                <p>
+                  <code>type Port = Int where self > 0</code> proves constraints at compile
+                  time, not at runtime. Define what valid data looks like once. The compiler
+                  checks every use. No defensive re-validation. No scattered checks.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="row">
+            <div class="six columns">
+              <div class="benefit">
+                <h3>No null, no exceptions</h3>
+                <p>
+                  <code>Option&lt;T&gt;</code> and <code>Result&lt;T, E&gt;</code> are the
+                  only error paths. Pattern matching is exhaustive -- the compiler rejects
+                  code that leaves a branch unhandled. If a function can fail, its signature
+                  says so. If it returns a value, that value exists.
+                </p>
+              </div>
+            </div>
+            <div class="six columns">
+              <div class="benefit">
+                <h3>One way to do each thing</h3>
+                <p>
+                  One syntax for errors, one for effects, one for data transformation.
+                  Pipes over nesting. Combinators over loops. Fewer choices means fewer
+                  mistakes -- and code that every team member and every LLM reads the same way.
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- CODE EXAMPLES -->
+        <section id="examples" aria-labelledby="examples-heading">
+          <span class="overline">Code</span>
+          <h2 id="examples-heading">See it in action.</h2>
+          <div class="example-set">
+
+            <div class="row">
+              <div class="four columns">
+                <div class="example-text">
+                  <h3>Pattern matching</h3>
+                  <p>
+                    Exhaustive by default. The compiler rejects unhandled branches.
+                    Model your domain with sum types and let the type system ensure
+                    every case is covered.
+                  </p>
+                </div>
+              </div>
+              <div class="eight columns">
+                <pre><code><span class="kw">type</span> <span class="type">Connection</span> <span class="op">=</span>
+  <span class="op">|</span> <span class="type">Disconnected</span>
+  <span class="op">|</span> <span class="type">Connected</span><span class="punct">(</span><span class="type">Socket</span><span class="punct">)</span>
+  <span class="op">|</span> <span class="type">Error</span><span class="punct">(</span><span class="type">String</span><span class="punct">)</span>
+
+<span class="fn">handle</span> <span class="op">:</span> <span class="type">Connection</span> <span class="op">-&gt;</span> <span class="type">String</span>
+<span class="fn">handle</span> <span class="op">=</span> <span class="op">|</span><span class="fn">conn</span><span class="op">|</span> <span class="kw">match</span> <span class="fn">conn</span>
+  <span class="type">Disconnected</span>      <span class="op">-&gt;</span> <span class="str">"reconnecting"</span>
+  <span class="type">Connected</span><span class="punct">(</span><span class="fn">socket</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="str">"active"</span>
+  <span class="type">Error</span><span class="punct">(</span><span class="fn">msg</span><span class="punct">)</span>       <span class="op">-&gt;</span> <span class="str">"failed: ${msg}"</span></code></pre>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="four columns">
+                <div class="example-text">
+                  <h3>Pipes and transforms</h3>
+                  <p>
+                    The pipe operator <code>|&gt;</code> chains transformations left to right.
+                    Data flow reads like prose. Combinators replace loops for
+                    filtering, mapping, and folding.
+                  </p>
+                </div>
+              </div>
+              <div class="eight columns">
+                <pre><code><span class="fn">active_users</span> <span class="op">:</span> <span class="type">List&lt;User&gt;</span> <span class="op">-&gt;</span> <span class="type">List&lt;String&gt;</span>
+<span class="fn">active_users</span> <span class="op">=</span> <span class="op">|</span><span class="fn">users</span><span class="op">|</span>
+  <span class="fn">users</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">filter</span><span class="punct">(|</span><span class="fn">u</span><span class="op">|</span> <span class="fn">u</span><span class="punct">.</span><span class="fn">active</span> <span class="op">==</span> <span class="kw">true</span><span class="punct">)</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(|</span><span class="fn">u</span><span class="op">|</span> <span class="fn">u</span><span class="punct">.</span><span class="fn">name</span><span class="punct">)</span>
+
+<span class="fn">total_age</span> <span class="op">:</span> <span class="type">List&lt;User&gt;</span> <span class="op">-&gt;</span> <span class="type">Int</span>
+<span class="fn">total_age</span> <span class="op">=</span> <span class="op">|</span><span class="fn">users</span><span class="op">|</span>
+  <span class="fn">users</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">map</span><span class="punct">(|</span><span class="fn">u</span><span class="op">|</span> <span class="fn">u</span><span class="punct">.</span><span class="fn">age</span><span class="punct">)</span>
+  <span class="op">|&gt;</span> <span class="type">List</span><span class="punct">.</span><span class="fn">fold</span><span class="punct">(</span><span class="num">0</span><span class="punct">,</span> <span class="op">|</span><span class="fn">acc</span><span class="punct">,</span> <span class="fn">x</span><span class="op">|</span> <span class="fn">acc</span> <span class="op">+</span> <span class="fn">x</span><span class="punct">)</span></code></pre>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="four columns">
+                <div class="example-text">
+                  <h3>Tracked effects</h3>
+                  <p>
+                    Every side effect is declared in the type signature.
+                    <code>{Http, Console}</code> means this function can fetch data
+                    and print, and nothing else. The <code>?</code> operator propagates errors.
+                  </p>
+                </div>
+              </div>
+              <div class="eight columns">
+                <pre><code><span class="fn">fetch_user!</span> <span class="op">:</span> <span class="type">Int</span> <span class="op">-&gt;</span> <span class="effect">{Http, Console}</span> <span class="type">Result</span>
+<span class="fn">fetch_user!</span> <span class="op">=</span> <span class="op">|</span><span class="fn">id</span><span class="op">|</span> <span class="punct">{</span>
+  <span class="type">Console</span><span class="punct">.</span><span class="fn">println!</span><span class="punct">(</span><span class="str">"Fetching user ${id}"</span><span class="punct">)</span>
+  <span class="kw">let</span> <span class="fn">response</span> <span class="op">=</span> <span class="type">Http</span><span class="punct">.</span><span class="fn">get!</span><span class="punct">(</span><span class="str">"/users/${id}"</span><span class="punct">)</span><span class="op">?</span>
+  <span class="kw">match</span> <span class="fn">response</span><span class="punct">.</span><span class="fn">status</span>
+    <span class="num">200</span> <span class="op">-&gt;</span> <span class="type">Ok</span><span class="punct">(</span><span class="fn">response</span><span class="punct">.</span><span class="fn">body</span><span class="punct">)</span>
+    <span class="num">404</span> <span class="op">-&gt;</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"User not found"</span><span class="punct">)</span>
+    <span class="fn">_</span>   <span class="op">-&gt;</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Unexpected: ${response.status}"</span><span class="punct">)</span>
+<span class="punct">}</span></code></pre>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="four columns">
+                <div class="example-text">
+                  <h3>Inline tests</h3>
+                  <p>
+                    Tests live next to the code they verify, using <code>where</code> blocks.
+                    Functions and their tests are always in sync because they share
+                    the same file and scope.
+                  </p>
+                </div>
+              </div>
+              <div class="eight columns">
+                <pre><code><span class="fn">add</span> <span class="op">:</span> <span class="punct">(</span><span class="type">Int</span><span class="punct">,</span> <span class="type">Int</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="type">Int</span>
+<span class="fn">add</span> <span class="op">=</span> <span class="op">|</span><span class="fn">a</span><span class="punct">,</span> <span class="fn">b</span><span class="op">|</span> <span class="fn">a</span> <span class="op">+</span> <span class="fn">b</span>
+  <span class="kw">where</span>
+    <span class="kw">test</span> <span class="str">"positive"</span>  <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="num">3</span>
+    <span class="kw">test</span> <span class="str">"zero"</span>      <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">0</span><span class="punct">,</span> <span class="num">5</span><span class="punct">)</span> <span class="op">==</span> <span class="num">5</span>
+    <span class="kw">test</span> <span class="str">"negative"</span>  <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="op">-</span><span class="num">1</span><span class="punct">,</span> <span class="num">1</span><span class="punct">)</span> <span class="op">==</span> <span class="num">0</span>
+
+<span class="fn">safe_divide</span> <span class="op">:</span> <span class="punct">(</span><span class="type">Int</span><span class="punct">,</span> <span class="type">Int</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="type">Result</span>
+<span class="fn">safe_divide</span> <span class="op">=</span> <span class="op">|</span><span class="fn">a</span><span class="punct">,</span> <span class="fn">b</span><span class="op">|</span>
+  <span class="kw">if</span> <span class="fn">b</span> <span class="op">==</span> <span class="num">0</span> <span class="kw">then</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Division by zero"</span><span class="punct">)</span>
+  <span class="kw">else</span> <span class="type">Ok</span><span class="punct">(</span><span class="fn">a</span> <span class="op">/</span> <span class="fn">b</span><span class="punct">)</span>
+  <span class="kw">where</span>
+    <span class="kw">test</span> <span class="str">"divides"</span> <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">10</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Ok</span><span class="punct">(</span><span class="num">5</span><span class="punct">)</span>
+    <span class="kw">test</span> <span class="str">"by zero"</span> <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">0</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Division by zero"</span><span class="punct">)</span></code></pre>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- FEATURES -->
+        <section id="features" aria-labelledby="features-heading">
+          <span class="overline">Features</span>
+          <h2 id="features-heading">Language at a glance.</h2>
+          <div class="feature-grid-wrap">
+            <div class="row">
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Algebraic Effects</dt>
+                    <dd>Side effects declared in type signatures and enforced by the compiler. Built-in: Console, Http, Fs, Log, Time.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Refinement Types</dt>
+                    <dd><code>Int where self > 0</code> proves constraints at compile time. Parse, don't validate.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Pattern Matching</dt>
+                    <dd>Exhaustive matches on sum types, records, lists, and tuples. Destructuring built in.</dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Pipe Operator</dt>
+                    <dd><code>|&gt;</code> chains data transformations left to right. The compiler warns against deep nesting.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Sum Types</dt>
+                    <dd>Model domain variants precisely. <code>Option&lt;T&gt;</code> and <code>Result&lt;T, E&gt;</code> are built-in.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Records</dt>
+                    <dd>Named fields, dot access, update syntax, structural typing.</dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Inline Tests</dt>
+                    <dd><code>where test "name" = expr</code> keeps tests alongside the code they verify.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>ML-Style Functions</dt>
+                    <dd><code>name : Sig = body</code>. Lambdas with <code>|x| expr</code>. Type inference for locals.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Modules</dt>
+                    <dd><code>@module Name</code> with explicit imports. Prelude levels from none to server.</dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+            <div class="row">
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>Error Propagation</dt>
+                    <dd>The <code>?</code> operator propagates errors. <code>match</code> for explicit handling. No try/catch.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>JSON Diagnostics</dt>
+                    <dd>All compiler output is structured JSON. LLMs self-correct against machine-readable errors.</dd>
+                  </dl>
+                </div>
+              </div>
+              <div class="four columns">
+                <div class="feature-item">
+                  <dl>
+                    <dt>LLM-Native Design</dt>
+                    <dd>Unambiguous syntax, constrained solution space, structured errors. Built for machine generation.</dd>
+                  </dl>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- GETTING STARTED -->
+        <section id="start" aria-labelledby="start-heading">
+          <span class="overline">Get Started</span>
+          <h2 id="start-heading">Up and running.</h2>
+          <div class="install-steps">
+
+            <div class="row">
+              <div class="one column">
+                <div class="step-number" aria-hidden="true">1</div>
+              </div>
+              <div class="eleven columns">
+                <div class="step-content">
+                  <h3>Install</h3>
+                  <pre><code>brew install baseline-lang/tap/blc</code></pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="one column">
+                <div class="step-number" aria-hidden="true">2</div>
+              </div>
+              <div class="eleven columns">
+                <div class="step-content">
+                  <h3>Write</h3>
+                  <p>Create <code>hello.bl</code>:</p>
+                  <pre><code><span class="annot">@prelude</span><span class="punct">(</span><span class="fn">script</span><span class="punct">)</span>
+
+<span class="fn">greet</span> <span class="op">:</span> <span class="type">String</span> <span class="op">-&gt;</span> <span class="type">String</span>
+<span class="fn">greet</span> <span class="op">=</span> <span class="op">|</span><span class="fn">name</span><span class="op">|</span> <span class="str">"Hello, ${name}!"</span>
+
+<span class="fn">main!</span> <span class="op">:</span> <span class="punct">()</span> <span class="op">-&gt;</span> <span class="effect">{Console}</span> <span class="punct">()</span>
+<span class="fn">main!</span> <span class="op">=</span> <span class="punct">{</span>
+  <span class="kw">let</span> <span class="fn">message</span> <span class="op">=</span> <span class="fn">greet</span><span class="punct">(</span><span class="str">"World"</span><span class="punct">)</span>
+  <span class="type">Console</span><span class="punct">.</span><span class="fn">print!</span><span class="punct">(</span><span class="fn">message</span><span class="punct">)</span>
+<span class="punct">}</span></code></pre>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="one column">
+                <div class="step-number" aria-hidden="true">3</div>
+              </div>
+              <div class="eleven columns">
+                <div class="step-content">
+                  <h3>Run</h3>
+                  <pre><code>blc run hello.bl
+<span class="comment"># Hello, World!</span>
+
+blc check hello.bl --json
+<span class="comment"># {"status": "ok", "diagnostics": []}</span></code></pre>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </section>
+
+        <!-- CTA -->
+        <section class="cta-section">
+          <h2>Start building.</h2>
+          <p>
+            The compiler, grammar, and core type system are functional.
+            Baseline is in active development and accepting contributors.
+          </p>
+          <div class="btn-group">
+            <a href="https://github.com/baseline-lang" class="button button-primary">View on GitHub</a>
+            <a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md" class="button">Read the Specification</a>
+          </div>
+        </section>
+
+        <footer class="site-footer">
+          Baseline Programming Language
+        </footer>
+
+      </div>
+    </main>
+
+  </div>
+
+</body>
+</html>
