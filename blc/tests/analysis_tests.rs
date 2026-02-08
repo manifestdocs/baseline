@@ -30,6 +30,24 @@ fn check_has_error(source: &str, code: &str) {
     );
 }
 
+/// Helper: check source has a specific warning code
+fn check_has_warning(source: &str, code: &str) {
+    let result = parse_source(source, "<test>");
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.code == code && d.severity == Severity::Warning),
+        "Expected warning {}, got: {:?}",
+        code,
+        result
+            .diagnostics
+            .iter()
+            .map(|d| format!("{}: {} ({:?})", d.code, d.message, d.severity))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// Helper: check source has no errors (warnings are allowed)
 fn check_no_errors(source: &str) {
     let result = parse_source(source, "<test>");
@@ -61,22 +79,22 @@ fn count_errors(source: &str, prefix: &str) -> usize {
 
 #[test]
 fn type_check_simple_function() {
-    check_ok("add : (Int, Int) -> Int\nadd = |a, b| a + b");
+    check_ok("fn add(a: Int, b: Int) -> Int = a + b");
 }
 
 #[test]
 fn type_check_string_function() {
-    check_ok("greet : String -> String\ngreet = |name| name");
+    check_ok("fn greet(name: String) -> String = name");
 }
 
 #[test]
 fn type_check_bool_function() {
-    check_ok("is_pos : Int -> Bool\nis_pos = |n| n > 0");
+    check_ok("fn is_pos(n: Int) -> Bool = n > 0");
 }
 
 #[test]
 fn type_check_float_literal() {
-    check_ok("pi : () -> Float\npi = 3.14");
+    check_ok("fn pi() -> Float = 3.14");
 }
 
 #[test]
@@ -93,8 +111,7 @@ fn type_check_struct_definition() {
 fn type_check_struct_construction() {
     check_ok(
         "type User = { name: String, age: Int }\n\
-         make_user : () -> User\n\
-         make_user = User { name: \"Alice\", age: 30 }",
+                  fn make_user() -> User = User { name: \"Alice\", age: 30 }",
     );
 }
 
@@ -102,8 +119,7 @@ fn type_check_struct_construction() {
 fn type_check_struct_field_access() {
     check_ok(
         "type User = { name: String, age: Int }\n\
-         get_name : User -> String\n\
-         get_name = |u| u.name",
+                  fn get_name(u: User) -> String = u.name",
     );
 }
 
@@ -111,8 +127,7 @@ fn type_check_struct_field_access() {
 fn type_check_struct_missing_field() {
     check_has_error(
         "type User = { name: String, age: Int }\n\
-         make : () -> User\n\
-         make = User { name: \"Alice\" }",
+         fn make() -> User = User { name: \"Alice\" }",
         "TYP_012",
     );
 }
@@ -121,8 +136,7 @@ fn type_check_struct_missing_field() {
 fn type_check_struct_wrong_field_type() {
     check_has_error(
         "type User = { name: String, age: Int }\n\
-         make : () -> User\n\
-         make = User { name: \"Alice\", age: \"thirty\" }",
+         fn make() -> User = User { name: \"Alice\", age: \"thirty\" }",
         "TYP_010",
     );
 }
@@ -130,65 +144,43 @@ fn type_check_struct_wrong_field_type() {
 #[test]
 fn type_check_if_expression_branch_mismatch() {
     check_has_error(
-        "foo : Bool -> Int\n\
-         foo = |x| if x then 1 else \"two\"",
+        "fn foo(x: Bool) -> Int = if x then 1 else \"two\"",
         "TYP_004",
     );
 }
 
 #[test]
 fn type_check_if_condition_not_bool() {
-    check_has_error(
-        "foo : Int -> Int\n\
-         foo = |x| if x then 1 else 2",
-        "TYP_003",
-    );
+    check_has_error("fn foo(x: Int) -> Int = if x then 1 else 2", "TYP_003");
 }
 
 #[test]
 fn type_check_undefined_variable() {
-    check_has_error(
-        "foo : () -> Int\n\
-         foo = unknown_var",
-        "TYP_002",
-    );
+    check_has_error("fn foo() -> Int = unknown_var", "TYP_002");
 }
 
 #[test]
 fn type_check_arg_count_mismatch() {
     check_has_error(
-        "add : (Int, Int) -> Int\n\
-         add = |a, b| a + b\n\
-         main : () -> Int\n\
-         main = add(1)",
+        "fn add(a: Int, b: Int) -> Int = a + b\n\
+         fn main() -> Int = add(1)",
         "TYP_007",
     );
 }
 
 #[test]
 fn type_check_binary_op_type_mismatch() {
-    check_has_error(
-        "foo : () -> Int\n\
-         foo = 1 + \"two\"",
-        "TYP_001",
-    );
+    check_has_error("fn foo() -> Int = 1 + \"two\"", "TYP_001");
 }
 
 #[test]
 fn type_check_list_homogeneity() {
-    check_has_error(
-        "foo : () -> List<Int>\n\
-         foo = [1, \"two\", 3]",
-        "TYP_016",
-    );
+    check_has_error("fn foo() -> List<Int> = [1, \"two\", 3]", "TYP_016");
 }
 
 #[test]
 fn type_check_list_ok() {
-    check_ok(
-        "foo : () -> List<Int>\n\
-         foo = [1, 2, 3]",
-    );
+    check_ok("fn foo() -> List<Int> = [1, 2, 3]");
 }
 
 // ============================================================
@@ -200,8 +192,7 @@ fn type_check_println_wrong_arg_type() {
     // Console.println! expects String, passing Int should error
     check_has_error(
         "@prelude(script)\n\
-         main! : () -> {Console} ()\n\
-         main! = Console.println!(42)",
+         fn main!() -> {Console} () = Console.println!(42)",
         "TYP_008",
     );
 }
@@ -212,8 +203,7 @@ fn type_check_println_correct_arg() {
     assert_eq!(
         count_errors(
             "@prelude(script)\n\
-             main! : () -> {Console} ()\n\
-             main! = Console.println!(\"hello\")",
+                      fn main!() -> {Console} () = Console.println!(\"hello\")",
             "TYP"
         ),
         0
@@ -225,8 +215,7 @@ fn type_check_println_wrong_arg_count() {
     // Console.println! expects 1 arg, passing 2 should error
     check_has_error(
         "@prelude(script)\n\
-         main! : () -> {Console} ()\n\
-         main! = Console.println!(\"a\", \"b\")",
+         fn main!() -> {Console} () = Console.println!(\"a\", \"b\")",
         "TYP_007",
     );
 }
@@ -236,8 +225,7 @@ fn type_check_read_line_returns_string() {
     // Console.read_line! returns String, assigning to Int-expecting context should error
     check_has_error(
         "@prelude(script)\n\
-         main! : () -> {Console} Int\n\
-         main! = Console.read_line!()",
+         fn main!() -> {Console} Int = Console.read_line!()",
         "TYP_006",
     );
 }
@@ -247,8 +235,7 @@ fn type_check_time_sleep_expects_int() {
     // Time.sleep! expects Int, passing String should error
     check_has_error(
         "@prelude(script)\n\
-         main! : () -> {Time} ()\n\
-         main! = Time.sleep!(\"100\")",
+         fn main!() -> {Time} () = Time.sleep!(\"100\")",
         "TYP_008",
     );
 }
@@ -259,8 +246,7 @@ fn type_check_fs_exists_returns_bool() {
     assert_eq!(
         count_errors(
             "@prelude(script)\n\
-             main! : () -> {Fs} Bool\n\
-             main! = Fs.exists!(\"file.txt\")",
+                      fn main!() -> {Fs} Bool = Fs.exists!(\"file.txt\")",
             "TYP"
         ),
         0
@@ -273,8 +259,7 @@ fn type_check_string_length_correct() {
     assert_eq!(
         count_errors(
             "@prelude(core)\n\
-             len : String -> Int\n\
-             len = |s| String.length(s)",
+                      fn len(s: String) -> Int = String.length(s)",
             "TYP"
         ),
         0
@@ -286,8 +271,7 @@ fn type_check_string_length_wrong_arg() {
     // String.length expects String, passing Int should error
     check_has_error(
         "@prelude(core)\n\
-         len : () -> Int\n\
-         len = String.length(42)",
+         fn len() -> Int = String.length(42)",
         "TYP_008",
     );
 }
@@ -299,31 +283,23 @@ fn type_check_string_length_wrong_arg() {
 #[test]
 fn type_check_tuple_return_type() {
     // Function returning (Int, String) with correct body
-    check_ok(
-        "pair : () -> (Int, String)\n\
-         pair = (1, \"hello\")",
-    );
+    check_ok("fn pair() -> (Int, String) = (1, \"hello\")");
 }
 
 #[test]
 fn type_check_tuple_return_mismatch() {
     // Function returning (Int, String) but body has (Int, Int)
-    check_has_error(
-        "pair : () -> (Int, String)\n\
-         pair = (1, 2)",
-        "TYP_006",
-    );
+    check_has_error("fn pair() -> (Int, String) = (1, 2)", "TYP_006");
 }
 
 #[test]
 fn type_check_tuple_destructuring() {
     // Tuple destructuring binds correct types
     check_ok(
-        "sum : () -> Int\n\
-         sum = {\n\
-           let (x, y) = (10, 20)\n\
-           x + y\n\
-         }",
+        "fn sum() -> Int = {\n\
+                    let (x, y) = (10, 20)\n\
+                    x + y\n\
+                  }",
     );
 }
 
@@ -331,12 +307,11 @@ fn type_check_tuple_destructuring() {
 fn type_check_tuple_in_match() {
     // Match on a tuple expression with pattern binding
     check_ok(
-        "first : () -> Int\n\
-         first = {\n\
-           let t = (10, \"hello\")\n\
-           match t\n\
-             (a, _) -> a\n\
-         }",
+        "fn first() -> Int = {\n\
+                    let t = (10, \"hello\")\n\
+                    match t\n\
+                      (a, _) -> a\n\
+                  }",
     );
 }
 
@@ -348,8 +323,7 @@ fn type_check_tuple_in_match() {
 fn type_check_float_annotation_mismatch() {
     // let x: Int = 3.14 should report type mismatch
     check_has_error(
-        "foo : () -> ()\n\
-         foo = {\n\
+        "fn foo() -> () = {\n\
            let x : Int = 3.14\n\
          }",
         "TYP_021",
@@ -360,37 +334,29 @@ fn type_check_float_annotation_mismatch() {
 fn type_check_float_annotation_ok() {
     // let x: Float = 3.14 should pass
     check_ok(
-        "foo : () -> ()\n\
-         foo = {\n\
-           let x : Float = 3.14\n\
-         }",
+        "fn foo() -> () = {\n\
+                    let x : Float = 3.14\n\
+                  }",
     );
 }
 
 #[test]
 fn type_check_mixed_int_float_arithmetic() {
     // 1 + 3.14 should promote to Float
-    check_ok(
-        "foo : () -> Float\n\
-         foo = 1 + 3.14",
-    );
+    check_ok("fn foo() -> Float = 1 + 3.14");
 }
 
 #[test]
 fn type_check_float_arithmetic_pure() {
     // Float + Float = Float
-    check_ok(
-        "foo : () -> Float\n\
-         foo = 1.5 + 2.5",
-    );
+    check_ok("fn foo() -> Float = 1.5 + 2.5");
 }
 
 #[test]
 fn type_check_let_annotation_string() {
     // let s: String = 42 should error
     check_has_error(
-        "foo : () -> ()\n\
-         foo = {\n\
+        "fn foo() -> () = {\n\
            let s : String = 42\n\
          }",
         "TYP_021",
@@ -405,10 +371,8 @@ fn type_check_let_annotation_string() {
 fn type_check_lambda_inferred_from_higher_order() {
     // apply expects ((Int) -> Int, Int) -> Int; lambda arg x inferred as Int
     check_ok(
-        "apply : ((Int) -> Int, Int) -> Int\n\
-         apply = |f, x| f(x)\n\
-         main : () -> Int\n\
-         main = apply(|x| x + 1, 5)",
+        "fn apply(f: (Int) -> Int, x: Int) -> Int = f(x)\n\
+                  fn main() -> Int = apply(|x| x + 1, 5)",
     );
 }
 
@@ -416,10 +380,8 @@ fn type_check_lambda_inferred_from_higher_order() {
 fn type_check_lambda_inferred_body_mismatch() {
     // apply expects (Int) -> String callback, but lambda body returns Int (x + 1)
     check_has_error(
-        "apply : ((Int) -> String, Int) -> String\n\
-         apply = |f, x| f(x)\n\
-         main : () -> String\n\
-         main = apply(|x| x + 1, 5)",
+        "fn apply(f: (Int) -> String, x: Int) -> String = f(x)\n\
+         fn main() -> String = apply(|x| x + 1, 5)",
         "TYP_008",
     );
 }
@@ -428,10 +390,9 @@ fn type_check_lambda_inferred_body_mismatch() {
 fn type_check_lambda_standalone_unknown_args() {
     // Standalone lambda without context — args remain Unknown, no error
     check_ok(
-        "foo : () -> ()\n\
-         foo = {\n\
-           let f = |x| x\n\
-         }",
+        "fn foo() -> () = {\n\
+                    let f = |x| x\n\
+                  }",
     );
 }
 
@@ -453,8 +414,7 @@ fn type_check_sum_type_with_payload() {
 fn type_check_sum_type_constructor_expression() {
     check_ok(
         "type Option = | Some(Int) | None\n\
-         wrap : Int -> Option\n\
-         wrap = |x| Some(x)",
+                  fn wrap(x: Int) -> Option = Some(x)",
     );
 }
 
@@ -462,8 +422,7 @@ fn type_check_sum_type_constructor_expression() {
 fn type_check_nullary_constructor_expression() {
     check_ok(
         "type Color = | Red | Green | Blue\n\
-         get : () -> Color\n\
-         get = Red",
+                  fn get() -> Color = Red",
     );
 }
 
@@ -476,13 +435,12 @@ fn type_check_sum_type_without_leading_pipe() {
 fn type_check_match_on_sum_type() {
     check_ok(
         "type Color = | Red | Green | Blue\n\
-         describe : Color -> String\n\
-         describe = |c| {\n\
-           match c\n\
-             Red -> \"red\"\n\
-             Green -> \"green\"\n\
-             Blue -> \"blue\"\n\
-         }",
+                  fn describe(c: Color) -> String = {\n\
+                    match c\n\
+                      Red -> \"red\"\n\
+                      Green -> \"green\"\n\
+                      Blue -> \"blue\"\n\
+                  }",
     );
 }
 
@@ -490,12 +448,11 @@ fn type_check_match_on_sum_type() {
 fn type_check_constructor_pattern_match() {
     check_ok(
         "type Option = | Some(Int) | None\n\
-         unwrap : (Option, Int) -> Int\n\
-         unwrap = |opt, default| {\n\
-           match opt\n\
-             Some(v) -> v\n\
-             None -> default\n\
-         }",
+                  fn unwrap(opt: Option, default: Int) -> Int = {\n\
+                    match opt\n\
+                      Some(v) -> v\n\
+                      None -> default\n\
+                  }",
     );
 }
 
@@ -507,7 +464,7 @@ fn type_check_constructor_pattern_match() {
 fn effect_check_no_effect_needed() {
     // Pure function should have zero effect diagnostics
     assert_eq!(
-        count_errors("add : (Int, Int) -> Int\nadd = |a, b| a + b", "CAP"),
+        count_errors("fn add(a: Int, b: Int) -> Int = a + b", "CAP"),
         0
     );
 }
@@ -515,8 +472,7 @@ fn effect_check_no_effect_needed() {
 #[test]
 fn effect_check_missing_capability() {
     check_has_error(
-        "fetch! : () -> String\n\
-         fetch! = Http.get!(\"http://example.com\")",
+        "fn fetch!() -> String = Http.get!(\"http://example.com\")",
         "CAP_001",
     );
 }
@@ -526,8 +482,7 @@ fn effect_check_declared_capability() {
     // Function declares {Console} and uses Console.print! — should be ok
     assert_eq!(
         count_errors(
-            "main! : () -> {Console} ()\n\
-             main! = Console.print!(\"hello\")",
+            "fn main!() -> {Console} () = Console.print!(\"hello\")",
             "CAP"
         ),
         0
@@ -543,10 +498,9 @@ fn refinement_check_valid_port() {
     assert_eq!(
         count_errors(
             "type Port = Int where self > 0 && self < 65536\n\
-             test_port : () -> ()\n\
-             test_port = {\n\
-               let p : Port = 8080\n\
-             }",
+                      fn test_port() -> () = {\n\
+                        let p : Port = 8080\n\
+                      }",
             "REF"
         ),
         0
@@ -557,8 +511,7 @@ fn refinement_check_valid_port() {
 fn refinement_check_invalid_port_too_high() {
     check_has_error(
         "type Port = Int where self > 0 && self < 65536\n\
-         test_port : () -> ()\n\
-         test_port = {\n\
+         fn test_port() -> () = {\n\
            let p : Port = 70000\n\
          }",
         "REF_001",
@@ -569,8 +522,7 @@ fn refinement_check_invalid_port_too_high() {
 fn refinement_check_invalid_port_zero() {
     check_has_error(
         "type Port = Int where self > 0 && self < 65536\n\
-         test_port : () -> ()\n\
-         test_port = {\n\
+         fn test_port() -> () = {\n\
            let p : Port = 0\n\
          }",
         "REF_001",
@@ -581,8 +533,7 @@ fn refinement_check_invalid_port_zero() {
 fn refinement_check_probability_range() {
     check_has_error(
         "type Prob = Int where self >= 0 && self <= 100\n\
-         check_prob : () -> ()\n\
-         check_prob = {\n\
+         fn check_prob() -> () = {\n\
            let p : Prob = 101\n\
          }",
         "REF_001",
@@ -606,49 +557,36 @@ fn parse_comments_only() {
 #[test]
 fn parse_pipe_expression() {
     check_ok(
-        "double : Int -> Int\n\
-         double = |x| x + x\n\
-         main : () -> Int\n\
-         main = 5 |> double",
+        "fn double(x: Int) -> Int = x + x\n\
+                  fn main() -> Int = 5 |> double",
     );
 }
 
 #[test]
 fn parse_match_expression() {
     check_ok(
-        "foo : Int -> String\n\
-         foo = |x| {\n\
-           match x\n\
-             1 -> \"one\"\n\
-             _ -> \"other\"\n\
-         }",
+        "fn foo(x: Int) -> String = {\n\
+                    match x\n\
+                      1 -> \"one\"\n\
+                      _ -> \"other\"\n\
+                  }",
     );
 }
 
 #[test]
 fn parse_for_expression() {
-    check_ok(
-        "foo : () -> ()\n\
-         foo = for x in [1, 2, 3] do x",
-    );
+    check_ok("fn foo() -> () = for x in [1, 2, 3] do ()");
 }
 
 #[test]
 fn parse_string_interpolation() {
-    check_ok(
-        "greet : String -> String\n\
-         greet = |name| \"Hello, ${name}!\"",
-    );
+    check_ok("fn greet(name: String) -> String = \"Hello, ${name}!\"");
 }
 
 #[test]
 fn parse_range_expression() {
     // Range expression parses correctly
-    let result = parse_source(
-        "r : () -> ()\n\
-         r = 1..10",
-        "<test>",
-    );
+    let result = parse_source("fn r() -> () = 1..10", "<test>");
     let syntax_errors = result
         .diagnostics
         .iter()
@@ -661,8 +599,8 @@ fn parse_range_expression() {
 fn parse_effect_def() {
     check_ok(
         "effect Logger {\n\
-           log! : String -> ()\n\
-         }",
+                    log! : String -> ()\n\
+                  }",
     );
 }
 
@@ -679,12 +617,11 @@ fn parse_prelude_decl() {
 #[test]
 fn parse_semicolons_in_block() {
     check_ok(
-        "foo : () -> Int\n\
-         foo = {\n\
-           let x = 1;\n\
-           let y = 2;\n\
-           x + y\n\
-         }",
+        "fn foo() -> Int = {\n\
+                    let x = 1;\n\
+                    let y = 2;\n\
+                    x + y\n\
+                  }",
     );
 }
 
@@ -692,8 +629,7 @@ fn parse_semicolons_in_block() {
 fn parse_trailing_commas() {
     check_ok(
         "type User = { name: String, age: Int, }\n\
-         make : () -> User\n\
-         make = User { name: \"Alice\", age: 30, }",
+                  fn make() -> User = User { name: \"Alice\", age: 30, }",
     );
 }
 
@@ -710,8 +646,7 @@ fn type_check_option_int_annotation() {
     // Option<Int> in a function return type — Some(1) should be compatible
     let source = r#"
 @prelude(core)
-wrap : (Int) -> Option<Int>
-wrap = |x| Some(x)
+fn wrap(x: Int) -> Option<Int> = Some(x)
 "#;
     check_ok(source);
 }
@@ -721,8 +656,7 @@ fn type_check_option_type_mismatch() {
     // Returning a Result where Option<Int> is expected should error
     let source = r#"
 @prelude(core)
-wrap : (Int) -> Option<Int>
-wrap = |x| Ok(x)
+fn wrap(x: Int) -> Option<Int> = Ok(x)
 "#;
     check_has_error(source, "TYP_006");
 }
@@ -732,8 +666,7 @@ fn type_check_result_annotation() {
     // Result<Int, String> in a function return type — Ok(1) should be compatible
     let source = r#"
 @prelude(core)
-safe_div : (Int, Int) -> Result<Int, String>
-safe_div = |a, b| Ok(a)
+fn safe_div(a: Int, b: Int) -> Result<Int, String> = Ok(a)
 "#;
     check_ok(source);
 }
@@ -743,8 +676,7 @@ fn type_check_option_sugar_question_mark() {
     // Int? desugars to Option<Int>
     let source = r#"
 @prelude(core)
-find : (Int) -> Int?
-find = |x| Some(x)
+fn find(x: Int) -> Int? = Some(x)
 "#;
     check_ok(source);
 }
@@ -754,8 +686,7 @@ fn type_check_option_sugar_mismatch() {
     // Returning plain Int where Int? (Option<Int>) is expected should error
     let source = r#"
 @prelude(core)
-find : (Int) -> Int?
-find = |x| x
+fn find(x: Int) -> Int? = x
 "#;
     check_has_error(source, "TYP_006");
 }
@@ -765,8 +696,7 @@ fn type_check_let_option_annotation() {
     // let x : Option<Int> = Some(1) — should pass
     let source = r#"
 @prelude(core)
-main : () -> Int
-main = || {
+fn main() -> Int = {
     let x : Option<Int> = Some(1);
     1
 }
@@ -779,8 +709,7 @@ fn type_check_let_result_annotation() {
     // let x : Result<Int, String> = Ok(1) — should pass
     let source = r#"
 @prelude(core)
-main : () -> Int
-main = || {
+fn main() -> Int = {
     let x : Result<Int, String> = Ok(1);
     1
 }
@@ -793,8 +722,7 @@ fn type_check_option_result_cross_mismatch() {
     // let x : Option<Int> = Ok(1) — should error, Result != Option
     let source = r#"
 @prelude(core)
-main : () -> Int
-main = || {
+fn main() -> Int = {
     let x : Option<Int> = Ok(1);
     1
 }
@@ -884,8 +812,7 @@ fn integration_refinement_test() {
 fn exhaustive_enum_all_variants() {
     let source = r#"
 type Color = | Red | Green | Blue
-describe : Color -> String
-describe = |c| {
+fn describe(c: Color) -> String = {
   match c
     Red -> "red"
     Green -> "green"
@@ -899,8 +826,7 @@ describe = |c| {
 fn exhaustive_enum_missing_variant() {
     let source = r#"
 type Color = | Red | Green | Blue
-describe : Color -> String
-describe = |c| {
+fn describe(c: Color) -> String = {
   match c
     Red -> "red"
     Green -> "green"
@@ -913,8 +839,7 @@ describe = |c| {
 fn exhaustive_enum_wildcard() {
     let source = r#"
 type Color = | Red | Green | Blue
-describe : Color -> String
-describe = |c| {
+fn describe(c: Color) -> String = {
   match c
     Red -> "red"
     _ -> "other"
@@ -927,8 +852,7 @@ describe = |c| {
 fn exhaustive_enum_variable_binding() {
     let source = r#"
 type Color = | Red | Green | Blue
-describe : Color -> String
-describe = |c| {
+fn describe(c: Color) -> String = {
   match c
     Red -> "red"
     other -> "other"
@@ -941,8 +865,7 @@ describe = |c| {
 fn exhaustive_option_complete() {
     let source = r#"
 type Option = | Some(Int) | None
-unwrap_or : (Option, Int) -> Int
-unwrap_or = |opt, default| {
+fn unwrap_or(opt: Option, default: Int) -> Int = {
   match opt
     Some(v) -> v
     None -> default
@@ -955,8 +878,7 @@ unwrap_or = |opt, default| {
 fn exhaustive_option_missing_none() {
     let source = r#"
 type Option = | Some(Int) | None
-unwrap : Option -> Int
-unwrap = |opt| {
+fn unwrap(opt: Option) -> Int = {
   match opt
     Some(v) -> v
 }
@@ -968,8 +890,7 @@ unwrap = |opt| {
 fn exhaustive_result_complete() {
     let source = r#"
 type Result = | Ok(Int) | Err(String)
-get_val : Result -> Int
-get_val = |r| {
+fn get_val(r: Result) -> Int = {
   match r
     Ok(v) -> v
     Err(e) -> 0
@@ -981,8 +902,7 @@ get_val = |r| {
 #[test]
 fn exhaustive_bool_both() {
     let source = r#"
-to_str : Bool -> String
-to_str = |b| {
+fn to_str(b: Bool) -> String = {
   match b
     true -> "yes"
     false -> "no"
@@ -994,8 +914,7 @@ to_str = |b| {
 #[test]
 fn exhaustive_bool_missing_false() {
     let source = r#"
-to_str : Bool -> String
-to_str = |b| {
+fn to_str(b: Bool) -> String = {
   match b
     true -> "yes"
 }
@@ -1006,8 +925,7 @@ to_str = |b| {
 #[test]
 fn exhaustive_int_with_wildcard() {
     let source = r#"
-describe : Int -> String
-describe = |n| {
+fn describe(n: Int) -> String = {
   match n
     1 -> "one"
     _ -> "other"
@@ -1019,8 +937,7 @@ describe = |n| {
 #[test]
 fn exhaustive_int_without_wildcard() {
     let source = r#"
-describe : Int -> String
-describe = |n| {
+fn describe(n: Int) -> String = {
   match n
     1 -> "one"
     2 -> "two"
@@ -1033,8 +950,7 @@ describe = |n| {
 fn exhaustive_user_enum_missing() {
     let source = r#"
 type Status = | Active | Pending | Closed
-label : Status -> String
-label = |s| {
+fn label(s: Status) -> String = {
   match s
     Active -> "active"
     Pending -> "pending"
@@ -1051,11 +967,9 @@ label = |s| {
 fn forward_call() {
     check_ok(
         r#"
-main : () -> Int
-main = || helper(1)
+fn main() -> Int = helper(1)
 
-helper : Int -> Int
-helper = |x| x + 1
+fn helper(x: Int) -> Int = x + 1
 "#,
     );
 }
@@ -1064,15 +978,13 @@ helper = |x| x + 1
 fn forward_mutual_recursion() {
     check_ok(
         r#"
-is_even : Int -> Bool
-is_even = |n| {
+fn is_even(n: Int) -> Bool = {
   match n
     0 -> true
     _ -> is_odd(n - 1)
 }
 
-is_odd : Int -> Bool
-is_odd = |n| {
+fn is_odd(n: Int) -> Bool = {
   match n
     0 -> false
     _ -> is_even(n - 1)
@@ -1085,11 +997,9 @@ is_odd = |n| {
 fn forward_call_type_check() {
     check_ok(
         r#"
-run : () -> String
-run = || format(42)
+fn run() -> String = format(42)
 
-format : Int -> String
-format = |n| "hello"
+fn format(n: Int) -> String = "hello"
 "#,
     );
 }
@@ -1098,8 +1008,7 @@ format = |n| "hello"
 fn truly_undefined_still_errors() {
     check_has_error(
         r#"
-main : () -> Int
-main = || nonexistent(1)
+fn main() -> Int = nonexistent(1)
 "#,
         "TYP_002",
     );
@@ -1109,11 +1018,9 @@ main = || nonexistent(1)
 fn forward_arg_type_mismatch() {
     check_has_error(
         r#"
-main : () -> Int
-main = || helper("wrong")
+fn main() -> Int = helper("wrong")
 
-helper : Int -> Int
-helper = |x| x + 1
+fn helper(x: Int) -> Int = x + 1
 "#,
         "TYP_008",
     );
@@ -1123,8 +1030,7 @@ helper = |x| x + 1
 fn local_let_stays_sequential() {
     check_has_error(
         r#"
-main : () -> Int
-main = || {
+fn main() -> Int = {
   let result = future_val
   let future_val = 42
   result
@@ -1142,9 +1048,18 @@ main = || {
 fn for_over_list_ok() {
     check_ok(
         r#"
-foo : () -> ()
-foo = for x in [1, 2, 3] do x + 1
+fn foo() -> () = for x in [1, 2, 3] do ()
 "#,
+    );
+}
+
+#[test]
+fn for_body_non_unit_warns() {
+    check_has_warning(
+        r#"
+fn foo() -> () = for x in [1, 2, 3] do x + 1
+"#,
+        "TYP_033",
     );
 }
 
@@ -1152,8 +1067,7 @@ foo = for x in [1, 2, 3] do x + 1
 fn for_over_non_list_errors() {
     check_has_error(
         r#"
-foo : () -> ()
-foo = for x in 42 do x
+fn foo() -> () = for x in 42 do x
 "#,
         "TYP_023",
     );
@@ -1167,8 +1081,7 @@ foo = for x in 42 do x
 fn range_int_ok() {
     check_ok(
         r#"
-foo : () -> ()
-foo = {
+fn foo() -> () = {
   let r = 1..10
 }
 "#,
@@ -1179,8 +1092,7 @@ foo = {
 fn range_non_int_errors() {
     check_has_error(
         r#"
-foo : () -> ()
-foo = {
+fn foo() -> () = {
   let r = "a".."z"
 }
 "#,
@@ -1196,8 +1108,7 @@ foo = {
 fn unary_not_bool_ok() {
     check_ok(
         r#"
-foo : () -> Bool
-foo = not true
+fn foo() -> Bool = not true
 "#,
     );
 }
@@ -1206,8 +1117,7 @@ foo = not true
 fn unary_negate_int_ok() {
     check_ok(
         r#"
-foo : () -> Int
-foo = -5
+fn foo() -> Int = -5
 "#,
     );
 }
@@ -1216,8 +1126,7 @@ foo = -5
 fn unary_not_int_errors() {
     check_has_error(
         r#"
-foo : () -> Bool
-foo = not 42
+fn foo() -> Bool = not 42
 "#,
         "TYP_025",
     );
@@ -1227,8 +1136,7 @@ foo = not 42
 fn unary_negate_string_errors() {
     check_has_error(
         r#"
-foo : () -> ()
-foo = {
+fn foo() -> () = {
   let n = -"hello"
 }
 "#,
@@ -1244,8 +1152,7 @@ foo = {
 fn string_interpolation_checks_expr() {
     check_has_error(
         r#"
-foo : () -> String
-foo = "hello ${undefined_var}"
+fn foo() -> String = "hello ${undefined_var}"
 "#,
         "TYP_002",
     );
@@ -1255,8 +1162,7 @@ foo = "hello ${undefined_var}"
 fn string_interpolation_ok() {
     check_ok(
         r#"
-foo : () -> String
-foo = {
+fn foo() -> String = {
   let x = 1
   "val: ${x}"
 }
@@ -1272,14 +1178,11 @@ foo = {
 fn warning_does_not_cause_failure() {
     // f(g(x)) produces STY_001 warning but no errors — status should be success
     let source = r#"
-g : Int -> Int
-g = |x| x + 1
+fn g(x: Int) -> Int = x + 1
 
-f : Int -> Int
-f = |x| x * 2
+fn f(x: Int) -> Int = x * 2
 
-main : () -> Int
-main = f(g(1))
+fn main() -> Int = f(g(1))
 "#;
     let result = parse_source(source, "<test>");
     assert_eq!(
@@ -1296,14 +1199,11 @@ main = f(g(1))
 fn nested_call_pipe_suggestion() {
     // f(g(x)) should emit STY_001 warning
     let source = r#"
-g : Int -> Int
-g = |x| x + 1
+fn g(x: Int) -> Int = x + 1
 
-f : Int -> Int
-f = |x| x * 2
+fn f(x: Int) -> Int = x * 2
 
-main : () -> Int
-main = f(g(1))
+fn main() -> Int = f(g(1))
 "#;
     let result = parse_source(source, "<test>");
     let sty_warnings: Vec<_> = result
@@ -1319,14 +1219,11 @@ main = f(g(1))
 fn pipe_style_no_warning() {
     // x |> g |> f should NOT emit STY_001
     let source = r#"
-g : Int -> Int
-g = |x| x + 1
+fn g(x: Int) -> Int = x + 1
 
-f : Int -> Int
-f = |x| x * 2
+fn f(x: Int) -> Int = x * 2
 
-main : () -> Int
-main = 1 |> g |> f
+fn main() -> Int = 1 |> g |> f
 "#;
     let result = parse_source(source, "<test>");
     assert!(
@@ -1339,14 +1236,11 @@ main = 1 |> g |> f
 fn error_and_warning_both_reported() {
     // Source with both a type error and a nested call warning
     let source = r#"
-g : Int -> Int
-g = |x| x + 1
+fn g(x: Int) -> Int = x + 1
 
-f : Int -> String
-f = |x| x * 2
+fn f(x: Int) -> String = x * 2
 
-main : () -> String
-main = f(g(1))
+fn main() -> String = f(g(1))
 "#;
     let result = parse_source(source, "<test>");
     assert_eq!(result.status, "failure", "Errors should cause failure");
@@ -1370,14 +1264,11 @@ main = f(g(1))
 fn multi_arg_call_no_warning() {
     // f(x, g(y)) should NOT emit STY_001 (only single-arg calls trigger it)
     let source = r#"
-g : Int -> Int
-g = |x| x + 1
+fn g(x: Int) -> Int = x + 1
 
-f : (Int, Int) -> Int
-f = |a, b| a + b
+fn f(a: Int, b: Int) -> Int = a + b
 
-main : () -> Int
-main = f(1, g(2))
+fn main() -> Int = f(1, g(2))
 "#;
     let result = parse_source(source, "<test>");
     assert!(
@@ -1394,8 +1285,7 @@ main = f(1, g(2))
 fn inline_test_bool_ok() {
     check_ok(
         r#"
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
   where
     test "basic" = add(1, 2) == 3
 "#,
@@ -1406,8 +1296,7 @@ add = |a, b| a + b
 fn inline_test_non_bool_errors() {
     check_has_error(
         r#"
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
   where
     test "returns int" = add(1, 2)
 "#,
@@ -1435,8 +1324,7 @@ fn infer_list_map_returns_typed_list() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> ()
-main = {
+fn main() -> () = {
     let doubled = List.map([1, 2, 3], |x| x + 1)
 }
 "#,
@@ -1449,8 +1337,7 @@ fn infer_list_filter_preserves_element_type() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> ()
-main = {
+fn main() -> () = {
     let xs = [1, 2, 3, 4]
     let evens = List.filter(xs, |x| x > 2)
 }
@@ -1464,8 +1351,7 @@ fn infer_option_unwrap_extracts_inner() {
     check_no_errors(
         r#"
 @prelude(core)
-main : () -> Int
-main = {
+fn main() -> Int = {
     let x = Option.unwrap(Some(42))
     x + 1
 }
@@ -1479,8 +1365,7 @@ fn infer_try_expression_option() {
     check_ok(
         r#"
 @prelude(core)
-wrap : () -> Option<Int>
-wrap = {
+fn wrap() -> Option<Int> = {
     let x : Option<Int> = Some(42)
     let val = x?
     Some(val + 1)
@@ -1495,8 +1380,7 @@ fn infer_try_expression_result() {
     check_ok(
         r#"
 @prelude(core)
-wrap : () -> Result<Int, String>
-wrap = {
+fn wrap() -> Result<Int, String> = {
     let x : Result<Int, String> = Ok(42)
     let val = x?
     Ok(val + 1)
@@ -1511,8 +1395,7 @@ fn infer_list_head_concrete() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> Int
-main = {
+fn main() -> Int = {
     let first = List.head([1, 2, 3])
     first + 1
 }
@@ -1526,8 +1409,7 @@ fn infer_let_propagation() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> Int
-main = {
+fn main() -> Int = {
     let x = List.head([1, 2, 3])
     x + 1
 }
@@ -1541,8 +1423,7 @@ fn infer_nested_generic_calls() {
     check_no_errors(
         r#"
 @prelude(core)
-main : () -> Bool
-main = List.head(List.map([1, 2], |x| x > 0))
+fn main() -> Bool = List.head(List.map([1, 2], |x| x > 0))
 "#,
     );
 }
@@ -1553,8 +1434,7 @@ fn infer_list_map_string_result() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> ()
-main = {
+fn main() -> () = {
     let names = List.map([1, 2, 3], |x| "item")
 }
 "#,
@@ -1567,8 +1447,7 @@ fn infer_list_fold_accumulator() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> Int
-main = List.fold([1, 2, 3], 0, |acc, x| acc + x)
+fn main() -> Int = List.fold([1, 2, 3], 0, |acc, x| acc + x)
 "#,
     );
 }
@@ -1579,8 +1458,7 @@ fn infer_list_tail_preserves_type() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> ()
-main = {
+fn main() -> () = {
     let rest = List.tail([1, 2, 3])
     let first = List.head(rest)
     let sum = first + 1
@@ -1595,8 +1473,7 @@ fn infer_list_concat_types() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> Int
-main = {
+fn main() -> Int = {
     let combined = List.concat([1, 2], [3, 4])
     List.head(combined)
 }
@@ -1610,8 +1487,7 @@ fn infer_result_unwrap_extracts_inner() {
     check_no_errors(
         r#"
 @prelude(core)
-main : () -> Int
-main = {
+fn main() -> Int = {
     let x = Result.unwrap(Ok(42))
     x + 1
 }
@@ -1624,8 +1500,7 @@ fn infer_list_reverse_preserves_type() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> Int
-main = {
+fn main() -> Int = {
     let rev = List.reverse([1, 2, 3])
     List.head(rev)
 }
@@ -1638,8 +1513,7 @@ fn infer_list_sort_preserves_type() {
     check_ok(
         r#"
 @prelude(core)
-main : () -> Int
-main = {
+fn main() -> Int = {
     let sorted = List.sort([3, 1, 2])
     List.head(sorted)
 }
@@ -1657,8 +1531,7 @@ fn generic_some_produces_concrete_option() {
     check_no_errors(
         r#"
 @prelude(core)
-main : () -> Int
-main = Option.unwrap(Some(42))
+fn main() -> Int = Option.unwrap(Some(42))
 "#,
     );
 }
@@ -1669,8 +1542,7 @@ fn generic_ok_produces_concrete_result() {
     check_no_errors(
         r#"
 @prelude(core)
-main : () -> String
-main = Result.unwrap(Ok("hello"))
+fn main() -> String = Result.unwrap(Ok("hello"))
 "#,
     );
 }
@@ -1680,8 +1552,7 @@ fn generic_some_match_extracts_concrete_type() {
     // match on Some(42) should bind x as Int
     check_no_errors(
         "@prelude(core)\n\
-         main : () -> Int\n\
-         main = {\n\
+         fn main() -> Int = {\n\
            match Some(42)\n\
              Some(x) -> x + 1\n\
              None -> 0\n\
@@ -1694,8 +1565,7 @@ fn generic_ok_match_extracts_concrete_type() {
     // match on Ok(42) should bind x as Int
     check_no_errors(
         "@prelude(core)\n\
-         main : () -> Int\n\
-         main = {\n\
+         fn main() -> Int = {\n\
            match Ok(42)\n\
              Ok(x) -> x + 1\n\
              Err(_) -> 0\n\
@@ -1708,8 +1578,7 @@ fn generic_option_type_mismatch_in_match() {
     // Option<Int> matched — using x (Int) where String expected should error
     check_has_error(
         "@prelude(core)\n\
-         main : () -> Int\n\
-         main = {\n\
+         fn main() -> Int = {\n\
            let opt : Option<Int> = Some(42)\n\
            match opt\n\
              Some(x) -> String.length(x)\n\
@@ -1724,11 +1593,9 @@ fn generic_enum_payload_compatibility_checked() {
     // types_compatible should reject Option<Int> vs Option<String>
     check_has_error(
         "@prelude(core)\n\
-         identity : (Option<String>) -> Option<String>\n\
-         identity = |x| x\n\
+         fn identity(x: Option<String>) -> Option<String> = x\n\
          \n\
-         main : () -> Option<String>\n\
-         main = identity(Some(42))",
+         fn main() -> Option<String> = identity(Some(42))",
         "TYP_008",
     );
 }
@@ -1738,11 +1605,9 @@ fn generic_list_map_result_type_enforced() {
     // List.map([1,2,3], |x| x > 0) returns List<Bool>, not assignable to List<Int>
     check_has_error(
         "@prelude(core)\n\
-         sum : (List<Int>) -> Int\n\
-         sum = |xs| List.fold(xs, 0, |acc, x| acc + x)\n\
+         fn sum(xs: List<Int>) -> Int = List.fold(xs, 0, |acc, x| acc + x)\n\
          \n\
-         main : () -> Int\n\
-         main = {\n\
+         fn main() -> Int = {\n\
            let bools = List.map([1, 2, 3], |x| x > 0)\n\
            sum(bools)\n\
          }",
@@ -1755,11 +1620,10 @@ fn generic_try_expression_preserves_concrete_type() {
     // Some(42)? should produce Int, usable in arithmetic
     check_ok(
         "@prelude(core)\n\
-         main : () -> Option<Int>\n\
-         main = {\n\
-           let val = Some(42)?\n\
-           Some(val + 1)\n\
-         }",
+                  fn main() -> Option<Int> = {\n\
+                    let val = Some(42)?\n\
+                    Some(val + 1)\n\
+                  }",
     );
 }
 
@@ -1767,8 +1631,7 @@ fn generic_try_expression_preserves_concrete_type() {
 fn generic_err_produces_concrete_result() {
     check_no_errors(
         "@prelude(core)\n\
-         main : () -> String\n\
-         main = {\n\
+         fn main() -> String = {\n\
            match Err(\"oops\")\n\
              Ok(_) -> \"ok\"\n\
              Err(msg) -> msg\n\
@@ -1784,8 +1647,7 @@ fn generic_err_produces_concrete_result() {
 fn transitive_effect_direct_still_works() {
     // Direct ! call without declared effect still produces CAP_001
     check_has_error(
-        "fetch! : () -> String\n\
-         fetch! = Http.get!(\"http://example.com\")",
+        "fn fetch!() -> String = Http.get!(\"http://example.com\")",
         "CAP_001",
     );
 }
@@ -1795,11 +1657,9 @@ fn transitive_effect_via_helper() {
     // helper calls Console.println! (direct effect), foo calls helper (transitive)
     // foo should get CAP_001 for missing {Console}
     let source = "\
-        helper : () -> {Console} ()\n\
-        helper = Console.println!(\"hi\")\n\
+        fn helper() -> {Console} () = Console.println!(\"hi\")\n\
         \n\
-        foo : () -> ()\n\
-        foo = helper()";
+        fn foo() -> () = helper()";
     check_has_error(source, "CAP_001");
     // Verify the transitive diagnostic mentions 'transitively'
     let result = parse_source(source, "<test>");
@@ -1823,11 +1683,9 @@ fn transitive_effect_via_helper() {
 fn transitive_effect_declared_ok() {
     // foo calls helper which needs Console, but foo declares {Console} — no error
     check_ok(
-        "helper : () -> {Console} ()\n\
-         helper = Console.println!(\"hi\")\n\
-         \n\
-         foo : () -> {Console} ()\n\
-         foo = helper()",
+        "fn helper() -> {Console} () = Console.println!(\"hi\")\n\
+                  \n\
+                  fn foo() -> {Console} () = helper()",
     );
 }
 
@@ -1836,14 +1694,11 @@ fn transitive_effect_chain() {
     // a calls b (pure), b calls c, c calls Console.println!
     // Effect should propagate: c -> b -> a
     let source = "\
-        c : () -> {Console} ()\n\
-        c = Console.println!(\"deep\")\n\
+        fn c() -> {Console} () = Console.println!(\"deep\")\n\
         \n\
-        b : () -> ()\n\
-        b = c()\n\
+        fn b() -> () = c()\n\
         \n\
-        a : () -> ()\n\
-        a = b()";
+        fn a() -> () = b()";
     // Both a and b should get transitive CAP_001
     let result = parse_source(source, "<test>");
     let transitive_diags: Vec<_> = result
@@ -1867,11 +1722,9 @@ fn transitive_effect_mutual_recursion() {
     // ping calls pong, pong calls ping — mutual recursion should not infinite loop
     // Neither has effects, so no diagnostics should be emitted
     check_ok(
-        "ping : () -> ()\n\
-         ping = pong()\n\
-         \n\
-         pong : () -> ()\n\
-         pong = ping()",
+        "fn ping() -> () = pong()\n\
+                  \n\
+                  fn pong() -> () = ping()",
     );
 }
 
@@ -1883,8 +1736,7 @@ fn transitive_effect_mutual_recursion() {
 fn record_update_basic() {
     check_no_errors(
         "type Point = { x: Int, y: Int }\n\
-         update : Point -> Point\n\
-         update = |p| { ..p, x: 42 }",
+         fn update(p: Point) -> Point = { ..p, x: 42 }",
     );
 }
 
@@ -1893,8 +1745,7 @@ fn record_update_preserves_type() {
     // The result of a record update should have the same type as the base
     check_no_errors(
         "type Point = { x: Int, y: Int }\n\
-         shift : Point -> Int\n\
-         shift = |p| {\n\
+         fn shift(p: Point) -> Int = {\n\
            let p2 = { ..p, x: 99 }\n\
            p2.x\n\
          }",
@@ -1905,8 +1756,7 @@ fn record_update_preserves_type() {
 fn record_update_wrong_field_type() {
     check_has_error(
         "type Point = { x: Int, y: Int }\n\
-         update : Point -> Point\n\
-         update = |p| { ..p, x: \"hello\" }",
+         fn update(p: Point) -> Point = { ..p, x: \"hello\" }",
         "TYP_028",
     );
 }
@@ -1915,8 +1765,7 @@ fn record_update_wrong_field_type() {
 fn record_update_nonexistent_field() {
     check_has_error(
         "type Point = { x: Int, y: Int }\n\
-         update : Point -> Point\n\
-         update = |p| { ..p, z: 42 }",
+         fn update(p: Point) -> Point = { ..p, z: 42 }",
         "TYP_029",
     );
 }

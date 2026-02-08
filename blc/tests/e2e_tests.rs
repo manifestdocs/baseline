@@ -295,17 +295,14 @@ fn check_refinement_test() {
 
 #[test]
 fn check_type_fail() {
-    assert_check_has_errors(
-        "type_fail.bl",
-        &["TYP_005", "TYP_006", "TYP_008", "TYP_010"],
-    );
+    assert_check_has_errors("type_fail.bl", &["TYP_006", "TYP_007", "TYP_010"]);
 }
 
 #[test]
 fn check_type_test() {
     assert_check_has_errors(
         "type_test.bl",
-        &["TYP_001", "TYP_002", "TYP_003", "TYP_004", "TYP_005"],
+        &["TYP_001", "TYP_002", "TYP_003", "TYP_004"],
     );
 }
 

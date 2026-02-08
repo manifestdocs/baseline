@@ -62,7 +62,7 @@ fn arith_expr() -> impl Strategy<Value = String> {
 
 /// Generate a well-typed pure program that should run without errors
 fn pure_program() -> impl Strategy<Value = String> {
-    arith_expr().prop_map(|expr| format!("@prelude(core)\n\nmain : () -> Int\nmain = || {expr}\n"))
+    arith_expr().prop_map(|expr| format!("@prelude(core)\n\nfn main() -> Int = {expr}\n"))
 }
 
 proptest! {
@@ -86,7 +86,7 @@ proptest! {
     #[test]
     fn soundness_arithmetic(expr in arith_expr()) {
         let source = format!(
-            "@prelude(core)\n\nmain : () -> Int\nmain = || {expr}\n"
+            "@prelude(core)\n\nfn main() -> Int = {expr}\n"
         );
         let (rc, _json) = blc_check_json(&source);
         // If analysis passes, interpreter should not panic
