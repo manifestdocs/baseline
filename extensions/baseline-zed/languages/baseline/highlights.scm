@@ -129,10 +129,18 @@
 ; ============================================================================
 
 (spec_decl
-  "@spec" @attribute)
+  "@spec" @attribute
+  name: (identifier) @function)
+
+(spec_decl
+  "@spec" @attribute
+  name: (type_identifier) @type)
 
 (given_clause
   "@given" @attribute)
+
+(given_clause
+  "where" @keyword)
 
 (returns_clause
   "@returns" @attribute)
@@ -149,6 +157,15 @@
 (pure_attribute) @attribute
 
 (total_attribute) @attribute
+
+; "result" is a special variable in @ensures/@requires conditions
+(ensures_clause
+  (identifier) @variable.builtin
+  (#eq? @variable.builtin "result"))
+
+(requires_clause
+  (identifier) @variable.builtin
+  (#eq? @variable.builtin "result"))
 
 ; ============================================================================
 ; Functions
@@ -239,7 +256,6 @@
   ">="
   "&&"
   "||"
-  "!"
   "|>"
   "?"
   ".."
