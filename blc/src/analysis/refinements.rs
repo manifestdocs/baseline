@@ -262,11 +262,9 @@ fn check_let_binding(
         }
 
         if val.kind() == "integer_literal" {
-            resolved_value = val
-                .utf8_text(source.as_bytes())
-                .unwrap_or("0")
-                .parse::<i64>()
-                .ok();
+            resolved_value = crate::parse::parse_int_literal(
+                val.utf8_text(source.as_bytes()).unwrap_or("0"),
+            );
         } else if val.kind() == "identifier" {
             // Lookup in ValueTable
             if let Ok(var_name) = val.utf8_text(source.as_bytes()) {

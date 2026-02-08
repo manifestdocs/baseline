@@ -112,6 +112,21 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
     }
 }
 
+/// Parse an integer literal that may use hex (0x), binary (0b), octal (0o),
+/// or decimal notation, with optional underscore separators.
+pub fn parse_int_literal(text: &str) -> Option<i64> {
+    let s = text.replace('_', "");
+    if s.starts_with("0x") || s.starts_with("0X") {
+        i64::from_str_radix(&s[2..], 16).ok()
+    } else if s.starts_with("0b") || s.starts_with("0B") {
+        i64::from_str_radix(&s[2..], 2).ok()
+    } else if s.starts_with("0o") || s.starts_with("0O") {
+        i64::from_str_radix(&s[2..], 8).ok()
+    } else {
+        s.parse::<i64>().ok()
+    }
+}
+
 /// Recursively collect ERROR and MISSING nodes from the syntax tree.
 fn collect_errors(
     node: tree_sitter::Node,

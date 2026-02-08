@@ -378,8 +378,8 @@ fn check_function(node: Node, source: &str, file: &str, diagnostics: &mut Vec<Di
 
 /// Find the function name from a function_def node.
 fn find_function_name<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
-    // The grammar defines: field('name', $._name) twice in function_def.
-    // child_by_field_name("name") returns the first occurrence.
+    // The grammar defines: fn field('name', $._name)(...)
+    // child_by_field_name("name") returns the function name.
     if let Some(name_node) = node.child_by_field_name("name") {
         return name_node.utf8_text(source.as_bytes()).ok();
     }
@@ -398,22 +398,14 @@ fn find_function_name<'a>(node: Node<'a>, source: &'a str) -> Option<&'a str> {
 
 /// Extract declared effects from a function's type annotation.
 ///
-/// Looks for patterns like `func : Type -> {Http, Db} Result`
+/// Looks for the `effects` field in `fn name() -> {Http, Db} ReturnType`
 fn extract_declared_effects(node: Node, source: &str) -> Vec<String> {
     let mut effects = Vec::new();
 
-    // Find the signature child
-    if let Some(sig) = node.child_by_field_name("signature") {
-        collect_effects_from_type(sig, source, &mut effects);
+    // Read the effects field directly from function_def
+    if let Some(effect_set) = node.child_by_field_name("effects") {
+        collect_effects_from_type(effect_set, source, &mut effects);
         return effects;
-    }
-
-    // Fallback search
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        if child.kind() == "type_signature" || child.kind() == "type_annotation" {
-            collect_effects_from_type(child, source, &mut effects);
-        }
     }
 
     effects

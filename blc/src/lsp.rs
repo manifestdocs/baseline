@@ -263,11 +263,18 @@ fn extract_symbols(source: &str) -> Vec<SymbolInfo> {
                         .unwrap_or("")
                         .to_string();
 
-                    // Extract type signature
-                    let type_sig = child
-                        .child_by_field_name("signature")
-                        .and_then(|sig| sig.utf8_text(source.as_bytes()).ok())
-                        .map(|s| s.to_string());
+                    // Build type signature from params and return type
+                    let type_sig = {
+                        let params = child
+                            .child_by_field_name("params")
+                            .and_then(|p| p.utf8_text(source.as_bytes()).ok())
+                            .unwrap_or("");
+                        let ret = child
+                            .child_by_field_name("return_type")
+                            .and_then(|r| r.utf8_text(source.as_bytes()).ok())
+                            .unwrap_or("()");
+                        Some(format!("({}) -> {}", params, ret))
+                    };
 
                     let start = child.start_position();
                     let end = child.end_position();
@@ -449,14 +456,16 @@ mod tests {
     #[test]
     fn test_extract_symbols_function() {
         let source = r#"
-greet : String -> String
-greet = |name| "Hello"
+fn greet(name: String) -> String = "Hello"
 "#;
         let symbols = extract_symbols(source);
         assert_eq!(symbols.len(), 1);
         assert_eq!(symbols[0].name, "greet");
         assert_eq!(symbols[0].kind, SymbolKind::FUNCTION);
-        assert_eq!(symbols[0].type_sig.as_deref(), Some("String -> String"));
+        assert_eq!(
+            symbols[0].type_sig.as_deref(),
+            Some("(name: String) -> String")
+        );
     }
 
     #[test]

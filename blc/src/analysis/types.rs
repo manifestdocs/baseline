@@ -266,6 +266,21 @@ impl SymbolTable {
     fn lookup_generic_schema(&self, qualified_name: &str) -> Option<&GenericSchema> {
         self.generic_schemas.get(qualified_name)
     }
+
+    /// Collect all visible bindings from current scope chain (for typed holes).
+    fn visible_bindings(&self) -> Vec<(String, Type)> {
+        let mut seen = HashSet::new();
+        let mut bindings = Vec::new();
+        for scope in self.scopes.iter().rev() {
+            for (name, ty) in scope {
+                if seen.insert(name.clone()) {
+                    bindings.push((name.clone(), ty.clone()));
+                }
+            }
+        }
+        bindings.sort_by(|a, b| a.0.cmp(&b.0));
+        bindings
+    }
 }
 
 /// Build a map of "Module.method" -> Function type for all builtins and native
@@ -568,7 +583,7 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         );
         sigs.insert(
             "Response.json".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
         );
         sigs.insert(
             "Response.created".into(),
@@ -600,6 +615,18 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
                 vec![Type::Unknown, Type::String, Type::String],
                 Box::new(Type::Unknown),
             ),
+        );
+        sigs.insert(
+            "Response.with_headers".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.redirect".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Response.redirect_permanent".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
         );
     }
 
@@ -638,6 +665,34 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
             ),
         );
         sigs.insert(
+            "Router.patch".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Router.options".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Router.head".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Router.any".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
             "Router.routes".into(),
             Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
         );
@@ -645,13 +700,47 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
             "Router.use".into(),
             Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
         );
+        sigs.insert(
+            "Router.group".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+    }
+
+    // -- Request helpers (pure) --
+    if native_modules.contains(&"Request") {
+        sigs.insert(
+            "Request.header".into(),
+            Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Request.method".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Request.body_json".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Request.with_state".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Request.state".into(),
+            Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+        );
     }
 
     // -- Server builtins (effect: Http) --
     if builtin_modules.contains(&"Server") {
         sigs.insert(
             "Server.listen!".into(),
-            Type::Function(vec![Type::Int, Type::Unknown], Box::new(Type::Unit)),
+            Type::Function(vec![Type::Unknown, Type::Int], Box::new(Type::Unit)),
         );
     }
 
@@ -694,12 +783,9 @@ fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
     for child in node.children(&mut cursor) {
         match child.kind() {
             "function_def" => {
-                if let (Some(name_node), Some(sig_node)) = (
-                    child.child_by_field_name("name"),
-                    child.child_by_field_name("signature"),
-                ) {
+                if let Some(name_node) = child.child_by_field_name("name") {
                     let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                    let ty = parse_type(&sig_node, source, symbols);
+                    let ty = parse_function_type(&child, source, symbols);
                     symbols.insert(name, ty);
                 }
             }
@@ -707,6 +793,27 @@ fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
             _ => {}
         }
     }
+}
+
+/// Build a Type::Function from a function_def's param_list and return_type fields.
+fn parse_function_type(func_node: &Node, source: &str, symbols: &SymbolTable) -> Type {
+    let mut arg_types = Vec::new();
+    if let Some(params) = func_node.child_by_field_name("params") {
+        let mut cursor = params.walk();
+        for param in params.named_children(&mut cursor) {
+            if param.kind() == "param"
+                && let Some(type_node) = param.child_by_field_name("type")
+            {
+                arg_types.push(parse_type(&type_node, source, symbols));
+            }
+        }
+    }
+    let ret_type = if let Some(ret_node) = func_node.child_by_field_name("return_type") {
+        parse_type(&ret_node, source, symbols)
+    } else {
+        Type::Unit
+    };
+    Type::Function(arg_types, Box::new(ret_type))
 }
 
 pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
@@ -1107,87 +1214,46 @@ fn check_node_inner(
             let name_node = node.child_by_field_name("name").unwrap();
             let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
 
-            // Check signature
-            let sig_node = node.child_by_field_name("signature").unwrap();
-            let function_type = parse_type(&sig_node, source, symbols);
+            // Build function type from param_list and return_type
+            let function_type = parse_function_type(node, source, symbols);
 
             symbols.insert(name.clone(), function_type.clone());
 
             if let Type::Function(arg_types, ret_type) = &function_type {
                 symbols.enter_scope();
 
-                let body_node = node.child_by_field_name("body").unwrap();
-
-                // Special handling if body is a lambda to bind args
-                if body_node.kind() == "lambda" {
-                    let child_count = body_node.named_child_count();
-                    // Last identified named child is body, others are args
-                    let arg_count = if child_count > 0 { child_count - 1 } else { 0 };
-
-                    if arg_count != arg_types.len() {
-                        diagnostics.push(Diagnostic {
-                            code: "TYP_005".to_string(),
-                            severity: Severity::Error,
-                            location: loc(file, &body_node),
-                            message: format!(
-                                "Function `{}` expects {} arguments, lambda has {}",
-                                name,
-                                arg_types.len(),
-                                arg_count
-                            ),
-                            context: "Function implementation must match signature.".to_string(),
-                            suggestions: vec![],
-                        });
-                    }
-
-                    for (i, arg_type) in arg_types
-                        .iter()
-                        .enumerate()
-                        .take(std::cmp::min(arg_count, arg_types.len()))
-                    {
-                        let arg_node = body_node.named_child(i).unwrap();
-                        if arg_node.kind() == "identifier" {
+                // Bind params from param_list
+                if let Some(params) = node.child_by_field_name("params") {
+                    let mut cursor = params.walk();
+                    let mut i = 0;
+                    for param in params.named_children(&mut cursor) {
+                        if param.kind() == "param"
+                            && let Some(name_node) = param.child_by_field_name("name")
+                        {
                             let arg_name =
-                                arg_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                            symbols.insert(arg_name, arg_type.clone());
+                                name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                            if i < arg_types.len() {
+                                symbols.insert(arg_name, arg_types[i].clone());
+                            }
+                            i += 1;
                         }
                     }
+                }
 
-                    if child_count > 0 {
-                        let lambda_body = body_node.named_child(child_count - 1).unwrap();
-                        let body_type =
-                            check_node(&lambda_body, source, file, symbols, diagnostics);
-
-                        if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
-                            diagnostics.push(Diagnostic {
-                                code: "TYP_006".to_string(),
-                                severity: Severity::Error,
-                                location: loc(file, &lambda_body),
-                                message: format!(
-                                    "Function `{}` declares return type {}, body returns {}",
-                                    name, ret_type, body_type
-                                ),
-                                context: "Function body return type must match signature."
-                                    .to_string(),
-                                suggestions: vec![],
-                            });
-                        }
-                    }
-                } else {
-                    let body_type = check_node(&body_node, source, file, symbols, diagnostics);
-                    if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
-                        diagnostics.push(Diagnostic {
-                            code: "TYP_006".to_string(),
-                            severity: Severity::Error,
-                            location: loc(file, &body_node),
-                            message: format!(
-                                "Function `{}` declares return type {}, body returns {}",
-                                name, ret_type, body_type
-                            ),
-                            context: "Function body return type must match signature.".to_string(),
-                            suggestions: vec![],
-                        });
-                    }
+                let body_node = node.child_by_field_name("body").unwrap();
+                let body_type = check_node(&body_node, source, file, symbols, diagnostics);
+                if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_006".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &body_node),
+                        message: format!(
+                            "Function `{}` declares return type {}, body returns {}",
+                            name, ret_type, body_type
+                        ),
+                        context: "Function body return type must match signature.".to_string(),
+                        suggestions: vec![],
+                    });
                 }
 
                 // Check where_block inline tests (expressions must be Bool)
@@ -1245,9 +1311,44 @@ fn check_node_inner(
             let func_node = node.named_child(0).unwrap();
             let func_type = check_node(&func_node, source, file, symbols, diagnostics);
 
-            // STY_001: suggest pipe for nested single-arg calls like f(g(x))
+            // Named argument validation
             let total_children = node.named_child_count();
             let params_provided = total_children.saturating_sub(1);
+
+            // Check: no positional args after named args, no duplicate names
+            let mut seen_named = false;
+            let mut named_names: Vec<String> = Vec::new();
+            for i in 1..total_children {
+                let arg = node.named_child(i).unwrap();
+                if arg.kind() == "named_argument" {
+                    seen_named = true;
+                    if let Some(name_node) = arg.child_by_field_name("name") {
+                        let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        if named_names.contains(&name) {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_031".to_string(),
+                                severity: Severity::Error,
+                                location: loc(file, &arg),
+                                message: format!("Duplicate named argument: {}", name),
+                                context: "Each named argument may only appear once.".to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+                        named_names.push(name);
+                    }
+                } else if seen_named {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_030".to_string(),
+                        severity: Severity::Error,
+                        location: loc(file, &arg),
+                        message: "Positional argument after named argument".to_string(),
+                        context: "All positional arguments must come before named arguments.".to_string(),
+                        suggestions: vec![],
+                    });
+                }
+            }
+
+            // STY_001: suggest pipe for nested single-arg calls like f(g(x))
             if params_provided == 1 {
                 let single_arg = node.named_child(1).unwrap();
                 if single_arg.kind() == "call_expression" {
@@ -1307,7 +1408,8 @@ fn check_node_inner(
                         .enumerate()
                         .take(std::cmp::min(params_provided, schema_params.len()))
                     {
-                        let arg_expr = node.named_child(i + 1).unwrap();
+                        let raw_arg = node.named_child(i + 1).unwrap();
+                        let arg_expr = call_arg_expr(&raw_arg);
 
                         // For lambda args with a Function-typed schema param, use
                         // check_lambda_with_expected with the resolved param types
@@ -1370,7 +1472,8 @@ fn check_node_inner(
                     .enumerate()
                     .take(std::cmp::min(params_provided, arg_types.len()))
                 {
-                    let arg_expr = node.named_child(i + 1).unwrap();
+                    let raw_arg = node.named_child(i + 1).unwrap();
+                    let arg_expr = call_arg_expr(&raw_arg);
 
                     // Lambda argument inference: if expected type is Function and arg is
                     // a lambda, check the lambda body with expected param types injected.
@@ -1701,6 +1804,39 @@ fn check_node_inner(
             // For now, assume most effects return Unit or Unknown to allow flow.
             Type::Unknown
         }
+        "named_argument" => {
+            // Named argument: name: expression — type-check the expression
+            let count = node.named_child_count();
+            if count > 0 {
+                check_node(&node.named_child(count - 1).unwrap(), source, file, symbols, diagnostics)
+            } else {
+                Type::Unknown
+            }
+        }
+        "hole_expression" => {
+            // Typed hole: ?? — report expected type and available bindings
+            let expected = infer_expected_type(node, source, symbols);
+            let bindings = symbols.visible_bindings();
+
+            let mut msg = format!("Typed hole (??) — expected type: {}", expected);
+            if !bindings.is_empty() {
+                msg.push_str("\n  Available bindings:");
+                for (name, ty) in &bindings {
+                    msg.push_str(&format!("\n    {}: {}", name, ty));
+                }
+            }
+
+            diagnostics.push(Diagnostic {
+                code: "HOLE_001".to_string(),
+                severity: Severity::Warning,
+                location: loc(file, node),
+                message: msg,
+                context: "Replace ?? with an expression of the expected type.".to_string(),
+                suggestions: vec![],
+            });
+
+            expected
+        }
         "literal" | "parenthesized_expression" => {
             if let Some(child) = node.named_child(0) {
                 check_node(&child, source, file, symbols, diagnostics)
@@ -1710,7 +1846,7 @@ fn check_node_inner(
         }
         "integer_literal" => Type::Int,
         "float_literal" => Type::Float,
-        "string_literal" => {
+        "string_literal" | "multiline_string_literal" => {
             // Recurse into interpolation children to type-check embedded expressions
             let named_count = node.named_child_count();
             for i in 0..named_count {
@@ -1723,6 +1859,7 @@ fn check_node_inner(
             }
             Type::String
         }
+        "raw_string_literal" | "raw_hash_string_literal" => Type::String,
         "boolean_literal" => Type::Bool,
         "binary_expression" => {
             let left_type = check_node(
@@ -1764,6 +1901,36 @@ fn check_node_inner(
                             });
                         }
                         Type::Unknown
+                    }
+                }
+                "++" => {
+                    // List concatenation: List<T> ++ List<T> -> List<T>
+                    match (&left_type, &right_type) {
+                        (Type::List(inner_l), Type::List(inner_r)) => {
+                            if types_compatible(inner_l, inner_r) {
+                                left_type.clone()
+                            } else if **inner_l == Type::Unknown {
+                                right_type.clone()
+                            } else {
+                                Type::List(inner_l.clone())
+                            }
+                        }
+                        (Type::List(_), Type::Unknown) | (Type::Unknown, Type::List(_)) | (Type::Unknown, Type::Unknown) => {
+                            if matches!(left_type, Type::List(_)) { left_type.clone() } else { right_type.clone() }
+                        }
+                        _ => {
+                            if left_type != Type::Unknown && right_type != Type::Unknown {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_001".to_string(),
+                                    severity: Severity::Error,
+                                    location: loc(file, node),
+                                    message: format!("Operator `++` requires List operands, found {} and {}", left_type, right_type),
+                                    context: "The ++ operator concatenates two lists of the same type.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                            Type::Unknown
+                        }
                     }
                 }
                 "==" | "!=" | "<" | ">" | "<=" | ">=" => Type::Bool,
@@ -2016,8 +2183,28 @@ fn check_node_inner(
 
             symbols.enter_scope();
             bind_pattern(&pat_node, element_type, source, symbols);
-            check_node(&body_node, source, file, symbols, diagnostics);
+            let body_type = check_node(&body_node, source, file, symbols, diagnostics);
             symbols.exit_scope();
+
+            // For loops are for side effects only. If the body returns a non-Unit type,
+            // warn: use List.map for transformations (One Way Principle).
+            if body_type != Type::Unit && body_type != Type::Unknown {
+                diagnostics.push(Diagnostic {
+                    code: "TYP_033".to_string(),
+                    severity: Severity::Warning,
+                    location: loc(file, &body_node),
+                    message: format!(
+                        "For loop body returns {}, but for loops are for side effects only",
+                        body_type
+                    ),
+                    context: "Use List.map() to transform data, for loops to perform effects.".to_string(),
+                    suggestions: vec![Suggestion {
+                        strategy: "replace".to_string(),
+                        description: "Use List.map() for transformations".to_string(),
+                        patch: None,
+                    }],
+                });
+            }
 
             Type::Unit
         }
@@ -2101,6 +2288,42 @@ fn check_node_inner(
         _ => {
             Type::Unit // simplified
         }
+    }
+}
+
+/// Infer the expected type for a typed hole from its parent context.
+fn infer_expected_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
+    if let Some(parent) = node.parent() {
+        match parent.kind() {
+            "let_binding" => {
+                // let x: T = ?? → look for type annotation
+                if let Some(ann_node) = parent.child_by_field_name("type") {
+                    if let Some(type_node) = ann_node.named_child(0) {
+                        return parse_type(&type_node, source, symbols);
+                    }
+                }
+            }
+            "function_def" => {
+                // fn foo() -> T = ?? → look for return type
+                if let Some(ret_node) = parent.child_by_field_name("return_type") {
+                    return parse_type(&ret_node, source, symbols);
+                }
+            }
+            _ => {}
+        }
+    }
+    Type::Unknown
+}
+
+/// Extract the expression node from a call argument (handles named_argument).
+fn call_arg_expr<'a>(arg: &Node<'a>) -> Node<'a> {
+    if arg.kind() == "named_argument" {
+        // named_argument: name ':' expression
+        // The expression is the last named child
+        let count = arg.named_child_count();
+        arg.named_child(count - 1).unwrap_or(*arg)
+    } else {
+        *arg
     }
 }
 

@@ -164,9 +164,10 @@ impl<'a> Formatter<'a> {
     }
 
     fn format_function_def(&mut self, node: &Node) {
-        // Use field accessors: name, signature, body
         let name_node = node.child_by_field_name("name");
-        let sig_node = node.child_by_field_name("signature");
+        let params_node = node.child_by_field_name("params");
+        let effects_node = node.child_by_field_name("effects");
+        let ret_node = node.child_by_field_name("return_type");
         let body_node = node.child_by_field_name("body");
 
         let name = name_node.map(|n| self.text(&n)).unwrap_or("?");
@@ -177,21 +178,38 @@ impl<'a> Formatter<'a> {
             .children(&mut cursor)
             .any(|c| self.text(&c) == "export");
 
-        // Signature line: [export] name : signature
+        // Single line: [export] fn name(params) [-> [effects] return_type] = body
         self.push_indent();
         if has_export {
             self.push("export ");
         }
+        self.push("fn ");
         self.push(name);
-        if let Some(sig) = sig_node {
-            self.push(" : ");
-            self.format_type_signature(&sig);
+        self.push("(");
+        if let Some(params) = params_node {
+            let mut pcursor = params.walk();
+            let mut first = true;
+            for param in params.named_children(&mut pcursor) {
+                if param.kind() == "param" {
+                    if !first {
+                        self.push(", ");
+                    }
+                    self.push(self.text(&param));
+                    first = false;
+                }
+            }
         }
-        self.newline();
-
-        // Implementation line: name = body
-        self.push_indent();
-        self.push(name);
+        self.push(")");
+        if ret_node.is_some() || effects_node.is_some() {
+            self.push(" -> ");
+            if let Some(eff) = effects_node {
+                self.format_effect_set(&eff);
+                self.push(" ");
+            }
+            if let Some(ret) = ret_node {
+                self.format_type_expr(&ret);
+            }
+        }
         if let Some(body) = body_node {
             self.push(" = ");
             self.format_expression(&body);
@@ -204,29 +222,6 @@ impl<'a> Formatter<'a> {
                 self.newline();
                 self.format_where_block(&child);
             }
-        }
-    }
-
-    fn format_type_signature(&mut self, node: &Node) {
-        // type_signature: _type_expr -> optional(effect_set) _type_expr
-        let mut cursor = node.walk();
-        let children: Vec<Node> = node.children(&mut cursor).collect();
-
-        let mut first = true;
-        for child in &children {
-            let txt = self.text(child);
-            if txt == "->" {
-                self.push(" -> ");
-            } else if child.kind() == "effect_set" {
-                self.format_effect_set(child);
-                self.push(" ");
-            } else {
-                if !first && !self.output.ends_with(' ') && !self.output.ends_with('>') {
-                    self.push(", ");
-                }
-                self.format_type_expr(child);
-            }
-            first = false;
         }
     }
 
@@ -375,7 +370,9 @@ impl<'a> Formatter<'a> {
                 i += 1;
                 continue;
             }
-            if children[i].kind() == "string_literal" {
+            if children[i].kind() == "string_literal"
+                || children[i].kind() == "multiline_string_literal"
+            {
                 self.push(txt);
                 i += 1;
                 continue;
@@ -637,8 +634,7 @@ greet = |name| "Hello, ${name}!"
 
     #[test]
     fn test_blank_line_between_defs() {
-        let source =
-            "greet : String -> String\ngreet = |name| name\nadd : Int -> Int\nadd = |n| n + 1\n";
+        let source = "fn greet(name: String) -> String = name\nfn add(n: Int) -> Int = n + 1\n";
         let result = format_source(source).unwrap();
         assert!(
             result.contains("\n\n"),
@@ -656,8 +652,7 @@ greet = |name| "Hello, ${name}!"
 
     #[test]
     fn test_format_binary_spacing() {
-        let source = r#"add : Int -> Int
-add = |n| n + 1
+        let source = r#"fn add(n: Int) -> Int = n + 1
 "#;
         let result = format_source(source).unwrap();
         assert!(
