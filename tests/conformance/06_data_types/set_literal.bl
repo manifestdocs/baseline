@@ -1,0 +1,25 @@
+@prelude(core)
+
+// Conformance: Set literal syntax #{ value1, value2, ... }
+
+fn my_set() -> Set<Int> = #{ 1, 2, 3 }
+  where
+    test "set literal has 3 elements" = Set.len(my_set()) == 3
+    test "set literal contains 1" = Set.contains(my_set(), 1) == true
+    test "set literal contains 2" = Set.contains(my_set(), 2) == true
+    test "set literal contains 3" = Set.contains(my_set(), 3) == true
+    test "set literal does not contain 4" = Set.contains(my_set(), 4) == false
+
+fn string_set() -> Set<String> = #{ "a", "b", "c" }
+  where
+    test "string set has 3 elements" = Set.len(string_set()) == 3
+    test "string set contains a" = Set.contains(string_set(), "a") == true
+
+fn single_set() -> Set<Int> = #{ 42 }
+  where
+    test "single element set" = Set.len(single_set()) == 1
+
+test "set literal deduplicates" = {
+  let s = #{ 1, 2, 2, 3, 3, 3 }
+  Set.len(s) == 3
+}

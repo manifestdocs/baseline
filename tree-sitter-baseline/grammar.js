@@ -255,7 +255,8 @@ module.exports = grammar({
       $.parenthesized_expression,
       $.hole_expression,
       $.expect_expression,
-      $.map_literal
+      $.map_literal,
+      $.set_literal
     ),
 
     // [1, 2, 3]
@@ -264,6 +265,9 @@ module.exports = grammar({
     // #{ key: value, ... }
     map_literal: $ => seq('#{', commaSep($.map_entry), '}'),
     map_entry: $ => seq(field('key', $._expression), ':', field('value', $._expression)),
+
+    // #{ value1, value2, ... } — at least 1 element to avoid ambiguity with empty map #{}
+    set_literal: $ => seq('#{', commaSep1($._expression), '}'),
 
     // x |> f
     pipe_expression: $ => prec.left(PREC.PIPE, seq($._expression, '|>', $._expression)),

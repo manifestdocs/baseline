@@ -307,6 +307,7 @@ impl<'a> Lowerer<'a> {
             "with_expression" => self.lower_with_expression(node),
             "handle_expression" => self.lower_handle_expression(node),
             "map_literal" => self.lower_map_literal(node),
+            "set_literal" => self.lower_set_literal(node),
             "map_entry" => Ok(Expr::Unit),
             "expect_expression" | "matcher" => Ok(Expr::Bool(true)),
             "describe_block" | "it_block" | "before_each_block" | "after_each_block" => {
@@ -1223,6 +1224,29 @@ impl<'a> Lowerer<'a> {
                     ty: None,
                 };
             }
+        }
+
+        Ok(result)
+    }
+
+    fn lower_set_literal(&mut self, node: &Node) -> Result<Expr, LowerError> {
+        // Desugar #{ v1, v2 } into Set.insert(Set.insert(Set.empty(), v1), v2)
+        let mut result = Expr::CallNative {
+            module: "Set".to_string(),
+            method: "empty".to_string(),
+            args: vec![],
+            ty: None,
+        };
+
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            let elem = self.lower_expression(&child)?;
+            result = Expr::CallNative {
+                module: "Set".to_string(),
+                method: "insert".to_string(),
+                args: vec![result, elem],
+                ty: None,
+            };
         }
 
         Ok(result)

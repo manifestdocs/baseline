@@ -1417,6 +1417,18 @@ fn check_node_inner(
             // Handled within map_literal
             Type::Unit
         }
+        "set_literal" => {
+            // #{ val1, val2, ... } — infer Set<T> from first element
+            let mut elem_type = Type::Unknown;
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                let t = check_node(&child, source, file, symbols, diagnostics);
+                if elem_type == Type::Unknown {
+                    elem_type = t;
+                }
+            }
+            Type::Set(Box::new(elem_type))
+        }
         "let_binding" => {
             // Grammar: let pattern [: type_annotation] = expression
             // named_child(0) = pattern, last named_child = expression

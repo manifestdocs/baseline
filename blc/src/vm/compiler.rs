@@ -243,6 +243,9 @@ impl<'a> Compiler<'a> {
             "map_literal" => {
                 self.compile_map_literal(node)?;
             }
+            "set_literal" => {
+                self.compile_set_literal(node)?;
+            }
             "map_entry" => {
                 // Handled within map_literal
             }
@@ -2228,6 +2231,30 @@ impl<'a> Compiler<'a> {
                 self.compile_expression(&val_node)?;
                 self.emit(Op::CallNative(insert_id, 3), node);
             }
+        }
+        Ok(())
+    }
+
+    fn compile_set_literal(&mut self, node: &Node<'a>) -> Result<(), CompileError> {
+        // Desugar #{ v1, v2 } into Set.empty() then Set.insert chains
+        let empty_id = self
+            .natives
+            .lookup("Set.empty")
+            .ok_or_else(|| self.error("Set.empty native not found".into(), node))?;
+        let insert_id = self
+            .natives
+            .lookup("Set.insert")
+            .ok_or_else(|| self.error("Set.insert native not found".into(), node))?;
+
+        // Start with Set.empty()
+        self.emit(Op::CallNative(empty_id, 0), node);
+
+        // For each element, call Set.insert(set, elem)
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            // Stack: [set] → compile elem → [set, elem]
+            self.compile_expression(&child)?;
+            self.emit(Op::CallNative(insert_id, 2), node);
         }
         Ok(())
     }
