@@ -1,0 +1,208 @@
+# Baseline Language Quick Reference
+
+Baseline is a strongly typed, effect-tracked programming language.
+Files use the `.bl` extension. The compiler is `blc`.
+
+## Syntax Summary
+
+### Functions
+```
+fn name(param: Type) -> ReturnType = body
+fn name(a: Int, b: Int) -> Int = a + b
+fn effectful!(x: Int) -> {Console} () = Console.println!("${x}")
+```
+
+### Effects
+Effectful functions end with `!` and declare effects in `{...}`:
+```
+fn fetch!(url: String) -> {Http, Log} Result = {
+  Log.info!("Fetching ${url}")
+  Http.get!(url)
+}
+```
+
+Pure functions (no `!`) cannot call effectful functions.
+
+### Types
+```
+type Port = Int where self > 0 && self <= 65535    // Refinement type
+type Status = | Active | Inactive | Error(String)  // Sum type (enum)
+type User = { name: String, age: Int }             // Record type
+type UserId = Int                                  // Type alias
+```
+
+### Built-in Types
+`Int`, `String`, `Bool`, `Float`, `Unit`, `List<T>`, `Option<T>`, `Result<T, E>`
+
+### Let Bindings
+```
+let x = 42
+let name: String = "Alice"
+```
+
+### Conditionals
+```
+if condition then expr1 else expr2
+```
+
+### Pattern Matching (exhaustive)
+```
+match value
+  Some(x) -> x
+  None -> 0
+
+match status
+  Active -> "active"
+  Inactive -> "inactive"
+  Error(msg) -> "error: ${msg}"
+```
+
+### Pipes
+```
+value |> transform |> validate |> process
+```
+
+### Lambdas
+```
+|x| x + 1
+|a, b| a + b
+```
+
+### Lists
+```
+let nums = [1, 2, 3]
+List.map(nums, |x| x * 2)
+List.filter(nums, |x| x > 1)
+List.fold(nums, 0, |acc, x| acc + x)
+[1, 2] ++ [3, 4]                      // Concatenation: [1, 2, 3, 4]
+```
+
+### Records
+```
+let user = User { name: "Alice", age: 30 }
+user.name                              // Field access
+{ ..user, age: 31 }                   // Record update
+```
+
+### String Interpolation
+```
+"Hello, ${name}. You are ${age} years old."
+```
+
+### Error Handling
+```
+// Result: Ok(value) or Err(error)
+let user = get_user(id)?               // Propagate with ?
+match get_user(id)
+  Ok(u) -> process(u)
+  Err(e) -> handle(e)
+
+// Option: Some(value) or None
+let found = List.find(items, |x| x > 10)
+Option.unwrap_or(found, 0)
+```
+
+### Inline Tests
+```
+fn add(a: Int, b: Int) -> Int = a + b
+where
+  test "basic" = add(1, 2) == 3
+  test "zero" = add(0, 5) == 5
+```
+
+### Integer Literals
+```
+42          // Decimal
+1_000_000   // Underscores
+0xFF        // Hexadecimal
+0b1010      // Binary
+0o755       // Octal
+```
+
+### Modules and Imports
+```
+@prelude(script)                       // Prelude: script, core, minimal, pure
+
+import Math.{sqrt, pow}               // Selective import
+import Utils.*                         // Wildcard import
+```
+
+### For Loops (effectful only)
+```
+for item in items do
+  Console.println!("${item}")
+```
+
+### Logical Operators
+`&&`, `||`, `not` (keyword, not `!`)
+
+## Key Rules
+
+1. Pure functions have NO `!` suffix and CANNOT use effects
+2. Effectful functions end with `!` and declare effects: `-> {Http, Db} Result`
+3. Effects are called with `!`: `Console.println!("hello")`
+4. Call style is always `Module.method(value, args)` — no `value.method()`
+5. Pattern matching must be exhaustive
+6. `not` is a keyword for logical negation (not `!`)
+7. String interpolation uses `${expr}`
+8. No null/undefined/nil — use `Option<T>` with `Some(v)` / `None`
+9. No exceptions — use `Result<T, E>` with `Ok(v)` / `Err(e)` and `?`
+10. No classes or inheritance — use records + sum types + effects
+11. `++` concatenates lists: `[1] ++ [2] == [1, 2]`
+
+## NOT Supported
+
+- No `class`, `extends`, `implements`, `interface`
+- No `try`/`catch`/`throw` — use Result with `?`
+- No `null`, `undefined`, `nil` — use Option
+- No `async`/`await` — effects handle this
+- No string concatenation with `+` — use interpolation `"${a}${b}"`
+- No `!` for boolean negation — use `not`
+- No method syntax `value.method()` — use `Module.method(value)`
+
+## Common Patterns
+
+```
+// Pure function with inline test
+fn is_even(n: Int) -> Bool = n % 2 == 0
+where
+  test "even" = is_even(4) == true
+  test "odd" = is_even(3) == false
+
+// Effectful entry point
+fn main!() -> {Console} () = {
+  Console.println!("Hello, Baseline!")
+}
+
+// Data transformation with combinators
+fn process(items: List<Int>) -> List<Int> = {
+  let positive = List.filter(items, |x| x > 0)
+  List.map(positive, |x| x * 2)
+}
+
+// Error propagation
+fn safe_divide(a: Int, b: Int) -> Result = {
+  if b == 0 then Err("Division by zero")
+  else Ok(a / b)
+}
+
+// Sum type with pattern matching
+type Shape =
+  | Circle(Float)
+  | Rectangle(Float, Float)
+
+fn area(shape: Shape) -> Float =
+  match shape
+    Circle(r) -> 3.14159 * r * r
+    Rectangle(w, h) -> w * h
+```
+
+## Preludes and Compiler
+
+Preludes: `pure` (no effects), `minimal` (Console), `core` (+Fs), `script` (+Http, Random, Env), `server` (+Db, Log, Metrics)
+
+```
+blc check file.bl --json    # Type/effect check, JSON output
+blc run file.bl             # Compile and run (VM)
+blc test file.bl            # Run inline tests
+```
