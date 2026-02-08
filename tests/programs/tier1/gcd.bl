@@ -2,11 +2,9 @@
 
 // Tier 1: GCD via Euclidean algorithm — recursion, modulo
 
-gcd : (Int, Int) -> Int
-gcd = |a, b| if b == 0 then a else gcd(b, a % b)
+fn gcd(a: Int, b: Int) -> Int = if b == 0 then a else gcd(b, a % b)
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   Console.println!("gcd(12, 8) = ${gcd(12, 8)}")
   Console.println!("gcd(100, 75) = ${gcd(100, 75)}")
   Console.println!("gcd(17, 13) = ${gcd(17, 13)}")

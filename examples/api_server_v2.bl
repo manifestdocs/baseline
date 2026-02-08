@@ -1,0 +1,86 @@
+@prelude(server)
+
+// HTTP Server v2 — demonstrates expanded API with thread-pool, middleware
+// chaining, new response helpers, and extended routing.
+
+// --- Handlers ---
+
+fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("{\"status\":\"ok\"}"))
+
+fn list_users(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]"))
+
+fn get_user(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok("User: ${req.params.id}"))
+
+fn create_user(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let body = Request.body_json(req)
+  Ok(Response.created("{\"id\":3}"))
+}
+
+fn update_user(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok("Updated user ${req.params.id}"))
+
+fn patch_user(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok("Patched user ${req.params.id}"))
+
+fn delete_user(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.no_content())
+
+fn go_home(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.redirect("/health"))
+
+fn gone_permanently(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.redirect_permanent("/health"))
+
+fn echo_method(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let m = Request.method(req)
+  Ok(Response.ok(m))
+}
+
+fn cors_preflight(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let headers = [
+    ("Access-Control-Allow-Origin", "*"),
+    ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH"),
+    ("Access-Control-Allow-Headers", "Content-Type")
+  ]
+  Ok(Response.ok("") |> Response.with_headers(headers))
+}
+
+// --- Middleware ---
+
+fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+  let res = next(req)?
+  Log.info!("${req.method} ${req.url} -> ${res.status}")
+  Ok(res)
+}
+
+fn timer(req: Unknown, next: Unknown) -> {Http, Time} Result<Unknown, String> = {
+  let start = Time.now!()
+  let res = next(req)?
+  let elapsed = Time.now!() - start
+  Ok(res |> Response.with_header("X-Response-Time", Int.to_string(elapsed)))
+}
+
+// --- Routes ---
+
+fn user_routes() -> Unknown = Router.new()
+  |> Router.get("/", list_users)
+  |> Router.get("/:id", get_user)
+  |> Router.post("/", create_user)
+  |> Router.put("/:id", update_user)
+  |> Router.patch("/:id", patch_user)
+  |> Router.delete("/:id", delete_user)
+
+fn main!() -> {Http, Log, Time} () =
+  Router.new()
+    |> Router.use(logger)
+    |> Router.use(timer)
+    |> Router.get("/health", health)
+    |> Router.get("/redirect", go_home)
+    |> Router.get("/gone", gone_permanently)
+    |> Router.any("/echo", echo_method)
+    |> Router.options("/cors", cors_preflight)
+    |> Router.group("/users", user_routes())
+    |> Server.listen!(8080)

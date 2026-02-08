@@ -2,13 +2,12 @@
 
 type Config = { port: Int, debug: Bool }
 
-main : () -> ()
-main = |args| {
+fn main() -> () = {
   // Valid types
   let x = 1
   let y = 2
   let sum = x + y
-  
+
   // Valid logic
   let valid = if true then 1 else 0
 

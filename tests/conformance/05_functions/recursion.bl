@@ -2,11 +2,9 @@
 
 // Conformance: recursive functions
 
-factorial : Int -> Int
-factorial = |n| if n <= 1 then 1 else n * factorial(n - 1)
+fn factorial(n: Int) -> Int = if n <= 1 then 1 else n * factorial(n - 1)
 
-fibonacci : Int -> Int
-fibonacci = |n| if n <= 1 then n else fibonacci(n - 1) + fibonacci(n - 2)
+fn fibonacci(n: Int) -> Int = if n <= 1 then n else fibonacci(n - 1) + fibonacci(n - 2)
 
 test "factorial 0" = factorial(0) == 1
 test "factorial 1" = factorial(1) == 1

@@ -2,5 +2,4 @@
 
 import Circulara
 
-bar : Int -> Int
-bar = |n| n + 2
+fn bar(n: Int) -> Int = n + 2

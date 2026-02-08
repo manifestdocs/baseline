@@ -2,14 +2,12 @@
 
 // Result type - built-in Ok/Err constructors and module functions
 
-safe_divide : (Int, Int) -> Result
-safe_divide = |a, b| {
+fn safe_divide(a: Int, b: Int) -> Result = {
   if b == 0 then Err("division by zero")
   else Ok(a / b)
 }
 
-main! : () -> {Console} Unit
-main! = || {
+fn main!() -> {Console} Unit = {
   let ok_val = Ok(42)
   let err_val = Err("something went wrong")
 

@@ -2,11 +2,9 @@
 
 // Tier 1: Factorial — recursion, multiplication
 
-factorial : Int -> Int
-factorial = |n| if n <= 1 then 1 else n * factorial(n - 1)
+fn factorial(n: Int) -> Int = if n <= 1 then 1 else n * factorial(n - 1)
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   Console.println!("0! = ${factorial(0)}")
   Console.println!("1! = ${factorial(1)}")
   Console.println!("5! = ${factorial(5)}")

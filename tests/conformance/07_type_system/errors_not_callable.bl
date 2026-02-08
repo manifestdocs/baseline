@@ -3,8 +3,7 @@
 // Negative test: calling non-function
 // Expected errors: TYP_009
 
-bad_call : () -> Int
-bad_call = || {
+fn bad_call() -> Int = {
   let x = 42
   x(5)
 }

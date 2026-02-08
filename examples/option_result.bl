@@ -10,22 +10,19 @@
 //   - Option/Result module functions (map, unwrap_or)
 
 /// Safe division that returns Result instead of crashing
-safe_divide : (Int, Int) -> Result
-safe_divide = |a, b| {
+fn safe_divide(a: Int, b: Int) -> Result = {
   if b == 0 then Err("Division by zero")
   else Ok(a / b)
 }
 
 /// Chain multiple safe divisions using the ? operator
-chain_divide : (Int, Int, Int) -> Result
-chain_divide = |a, b, c| {
+fn chain_divide(a: Int, b: Int, c: Int) -> Result = {
   let first = safe_divide(a, b)?
   let second = safe_divide(first, c)?
   Ok(first + second)
 }
 
-main! : () -> {Console} Unit
-main! = || {
+fn main!() -> {Console} Unit = {
   // --- Option Examples ---
   Console.println!("=== Option Examples ===")
   let items = [10, 20, 30, 42, 50]

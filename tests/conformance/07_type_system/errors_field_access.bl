@@ -6,15 +6,13 @@
 type Point = { x: Int, y: Int }
 
 // TYP_014: field not found on struct
-bad_field : () -> Int
-bad_field = || {
+fn bad_field() -> Int = {
   let p = Point { x: 1, y: 2 }
   p.z
 }
 
 // TYP_015: field access on non-struct
-bad_access : () -> Int
-bad_access = || {
+fn bad_access() -> Int = {
   let x = 42
   x.field
 }

@@ -2,14 +2,12 @@
 
 // Conformance: try (?) operator for error propagation
 
-safe_divide : (Int, Int) -> Result<Int, String>
-safe_divide = |a, b| {
+fn safe_divide(a: Int, b: Int) -> Result<Int, String> = {
   if b == 0 then Err("division by zero")
   else Ok(a / b)
 }
 
-chain_divide : (Int, Int, Int) -> Result<Int, String>
-chain_divide = |a, b, c| {
+fn chain_divide(a: Int, b: Int, c: Int) -> Result<Int, String> = {
   let x = safe_divide(a, b)?
   let y = safe_divide(x, c)?
   Ok(y)

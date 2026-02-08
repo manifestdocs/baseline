@@ -1,0 +1,92 @@
+@prelude(server)
+
+// Conformance: HTTP API surface — check-pass
+// Verifies type checking for Response, Request, Router, and Server builtins
+
+fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok("healthy"))
+
+fn json_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("{\"key\":\"value\"}"))
+
+fn created_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.created("{\"id\":1}"))
+
+fn no_content_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.no_content())
+
+fn bad_request_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.bad_request("invalid"))
+
+fn not_found_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.not_found("missing"))
+
+fn error_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.error("oops"))
+
+fn status_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.status(418, "I'm a teapot"))
+
+fn header_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok("ok") |> Response.with_header("X-Custom", "value"))
+
+fn redirect_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.redirect("/new-location"))
+
+fn redirect_perm_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.redirect_permanent("/permanent"))
+
+fn with_headers_handler(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let headers = [("X-A", "1"), ("X-B", "2")]
+  Ok(Response.ok("ok") |> Response.with_headers(headers))
+}
+
+fn method_handler(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let m = Request.method(req)
+  Ok(Response.ok(m))
+}
+
+fn body_json_handler(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let parsed = Request.body_json(req)
+  Ok(Response.ok("parsed"))
+}
+
+fn header_check(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let h = Request.header(req, "Content-Type")
+  Ok(Response.ok("ok"))
+}
+
+// Middleware: logs requests
+fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+  let res = next(req)?
+  Log.info!("${req.method} ${req.url}")
+  Ok(res)
+}
+
+// Middleware: adds timing header
+fn timer(req: Unknown, next: Unknown) -> {Http, Time} Result<Unknown, String> = {
+  let start = Time.now!()
+  let res = next(req)?
+  let elapsed = Time.now!() - start
+  Ok(res |> Response.with_header("X-Time-Ms", Int.to_string(elapsed)))
+}
+
+fn main!() -> {Http, Log, Time} () =
+  Router.new()
+    |> Router.use(logger)
+    |> Router.use(timer)
+    |> Router.get("/health", health)
+    |> Router.post("/json", json_handler)
+    |> Router.put("/update", created_handler)
+    |> Router.delete("/remove", no_content_handler)
+    |> Router.patch("/patch", status_handler)
+    |> Router.options("/options", header_handler)
+    |> Router.head("/head", health)
+    |> Router.any("/any", health)
+    |> Router.get("/redirect", redirect_handler)
+    |> Router.get("/redirect-perm", redirect_perm_handler)
+    |> Router.get("/with-headers", with_headers_handler)
+    |> Router.get("/method", method_handler)
+    |> Router.get("/body-json", body_json_handler)
+    |> Router.get("/header-check", header_check)
+    |> Server.listen!(8080)

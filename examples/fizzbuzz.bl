@@ -12,8 +12,7 @@
 //   - Effectful I/O (Console.println!)
 
 /// Classify a number as FizzBuzz, Fizz, Buzz, or itself
-fizzbuzz : Int -> String
-fizzbuzz = |n| {
+fn fizzbuzz(n: Int) -> String = {
   if n % 15 == 0 then "FizzBuzz"
   else if n % 3 == 0 then "Fizz"
   else if n % 5 == 0 then "Buzz"
@@ -21,8 +20,7 @@ fizzbuzz = |n| {
 }
 
 /// Print FizzBuzz for numbers 1 through 100
-main! : () -> {Console} Unit
-main! = || {
+fn main!() -> {Console} Unit = {
   for n in 1..101 do
     Console.println!(fizzbuzz(n))
 }

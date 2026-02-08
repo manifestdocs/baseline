@@ -6,11 +6,9 @@ type Age = Int
 
 type Pair = { first: Int, second: Int }
 
-make_pair : (Int, Int) -> Pair
-make_pair = |a, b| Pair { first: a, second: b }
+fn make_pair(a: Int, b: Int) -> Pair = Pair { first: a, second: b }
 
-sum_pair : Pair -> Int
-sum_pair = |p| p.first + p.second
+fn sum_pair(p: Pair) -> Int = p.first + p.second
 
 test "struct alias" = {
   let p = make_pair(3, 7)

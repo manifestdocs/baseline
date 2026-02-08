@@ -1,8 +1,5 @@
-divide : (Int, Int) -> Int
-divide = |a, b| a / b
+fn divide(a: Int, b: Int) -> Int = a / b
 
-call_divide : () -> Int
-call_divide = || divide(10, 0)
+fn call_divide() -> Int = divide(10, 0)
 
-main : () -> Int
-main = || call_divide()
+fn main() -> Int = call_divide()

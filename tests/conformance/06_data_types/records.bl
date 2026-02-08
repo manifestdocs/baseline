@@ -9,8 +9,7 @@ type User = {
   age: Int,
 }
 
-distance_sq : (Point, Point) -> Int
-distance_sq = |a, b| {
+fn distance_sq(a: Point, b: Point) -> Int = {
   let dx = a.x - b.x
   let dy = a.y - b.y
   dx * dx + dy * dy

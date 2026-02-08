@@ -1,10 +1,7 @@
 @prelude(core)
 
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
-multiply : (Int, Int) -> Int
-multiply = |a, b| a * b
+fn multiply(a: Int, b: Int) -> Int = a * b
 
-square : Int -> Int
-square = |n| multiply(n, n)
+fn square(n: Int) -> Int = multiply(n, n)

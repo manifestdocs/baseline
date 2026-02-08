@@ -5,23 +5,19 @@
 // No type declaration needed - Option is built-in
 
 // Constructors
-wrap : Int -> Option
-wrap = |x| Some(x)
+fn wrap(x: Int) -> Option = Some(x)
 
-nothing : () -> Option
-nothing = || None
+fn nothing() -> Option = None
 
 // Match on Option
-unwrap_or_default : (Option, Int) -> Int
-unwrap_or_default = |opt, default| {
+fn unwrap_or_default(opt: Option, default: Int) -> Int = {
   match opt
     Some(v) -> v
     None -> default
 }
 
 // Using Option module functions
-main! : () -> {Console} Unit
-main! = || {
+fn main!() -> {Console} Unit = {
   let some_val = Some(42)
   let none_val = None
 

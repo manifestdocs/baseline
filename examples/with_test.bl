@@ -2,8 +2,7 @@
 
 // Test effect handler capture with `with` expression
 
-greet! : String -> {Console} Unit
-greet! = |name| Console.println!("Hello, ${name}!")
+fn greet!(name: String) -> {Console} Unit = Console.println!("Hello, ${name}!")
 
 test "with captures single call" = {
   let (_, output) = with Console.println! {

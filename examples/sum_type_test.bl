@@ -5,24 +5,20 @@ type Option = | Some(Int) | None
 type Result = | Ok(Int) | Err(String)
 
 // Nullary constructor as expression
-get_color : () -> Color
-get_color = Red
+fn get_color() -> Color = Red
 
 // Constructor with payload
-wrap : Int -> Option
-wrap = |x| Some(x)
+fn wrap(x: Int) -> Option = Some(x)
 
 // Match on sum type with constructor patterns
-describe_color : Color -> String
-describe_color = |c| {
+fn describe_color(c: Color) -> String = {
   match c
     Red -> "red"
     Green -> "green"
     Blue -> "blue"
 }
 
-unwrap_or : (Option, Int) -> Int
-unwrap_or = |opt, default| {
+fn unwrap_or(opt: Option, default: Int) -> Int = {
   match opt
     Some(v) -> v
     None -> default

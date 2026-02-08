@@ -1,0 +1,39 @@
+@prelude(server)
+
+// HTTP Server example — demonstrates Router, Server.listen!, and Response builders
+
+fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("{\"status\":\"ok\"}"))
+
+fn list_users(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]"))
+
+fn get_user(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok("User: ${req.params.id}"))
+
+fn create_user(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.created("{\"id\":3}"))
+
+// Middleware: logs method + path
+
+fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+  let res = next(req)?
+  Log.info!("${req.method} ${req.url} -> ${res.status}")
+  Ok(res)
+}
+
+// Sub-router for /users
+
+fn user_routes() -> Unknown = Router.new()
+  |> Router.get("/", list_users)
+  |> Router.get("/:id", get_user)
+  |> Router.post("/", create_user)
+
+// Main entry point: build router and start server
+
+fn main!() -> {Http, Log} () =
+  Router.new()
+    |> Router.use(logger)
+    |> Router.get("/health", health)
+    |> Router.group("/users", user_routes())
+    |> Server.listen!(8080)

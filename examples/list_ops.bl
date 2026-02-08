@@ -10,11 +10,9 @@
 //   - String interpolation with complex expressions
 
 /// Check if a number is even
-is_even : Int -> Bool
-is_even = |x| x % 2 == 0
+fn is_even(x: Int) -> Bool = x % 2 == 0
 
-main! : () -> {Console} Unit
-main! = || {
+fn main!() -> {Console} Unit = {
   let nums = [1, 2, 3, 4, 5]
   Console.println!("Original: ${nums}")
 

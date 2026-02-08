@@ -4,25 +4,21 @@
 
 type Entry = { key: String, value: Int }
 
-make_entry : (String, Int) -> Entry
-make_entry = |k, v| Entry { key: k, value: v }
+fn make_entry(k: String, v: Int) -> Entry = Entry { key: k, value: v }
 
 // Look up a key in an association list
-lookup : (List<Entry>, String) -> Option<Int>
-lookup = |entries, k| {
+fn lookup(entries: List<Entry>, k: String) -> Option<Int> = {
   let found = List.find(entries, |e| e.key == k)
   Option.map(found, |e| e.value)
 }
 
 // Insert or update a key
-insert_entry : (List<Entry>, String, Int) -> List<Entry>
-insert_entry = |entries, k, v| {
+fn insert_entry(entries: List<Entry>, k: String, v: Int) -> List<Entry> = {
   let without = List.filter(entries, |e| e.key != k)
   List.concat([make_entry(k, v)], without)
 }
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   let db = []
   let db = insert_entry(db, "alice", 42)
   let db = insert_entry(db, "bob", 17)

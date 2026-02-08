@@ -2,8 +2,7 @@
 
 // List module functions
 
-main! : () -> {Console} Unit
-main! = || {
+fn main!() -> {Console} Unit = {
   let nums = [5, 3, 1, 4, 2]
 
   Console.println!("length: ${List.length(nums)}")

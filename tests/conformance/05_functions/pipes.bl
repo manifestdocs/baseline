@@ -2,14 +2,11 @@
 
 // Conformance: pipe operator
 
-double : Int -> Int
-double = |x| x * 2
+fn double(x: Int) -> Int = x * 2
 
-increment : Int -> Int
-increment = |x| x + 1
+fn increment(x: Int) -> Int = x + 1
 
-negate : Int -> Int
-negate = |x| 0 - x
+fn negate(x: Int) -> Int = 0 - x
 
 test "simple pipe" = {
   let r = 5 |> double

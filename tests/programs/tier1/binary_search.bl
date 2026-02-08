@@ -4,14 +4,12 @@
 
 // Binary search on a sorted list (returns index or -1)
 // Uses linear search since list indexing isn't available
-contains_sorted : (List<Int>, Int) -> Bool
-contains_sorted = |lst, target| {
+fn contains_sorted(lst: List<Int>, target: Int) -> Bool = {
   let found = List.find(lst, |x| x == target)
   Option.is_some(found)
 }
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   let sorted = [1, 3, 5, 7, 9, 11, 13, 15]
   Console.println!("list: ${sorted}")
   Console.println!("contains 7: ${contains_sorted(sorted, 7)}")

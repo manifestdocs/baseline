@@ -2,5 +2,4 @@
 
 import NoSuchModule
 
-main! : () -> {Console} ()
-main! = Console.println!("should not get here")
+fn main!() -> {Console} () = Console.println!("should not get here")

@@ -3,8 +3,7 @@
 type Point = { x: Int, y: Int }
 type User = { id: Int, active: Bool }
 
-main : () -> Int
-main = || {
+fn main() -> Int = {
   let p = Point { x: 10, y: 20 }
   let u = User { id: 1, active: true }
   

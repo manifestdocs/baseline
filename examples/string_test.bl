@@ -2,8 +2,7 @@
 
 // String module functions
 
-main! : () -> {Console} Unit
-main! = || {
+fn main!() -> {Console} Unit = {
   let greeting = "  Hello, World!  "
 
   Console.println!("length: ${String.length(greeting)}")

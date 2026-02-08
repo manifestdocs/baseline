@@ -2,44 +2,38 @@
 
 // -- Middleware that wraps response body --
 
-wrap_middleware : (Unknown, Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-wrap_middleware = |req, next| {
+fn wrap_middleware(req: Unknown, next: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
   let res = next(req)?
   Ok(Response.ok("[${res.body}]"))
 }
 
 // -- Middleware that adds a prefix --
 
-prefix_middleware : (Unknown, Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-prefix_middleware = |req, next| {
+fn prefix_middleware(req: Unknown, next: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
   let res = next(req)?
   Ok(Response.ok("prefix:${res.body}"))
 }
 
 // -- Simple handler --
 
-simple_handler : Unknown -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-simple_handler = |req| {
+fn simple_handler(req: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
   Ok(Response.ok("hello"))
 }
 
 // -- Build routers for testing --
 
-no_middleware_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
-no_middleware_router = || {
+fn no_middleware_router() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   Router.new()
     |> Router.get("/test", simple_handler)
 }
 
-single_middleware_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
-single_middleware_router = || {
+fn single_middleware_router() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   Router.new()
     |> Router.use(wrap_middleware)
     |> Router.get("/test", simple_handler)
 }
 
-chained_middleware_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
-chained_middleware_router = || {
+fn chained_middleware_router() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   Router.new()
     |> Router.use(wrap_middleware)
     |> Router.use(prefix_middleware)
@@ -48,16 +42,14 @@ chained_middleware_router = || {
 
 // -- Direct Router.use call (non-piped) --
 
-direct_use_router : () -> { routes: List<Unknown>, middleware: List<Unknown> }
-direct_use_router = || {
+fn direct_use_router() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   let app = Router.new()
   let app = Router.use(app, wrap_middleware)
   let app = Router.get(app, "/test", simple_handler)
   app
 }
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   let r0 = no_middleware_router()
   let r1 = single_middleware_router()
   let r2 = chained_middleware_router()

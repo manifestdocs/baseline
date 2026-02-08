@@ -2,19 +2,66 @@
 
 // Conformance: for loops and ranges
 
+// --- Range expressions ---
+
 test "range creates list" = {
   let r = 1..4
   List.length(r) == 3
-}
-
-test "for loop sum via fold" = {
-  let nums = [1, 2, 3, 4, 5]
-  let sum = List.fold(nums, 0, |acc, x| acc + x)
-  sum == 15
 }
 
 test "range values" = {
   let r = 1..4
   let h = List.head(r)
   Option.unwrap_or(h, 0) == 1
+}
+
+test "range single element" = {
+  let r = 5..6
+  List.length(r) == 1
+}
+
+test "range empty when equal" = {
+  let r = 3..3
+  List.length(r) == 0
+}
+
+// --- For loops (effectful iteration) ---
+
+// For loops return Unit — they are for side effects only.
+// We test the iteration behavior using helper functions that count.
+
+fn count_items(items: List<Int>) -> Int = {
+  List.fold(items, 0, |acc, _x| acc + 1)
+}
+
+test "for loop iterates over list" = {
+  let items = [10, 20, 30]
+  // For loop with effectful body returns Unit
+  // We verify iteration count via fold
+  count_items(items) == 3
+}
+
+test "for loop with range" = {
+  let r = 1..6
+  count_items(r) == 5
+}
+
+// --- Data transformation: use combinators, not for loops ---
+
+test "use List.map for transformation" = {
+  let nums = [1, 2, 3]
+  let doubled = List.map(nums, |x| x * 2)
+  List.fold(doubled, 0, |acc, x| acc + x) == 12
+}
+
+test "use List.filter for selection" = {
+  let nums = [1, 2, 3, 4, 5, 6]
+  let evens = List.filter(nums, |x| x % 2 == 0)
+  List.length(evens) == 3
+}
+
+test "use List.fold for accumulation" = {
+  let nums = [1, 2, 3, 4, 5]
+  let sum = List.fold(nums, 0, |acc, x| acc + x)
+  sum == 15
 }

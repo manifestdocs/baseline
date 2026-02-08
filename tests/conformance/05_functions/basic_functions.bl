@@ -2,14 +2,11 @@
 
 // Conformance: function definitions and calls
 
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
-identity : Int -> Int
-identity = |x| x
+fn identity(x: Int) -> Int = x
 
-constant : () -> Int
-constant = || 42
+fn constant() -> Int = 42
 
 test "two arg function" = add(1, 2) == 3
 test "identity function" = identity(7) == 7

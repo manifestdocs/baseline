@@ -2,5 +2,4 @@
 
 import Circularb
 
-foo : Int -> Int
-foo = |n| n + 1
+fn foo(n: Int) -> Int = n + 1

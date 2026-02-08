@@ -2,8 +2,7 @@
 
 import Math.{add, square}
 
-main! : () -> {Console} ()
-main! = {
+fn main!() -> {Console} () = {
   let result = add(square(3), 1)
   Console.println!("Result: ${result}")
 }

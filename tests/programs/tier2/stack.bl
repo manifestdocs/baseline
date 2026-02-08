@@ -5,24 +5,19 @@
 // Stack is represented as a List<Int>
 // push: prepend to front, pop: take from front
 
-push : (List<Int>, Int) -> List<Int>
-push = |stack, val| List.concat([val], stack)
+fn push(stack: List<Int>, val: Int) -> List<Int> = List.concat([val], stack)
 
-pop : List<Int> -> (Int, List<Int>)
-pop = |stack| {
+fn pop(stack: List<Int>) -> (Int, List<Int>) = {
   let top = Option.unwrap(List.head(stack))
   let rest = List.tail(stack)
   (top, rest)
 }
 
-peek : List<Int> -> Int
-peek = |stack| Option.unwrap(List.head(stack))
+fn peek(stack: List<Int>) -> Int = Option.unwrap(List.head(stack))
 
-is_empty : List<Int> -> Bool
-is_empty = |stack| List.length(stack) == 0
+fn is_empty(stack: List<Int>) -> Bool = List.length(stack) == 0
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   let s0 = []
   let s1 = push(s0, 10)
   let s2 = push(s1, 20)

@@ -3,16 +3,13 @@
 // A simple Baseline program demonstrating basic features
 
 /// Greets a user by name
-greet : String -> String
-greet = |name| "Hello, ${name}!"
+fn greet(name: String) -> String = "Hello, ${name}!"
 
 /// Adds two integers
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
 /// Checks if a number is positive
-is_positive : Int -> Bool
-is_positive = |n| n > 0
+fn is_positive(n: Int) -> Bool = n > 0
 
 /// A simple sum type for results
 type Status =
@@ -28,8 +25,7 @@ type User = {
 }
 
 /// Main entry point
-main! : () -> {Console} ()
-main! = {
+fn main!() -> {Console} () = {
   let message = greet("World")
   Console.print!(message)
   let sum = add(1, 2)

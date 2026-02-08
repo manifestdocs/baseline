@@ -1,8 +1,7 @@
 // JSON module example — parse and serialize JSON data
 @prelude(script)
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   // Parse a JSON object
   let data = Json.parse("{\"name\":\"Alice\",\"age\":30,\"active\":true}")
   Console.println!("name: ${data.name}")

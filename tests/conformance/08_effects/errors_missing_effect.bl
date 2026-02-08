@@ -4,5 +4,4 @@
 // Expected errors: CAP_001
 
 // This function calls Console but does not declare the effect
-bad_print : () -> ()
-bad_print = || Console.println!("oops")
+fn bad_print() -> () = Console.println!("oops")

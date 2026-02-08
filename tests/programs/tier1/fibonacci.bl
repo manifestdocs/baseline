@@ -2,11 +2,9 @@
 
 // Tier 1: Fibonacci — recursion, conditionals, arithmetic
 
-fibonacci : Int -> Int
-fibonacci = |n| if n <= 1 then n else fibonacci(n - 1) + fibonacci(n - 2)
+fn fibonacci(n: Int) -> Int = if n <= 1 then n else fibonacci(n - 1) + fibonacci(n - 2)
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   Console.println!("fib(0) = ${fibonacci(0)}")
   Console.println!("fib(1) = ${fibonacci(1)}")
   Console.println!("fib(5) = ${fibonacci(5)}")

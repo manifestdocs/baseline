@@ -1,0 +1,29 @@
+@prelude(core)
+
+// Multi-line string literals using triple quotes
+
+// Basic multi-line string
+fn greeting() -> String = """Hello, World!"""
+
+// Multi-line with actual newlines
+fn poem() -> String = """Roses are red
+Violets are blue"""
+
+// Empty multi-line string
+fn empty() -> String = """"""
+
+// Multi-line with escape sequences
+fn escaped() -> String = """Hello\tWorld\n"""
+
+// Multi-line with interpolation
+fn greet(name: String) -> String = """Hello, ${name}!"""
+
+// Multi-line with embedded quotes
+fn quoted() -> String = """She said "hello" to me"""
+
+test "multiline basic" = greeting() == "Hello, World!"
+test "multiline newlines" = poem() == "Roses are red\nViolets are blue"
+test "multiline empty" = empty() == ""
+test "multiline escape" = escaped() == "Hello\tWorld\n"
+test "multiline interpolation" = greet("Alice") == "Hello, Alice!"
+test "multiline embedded quotes" = quoted() == "She said \"hello\" to me"

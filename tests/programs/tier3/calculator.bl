@@ -4,8 +4,7 @@
 
 // RPN (Reverse Polish Notation) calculator using a list-based stack
 
-eval_rpn_step : (List<Int>, String) -> List<Int>
-eval_rpn_step = |stack, token| {
+fn eval_rpn_step(stack: List<Int>, token: String) -> List<Int> = {
   if token == "+" then {
     let b = Option.unwrap(List.head(stack))
     let rest1 = List.tail(stack)
@@ -38,14 +37,12 @@ eval_rpn_step = |stack, token| {
   }
 }
 
-eval_rpn : List<String> -> Int
-eval_rpn = |tokens| {
+fn eval_rpn(tokens: List<String>) -> Int = {
   let final_stack = List.fold(tokens, [], |stack, token| eval_rpn_step(stack, token))
   Option.unwrap_or(List.head(final_stack), 0)
 }
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   // 2 3 + => 5
   let e1 = ["2", "3", "+"]
   Console.println!("2 3 + = ${eval_rpn(e1)}")

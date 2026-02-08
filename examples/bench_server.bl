@@ -1,0 +1,44 @@
+@prelude(server)
+
+// Benchmark HTTP Server - for performance comparison with Axum/Fiber
+//
+// Usage: blc run examples/bench_server.bl
+// Then test with: wrk -t4 -c100 -d10s http://localhost:8080/hello
+
+// Simple "Hello World" handler - minimal overhead
+fn hello(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok("Hello, World!"))
+
+// JSON response handler - measures serialization overhead
+fn json(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("{\"message\":\"Hello, World!\"}"))
+
+// Echo handler - measures request parsing
+fn echo(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.ok(req.body))
+
+// Health check
+fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("{\"status\":\"ok\"}"))
+
+// User by ID - tests parameter extraction
+fn get_user(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json("{\"id\":\"${req.params.id}\",\"name\":\"User ${req.params.id}\"}"))
+
+fn main!() -> {Http, Log} () = {
+  Log.info!("Starting benchmark server on port 8080...")
+  Log.info!("Endpoints:")
+  Log.info!("  GET /hello     - plain text hello world")
+  Log.info!("  GET /json      - JSON hello world")
+  Log.info!("  POST /echo     - echo request body")
+  Log.info!("  GET /health    - health check")
+  Log.info!("  GET /users/:id - user lookup")
+
+  Router.new()
+    |> Router.get("/hello", hello)
+    |> Router.get("/json", json)
+    |> Router.post("/echo", echo)
+    |> Router.get("/health", health)
+    |> Router.get("/users/:id", get_user)
+    |> Server.listen!(8080)
+}

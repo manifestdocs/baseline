@@ -4,8 +4,7 @@
 
 type Color = | Red | Green | Blue
 
-describe : Color -> String
-describe = |c| {
+fn describe(c: Color) -> String = {
   match c
     Red -> "red"
     Green -> "green"
@@ -16,8 +15,7 @@ test "match enum red" = describe(Red) == "red"
 test "match enum green" = describe(Green) == "green"
 test "match enum blue" = describe(Blue) == "blue"
 
-unwrap_default : (Option<Int>, Int) -> Int
-unwrap_default = |opt, default| {
+fn unwrap_default(opt: Option<Int>, default: Int) -> Int = {
   match opt
     Some(x) -> x
     None -> default
@@ -26,8 +24,7 @@ unwrap_default = |opt, default| {
 test "match option some" = unwrap_default(Some(42), 0) == 42
 test "match option none" = unwrap_default(None, -1) == -1
 
-to_string : Int -> String
-to_string = |x| {
+fn to_string(x: Int) -> String = {
   match x
     _ -> "anything"
 }

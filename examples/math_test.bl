@@ -3,8 +3,7 @@
 // Math module demonstration
 // Pure functions — no effect annotation needed
 
-main! : () -> {Console} ()
-main! = {
+fn main!() -> {Console} () = {
   // Math.abs
   let a = Math.abs(-5)
   Console.println!("abs(-5) = ${a}")

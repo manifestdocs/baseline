@@ -2,7 +2,6 @@
 
 // Conformance: unit type — unit functions return ()
 
-side_effect_free : () -> Int
-side_effect_free = || 42
+fn side_effect_free() -> Int = 42
 
 test "function returns value" = side_effect_free() == 42

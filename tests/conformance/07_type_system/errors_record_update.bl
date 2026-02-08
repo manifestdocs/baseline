@@ -6,16 +6,13 @@
 type Point = { x: Int, y: Int }
 
 // TYP_027: record update on non-record
-bad_update_base : Int -> Int
-bad_update_base = |x| {
+fn bad_update_base(x: Int) -> Int = {
   let r = { ..x, y: 1 }
   0
 }
 
 // TYP_029: field not found in record update
-bad_update_field : Point -> Point
-bad_update_field = |p| { ..p, z: 3 }
+fn bad_update_field(p: Point) -> Point = { ..p, z: 3 }
 
 // TYP_028: type mismatch in record update
-bad_update_type : Point -> Point
-bad_update_type = |p| { ..p, x: "hello" }
+fn bad_update_type(p: Point) -> Point = { ..p, x: "hello" }

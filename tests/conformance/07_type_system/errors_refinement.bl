@@ -5,7 +5,6 @@
 
 type ValidPort = Int where self > 0 && self < 65536
 
-check_refinements : () -> ()
-check_refinements = {
+fn check_refinements() -> () = {
   let p : ValidPort = 0
 }

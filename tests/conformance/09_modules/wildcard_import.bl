@@ -2,8 +2,7 @@
 
 import Util.*
 
-main! : () -> {Console} ()
-main! = {
+fn main!() -> {Console} () = {
   let result = add(double(5), 1)
   Console.println!("${result}")
 }

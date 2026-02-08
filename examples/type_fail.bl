@@ -3,19 +3,16 @@
 type Point = { x: Int, y: Int }
 
 // Function Signature Mismatch (Return Type)
-bad_ret : () -> Int
-bad_ret = |args| {
+fn bad_ret(x: Int) -> Int = {
     "string" // Returns String, expects Int
 }
 
 // Function Arg Mismatch
-bad_args : (Int, Int) -> Int
-bad_args = |a| { // Expects 2 args, provides 1
+fn bad_args(a: Int) -> Int = { // Expects 2 args, provides 1
     a
 }
 
-main : () -> Int
-main = || {
+fn main() -> Int = {
   // Field Mismatch
   let p = Point { x: true, y: 1 }
 

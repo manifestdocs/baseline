@@ -3,8 +3,7 @@
 type ValidPort = Int where self > 0 && self < 65536
 type Probability = Int where self >= 0 && self <= 100
 
-check_refinements : () -> ()
-check_refinements = {
+fn check_refinements() -> () = {
   // These should pass
   let p1 : ValidPort = 8080
   let prob1 : Probability = 50

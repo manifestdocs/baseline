@@ -1,0 +1,38 @@
+@prelude(script)
+// Conformance: ++ list concatenation operator
+
+fn test_basic_concat() -> Bool = [1, 2] ++ [3, 4] == [1, 2, 3, 4]
+
+fn test_empty_left() -> Bool = [] ++ [1, 2] == [1, 2]
+
+fn test_empty_right() -> Bool = [1, 2] ++ [] == [1, 2]
+
+fn test_empty_both() -> Bool = {
+  let a: List<Int> = []
+  let b: List<Int> = []
+  a ++ b == []
+}
+
+fn test_string_lists() -> Bool = ["a", "b"] ++ ["c"] == ["a", "b", "c"]
+
+fn test_chained() -> Bool = [1] ++ [2] ++ [3] == [1, 2, 3]
+
+fn main!() -> {Console} () = {
+  Console.println!("[1, 2] ++ [3, 4]: ${[1, 2] ++ [3, 4]}")
+  Console.println!("[] ++ [1]: ${[] ++ [1]}")
+
+  if test_basic_concat() then Console.println!("PASS: basic concat")
+  else Console.println!("FAIL: basic concat")
+
+  if test_empty_left() then Console.println!("PASS: empty left")
+  else Console.println!("FAIL: empty left")
+
+  if test_empty_right() then Console.println!("PASS: empty right")
+  else Console.println!("FAIL: empty right")
+
+  if test_string_lists() then Console.println!("PASS: string lists")
+  else Console.println!("FAIL: string lists")
+
+  if test_chained() then Console.println!("PASS: chained")
+  else Console.println!("FAIL: chained")
+}

@@ -3,16 +3,13 @@
 // Negative test: pipe operator errors
 // Expected errors: TYP_019, TYP_020
 
-double : Int -> Int
-double = |x| x * 2
+fn double(x: Int) -> Int = x * 2
 
 // TYP_019: pipe argument type mismatch
-bad_pipe_type : () -> Int
-bad_pipe_type = || "hello" |> double
+fn bad_pipe_type() -> Int = "hello" |> double
 
 // TYP_020: pipe target is not a function
-bad_pipe_target : () -> Int
-bad_pipe_target = || {
+fn bad_pipe_target() -> Int = {
   let x = 42
   5 |> x
 }

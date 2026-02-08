@@ -2,15 +2,13 @@
 
 // -- Handler functions using Response builders --
 
-hello_handler : { method: String, url: String, headers: List<(String, String)>, body: String, params: {} } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-hello_handler = |req| {
+fn hello_handler(req: { method: String, url: String, headers: List<(String, String)>, body: String, params: {} }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
   let resp = Response.ok("Hello, World!")
     |> Response.with_header("Content-Type", "text/plain")
   Ok(resp)
 }
 
-echo_handler : { method: String, url: String, headers: List<(String, String)>, body: String, params: {} } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-echo_handler = |req| {
+fn echo_handler(req: { method: String, url: String, headers: List<(String, String)>, body: String, params: {} }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
   let resp = Response.ok(req.body)
     |> Response.with_header("Content-Type", "text/plain")
   Ok(resp)
@@ -18,24 +16,21 @@ echo_handler = |req| {
 
 // -- Handler with path parameters --
 
-user_handler : { method: String, url: String, headers: List<(String, String)>, body: String, params: { id: String } } -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-user_handler = |req| {
+fn user_handler(req: { method: String, url: String, headers: List<(String, String)>, body: String, params: { id: String } }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
   let id = req.params.id
   Ok(Response.ok("User: ${id}"))
 }
 
 // -- Middleware: adds a custom header to every response --
 
-add_header_mw : (Unknown, Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String>
-add_header_mw = |req, next| {
+fn add_header_mw(req: Unknown, next: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
   let res = next(req)?
   Ok(res |> Response.with_header("X-Powered-By", "Baseline"))
 }
 
 // -- Build router with direct calls --
 
-build_direct : () -> { routes: List<Unknown>, middleware: List<Unknown> }
-build_direct = || {
+fn build_direct() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   let app = Router.new()
   let app = Router.get(app, "/hello", hello_handler)
   let app = Router.post(app, "/echo", echo_handler)
@@ -45,8 +40,7 @@ build_direct = || {
 
 // -- Build router with pipe composition and middleware --
 
-build_piped : () -> { routes: List<Unknown>, middleware: List<Unknown> }
-build_piped = || {
+fn build_piped() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   Router.new()
     |> Router.use(add_header_mw)
     |> Router.get("/hello", hello_handler)
@@ -56,8 +50,7 @@ build_piped = || {
 
 // -- Test: verify route counts and middleware count --
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   let direct = build_direct()
   let piped = build_piped()
   let direct_count = List.length(Router.routes(direct))

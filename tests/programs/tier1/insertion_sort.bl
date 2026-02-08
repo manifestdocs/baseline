@@ -2,8 +2,7 @@
 
 // Tier 1: Insertion sort — lists, recursion, HOFs
 
-insert : (Int, List<Int>) -> List<Int>
-insert = |x, sorted| {
+fn insert(x: Int, sorted: List<Int>) -> List<Int> = {
   if List.length(sorted) == 0 then [x]
   else {
     let h = Option.unwrap(List.head(sorted))
@@ -12,13 +11,11 @@ insert = |x, sorted| {
   }
 }
 
-insertion_sort : List<Int> -> List<Int>
-insertion_sort = |lst| {
+fn insertion_sort(lst: List<Int>) -> List<Int> = {
   List.fold(lst, [], |sorted, x| insert(x, sorted))
 }
 
-main! : () -> {Console} ()
-main! = || {
+fn main!() -> {Console} () = {
   let nums = [5, 3, 8, 1, 9, 2, 7, 4, 6]
   let sorted = insertion_sort(nums)
   Console.println!("input:  ${nums}")

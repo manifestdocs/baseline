@@ -1,0 +1,33 @@
+@prelude(core)
+
+// Raw string literals — no escape processing, no interpolation
+
+fn raw_basic() -> String = r"hello world"
+
+fn raw_backslash() -> String = r"C:\Users\path"
+
+fn raw_dollar() -> String = r"price is $100"
+
+fn raw_interp_literal() -> String = r"${not interpolated}"
+
+fn raw_hash_basic() -> String = r#"hello world"#
+
+fn raw_hash_quotes() -> String = r#"has "quotes" inside"#
+
+fn raw_hash_backslash() -> String = r#"C:\path\to\file"#
+
+fn raw_empty() -> String = r""
+
+fn raw_hash_empty() -> String = r#""#
+
+test "raw basic" = raw_basic() == "hello world"
+test "raw backslash preserved" = raw_backslash() == "C:\\Users\\path"
+test "raw dollar preserved" = raw_dollar() == "price is $100"
+// raw_interp_literal contains "${not interpolated}" — can't compare with regular string
+// because ${} would be parsed as interpolation. Test via length instead.
+test "raw interpolation syntax preserved" = String.length(raw_interp_literal()) == 19
+test "raw hash basic" = raw_hash_basic() == "hello world"
+test "raw hash with quotes" = raw_hash_quotes() == r#"has "quotes" inside"#
+test "raw hash backslash" = raw_hash_backslash() == "C:\\path\\to\\file"
+test "raw empty" = raw_empty() == ""
+test "raw hash empty" = raw_hash_empty() == ""

@@ -1,0 +1,50 @@
+@prelude(script)
+// Conformance: numeric literal bases and underscore separators
+// Tests hex, binary, octal, and decimal with underscores
+
+fn test_hex() -> Bool = 0xFF == 255
+
+fn test_hex_lower() -> Bool = 0xff == 255
+
+fn test_hex_mixed() -> Bool = 0x1A == 26
+
+fn test_binary() -> Bool = 0b1010 == 10
+
+fn test_binary_long() -> Bool = 0b11111111 == 255
+
+fn test_octal() -> Bool = 0o755 == 493
+
+fn test_octal_simple() -> Bool = 0o10 == 8
+
+fn test_underscore_decimal() -> Bool = 1_000_000 == 1000000
+
+fn test_underscore_hex() -> Bool = 0xFF_FF == 65535
+
+fn test_underscore_binary() -> Bool = 0b1111_0000 == 240
+
+fn main!() -> {Console} () = {
+  Console.println!("hex 0xFF: ${0xFF}")
+  Console.println!("hex 0x1A: ${0x1A}")
+  Console.println!("binary 0b1010: ${0b1010}")
+  Console.println!("octal 0o755: ${0o755}")
+  Console.println!("underscore 1_000: ${1_000}")
+
+  // Assertions via function calls
+  if test_hex() then Console.println!("PASS: hex")
+  else Console.println!("FAIL: hex")
+
+  if test_binary() then Console.println!("PASS: binary")
+  else Console.println!("FAIL: binary")
+
+  if test_octal() then Console.println!("PASS: octal")
+  else Console.println!("FAIL: octal")
+
+  if test_underscore_decimal() then Console.println!("PASS: underscore decimal")
+  else Console.println!("FAIL: underscore decimal")
+
+  if test_underscore_hex() then Console.println!("PASS: underscore hex")
+  else Console.println!("FAIL: underscore hex")
+
+  if test_underscore_binary() then Console.println!("PASS: underscore binary")
+  else Console.println!("FAIL: underscore binary")
+}

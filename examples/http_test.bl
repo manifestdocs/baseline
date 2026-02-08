@@ -2,26 +2,21 @@
 @prelude(script)
 
 // Simple GET request — returns Response record { status, headers, body }
-fetch! : String -> {Http} { status: Int, headers: List<(String, String)>, body: String }
-fetch! = |url| Http.get!(url)
+fn fetch!(url: String) -> {Http} { status: Int, headers: List<(String, String)>, body: String } = Http.get!(url)
 
 // POST with body — returns Response record
-post_data! : (String, String) -> {Http} { status: Int, headers: List<(String, String)>, body: String }
-post_data! = |url, body| Http.post!(url, body)
+fn post_data!(url: String, body: String) -> {Http} { status: Int, headers: List<(String, String)>, body: String } = Http.post!(url, body)
 
 // Flexible request via Request record
-send_request! : { method: String, url: String, headers: List<(String, String)>, body: String } -> {Http} { status: Int, headers: List<(String, String)>, body: String }
-send_request! = |req| Http.request!(req)
+fn send_request!(req: { method: String, url: String, headers: List<(String, String)>, body: String }) -> {Http} { status: Int, headers: List<(String, String)>, body: String } = Http.request!(req)
 
 // Combined effects: fetch and print the response body
-fetch_and_log! : String -> {Http, Console} ()
-fetch_and_log! = |url| {
+fn fetch_and_log!(url: String) -> {Http, Console} () = {
   let response = Http.get!(url)
   Console.println!(response.body)
 }
 
-main! : () -> {Http, Console} ()
-main! = || {
+fn main!() -> {Http, Console} () = {
   let response = Http.get!("https://httpbin.org/get")
   Console.println!("Status: ${response.status}")
   Console.println!(response.body)
