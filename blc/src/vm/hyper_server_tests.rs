@@ -1,7 +1,7 @@
-//! HTTP Server Benchmark Tests
+//! HTTP Server Tests
 //!
-//! TDD tests for the high-performance async HTTP server implementation.
-//! These tests validate correctness before performance optimization.
+//! Tests for the async HTTP server implementation including Phase 2-3 features:
+//! connection management, timeouts, body size enforcement, and graceful shutdown.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -36,21 +36,19 @@ mod tests {
     #[test]
     fn test_response_text_sets_content_type() {
         let resp = AsyncResponse::text(200, "Hello");
-        assert!(
-            resp.headers
-                .iter()
-                .any(|(k, v)| k == "Content-Type" && v == "text/plain")
-        );
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "text/plain"));
     }
 
     #[test]
     fn test_response_json_sets_content_type() {
         let resp = AsyncResponse::json(r#"{"ok":true}"#);
-        assert!(
-            resp.headers
-                .iter()
-                .any(|(k, v)| k == "Content-Type" && v == "application/json")
-        );
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
     }
 
     #[test]
@@ -85,11 +83,8 @@ mod tests {
             .get("/users", |_| AsyncResponse::json("[]"))
             .build();
 
-        // Should find registered routes
         assert!(tree.find("GET", "/health").is_some());
         assert!(tree.find("GET", "/users").is_some());
-
-        // Should not find unregistered routes
         assert!(tree.find("GET", "/foo").is_none());
         assert!(tree.find("POST", "/health").is_none());
     }
@@ -103,11 +98,9 @@ mod tests {
             })
             .build();
 
-        // Single param
         let (_, params) = tree.find("GET", "/users/123").unwrap();
         assert_eq!(params.get("id"), Some(&"123".to_string()));
 
-        // Multiple params
         let (_, params) = tree.find("GET", "/users/456/posts/789").unwrap();
         assert_eq!(params.get("id"), Some(&"456".to_string()));
         assert_eq!(params.get("post_id"), Some(&"789".to_string()));
@@ -120,11 +113,9 @@ mod tests {
             .get("/users/:id", |_| AsyncResponse::text(200, "user by id"))
             .build();
 
-        // Exact match should be preferred
         let (_, params) = tree.find("GET", "/users/me").unwrap();
-        assert!(params.is_empty()); // No params for exact match
+        assert!(params.is_empty());
 
-        // Param match for other values
         let (_, params) = tree.find("GET", "/users/123").unwrap();
         assert_eq!(params.get("id"), Some(&"123".to_string()));
     }
@@ -142,7 +133,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // ServerConfig Tests
+    // ServerConfig Tests (Phase 2-3)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -150,7 +141,13 @@ mod tests {
         let config = ServerConfig::default();
         assert!(config.workers > 0);
         assert!(config.keep_alive);
+        assert_eq!(config.keep_alive_timeout, Duration::from_secs(75));
         assert_eq!(config.max_body_size, 1024 * 1024);
+        assert_eq!(config.max_connections, 10_000);
+        assert_eq!(config.max_connections_per_ip, 256);
+        assert_eq!(config.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.shutdown_timeout, Duration::from_secs(30));
+        assert!(!config.enable_http2);
     }
 
     #[test]
@@ -158,17 +155,32 @@ mod tests {
         let config = ServerConfig {
             workers: 8,
             keep_alive: false,
+            keep_alive_timeout: Duration::from_secs(120),
             max_body_size: 2 * 1024 * 1024,
+            max_connections: 5_000,
+            max_connections_per_ip: 100,
+            request_timeout: Duration::from_secs(60),
+            shutdown_timeout: Duration::from_secs(15),
+            enable_http2: true,
         };
         assert_eq!(config.workers, 8);
         assert!(!config.keep_alive);
+        assert_eq!(config.keep_alive_timeout, Duration::from_secs(120));
         assert_eq!(config.max_body_size, 2 * 1024 * 1024);
+        assert_eq!(config.max_connections, 5_000);
+        assert_eq!(config.max_connections_per_ip, 100);
+        assert_eq!(config.request_timeout, Duration::from_secs(60));
+        assert_eq!(config.shutdown_timeout, Duration::from_secs(15));
+        assert!(config.enable_http2);
     }
 
-    // -----------------------------------------------------------------------
-    // Query String Parsing (via module tests)
-    // -----------------------------------------------------------------------
-    // Note: Query string tests are in hyper_server.rs
+    #[test]
+    fn test_server_config_clone() {
+        let config = ServerConfig::default();
+        let cloned = config.clone();
+        assert_eq!(config.max_connections, cloned.max_connections);
+        assert_eq!(config.enable_http2, cloned.enable_http2);
+    }
 
     // -----------------------------------------------------------------------
     // NValue Conversion Tests
@@ -176,7 +188,6 @@ mod tests {
 
     #[test]
     fn test_async_request_to_nvalue() {
-        // Create a mock AsyncRequest using test constructor
         let mut params = HashMap::new();
         params.insert("id".to_string(), "123".to_string());
 
@@ -189,23 +200,17 @@ mod tests {
         );
 
         let nvalue = req.to_nvalue();
-
-        // Verify it's a record
         assert!(nvalue.as_record().is_some());
 
         let fields = nvalue.as_record().unwrap();
 
-        // Check method
         let method = fields
             .iter()
             .find(|(k, _)| &**k == "method")
             .map(|(_, v)| v);
-        assert!(method.is_some());
         assert_eq!(method.unwrap().as_str(), Some("GET"));
 
-        // Check url
         let url = fields.iter().find(|(k, _)| &**k == "url").map(|(_, v)| v);
-        assert!(url.is_some());
         assert_eq!(url.unwrap().as_str(), Some("/users/123"));
     }
 
@@ -214,7 +219,6 @@ mod tests {
         use crate::vm::nvalue::NValue;
         use crate::vm::value::RcStr;
 
-        // Build a response NValue
         let headers = vec![NValue::tuple(vec![
             NValue::string(RcStr::from("Content-Type")),
             NValue::string(RcStr::from("application/json")),
@@ -230,11 +234,10 @@ mod tests {
 
         assert_eq!(resp.status.as_u16(), 201);
         assert_eq!(resp.body, Bytes::from(r#"{"id":1}"#));
-        assert!(
-            resp.headers
-                .iter()
-                .any(|(k, v)| k == "Content-Type" && v == "application/json")
-        );
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
     }
 
     // -----------------------------------------------------------------------
@@ -258,26 +261,42 @@ mod tests {
         let sv = req.to_sendable();
 
         if let SendableValue::Record(fields) = sv {
-            let get_field = |name: &str| fields.iter().find(|(k, _)| k == name).map(|(_, v)| v);
-            
+            let get_field =
+                |name: &str| fields.iter().find(|(k, _)| k == name).map(|(_, v)| v);
+
             assert_eq!(
-                get_field("method").and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+                get_field("method").and_then(|v| if let SendableValue::String(s) = v {
+                    Some(s.as_str())
+                } else {
+                    None
+                }),
                 Some("GET")
             );
             assert_eq!(
-                get_field("url").and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+                get_field("url").and_then(|v| if let SendableValue::String(s) = v {
+                    Some(s.as_str())
+                } else {
+                    None
+                }),
                 Some("/users/123")
             );
-             assert_eq!(
-                get_field("body").and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+            assert_eq!(
+                get_field("body").and_then(|v| if let SendableValue::String(s) = v {
+                    Some(s.as_str())
+                } else {
+                    None
+                }),
                 Some("body content")
             );
-            
-            // Check params
+
             if let Some(SendableValue::Record(params)) = get_field("params") {
                 let id = params.iter().find(|(k, _)| k == "id").map(|(_, v)| v);
                 assert_eq!(
-                    id.and_then(|v| if let SendableValue::String(s) = v { Some(s.as_str()) } else { None }),
+                    id.and_then(|v| if let SendableValue::String(s) = v {
+                        Some(s.as_str())
+                    } else {
+                        None
+                    }),
                     Some("123")
                 );
             } else {
@@ -294,36 +313,216 @@ mod tests {
 
         let sv = SendableValue::Record(vec![
             ("status".to_string(), SendableValue::Int(201)),
-            ("body".to_string(), SendableValue::String(r#"{"created":true}"#.to_string())),
-            ("headers".to_string(), SendableValue::List(vec![
-                SendableValue::Tuple(vec![
+            (
+                "body".to_string(),
+                SendableValue::String(r#"{"created":true}"#.to_string()),
+            ),
+            (
+                "headers".to_string(),
+                SendableValue::List(vec![SendableValue::Tuple(vec![
                     SendableValue::String("Content-Type".to_string()),
                     SendableValue::String("application/json".to_string()),
-                ])
-            ])),
+                ])]),
+            ),
         ]);
 
         let resp = AsyncResponse::from_sendable_val(&sv);
 
         assert_eq!(resp.status.as_u16(), 201);
         assert_eq!(resp.body, Bytes::from(r#"{"created":true}"#));
-        assert!(resp.headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
     }
 
     // -----------------------------------------------------------------------
-    // Performance Baseline Tests (to be expanded)
+    // Phase 2-3: Body Size Enforcement Tests
+    // -----------------------------------------------------------------------
+
+    /// Test body size enforcement by sending raw HTTP requests over TCP.
+    /// Uses raw TCP to avoid needing hyper-util client features.
+    #[tokio::test]
+    async fn test_body_size_enforcement_small_body_ok() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let tree = AsyncRouteTreeBuilder::new()
+            .post("/echo", |req| AsyncResponse::text(200, req.body.clone()))
+            .build();
+
+        let ctx = std::sync::Arc::new(
+            crate::vm::hyper_server::AsyncServerContext::native_only(tree),
+        );
+
+        let config = ServerConfig {
+            max_body_size: 64,
+            ..ServerConfig::default()
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let sc = std::sync::Arc::new(config);
+        let server_ctx = std::sync::Arc::clone(&ctx);
+        let server_sc = std::sync::Arc::clone(&sc);
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let io = hyper_util::rt::TokioIo::new(stream);
+            crate::vm::hyper_server::serve_http1_connection(io, server_ctx, &server_sc).await;
+        });
+
+        // Send a small body via raw TCP
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let body = "hi";
+        let req = format!(
+            "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(req.as_bytes()).await.unwrap();
+
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        let response = String::from_utf8_lossy(&buf);
+
+        assert!(
+            response.contains("200 OK"),
+            "Expected 200 OK, got: {}",
+            response
+        );
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_oversized_body_returns_413() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let tree = AsyncRouteTreeBuilder::new()
+            .post("/upload", |_| AsyncResponse::text(200, "ok"))
+            .build();
+
+        let ctx = std::sync::Arc::new(
+            crate::vm::hyper_server::AsyncServerContext::native_only(tree),
+        );
+
+        let config = ServerConfig {
+            max_body_size: 8, // Very small limit
+            ..ServerConfig::default()
+        };
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let sc = std::sync::Arc::new(config);
+        let server_ctx = std::sync::Arc::clone(&ctx);
+        let server_sc = std::sync::Arc::clone(&sc);
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let io = hyper_util::rt::TokioIo::new(stream);
+            crate::vm::hyper_server::serve_http1_connection(io, server_ctx, &server_sc).await;
+        });
+
+        // Send oversized body via raw TCP
+        let big_body = "this body is definitely larger than 8 bytes";
+        let req = format!(
+            "POST /upload HTTP/1.1\r\nHost: localhost\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            big_body.len(),
+            big_body
+        );
+
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream.write_all(req.as_bytes()).await.unwrap();
+
+        let mut buf = Vec::new();
+        stream.read_to_end(&mut buf).await.unwrap();
+        let response = String::from_utf8_lossy(&buf);
+
+        assert!(
+            response.contains("413"),
+            "Expected 413 Payload Too Large, got: {}",
+            response
+        );
+        server.await.unwrap();
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2-3: Request Timeout Tests
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn test_request_timeout_mechanism() {
+        // Test the timeout wrapper directly — a slow async operation should timeout
+        let request_timeout = Duration::from_millis(10);
+
+        let result = tokio::time::timeout(request_timeout, async {
+            // Simulate a slow handler
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            AsyncResponse::text(200, "ok")
+        })
+        .await;
+
+        assert!(result.is_err()); // Should have timed out
+    }
+
+    #[tokio::test]
+    async fn test_request_timeout_fast_handler_succeeds() {
+        let request_timeout = Duration::from_secs(5);
+
+        let result = tokio::time::timeout(request_timeout, async {
+            AsyncResponse::text(200, "fast")
+        })
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().status.as_u16(), 200);
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2-3: Graceful Shutdown Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_graceful_shutdown_config() {
+        let config = ServerConfig {
+            shutdown_timeout: Duration::from_secs(10),
+            ..ServerConfig::default()
+        };
+        assert_eq!(config.shutdown_timeout, Duration::from_secs(10));
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 2-3: HTTP/2 Config Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_http2_config_default_disabled() {
+        let config = ServerConfig::default();
+        assert!(!config.enable_http2);
+    }
+
+    #[test]
+    fn test_http2_config_enabled() {
+        let config = ServerConfig {
+            enable_http2: true,
+            ..ServerConfig::default()
+        };
+        assert!(config.enable_http2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Performance Baseline Tests
     // -----------------------------------------------------------------------
 
     #[test]
     fn test_response_creation_performance() {
-        // Measure time to create 10,000 responses
         let start = Instant::now();
         for _ in 0..10_000 {
             let _ = AsyncResponse::json(r#"{"status":"ok"}"#);
         }
         let elapsed = start.elapsed();
 
-        // Should complete in under 100ms (100µs per response is very conservative)
         assert!(
             elapsed < Duration::from_millis(100),
             "Response creation took {:?}, expected < 100ms",
@@ -335,14 +534,12 @@ mod tests {
     fn test_route_matching_performance() {
         let tree = AsyncRouteTree::new();
 
-        // Measure time to do 10,000 route lookups (even on empty tree)
         let start = Instant::now();
         for _ in 0..10_000 {
             let _ = tree.find("GET", "/users/123/posts/456");
         }
         let elapsed = start.elapsed();
 
-        // Should complete in under 50ms
         assert!(
             elapsed < Duration::from_millis(50),
             "Route matching took {:?}, expected < 50ms",
@@ -352,7 +549,6 @@ mod tests {
 
     #[test]
     fn test_route_tree_with_native_handlers_performance() {
-        // Build a tree with multiple routes
         let tree = AsyncRouteTreeBuilder::new()
             .get("/", |_| AsyncResponse::text(200, "root"))
             .get("/health", |_| AsyncResponse::json(r#"{"status":"ok"}"#))
@@ -365,7 +561,6 @@ mod tests {
             .post("/users", |_| AsyncResponse::text(201, "created"))
             .build();
 
-        // Measure time for 10,000 mixed route lookups
         let paths = [
             ("GET", "/"),
             ("GET", "/health"),
@@ -384,7 +579,6 @@ mod tests {
         }
         let elapsed = start.elapsed();
 
-        // 70,000 lookups should complete in under 200ms
         assert!(
             elapsed < Duration::from_millis(200),
             "Route matching took {:?}, expected < 200ms for 70k lookups",

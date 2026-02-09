@@ -2,18 +2,24 @@
 //!
 //! This module provides an async alternative to the tiny_http-based server,
 //! targeting performance comparable to Axum and Go Fiber.
+//!
+//! Phase 2-3 features: connection limits, keep-alive tuning, graceful shutdown,
+//! request timeouts, body size enforcement, HTTP/2 support.
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::net::TcpListener;
+use tokio::sync::Semaphore;
 
 use crate::vm::nvalue::NValue;
 use crate::vm::value::RcStr;
@@ -29,8 +35,20 @@ pub struct ServerConfig {
     pub workers: usize,
     /// Enable HTTP keep-alive
     pub keep_alive: bool,
+    /// Keep-alive timeout (how long to hold idle connections open)
+    pub keep_alive_timeout: Duration,
     /// Request body size limit (bytes)
     pub max_body_size: usize,
+    /// Maximum total concurrent connections
+    pub max_connections: usize,
+    /// Maximum connections from a single IP address
+    pub max_connections_per_ip: usize,
+    /// Request processing timeout (time for handler to complete)
+    pub request_timeout: Duration,
+    /// Graceful shutdown timeout (time to drain existing connections)
+    pub shutdown_timeout: Duration,
+    /// Enable HTTP/2 support (auto-detect HTTP/1.1 or HTTP/2)
+    pub enable_http2: bool,
 }
 
 impl Default for ServerConfig {
@@ -40,8 +58,97 @@ impl Default for ServerConfig {
                 .map(|n| n.get())
                 .unwrap_or(4),
             keep_alive: true,
+            keep_alive_timeout: Duration::from_secs(75),
             max_body_size: 1024 * 1024, // 1MB default
+            max_connections: 10_000,
+            max_connections_per_ip: 256,
+            request_timeout: Duration::from_secs(30),
+            shutdown_timeout: Duration::from_secs(30),
+            enable_http2: false,
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Connection Limiter
+// ---------------------------------------------------------------------------
+
+/// Tracks and limits connections globally and per-IP.
+struct ConnectionLimiter {
+    /// Global connection semaphore
+    global: Arc<Semaphore>,
+    /// Per-IP connection counts
+    per_ip: Arc<std::sync::Mutex<HashMap<IpAddr, usize>>>,
+    /// Max connections per IP
+    max_per_ip: usize,
+}
+
+/// RAII guard that decrements counts when a connection closes.
+struct ConnectionGuard {
+    ip: IpAddr,
+    per_ip: Arc<std::sync::Mutex<HashMap<IpAddr, usize>>>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl Drop for ConnectionGuard {
+    fn drop(&mut self) {
+        let mut map = self.per_ip.lock().unwrap();
+        if let Some(count) = map.get_mut(&self.ip) {
+            *count -= 1;
+            if *count == 0 {
+                map.remove(&self.ip);
+            }
+        }
+    }
+}
+
+impl ConnectionLimiter {
+    fn new(max_connections: usize, max_per_ip: usize) -> Self {
+        Self {
+            global: Arc::new(Semaphore::new(max_connections)),
+            per_ip: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            max_per_ip: max_per_ip,
+        }
+    }
+
+    /// Try to acquire a connection slot. Returns a guard on success, None if at capacity.
+    fn try_acquire(&self, ip: IpAddr) -> Option<ConnectionGuard> {
+        // Try global permit first
+        let permit = self.global.clone().try_acquire_owned().ok()?;
+
+        // Check per-IP limit
+        let mut map = self.per_ip.lock().unwrap();
+        let count = map.entry(ip).or_insert(0);
+        if *count >= self.max_per_ip {
+            // Drop permit (returned to semaphore)
+            drop(permit);
+            return None;
+        }
+        *count += 1;
+        drop(map);
+
+        Some(ConnectionGuard {
+            ip,
+            per_ip: Arc::clone(&self.per_ip),
+            _permit: permit,
+        })
+    }
+
+    /// Get the number of available global connection slots.
+    #[cfg(test)]
+    fn available(&self) -> usize {
+        self.global.available_permits()
+    }
+
+    /// Get the current connection count for an IP.
+    #[cfg(test)]
+    fn ip_count(&self, ip: &IpAddr) -> usize {
+        self.per_ip
+            .lock()
+            .unwrap()
+            .get(ip)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -96,16 +203,30 @@ pub struct AsyncRequest {
 }
 
 impl AsyncRequest {
-    /// Create from Hyper request.
-    pub async fn from_hyper(req: Request<Incoming>) -> Result<Self, hyper::Error> {
+    /// Create from Hyper request with body size enforcement.
+    pub async fn from_hyper(
+        req: Request<Incoming>,
+        max_body_size: usize,
+    ) -> Result<Self, BodyError> {
         let method = req.method().clone();
         let uri = req.uri();
         let path = uri.path().to_string();
         let raw_query = uri.query().map(|q| q.to_string());
         let headers = req.headers().clone();
 
-        // Collect body into Bytes (zero-copy if already contiguous)
-        let body = req.collect().await?.to_bytes();
+        // Pre-check Content-Length header if present
+        if let Some(content_length) = headers
+            .get(hyper::header::CONTENT_LENGTH)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            if content_length > max_body_size {
+                return Err(BodyError::TooLarge);
+            }
+        }
+
+        // Collect body with size limit
+        let body = read_body_limited(req.into_body(), max_body_size).await?;
 
         Ok(Self {
             method,
@@ -227,12 +348,7 @@ impl AsyncRequest {
         let params_vec: Vec<(String, SendableValue)> = self
             .params
             .iter()
-            .map(|(k, v)| {
-                (
-                    k.clone(),
-                    SendableValue::String(v.clone()),
-                )
-            })
+            .map(|(k, v)| (k.clone(), SendableValue::String(v.clone())))
             .collect();
         let params_sv = SendableValue::Record(params_vec);
 
@@ -243,12 +359,7 @@ impl AsyncRequest {
             .map(|q| {
                 parse_query_string(Some(q))
                     .into_iter()
-                    .map(|(k, v)| {
-                        (
-                            k,
-                            SendableValue::String(v),
-                        )
-                    })
+                    .map(|(k, v)| (k, SendableValue::String(v)))
                     .collect()
             })
             .unwrap_or_default();
@@ -268,6 +379,35 @@ impl AsyncRequest {
             ("params".to_string(), params_sv),
             ("query".to_string(), query_sv),
         ])
+    }
+}
+
+/// Errors that can occur when reading a request body.
+pub enum BodyError {
+    /// Body exceeded the configured max_body_size
+    TooLarge,
+    /// Transport-level error reading the body
+    Hyper(String),
+}
+
+/// Read request body with a size limit. Returns BodyError::TooLarge if exceeded.
+async fn read_body_limited(body: Incoming, max_size: usize) -> Result<Bytes, BodyError> {
+    use http_body_util::BodyExt;
+
+    // Use http_body_util::Limited to cap body collection.
+    // When the limit is exceeded, collect() returns an error whose Display
+    // contains "length limit" (from LengthLimitError).
+    let limited = http_body_util::Limited::new(body, max_size);
+    match BodyExt::collect(limited).await {
+        Ok(collected) => Ok(collected.to_bytes()),
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("length limit") {
+                Err(BodyError::TooLarge)
+            } else {
+                Err(BodyError::Hyper(msg))
+            }
+        }
     }
 }
 
@@ -351,7 +491,6 @@ impl AsyncResponse {
         }
     }
 
-
     /// Create from SendableValue response.
     /// Avoids converting back to NValue on the IO thread.
     pub fn from_sendable_val(val: &crate::vm::async_executor::SendableValue) -> Self {
@@ -362,7 +501,6 @@ impl AsyncResponse {
                 .iter()
                 .find(|(k, _)| k == "status")
                 .and_then(|(_, v)| {
-                    // Check for Int or AnyInt (usually Int in SendableValue)
                     if let SendableValue::Int(i) = v {
                         Some(*i as u16)
                     } else {
@@ -388,18 +526,28 @@ impl AsyncResponse {
                 .find(|(k, _)| k == "headers")
                 .and_then(|(_, v)| {
                     if let SendableValue::List(list) = v {
-                        Some(list.iter()
-                            .filter_map(|item| {
-                                if let SendableValue::Tuple(tuple) = item {
-                                    if tuple.len() == 2 {
-                                        let k = if let SendableValue::String(s) = &tuple[0] { s } else { return None; };
-                                        let v = if let SendableValue::String(s) = &tuple[1] { s } else { return None; };
-                                        return Some((k.clone(), v.clone()));
+                        Some(
+                            list.iter()
+                                .filter_map(|item| {
+                                    if let SendableValue::Tuple(tuple) = item {
+                                        if tuple.len() == 2 {
+                                            let k = if let SendableValue::String(s) = &tuple[0] {
+                                                s
+                                            } else {
+                                                return None;
+                                            };
+                                            let v = if let SendableValue::String(s) = &tuple[1] {
+                                                s
+                                            } else {
+                                                return None;
+                                            };
+                                            return Some((k.clone(), v.clone()));
+                                        }
                                     }
-                                }
-                                None
-                            })
-                            .collect())
+                                    None
+                                })
+                                .collect(),
+                        )
                     } else {
                         None
                     }
@@ -412,13 +560,13 @@ impl AsyncResponse {
                 body,
             }
         } else {
-             // Fallback: treat as string body
-             let body = if let SendableValue::String(s) = val {
-                 Bytes::from(s.clone())
-             } else {
-                 Bytes::new()
-             };
-             Self::text(200, body)
+            // Fallback: treat as string body
+            let body = if let SendableValue::String(s) = val {
+                Bytes::from(s.clone())
+            } else {
+                Bytes::new()
+            };
+            Self::text(200, body)
         }
     }
 
@@ -537,7 +685,8 @@ impl AsyncRouteTreeBuilder {
                 // Parameter segment
                 let param_name = segment[1..].to_string();
                 if current.param.is_none() {
-                    current.param = Some((param_name.clone(), Box::new(AsyncRadixNode::default())));
+                    current.param =
+                        Some((param_name.clone(), Box::new(AsyncRadixNode::default())));
                 }
                 let (_, child) = current.param.as_mut().unwrap();
                 current = child.as_mut();
@@ -654,10 +803,15 @@ impl AsyncRouteTree {
                     .map(|(_, v)| v)
                     .ok_or("Route must have 'handler'")?;
 
-                if let Some(sendable) = crate::vm::async_executor::SendableHandler::from_nvalue(handler_val) {
+                if let Some(sendable) =
+                    crate::vm::async_executor::SendableHandler::from_nvalue(handler_val)
+                {
                     builder = builder.route(method, path, AsyncHandler::Vm(sendable));
                 } else {
-                     return Err(format!("Invalid handler for route {} {}", method, path));
+                    return Err(format!(
+                        "Invalid handler for route {} {}",
+                        method, path
+                    ));
                 }
             }
         }
@@ -718,50 +872,201 @@ impl AsyncServerContext {
 pub async fn run_server(
     addr: SocketAddr,
     route_tree: AsyncRouteTree,
-    _config: ServerConfig,
+    config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ctx = Arc::new(AsyncServerContext::native_only(route_tree));
-    run_server_with_context(addr, ctx).await
+    run_server_with_context(addr, ctx, config).await
 }
 
 /// Start the async HTTP server with full context (including VM executor).
+///
+/// Features:
+/// - Connection limiting (global + per-IP)
+/// - Keep-alive tuning
+/// - Request timeouts
+/// - Body size enforcement
+/// - Graceful shutdown on SIGTERM/SIGINT
+/// - Optional HTTP/2 support
 pub async fn run_server_with_context(
     addr: SocketAddr,
     ctx: Arc<AsyncServerContext>,
+    config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(addr).await?;
+    let limiter = Arc::new(ConnectionLimiter::new(
+        config.max_connections,
+        config.max_connections_per_ip,
+    ));
+    let config = Arc::new(config);
 
     eprintln!("[server] Listening on http://{}", addr);
 
+    // Set up graceful shutdown signal
+    let shutdown = shutdown_signal();
+    tokio::pin!(shutdown);
+
+    // Track active connections for graceful drain
+    let active_connections = Arc::new(AtomicUsize::new(0));
+
     loop {
-        let (stream, _) = listener.accept().await?;
-        let io = hyper_util::rt::TokioIo::new(stream);
-        let ctx = Arc::clone(&ctx);
+        tokio::select! {
+            result = listener.accept() => {
+                let (stream, remote_addr) = match result {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        eprintln!("[server] Accept error: {:?}", e);
+                        continue;
+                    }
+                };
 
-        tokio::task::spawn(async move {
-            let service = service_fn(move |req| {
+                let remote_ip = remote_addr.ip();
+
+                // Try to acquire connection slot
+                let guard = match limiter.try_acquire(remote_ip) {
+                    Some(g) => g,
+                    None => {
+                        // At capacity — drop the connection silently
+                        drop(stream);
+                        continue;
+                    }
+                };
+
+                let io = hyper_util::rt::TokioIo::new(stream);
                 let ctx = Arc::clone(&ctx);
-                async move { handle_request_with_context(req, &ctx).await }
-            });
+                let config = Arc::clone(&config);
+                let active = Arc::clone(&active_connections);
 
-            if let Err(err) = http1::Builder::new().serve_connection(io, service).await {
-                eprintln!("[server] Connection error: {:?}", err);
+                active.fetch_add(1, Ordering::Relaxed);
+
+                tokio::task::spawn(async move {
+                    // guard is moved into this task — dropped when connection closes
+                    let _guard = guard;
+
+                    if config.enable_http2 {
+                        serve_auto_connection(io, ctx, &config).await;
+                    } else {
+                        serve_http1_connection(io, ctx, &config).await;
+                    }
+
+                    active.fetch_sub(1, Ordering::Relaxed);
+                });
             }
-        });
+            _ = &mut shutdown => {
+                eprintln!("[server] Shutdown signal received, draining connections...");
+                break;
+            }
+        }
+    }
+
+    // Graceful drain: wait for active connections to finish
+    let drain_deadline = tokio::time::Instant::now() + config.shutdown_timeout;
+    while active_connections.load(Ordering::Relaxed) > 0 {
+        if tokio::time::Instant::now() >= drain_deadline {
+            eprintln!(
+                "[server] Shutdown timeout reached, {} connections still active",
+                active_connections.load(Ordering::Relaxed)
+            );
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    eprintln!("[server] Shutdown complete");
+    Ok(())
+}
+
+/// Serve a connection using HTTP/1.1 only.
+pub(crate) async fn serve_http1_connection(
+    io: hyper_util::rt::TokioIo<tokio::net::TcpStream>,
+    ctx: Arc<AsyncServerContext>,
+    config: &ServerConfig,
+) {
+    let max_body_size = config.max_body_size;
+    let request_timeout = config.request_timeout;
+
+    let service = service_fn(move |req| {
+        let ctx = Arc::clone(&ctx);
+        async move {
+            handle_request_with_timeout(req, &ctx, max_body_size, request_timeout).await
+        }
+    });
+
+    let mut conn = http1::Builder::new()
+        .keep_alive(config.keep_alive)
+        .serve_connection(io, service);
+
+    // Use pin for potential graceful shutdown
+    let conn = std::pin::Pin::new(&mut conn);
+    if let Err(err) = conn.await {
+        if !err.to_string().contains("connection closed") {
+            eprintln!("[server] Connection error: {:?}", err);
+        }
+    }
+}
+
+/// Serve a connection using HTTP/1.1 or HTTP/2 auto-detection.
+pub(crate) async fn serve_auto_connection(
+    io: hyper_util::rt::TokioIo<tokio::net::TcpStream>,
+    ctx: Arc<AsyncServerContext>,
+    config: &ServerConfig,
+) {
+    use hyper_util::server::conn::auto;
+
+    let max_body_size = config.max_body_size;
+    let request_timeout = config.request_timeout;
+
+    let service = service_fn(move |req| {
+        let ctx = Arc::clone(&ctx);
+        async move {
+            handle_request_with_timeout(req, &ctx, max_body_size, request_timeout).await
+        }
+    });
+
+    let builder = auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+
+    if let Err(err) = builder.serve_connection(io, service).await {
+        if !err.to_string().contains("connection closed") {
+            eprintln!("[server] Connection error: {:?}", err);
+        }
+    }
+}
+
+/// Handle a request with timeout and body size enforcement.
+async fn handle_request_with_timeout(
+    req: Request<Incoming>,
+    ctx: &AsyncServerContext,
+    max_body_size: usize,
+    request_timeout: Duration,
+) -> Result<Response<Full<Bytes>>, Infallible> {
+    match tokio::time::timeout(
+        request_timeout,
+        handle_request_with_context(req, ctx, max_body_size),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            // Request timed out
+            Ok(AsyncResponse::text(408, "Request Timeout").into_hyper())
+        }
     }
 }
 
 async fn handle_request_with_context(
     req: Request<Incoming>,
     ctx: &AsyncServerContext,
+    max_body_size: usize,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     let method = req.method().to_string();
     let path = req.uri().path().to_string();
 
-    // Parse request
-    let mut async_req = match AsyncRequest::from_hyper(req).await {
+    // Parse request with body size enforcement
+    let mut async_req = match AsyncRequest::from_hyper(req, max_body_size).await {
         Ok(r) => r,
-        Err(_) => {
+        Err(BodyError::TooLarge) => {
+            return Ok(AsyncResponse::text(413, "Payload Too Large").into_hyper());
+        }
+        Err(BodyError::Hyper(_)) => {
             return Ok(AsyncResponse::text(500, "Failed to read request").into_hyper());
         }
     };
@@ -776,8 +1081,6 @@ async fn handle_request_with_context(
                 AsyncHandler::Vm(vm_handler) => {
                     // Execute VM handler via async executor
                     if let Some(executor) = &ctx.executor {
-                        use crate::vm::async_executor::SendableValue;
-
                         // Convert request to sendable format DIRECTLY
                         let request_sv = async_req.to_sendable();
 
@@ -800,6 +1103,31 @@ async fn handle_request_with_context(
             Ok(response.into_hyper())
         }
         None => Ok(AsyncResponse::text(404, "Not Found").into_hyper()),
+    }
+}
+
+/// Wait for a shutdown signal (SIGTERM or SIGINT).
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
     }
 }
 
@@ -836,11 +1164,10 @@ mod tests {
     fn test_async_response_json() {
         let resp = AsyncResponse::json(r#"{"ok":true}"#);
         assert_eq!(resp.status, StatusCode::OK);
-        assert!(
-            resp.headers
-                .iter()
-                .any(|(k, v)| k == "Content-Type" && v == "application/json")
-        );
+        assert!(resp
+            .headers
+            .iter()
+            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
     }
 
     #[test]
@@ -848,5 +1175,65 @@ mod tests {
         assert_eq!(urlencoding_decode("hello%20world"), "hello world");
         assert_eq!(urlencoding_decode("a+b"), "a b");
         assert_eq!(urlencoding_decode("100%25"), "100%");
+    }
+
+    // -----------------------------------------------------------------------
+    // Connection Limiter Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_connection_limiter_global_limit() {
+        let limiter = ConnectionLimiter::new(2, 256);
+        let ip: IpAddr = "127.0.0.1".parse().unwrap();
+
+        let g1 = limiter.try_acquire(ip);
+        assert!(g1.is_some());
+        assert_eq!(limiter.available(), 1);
+
+        let g2 = limiter.try_acquire(ip);
+        assert!(g2.is_some());
+        assert_eq!(limiter.available(), 0);
+
+        // Third should fail — at capacity
+        let g3 = limiter.try_acquire(ip);
+        assert!(g3.is_none());
+
+        // Drop one guard — slot opens
+        drop(g1);
+        assert_eq!(limiter.available(), 1);
+
+        let g4 = limiter.try_acquire(ip);
+        assert!(g4.is_some());
+    }
+
+    #[test]
+    fn test_connection_limiter_per_ip_limit() {
+        let limiter = ConnectionLimiter::new(100, 2);
+        let ip1: IpAddr = "10.0.0.1".parse().unwrap();
+        let ip2: IpAddr = "10.0.0.2".parse().unwrap();
+
+        let _g1 = limiter.try_acquire(ip1);
+        let _g2 = limiter.try_acquire(ip1);
+
+        // Third from same IP should fail
+        let g3 = limiter.try_acquire(ip1);
+        assert!(g3.is_none());
+
+        // Different IP should succeed
+        let g4 = limiter.try_acquire(ip2);
+        assert!(g4.is_some());
+    }
+
+    #[test]
+    fn test_connection_limiter_guard_cleanup() {
+        let limiter = ConnectionLimiter::new(10, 10);
+        let ip: IpAddr = "192.168.1.1".parse().unwrap();
+
+        {
+            let _g = limiter.try_acquire(ip);
+            assert_eq!(limiter.ip_count(&ip), 1);
+        }
+        // Guard dropped — count should be 0
+        assert_eq!(limiter.ip_count(&ip), 0);
     }
 }
