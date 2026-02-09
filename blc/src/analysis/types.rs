@@ -1099,11 +1099,26 @@ fn process_imports(
             None => continue,
         };
 
-        // Type-check the imported module (needs &mut loader for recursive imports)
-        // Scope the borrows carefully: get root+source, check, then re-borrow for exports.
+        // Type-check the imported module with recursive import support.
+        // Clone source/path to release the borrow on loader, so we can pass &mut loader.
         {
             let (mod_root, mod_source, _) = loader.get_module(module_idx).unwrap();
-            let mod_diagnostics = check_types(&mod_root, mod_source, &mod_file);
+            let mod_source_owned = mod_source.to_string();
+            let mod_file_owned = mod_file.clone();
+            let _ = mod_root;
+            // Re-parse to get an owned tree (required because mod_root borrows loader)
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_baseline::LANGUAGE.into())
+                .expect("Failed to load Baseline grammar");
+            let tree = parser.parse(&mod_source_owned, None).unwrap();
+            let mod_root = tree.root_node();
+            let mod_diagnostics = check_types_with_loader(
+                &mod_root,
+                &mod_source_owned,
+                &mod_file_owned,
+                Some(loader),
+            );
             let has_errors = mod_diagnostics
                 .iter()
                 .any(|d| d.severity == Severity::Error);
