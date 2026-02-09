@@ -1,0 +1,37 @@
+// Extended matchers conformance test
+// Tests: to_contain, to_start_with, to_satisfy, to_be
+@prelude(core)
+
+describe "to_contain matcher" {
+  it "checks string contains substring" = expect "hello world" to_contain "world"
+
+  it "checks string contains prefix" = expect "hello world" to_contain "hello"
+
+  it "checks list contains element" = expect [1, 2, 3] to_contain 2
+
+  it "checks list contains string" = expect ["a", "b", "c"] to_contain "b"
+}
+
+describe "to_start_with matcher" {
+  it "checks string starts with prefix" = expect "hello world" to_start_with "hello"
+
+  it "checks single char prefix" = expect "abc" to_start_with "a"
+}
+
+describe "to_satisfy matcher" {
+  it "checks predicate on value" = expect 42 to_satisfy (|x| x > 0)
+
+  it "checks string predicate" = expect "hello" to_satisfy (|s| String.length(s) == 5)
+}
+
+describe "to_be matcher" {
+  it "matches literal true" = expect true to_be true
+
+  it "matches literal false" = expect false to_be false
+
+  it "matches integer" = expect 42 to_be 42
+
+  it "matches string" = expect "hello" to_be "hello"
+
+  it "matches None tag" = expect None to_be None
+}

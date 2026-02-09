@@ -1,0 +1,24 @@
+// before_each / after_each hooks conformance test
+@prelude(core)
+
+describe "hooks in flat describe" {
+  before_each = Console.println!("before")
+
+  after_each = Console.println!("after")
+
+  it "runs with hooks" = expect 1 + 1 to_equal 2
+
+  it "runs hooks for each test" = expect true to_equal true
+}
+
+describe "nested hooks" {
+  before_each = Console.println!("outer-before")
+
+  describe "inner group" {
+    before_each = Console.println!("inner-before")
+
+    it "runs both before hooks" = expect 42 to_equal 42
+  }
+
+  it "runs only outer hook" = expect "hello" to_equal "hello"
+}

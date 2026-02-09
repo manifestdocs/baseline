@@ -166,6 +166,7 @@ impl NativeRegistry {
         self.register("List.reverse", native_list_reverse);
         self.register("List.sort", native_list_sort);
         self.register("List.concat", native_list_concat);
+        self.register("List.contains", native_list_contains);
 
         // -- List (HOF) — these are placeholders; actual execution handled by VM --
         self.register("List.map", native_hof_placeholder);
@@ -254,6 +255,9 @@ impl NativeRegistry {
         self.register("Set.intersection", native_set_intersection);
         self.register("Set.len", native_set_len);
         self.register("Set.from_list", native_set_from_list);
+
+        // -- Test internals --
+        self.register("__test_contains", native_test_contains);
 
         // -- Server (VM-reentrant, dispatched specially in vm.rs) --
         self.register("Server.listen!", native_server_listen_placeholder);
@@ -599,6 +603,35 @@ fn native_list_concat(args: &[NValue]) -> Result<NValue, NativeError> {
         }
         _ => Err(NativeError("List.concat: expected (List, List)".into())),
     }
+}
+
+fn native_list_contains(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => Ok(NValue::bool(items.contains(&args[1]))),
+        None => Err(NativeError(format!(
+            "List.contains: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
+/// Polymorphic contains for test matchers: string → substring check, list → element check.
+fn native_test_contains(args: &[NValue]) -> Result<NValue, NativeError> {
+    if let Some(s) = args[0].as_string() {
+        if let Some(sub) = args[1].as_string() {
+            return Ok(NValue::bool(s.contains(&**sub)));
+        }
+        return Err(NativeError(
+            "__test_contains: string actual requires string expected".into(),
+        ));
+    }
+    if let Some(items) = args[0].as_list() {
+        return Ok(NValue::bool(items.contains(&args[1])));
+    }
+    Err(NativeError(format!(
+        "__test_contains: expected String or List, got {}",
+        args[0]
+    )))
 }
 
 // ---------------------------------------------------------------------------
@@ -1881,5 +1914,53 @@ mod tests {
         let err = NValue::enum_val("Err".into(), NValue::string("bad".into()));
         assert!(native_result_is_ok(&[ok]).unwrap().as_bool());
         assert!(!native_result_is_ok(&[err]).unwrap().as_bool());
+    }
+
+    #[test]
+    fn list_contains_found() {
+        let list = NValue::list(vec![NValue::int(1), NValue::int(2), NValue::int(3)]);
+        let result = native_list_contains(&[list, NValue::int(2)]).unwrap();
+        assert!(result.as_bool());
+    }
+
+    #[test]
+    fn list_contains_not_found() {
+        let list = NValue::list(vec![NValue::int(1), NValue::int(2)]);
+        let result = native_list_contains(&[list, NValue::int(5)]).unwrap();
+        assert!(!result.as_bool());
+    }
+
+    #[test]
+    fn test_contains_string() {
+        let result = native_test_contains(&[
+            NValue::string("hello world".into()),
+            NValue::string("world".into()),
+        ])
+        .unwrap();
+        assert!(result.as_bool());
+    }
+
+    #[test]
+    fn test_contains_string_not_found() {
+        let result = native_test_contains(&[
+            NValue::string("hello".into()),
+            NValue::string("xyz".into()),
+        ])
+        .unwrap();
+        assert!(!result.as_bool());
+    }
+
+    #[test]
+    fn test_contains_list() {
+        let list = NValue::list(vec![NValue::int(10), NValue::int(20)]);
+        let result = native_test_contains(&[list, NValue::int(10)]).unwrap();
+        assert!(result.as_bool());
+    }
+
+    #[test]
+    fn test_contains_list_not_found() {
+        let list = NValue::list(vec![NValue::int(10)]);
+        let result = native_test_contains(&[list, NValue::int(99)]).unwrap();
+        assert!(!result.as_bool());
     }
 }
