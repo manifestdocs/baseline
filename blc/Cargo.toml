@@ -24,8 +24,7 @@ jit = [
     "dep:cranelift-native",
     "dep:target-lexicon",
 ]
-llvm = ["dep:inkwell"]
-async-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes"]
+async-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "dep:tokio-util"]
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
@@ -40,10 +39,11 @@ tower-lsp = "0.20"
 tokio = { version = "1", features = ["full"] }
 
 # Async HTTP server (behind feature flag)
-hyper = { version = "1", features = ["http1", "server"], optional = true }
-hyper-util = { version = "0.1", features = ["tokio"], optional = true }
+hyper = { version = "1", features = ["http1", "http2", "server"], optional = true }
+hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server-auto"], optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
+tokio-util = { version = "0.7", optional = true }
 
 # JIT dependencies (behind feature flag)
 cranelift-codegen = { version = "0.128", optional = true }
@@ -52,9 +52,6 @@ cranelift-module = { version = "0.128", optional = true }
 cranelift-jit = { version = "0.128", optional = true }
 cranelift-native = { version = "0.128", optional = true }
 target-lexicon = { version = "0.13", optional = true }
-
-# LLVM dependencies (behind feature flag)
-inkwell = { version = "0.8", features = ["llvm18-1"], optional = true }
 
 [[example]]
 name = "async_bench_server"

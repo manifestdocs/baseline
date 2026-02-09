@@ -2,10 +2,7 @@ use clap::{Parser, Subcommand};
 use std::path::{Path, PathBuf};
 
 use blc::diagnostics::{self, CheckResult};
-use blc::interpreter;
 use blc::parse;
-use blc::prelude;
-use blc::resolver::{self, ImportKind, ModuleLoader};
 use blc::test_runner;
 use blc::vm;
 
@@ -42,21 +39,9 @@ enum Commands {
         /// The file to run
         file: PathBuf,
 
-        /// Use the legacy tree-walk interpreter (debug only, deprecated)
-        #[arg(long)]
-        interp: bool,
-
-        /// Use the bytecode VM (default, kept for backward compatibility)
-        #[arg(long, hide = true)]
-        vm: bool,
-
         /// Use the Cranelift JIT compiler (requires --features jit)
         #[arg(long)]
         jit: bool,
-
-        /// Use the LLVM JIT backend (requires --features llvm)
-        #[arg(long)]
-        llvm: bool,
 
         /// Print heap allocation statistics after execution
         #[arg(long)]
@@ -71,14 +56,6 @@ enum Commands {
         /// Output results as JSON
         #[arg(long)]
         json: bool,
-
-        /// Use the legacy tree-walk interpreter (debug only, deprecated)
-        #[arg(long)]
-        interp: bool,
-
-        /// Use the bytecode VM (default, kept for backward compatibility)
-        #[arg(long, hide = true)]
-        vm: bool,
     },
 
     /// Format a Baseline source file
@@ -176,19 +153,12 @@ fn main() {
         }
         Commands::Run {
             file,
-            interp,
             jit,
-            llvm,
             mem_stats,
             ..
         } => {
-            if interp {
-                eprintln!("Warning: --interp is deprecated. The bytecode VM is the default and recommended backend.");
-                run_file(&file);
-            } else if jit {
+            if jit {
                 run_file_jit(&file);
-            } else if llvm {
-                run_file_llvm(&file);
             } else {
                 run_file_vm(&file);
             }
@@ -197,14 +167,8 @@ fn main() {
                 eprintln!("[mem] {}", stats);
             }
         }
-        Commands::Test {
-            file, json, interp, ..
-        } => {
-            let result = if interp {
-                test_runner::run_test_file(&file)
-            } else {
-                vm::test_runner::run_test_file(&file)
-            };
+        Commands::Test { file, json, .. } => {
+            let result = vm::test_runner::run_test_file(&file);
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap());
             } else {
@@ -248,6 +212,7 @@ fn main() {
 }
 
 fn run_file_vm(file: &PathBuf) {
+    use blc::resolver;
     use tree_sitter::Parser;
     use tree_sitter_baseline::LANGUAGE;
 
@@ -401,245 +366,6 @@ fn run_file_jit(_file: &PathBuf) {
     eprintln!("Error: JIT support requires building with --features jit");
     eprintln!("  cargo build --features jit --release");
     std::process::exit(1);
-}
-
-#[cfg(feature = "llvm")]
-fn run_file_llvm(file: &PathBuf) {
-    use tree_sitter::Parser;
-    use tree_sitter_baseline::LANGUAGE;
-
-    let source = std::fs::read_to_string(file).expect("Failed to read file");
-    let file_str = file.display().to_string();
-    let mut parser = Parser::new();
-    parser
-        .set_language(&LANGUAGE.into())
-        .expect("Failed to load language");
-    let tree = parser.parse(&source, None).expect("Failed to parse");
-    let root = tree.root_node();
-
-    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
-    let has_type_errors = type_diags
-        .iter()
-        .any(|d| d.severity == diagnostics::Severity::Error);
-    let type_map = if has_type_errors {
-        None
-    } else {
-        Some(type_map)
-    };
-
-    let vm_instance = vm::vm::Vm::new();
-    let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
-    let ir_module = match lowerer.lower_module(&root) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Compile Error: {}", e.message);
-            std::process::exit(1);
-        }
-    };
-
-    let mut optimized = ir_module;
-    vm::optimize_ir::optimize(&mut optimized);
-
-    let trace = std::env::var("BLC_TRACE").is_ok();
-    let program = match vm::llvm_backend::compile(&optimized, trace) {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("LLVM Error: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let result = program.run_entry();
-    if result != 0 {
-        println!("{}", result);
-    }
-}
-
-#[cfg(not(feature = "llvm"))]
-fn run_file_llvm(_file: &PathBuf) {
-    eprintln!("Error: LLVM support requires building with --features llvm");
-    eprintln!(
-        "  LLVM_SYS_181_PREFIX=/opt/homebrew/opt/llvm@18 cargo build --features llvm --release"
-    );
-    std::process::exit(1);
-}
-
-fn run_file(file: &PathBuf) {
-    use tree_sitter::Parser;
-    use tree_sitter_baseline::LANGUAGE;
-
-    let source = std::fs::read_to_string(file).expect("Failed to read file");
-    let mut parser = Parser::new();
-    parser
-        .set_language(&LANGUAGE.into())
-        .expect("Failed to load language");
-    let tree = parser.parse(&source, None).expect("Failed to parse");
-    let root = tree.root_node();
-
-    let active_prelude = match prelude::extract_prelude(&root, &source) {
-        Ok(p) => p,
-        Err(msg) => {
-            eprintln!("Prelude Error: {}", msg);
-            std::process::exit(1);
-        }
-    };
-    let file_path = file.display().to_string();
-
-    // Leak the loader so imported tree-sitter Nodes get 'static lifetime
-    let loader: &'static mut ModuleLoader = match file.parent() {
-        Some(dir) => Box::leak(Box::new(ModuleLoader::with_base_dir(dir.to_path_buf()))),
-        None => Box::leak(Box::new(ModuleLoader::new())),
-    };
-
-    let mut context = interpreter::Context::with_prelude_and_file(active_prelude, file_path);
-
-    if let Err(msg) = inject_imports(&root, &source, file, loader, &mut context) {
-        eprintln!("Import Error: {}", msg);
-        std::process::exit(1);
-    }
-
-    if let Err(e) = interpreter::eval(&root, &source, &mut context) {
-        eprintln!("Runtime Error: {e}");
-        std::process::exit(1);
-    }
-
-    let main_val = context
-        .get("main!")
-        .cloned()
-        .or_else(|| context.get("main").cloned());
-
-    if let Some(main_val) = main_val {
-        let result = run_main(&main_val, &mut context);
-        match result {
-            Ok(val) => {
-                let val = match val {
-                    interpreter::RuntimeValue::EarlyReturn(inner) => *inner,
-                    other => other,
-                };
-                if !matches!(val, interpreter::RuntimeValue::Unit) {
-                    println!("{}", val);
-                }
-            }
-            Err(e) => {
-                eprintln!("Runtime Error: {e}");
-                std::process::exit(1);
-            }
-        }
-    } else {
-        eprintln!("No 'main' or 'main!' function found");
-        std::process::exit(1);
-    }
-}
-
-/// Pre-inject imported modules into the interpreter context.
-fn inject_imports<'a>(
-    root: &tree_sitter::Node<'a>,
-    source: &str,
-    file: &Path,
-    loader: &'a mut ModuleLoader,
-    context: &mut interpreter::Context<'a>,
-) -> Result<(), String> {
-    let imports = ModuleLoader::parse_imports(root, source);
-    let file_str = file.display().to_string();
-
-    // Phase 1: resolve and load all modules (needs &mut loader)
-    let mut resolved: Vec<(resolver::ResolvedImport, usize)> = Vec::new();
-    for (import, import_node) in &imports {
-        let file_path = loader
-            .resolve_path(&import.module_name, import_node, &file_str)
-            .map_err(|d| d.message.clone())?;
-        let module_idx = loader
-            .load_module(&file_path, import_node, &file_str)
-            .map_err(|d| d.message.clone())?;
-        resolved.push((import.clone(), module_idx));
-    }
-
-    // Phase 2: eval each module and inject into context
-    for (import, module_idx) in &resolved {
-        let (mod_root, mod_source, mod_path) = loader
-            .get_module(*module_idx)
-            .ok_or_else(|| format!("Failed to get module {}", import.module_name))?;
-
-        let mod_prelude =
-            prelude::extract_prelude(&mod_root, mod_source).unwrap_or(prelude::Prelude::Core);
-
-        let mod_file = mod_path.display().to_string();
-        let mut mod_context = interpreter::Context::with_prelude_and_file(mod_prelude, mod_file);
-
-        interpreter::eval(&mod_root, mod_source, &mut mod_context)
-            .map_err(|e| format!("Error evaluating module `{}`: {}", import.module_name, e))?;
-
-        let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
-        let mut record_fields = std::collections::HashMap::new();
-
-        for (func_name, _) in &exports.functions {
-            if let Some(val) = mod_context.get(func_name) {
-                record_fields.insert(func_name.clone(), val.clone());
-            }
-        }
-
-        for type_name in &exports.types {
-            if let Some(val) = mod_context.get(type_name) {
-                record_fields.insert(type_name.clone(), val.clone());
-            }
-        }
-
-        let short_name = import
-            .module_name
-            .rsplit('.')
-            .next()
-            .unwrap_or(&import.module_name);
-
-        context.set(
-            short_name.to_string(),
-            interpreter::RuntimeValue::Record(record_fields.clone()),
-        );
-
-        match &import.kind {
-            ImportKind::Selective(names) => {
-                for name in names {
-                    if let Some(val) = record_fields.get(name) {
-                        context.set(name.clone(), val.clone());
-                    }
-                }
-            }
-            ImportKind::Wildcard => {
-                for (name, val) in &record_fields {
-                    context.set(name.clone(), val.clone());
-                }
-            }
-            ImportKind::Qualified => {}
-        }
-    }
-
-    Ok(())
-}
-
-/// Evaluate the main function body.
-fn run_main<'a>(
-    main_val: &interpreter::RuntimeValue<'a>,
-    context: &mut interpreter::Context<'a>,
-) -> Result<interpreter::RuntimeValue<'a>, interpreter::RuntimeError> {
-    match main_val {
-        interpreter::RuntimeValue::Function(_, main_body, fn_source) => {
-            context.enter_scope();
-            let result = interpreter::eval(main_body, fn_source, context);
-            context.exit_scope();
-            result
-        }
-        interpreter::RuntimeValue::Closure(_, main_body, fn_source, captured_env) => {
-            context.enter_scope();
-            for (k, v) in captured_env {
-                context.set(k.clone(), v.clone());
-            }
-            let result = interpreter::eval(main_body, fn_source, context);
-            context.exit_scope();
-            result
-        }
-        _ => Err(interpreter::RuntimeError::from(
-            "'main' is not a function".to_string(),
-        )),
-    }
 }
 
 fn check_file(path: &Path) -> CheckResult {

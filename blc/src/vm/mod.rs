@@ -10,8 +10,6 @@ mod hyper_server_tests;
 pub mod ir;
 #[cfg(feature = "jit")]
 pub mod jit;
-#[cfg(feature = "llvm")]
-pub mod llvm_backend;
 pub mod lower;
 pub mod module_compiler;
 pub mod natives;

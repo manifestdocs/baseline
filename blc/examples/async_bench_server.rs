@@ -4,7 +4,7 @@
 //!
 //! Then benchmark with: wrk -t4 -c100 -d10s http://localhost:8080/hello
 
-use blc::stdlib::hyper_server::{AsyncResponse, AsyncRouteTreeBuilder, ServerConfig, run_server};
+use blc::vm::hyper_server::{AsyncResponse, AsyncRouteTreeBuilder, ServerConfig, run_server};
 use std::net::SocketAddr;
 
 #[tokio::main]
