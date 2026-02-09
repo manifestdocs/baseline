@@ -28,15 +28,15 @@ impl Prelude {
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure => &["Option", "Result", "String", "List", "Json"],
             Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Json"]
+                &["Option", "Result", "String", "List", "Map", "Set", "Json", "Int"]
             }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Http", "Response",
-                "Request",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Int", "Http", "Response",
+                "Request", "Fs",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Http", "Response",
-                "Request", "Router",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Int", "Http", "Response",
+                "Request", "Router", "Fs",
             ],
         }
     }
@@ -60,16 +60,16 @@ impl Prelude {
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Math"],
             Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Json", "Math"]
+                &["Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Int"]
             }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Console",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Int", "Console",
                 "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Console",
+                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Int", "Console",
                 "Log", "Time", "Env", "Http", "Response", "Request", "Router", "Server", "Db",
-                "Metrics",
+                "Metrics", "Fs",
             ],
         }
     }

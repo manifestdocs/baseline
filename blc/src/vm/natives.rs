@@ -158,6 +158,13 @@ impl NativeRegistry {
         self.register("String.split", native_string_split);
         self.register("String.join", native_string_join);
         self.register("String.slice", native_string_slice);
+        self.register("String.ends_with", native_string_ends_with);
+        self.register("String.chars", native_string_chars);
+        self.register("String.char_at", native_string_char_at);
+        self.register("String.index_of", native_string_index_of);
+        self.register("String.to_int", native_string_to_int);
+        self.register("String.from_char_code", native_string_from_char_code);
+        self.register("String.char_code", native_string_char_code);
 
         // -- List (non-HOF) --
         self.register("List.length", native_list_length);
@@ -245,6 +252,11 @@ impl NativeRegistry {
         self.register("Map.keys", native_map_keys);
         self.register("Map.values", native_map_values);
         self.register("Map.len", native_map_len);
+        // Spec-aligned aliases
+        self.register("Map.set", native_map_insert);
+        self.register("Map.has", native_map_contains);
+        self.register("Map.size", native_map_len);
+        self.register("Map.from_list", native_map_from_list);
 
         // -- Set --
         self.register("Set.empty", native_set_empty);
@@ -255,6 +267,21 @@ impl NativeRegistry {
         self.register("Set.intersection", native_set_intersection);
         self.register("Set.len", native_set_len);
         self.register("Set.from_list", native_set_from_list);
+
+        // -- Fs (VM-side) --
+        self.register("Fs.read_file!", native_fs_read_file);
+        self.register("Fs.read_file", native_fs_read_file);
+        self.register("Fs.write_file!", native_fs_write_file);
+        self.register("Fs.write_file", native_fs_write_file);
+        self.register("Fs.exists!", native_fs_exists);
+        self.register("Fs.exists", native_fs_exists);
+        self.register("Fs.list_dir!", native_fs_list_dir);
+        self.register("Fs.list_dir", native_fs_list_dir);
+        // CST-compatible aliases
+        self.register("Fs.read!", native_fs_read_file);
+        self.register("Fs.read", native_fs_read_file);
+        self.register("Fs.write!", native_fs_write_file);
+        self.register("Fs.write", native_fs_write_file);
 
         // -- Test internals --
         self.register("__test_contains", native_test_contains);
@@ -505,6 +532,104 @@ fn native_string_slice(args: &[NValue]) -> Result<NValue, NativeError> {
         _ => Err(NativeError(
             "String.slice: expected (String, Int, Int)".into(),
         )),
+    }
+}
+
+fn native_string_ends_with(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string()) {
+        (Some(s), Some(suffix)) => Ok(NValue::bool(s.ends_with(&**suffix))),
+        _ => Err(NativeError(
+            "String.ends_with: expected (String, String)".into(),
+        )),
+    }
+}
+
+fn native_string_chars(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => {
+            let chars: Vec<NValue> = s
+                .chars()
+                .map(|c| NValue::string(c.to_string().into()))
+                .collect();
+            Ok(NValue::list(chars))
+        }
+        None => Err(NativeError(format!(
+            "String.chars: expected String, got {}",
+            args[0]
+        ))),
+    }
+}
+
+fn native_string_char_at(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].is_any_int()) {
+        (Some(s), true) => {
+            let idx = args[1].as_any_int() as usize;
+            match s.chars().nth(idx) {
+                Some(c) => Ok(NValue::enum_val("Some".into(), NValue::string(c.to_string().into()))),
+                None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+            }
+        }
+        _ => Err(NativeError(
+            "String.char_at: expected (String, Int)".into(),
+        )),
+    }
+}
+
+fn native_string_index_of(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string()) {
+        (Some(s), Some(needle)) => match s.find(&**needle) {
+            Some(idx) => Ok(NValue::enum_val("Some".into(), NValue::int(idx as i64))),
+            None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+        },
+        _ => Err(NativeError(
+            "String.index_of: expected (String, String)".into(),
+        )),
+    }
+}
+
+fn native_string_to_int(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => match s.trim().parse::<i64>() {
+            Ok(n) => Ok(NValue::enum_val("Some".into(), NValue::int(n))),
+            Err(_) => Ok(NValue::enum_val("None".into(), NValue::unit())),
+        },
+        None => Err(NativeError(format!(
+            "String.to_int: expected String, got {}",
+            args[0]
+        ))),
+    }
+}
+
+fn native_string_from_char_code(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_any_int() {
+        let code = args[0].as_any_int() as u32;
+        match char::from_u32(code) {
+            Some(c) => Ok(NValue::string(c.to_string().into())),
+            None => Err(NativeError(format!(
+                "String.from_char_code: invalid code point {}",
+                code
+            ))),
+        }
+    } else {
+        Err(NativeError(format!(
+            "String.from_char_code: expected Int, got {}",
+            args[0]
+        )))
+    }
+}
+
+fn native_string_char_code(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => match s.chars().next() {
+            Some(c) => Ok(NValue::int(c as i64)),
+            None => Err(NativeError(
+                "String.char_code: empty string".into(),
+            )),
+        },
+        None => Err(NativeError(format!(
+            "String.char_code: expected String, got {}",
+            args[0]
+        ))),
     }
 }
 
@@ -1717,6 +1842,34 @@ fn native_map_len(args: &[NValue]) -> Result<NValue, NativeError> {
     }
 }
 
+fn native_map_from_list(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let mut entries: Vec<(NValue, NValue)> = Vec::new();
+            for item in items {
+                if let Some(tuple) = item.as_tuple() {
+                    if tuple.len() >= 2 {
+                        entries.push((tuple[0].clone(), tuple[1].clone()));
+                    } else {
+                        return Err(NativeError(
+                            "Map.from_list: each element must be a (key, value) pair".into(),
+                        ));
+                    }
+                } else {
+                    return Err(NativeError(
+                        "Map.from_list: each element must be a (key, value) tuple".into(),
+                    ));
+                }
+            }
+            Ok(NValue::map(entries))
+        }
+        None => Err(NativeError(format!(
+            "Map.from_list: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Set operations
 // ---------------------------------------------------------------------------
@@ -1815,6 +1968,84 @@ fn native_set_from_list(args: &[NValue]) -> Result<NValue, NativeError> {
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Fs operations (VM-side)
+// ---------------------------------------------------------------------------
+
+fn native_fs_read_file(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(path) => match std::fs::read_to_string(&**path) {
+            Ok(content) => Ok(NValue::string(content.into())),
+            Err(e) => Err(NativeError(format!(
+                "Fs.read_file!: failed for \"{}\": {}",
+                path, e
+            ))),
+        },
+        None => Err(NativeError(format!(
+            "Fs.read_file!: expected String, got {}",
+            args[0]
+        ))),
+    }
+}
+
+fn native_fs_write_file(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string()) {
+        (Some(path), Some(content)) => match std::fs::write(&**path, &**content) {
+            Ok(()) => Ok(NValue::unit()),
+            Err(e) => Err(NativeError(format!(
+                "Fs.write_file!: failed for \"{}\": {}",
+                path, e
+            ))),
+        },
+        _ => Err(NativeError(
+            "Fs.write_file!: expected (String, String)".into(),
+        )),
+    }
+}
+
+fn native_fs_exists(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(path) => Ok(NValue::bool(std::path::Path::new(&**path).exists())),
+        None => Err(NativeError(format!(
+            "Fs.exists!: expected String, got {}",
+            args[0]
+        ))),
+    }
+}
+
+fn native_fs_list_dir(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(path) => match std::fs::read_dir(&**path) {
+            Ok(entries) => {
+                let mut names: Vec<NValue> = Vec::new();
+                for entry in entries {
+                    match entry {
+                        Ok(e) => {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            names.push(NValue::string(name.into()));
+                        }
+                        Err(e) => {
+                            return Err(NativeError(format!(
+                                "Fs.list_dir!: error reading entry: {}",
+                                e
+                            )));
+                        }
+                    }
+                }
+                Ok(NValue::list(names))
+            }
+            Err(e) => Err(NativeError(format!(
+                "Fs.list_dir!: failed for \"{}\": {}",
+                path, e
+            ))),
+        },
+        None => Err(NativeError(format!(
+            "Fs.list_dir!: expected String, got {}",
+            args[0]
+        ))),
+    }
+}
 
 #[cfg(test)]
 mod tests {

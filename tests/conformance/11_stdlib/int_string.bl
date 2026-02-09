@@ -1,0 +1,29 @@
+@prelude(core)
+
+// Conformance: Int/String conversion
+
+test "Int.to_string" = Int.to_string(42) == "42"
+test "Int.to_string zero" = Int.to_string(0) == "0"
+test "Int.to_string negative" = Int.to_string(-5) == "-5"
+
+test "Int.parse valid" = {
+  let result = Int.parse("123")
+  match result
+    Ok(n) -> n == 123
+    Err(_) -> false
+}
+
+test "Int.parse invalid" = {
+  let result = Int.parse("abc")
+  match result
+    Ok(_) -> false
+    Err(_) -> true
+}
+
+test "roundtrip int" = {
+  let s = Int.to_string(99)
+  let result = Int.parse(s)
+  match result
+    Ok(n) -> n == 99
+    Err(_) -> false
+}

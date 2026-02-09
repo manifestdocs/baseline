@@ -1,0 +1,57 @@
+@prelude(core)
+
+// Conformance: Map type operations (spec-aligned names)
+
+test "empty and size" = Map.size(Map.empty()) == 0
+
+test "set and get" = {
+  let m = Map.set(Map.empty(), "key", 42)
+  match Map.get(m, "key")
+    Some(v) -> v == 42
+    None -> false
+}
+
+test "has true" = {
+  let m = Map.set(Map.empty(), "a", 1)
+  Map.has(m, "a") == true
+}
+
+test "has false" = Map.has(Map.empty(), "x") == false
+
+test "remove" = {
+  let m = Map.set(Map.empty(), "a", 1)
+  let m2 = Map.remove(m, "a")
+  Map.has(m2, "a") == false
+}
+
+test "keys" = {
+  let m = Map.set(Map.set(Map.empty(), "a", 1), "b", 2)
+  List.length(Map.keys(m)) == 2
+}
+
+test "values" = {
+  let m = Map.set(Map.set(Map.empty(), "a", 1), "b", 2)
+  List.length(Map.values(m)) == 2
+}
+
+test "size after inserts" = {
+  let m = Map.set(Map.set(Map.empty(), "a", 1), "b", 2)
+  Map.size(m) == 2
+}
+
+test "insert alias" = {
+  let m = Map.insert(Map.empty(), "key", 99)
+  match Map.get(m, "key")
+    Some(v) -> v == 99
+    None -> false
+}
+
+test "contains alias" = {
+  let m = Map.insert(Map.empty(), "x", 1)
+  Map.contains(m, "x") == true
+}
+
+test "len alias" = {
+  let m = Map.set(Map.empty(), "a", 1)
+  Map.len(m) == 1
+}

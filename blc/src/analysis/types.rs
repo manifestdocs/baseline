@@ -397,6 +397,83 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         );
     }
 
+    // -- Fs native methods (VM-side) --
+    if native_modules.contains(&"Fs") {
+        sigs.insert(
+            "Fs.read_file!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Fs.write_file!".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Fs.list_dir!".into(),
+            Type::Function(
+                vec![Type::String],
+                Box::new(Type::List(Box::new(Type::String))),
+            ),
+        );
+    }
+
+    // -- Map native methods (generic — use Unknown for type params) --
+    if native_modules.contains(&"Map") {
+        sigs.insert(
+            "Map.empty".into(),
+            Type::Function(vec![], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Map.set".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Unknown, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Map.insert".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Unknown, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Map.get".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Map.has".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "Map.contains".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "Map.remove".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Map.keys".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Map.values".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Map.size".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "Map.len".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "Map.from_list".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+    }
+
     // -- Http natives (effect: Http) — returns Response records --
     if native_modules.contains(&"Http") {
         // Http.get!(url) -> Response, Http.post!(url, body) -> Response, etc.
@@ -514,6 +591,49 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
                 vec![Type::String, Type::Int, Type::Int],
                 Box::new(Type::String),
             ),
+        );
+        sigs.insert(
+            "String.ends_with".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "String.chars".into(),
+            Type::Function(
+                vec![Type::String],
+                Box::new(Type::List(Box::new(Type::String))),
+            ),
+        );
+        sigs.insert(
+            "String.char_at".into(),
+            Type::Function(vec![Type::String, Type::Int], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "String.index_of".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "String.to_int".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "String.from_char_code".into(),
+            Type::Function(vec![Type::Int], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "String.char_code".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Int)),
+        );
+    }
+
+    // -- Int native methods --
+    if native_modules.contains(&"Int") {
+        sigs.insert(
+            "Int.to_string".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Int.parse".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
         );
     }
 

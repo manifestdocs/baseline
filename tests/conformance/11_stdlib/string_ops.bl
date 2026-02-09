@@ -1,0 +1,61 @@
+@prelude(core)
+
+// Conformance: Additional String operations for self-hosting
+
+test "ends_with true" = String.ends_with("hello.bl", ".bl") == true
+test "ends_with false" = String.ends_with("hello.bl", ".rs") == false
+
+test "chars" = {
+  let cs = String.chars("abc")
+  List.length(cs) == 3
+}
+
+test "char_at Some" = {
+  let result = String.char_at("hello", 0)
+  match result
+    Some(c) -> c == "h"
+    None -> false
+}
+
+test "char_at None" = {
+  let result = String.char_at("hello", 10)
+  match result
+    Some(_) -> false
+    None -> true
+}
+
+test "index_of Some" = {
+  let result = String.index_of("hello world", "world")
+  match result
+    Some(i) -> i == 6
+    None -> false
+}
+
+test "index_of None" = {
+  let result = String.index_of("hello", "xyz")
+  match result
+    Some(_) -> false
+    None -> true
+}
+
+test "char_code" = String.char_code("A") == 65
+test "from_char_code" = String.from_char_code(65) == "A"
+
+test "to_int Some" = {
+  let result = String.to_int("42")
+  match result
+    Some(n) -> n == 42
+    None -> false
+}
+
+test "to_int None" = {
+  let result = String.to_int("abc")
+  match result
+    Some(_) -> false
+    None -> true
+}
+
+test "roundtrip char_code" = {
+  let code = String.char_code("Z")
+  String.from_char_code(code) == "Z"
+}
