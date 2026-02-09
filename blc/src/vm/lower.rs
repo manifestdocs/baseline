@@ -902,14 +902,8 @@ impl<'a> Lowerer<'a> {
         let callee = &children[0];
         let arg_nodes = &children[1..];
 
-        // Tail-resumptive: resume(val) = val (identity)
-        if callee.kind() == "identifier" && self.node_text(callee) == "resume" {
-            if arg_nodes.len() == 1 {
-                return self.lower_expression(&arg_nodes[0]);
-            } else {
-                return Ok(Expr::Unit);
-            }
-        }
+        // `resume(val)` — kept as CallIndirect so it flows through to the VM.
+        // The VM handles resume by calling the continuation value.
 
         // Constructor call: type_identifier(args) → MakeEnum
         if callee.kind() == "type_identifier" {
@@ -983,6 +977,21 @@ impl<'a> Lowerer<'a> {
                 self.tail_position = was_tail;
                 return Ok(Expr::CallDirect {
                     name: qualified,
+                    args,
+                    ty: None,
+                });
+            }
+            // User-defined effect: Module.method!(args) where Module is not native
+            if method.ends_with('!') {
+                let mut args = Vec::new();
+                for arg in arg_nodes {
+                    args.push(self.lower_expression(arg)?);
+                }
+                self.tail_position = was_tail;
+                let method_key = method.strip_suffix('!').unwrap_or(&method).to_string();
+                return Ok(Expr::PerformEffect {
+                    effect: module,
+                    method: method_key,
                     args,
                     ty: None,
                 });
@@ -1554,15 +1563,15 @@ impl<'a> Lowerer<'a> {
         self.lower_expression(&body_node)
     }
 
-    /// Lower `handle body with { Effect.method!(args) -> handler_body }` to WithHandlers IR.
+    /// Lower `handle body with { Effect.method!(args) -> handler_body }` to HandleEffect IR.
     fn lower_handle_expression(&mut self, node: &Node) -> Result<Expr, LowerError> {
+        use crate::vm::ir::HandlerClause;
+
         let body_node = node
             .child_by_field_name("body")
             .ok_or_else(|| self.error("handle_expression missing body".into(), node))?;
 
-        // Group clauses by effect name
-        let mut by_effect: Vec<(String, Vec<(String, Expr)>)> = Vec::new();
-        let mut effect_order: Vec<String> = Vec::new();
+        let mut clauses = Vec::new();
 
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
@@ -1587,32 +1596,38 @@ impl<'a> Lowerer<'a> {
                 let handler_body_node = child.child_by_field_name("handler_body").unwrap();
                 let handler_body = self.lower_expression(&handler_body_node)?;
 
-                // Wrap as lambda
-                let handler_fn = Expr::Lambda {
-                    params,
-                    body: Box::new(handler_body),
-                    ty: None,
-                };
+                // Detect tail-resumptive: handler body is exactly `resume(expr)`.
+                // If so, no continuation capture is needed.
+                let is_tail_resumptive = Self::is_tail_resumptive_body(&handler_body);
 
-                if !effect_order.contains(&effect_name) {
-                    effect_order.push(effect_name.clone());
-                    by_effect.push((effect_name, vec![(method_key, handler_fn)]));
-                } else {
-                    for (eff, methods) in &mut by_effect {
-                        if *eff == effect_name {
-                            methods.push((method_key, handler_fn));
-                            break;
-                        }
-                    }
-                }
+                clauses.push(HandlerClause {
+                    effect: effect_name,
+                    method: method_key,
+                    params,
+                    body: handler_body,
+                    is_tail_resumptive,
+                });
             }
         }
 
         let body = self.lower_expression(&body_node)?;
-        Ok(Expr::WithHandlers {
-            handlers: by_effect,
+        Ok(Expr::HandleEffect {
             body: Box::new(body),
+            clauses,
         })
+    }
+
+    /// Check if a handler body is tail-resumptive (body is exactly `resume(expr)`).
+    fn is_tail_resumptive_body(expr: &Expr) -> bool {
+        match expr {
+            Expr::CallIndirect { callee, args, .. } => {
+                matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") && args.len() == 1
+            }
+            Expr::Block(stmts, _) if stmts.len() == 1 => {
+                Self::is_tail_resumptive_body(&stmts[0])
+            }
+            _ => false,
+        }
     }
 }
 

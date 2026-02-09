@@ -174,11 +174,25 @@ pub enum Expr {
     Concat(Vec<Expr>),
 
     // -- Effect handlers --
-    /// `with { Effect: handler } body` or `handle body with { clauses }`.
+    /// `with { Effect: handler } body` — simple handler substitution.
     /// handlers: Vec<(effect_name, Vec<(method_name, handler_fn)>)>
     WithHandlers {
         handlers: Vec<(String, Vec<(String, Expr)>)>,
         body: Box<Expr>,
+    },
+
+    /// `handle body with { Effect.method!(args) -> handler_body }` — algebraic handler with resume.
+    HandleEffect {
+        body: Box<Expr>,
+        clauses: Vec<HandlerClause>,
+    },
+
+    /// Perform a user-defined effect operation: `MyEffect.method!(args)`.
+    PerformEffect {
+        effect: String,
+        method: String,
+        args: Vec<Expr>,
+        ty: Option<Type>,
     },
 }
 
@@ -216,6 +230,17 @@ pub enum UnaryOp {
 pub struct MatchArm {
     pub pattern: Pattern,
     pub body: Expr,
+}
+
+/// A single clause in a `handle ... with { ... }` block.
+#[derive(Debug, Clone)]
+pub struct HandlerClause {
+    pub effect: String,
+    pub method: String,
+    pub params: Vec<String>,
+    pub body: Expr,
+    /// If true, handler body is `resume(expr)` — no continuation capture needed.
+    pub is_tail_resumptive: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -383,8 +408,18 @@ mod tests {
                 handlers: vec![],
                 body: Box::new(Expr::Unit),
             },
+            Expr::HandleEffect {
+                body: Box::new(Expr::Unit),
+                clauses: vec![],
+            },
+            Expr::PerformEffect {
+                effect: "E".into(),
+                method: "m".into(),
+                args: vec![],
+                ty: None,
+            },
         ];
-        assert_eq!(exprs.len(), 31);
+        assert_eq!(exprs.len(), 33);
     }
 
     #[test]

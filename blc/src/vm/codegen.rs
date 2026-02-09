@@ -409,6 +409,19 @@ impl<'a> Codegen<'a> {
             Expr::WithHandlers { handlers, body } => {
                 self.gen_with_handlers(handlers, body, span)?;
             }
+
+            Expr::HandleEffect { body, clauses } => {
+                self.gen_handle_effect(body, clauses, span)?;
+            }
+
+            Expr::PerformEffect {
+                effect,
+                method,
+                args,
+                ..
+            } => {
+                self.gen_perform_effect(effect, method, args, span)?;
+            }
         }
         Ok(())
     }
@@ -949,6 +962,87 @@ impl<'a> Codegen<'a> {
         self.gen_expr(body, span)?;
 
         self.emit(Op::PopHandler, span);
+        Ok(())
+    }
+
+    fn gen_handle_effect(
+        &mut self,
+        body: &Expr,
+        clauses: &[crate::vm::ir::HandlerClause],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        // Build handler record same as gen_with_handlers:
+        // { EffectName: { method: handler_fn, ... }, ... }
+        // For non-tail-resumptive handlers, the lambda gets an extra `resume` param.
+        // Group clauses by effect name.
+        let mut grouped: Vec<(String, Vec<(&str, &crate::vm::ir::HandlerClause)>)> = Vec::new();
+        let mut effect_order: Vec<String> = Vec::new();
+
+        for clause in clauses {
+            if !effect_order.contains(&clause.effect) {
+                effect_order.push(clause.effect.clone());
+                grouped.push((clause.effect.clone(), vec![(&clause.method, clause)]));
+            } else {
+                for (eff, methods) in &mut grouped {
+                    if *eff == clause.effect {
+                        methods.push((&clause.method, clause));
+                        break;
+                    }
+                }
+            }
+        }
+
+        for (effect_name, methods) in &grouped {
+            let eff_key = self
+                .chunk
+                .add_constant(Value::String(effect_name.as_str().into()));
+            self.emit(Op::LoadConst(eff_key), span);
+
+            for (method_key, clause) in methods {
+                let mk = self
+                    .chunk
+                    .add_constant(Value::String((*method_key).into()));
+                self.emit(Op::LoadConst(mk), span);
+
+                // Compile handler body as a lambda.
+                // For non-tail-resumptive, add `resume` as the last parameter.
+                let mut lambda_params: Vec<String> = clause.params.clone();
+                if !clause.is_tail_resumptive {
+                    lambda_params.push("resume".to_string());
+                }
+                self.gen_lambda(&lambda_params, &clause.body, span)?;
+            }
+            self.emit(Op::MakeRecord(methods.len() as u16), span);
+        }
+        self.emit(Op::MakeRecord(grouped.len() as u16), span);
+        let handler_idx = self.emit(Op::PushResumableHandler(0), span);
+
+        self.gen_expr(body, span)?;
+
+        self.emit(Op::PopHandler, span);
+        // Patch the skip offset for abort handlers
+        let after_pop = self.chunk.code.len();
+        let skip = (after_pop - handler_idx - 1) as u16;
+        self.chunk.code[handler_idx] = Op::PushResumableHandler(skip);
+        Ok(())
+    }
+
+    fn gen_perform_effect(
+        &mut self,
+        effect: &str,
+        method: &str,
+        args: &[Expr],
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        // Push args onto stack
+        for arg in args {
+            self.gen_expr(arg, span)?;
+        }
+        // Emit perform with constant pool key "Effect.method"
+        let key = format!("{}.{}", effect, method);
+        let name_idx = self.chunk.add_constant(Value::String(key.into()));
+        let arg_count = Self::checked_u8(args.len(), "perform effect args", span)?;
+        self.emit(Op::PerformEffect(name_idx, arg_count), span);
         Ok(())
     }
 

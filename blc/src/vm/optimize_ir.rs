@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::ir::{BinOp, Expr, IrModule, MatchArm, Pattern, UnaryOp};
+use super::ir::{BinOp, Expr, HandlerClause, IrModule, MatchArm, Pattern, UnaryOp};
 
 /// Run all IR optimization passes on the module.
 pub fn optimize(module: &mut IrModule) {
@@ -257,6 +257,21 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
             body: Box::new(propagate_expr(*body, env)),
         },
 
+        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
+            body: Box::new(propagate_expr(*body, env)),
+            clauses: clauses.into_iter().map(|c| HandlerClause {
+                body: propagate_expr(c.body, env),
+                ..c
+            }).collect(),
+        },
+
+        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
+            effect,
+            method,
+            args: args.into_iter().map(|a| propagate_expr(a, env)).collect(),
+            ty,
+        },
+
         // Literals pass through unchanged
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
     }
@@ -421,6 +436,13 @@ fn expr_node_count(expr: &Expr) -> usize {
             1 + handlers.iter().map(|(_, methods)| methods.iter().map(|(_, h)| expr_node_count(h)).sum::<usize>()).sum::<usize>()
                 + expr_node_count(body)
         }
+        Expr::HandleEffect { body, clauses, .. } => {
+            1 + expr_node_count(body)
+                + clauses.iter().map(|c| expr_node_count(&c.body)).sum::<usize>()
+        }
+        Expr::PerformEffect { args, .. } => {
+            1 + args.iter().map(expr_node_count).sum::<usize>()
+        }
     }
 }
 
@@ -485,6 +507,13 @@ fn references_function(expr: &Expr, name: &str) -> bool {
         Expr::WithHandlers { handlers, body, .. } => {
             handlers.iter().any(|(_, methods)| methods.iter().any(|(_, h)| references_function(h, name)))
                 || references_function(body, name)
+        }
+        Expr::HandleEffect { body, clauses, .. } => {
+            references_function(body, name)
+                || clauses.iter().any(|c| references_function(&c.body, name))
+        }
+        Expr::PerformEffect { args, .. } => {
+            args.iter().any(|a| references_function(a, name))
         }
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
         | Expr::Var(_, _) => false,
@@ -686,6 +715,19 @@ fn rename_vars(expr: Expr, rename_map: &HashMap<String, String>) -> Expr {
                 (name, methods.into_iter().map(|(mk, h)| (mk, rename_vars(h, rename_map))).collect())
             }).collect(),
             body: Box::new(rename_vars(*body, rename_map)),
+        },
+        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
+            body: Box::new(rename_vars(*body, rename_map)),
+            clauses: clauses.into_iter().map(|c| HandlerClause {
+                body: rename_vars(c.body, rename_map),
+                ..c
+            }).collect(),
+        },
+        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
+            effect,
+            method,
+            args: args.into_iter().map(|a| rename_vars(a, rename_map)).collect(),
+            ty,
         },
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
     }
@@ -948,6 +990,19 @@ fn inline_expr(
             }).collect(),
             body: Box::new(inline_expr(*body, inlineable, counter)),
         },
+        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
+            body: Box::new(inline_expr(*body, inlineable, counter)),
+            clauses: clauses.into_iter().map(|c| HandlerClause {
+                body: inline_expr(c.body, inlineable, counter),
+                ..c
+            }).collect(),
+        },
+        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
+            effect,
+            method,
+            args: args.into_iter().map(|a| inline_expr(a, inlineable, counter)).collect(),
+            ty,
+        },
         // Literals pass through
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
         | Expr::Var(_, _) => expr,
@@ -1135,6 +1190,19 @@ fn simplify_blocks(expr: Expr) -> Expr {
             }).collect(),
             body: Box::new(simplify_blocks(*body)),
         },
+        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
+            body: Box::new(simplify_blocks(*body)),
+            clauses: clauses.into_iter().map(|c| HandlerClause {
+                body: simplify_blocks(c.body),
+                ..c
+            }).collect(),
+        },
+        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
+            effect,
+            method,
+            args: args.into_iter().map(simplify_blocks).collect(),
+            ty,
+        },
         // Leaves pass through
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
         | Expr::Var(_, _) => expr,
@@ -1255,6 +1323,17 @@ fn count_var_uses(expr: &Expr, counts: &mut HashMap<String, usize>) {
                 }
             }
             count_var_uses(body, counts);
+        }
+        Expr::HandleEffect { body, clauses, .. } => {
+            count_var_uses(body, counts);
+            for c in clauses {
+                count_var_uses(&c.body, counts);
+            }
+        }
+        Expr::PerformEffect { args, .. } => {
+            for a in args {
+                count_var_uses(a, counts);
+            }
         }
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => {}
     }

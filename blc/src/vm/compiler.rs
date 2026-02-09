@@ -384,11 +384,15 @@ impl<'a> Compiler<'a> {
                     self.emit(Op::MakeRecord(clauses.len() as u16), node);
                 }
                 self.emit(Op::MakeRecord(by_effect.len() as u16), node);
-                self.emit(Op::PushHandler, node);
+                let handler_idx = self.emit(Op::PushResumableHandler(0), node);
 
                 self.compile_expression(&body_node)?;
 
                 self.emit(Op::PopHandler, node);
+                // Patch the skip offset: distance from PushResumableHandler to here
+                let after_pop = self.chunk.code.len();
+                let skip = (after_pop - handler_idx - 1) as u16;
+                self.chunk.code[handler_idx] = Op::PushResumableHandler(skip);
             }
             "expect_expression" => {
                 self.compile_expect(node)?;
@@ -1560,7 +1564,7 @@ impl<'a> Compiler<'a> {
                 }
                 "describe_block" => {
                     let has_only = self.has_focused_tests(&effective);
-                    self.collect_describe_tests(&effective, "", has_only, &mut compiled_tests)?;
+                    self.collect_describe_tests(&effective, "", has_only, &[], &[], &mut compiled_tests)?;
                 }
                 _ => {}
             }
@@ -1650,11 +1654,14 @@ impl<'a> Compiler<'a> {
     }
 
     /// Collect BDD tests from a describe_block, recursively handling nested blocks.
+    /// `before_hooks` and `after_hooks` accumulate from outer describe blocks.
     fn collect_describe_tests(
         &mut self,
         node: &Node<'a>,
         prefix: &str,
         has_only: bool,
+        before_hooks: &[Node<'a>],
+        after_hooks: &[Node<'a>],
         out: &mut Vec<CompiledTest>,
     ) -> Result<(), CompileError> {
         let name_node = node.child_by_field_name("name");
@@ -1674,11 +1681,33 @@ impl<'a> Compiler<'a> {
             format!("{} > {}", prefix, raw_name)
         };
 
+        // Collect hooks at this level
+        let mut local_before: Vec<Node<'a>> = before_hooks.to_vec();
+        let mut local_after: Vec<Node<'a>> = after_hooks.to_vec();
+        {
+            let mut scan_cursor = node.walk();
+            for child in node.named_children(&mut scan_cursor) {
+                match child.kind() {
+                    "before_each_block" => {
+                        if let Some(expr) = child.named_child(0) {
+                            local_before.push(expr);
+                        }
+                    }
+                    "after_each_block" => {
+                        if let Some(expr) = child.named_child(0) {
+                            local_after.push(expr);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
             match child.kind() {
                 "it_block" => {
-                    if let Some(ct) = self.compile_it_block(&child, &full_name, has_only)? {
+                    if let Some(ct) = self.compile_it_block(&child, &full_name, has_only, &local_before, &local_after)? {
                         out.push(ct);
                     }
                 }
@@ -1689,7 +1718,7 @@ impl<'a> Compiler<'a> {
                     }
                 }
                 "describe_block" => {
-                    self.collect_describe_tests(&child, &full_name, has_only, out)?;
+                    self.collect_describe_tests(&child, &full_name, has_only, &local_before, &local_after, out)?;
                 }
                 _ => {}
             }
@@ -1703,6 +1732,8 @@ impl<'a> Compiler<'a> {
         node: &Node<'a>,
         prefix: &str,
         has_only: bool,
+        before_hooks: &[Node<'a>],
+        after_hooks: &[Node<'a>],
     ) -> Result<Option<CompiledTest>, CompileError> {
         let name_node = match node.child_by_field_name("name") {
             Some(n) => n,
@@ -1740,7 +1771,31 @@ impl<'a> Compiler<'a> {
         self.chunk = Chunk::new();
         self.locals.clear();
         self.scope_depth = 0;
+
+        // Compile before_each hooks (outer to inner)
+        for hook_expr in before_hooks {
+            self.compile_expression(hook_expr)?;
+            self.emit(Op::Pop, hook_expr);
+        }
+
+        // Compile the test body
         self.compile_expression(&body_node)?;
+
+        // Compile after_each hooks (inner to outer)
+        if !after_hooks.is_empty() {
+            // The test result is on top of the stack. Declare a local to name that slot.
+            self.declare_local("__test_result__");
+            let result_slot = (self.locals.len() - 1) as u16;
+
+            for hook_expr in after_hooks.iter().rev() {
+                self.compile_expression(hook_expr)?;
+                self.emit(Op::Pop, hook_expr);
+            }
+
+            // Push the test result back onto the stack
+            self.emit(Op::GetLocal(result_slot), node);
+        }
+
         let chunk = self.finish_chunk();
 
         let chunk_idx = self.compiled_chunks.len();
@@ -1819,6 +1874,65 @@ impl<'a> Compiler<'a> {
                     self.compile_expression(&expected)?;
                 }
                 self.emit(Op::Eq, node);
+            }
+            "to_contain" => {
+                self.compile_expression(&actual)?;
+                if let Some(expected) = matcher.named_child(0) {
+                    self.compile_expression(&expected)?;
+                }
+                let fn_id = self.natives.lookup("__test_contains").unwrap();
+                self.emit(Op::CallNative(fn_id, 2), node);
+            }
+            "to_start_with" => {
+                self.compile_expression(&actual)?;
+                if let Some(expected) = matcher.named_child(0) {
+                    self.compile_expression(&expected)?;
+                }
+                let fn_id = self.natives.lookup("String.starts_with").unwrap();
+                self.emit(Op::CallNative(fn_id, 2), node);
+            }
+            "to_satisfy" => {
+                // to_satisfy takes a predicate function: compile predicate, compile actual, call
+                if let Some(pred) = matcher.named_child(0) {
+                    self.compile_expression(&pred)?;
+                }
+                self.compile_expression(&actual)?;
+                self.emit(Op::Call(1), node);
+            }
+            "to_be" => {
+                // to_be takes a _pattern: literal, type_identifier (None/Some/Ok/Err), wildcard
+                if let Some(pat) = matcher.named_child(0) {
+                    match pat.kind() {
+                        "wildcard_pattern" => {
+                            // _ always matches
+                            self.compile_expression(&actual)?;
+                            self.emit(Op::Pop, node);
+                            let idx = self.chunk.add_constant(Value::Bool(true));
+                            self.emit(Op::LoadConst(idx), node);
+                        }
+                        "type_identifier" => {
+                            // Nullary constructor: None, etc. — compare enum tags
+                            let tag = self.node_text(&pat);
+                            self.compile_expression(&actual)?;
+                            self.emit(Op::EnumTag, node);
+                            let tag_idx =
+                                self.chunk.add_constant(Value::String(tag.into()));
+                            self.emit(Op::LoadConst(tag_idx), node);
+                            self.emit(Op::Eq, node);
+                        }
+                        _ => {
+                            // Literal or other: compile both sides and compare
+                            self.compile_expression(&actual)?;
+                            self.compile_expression(&pat)?;
+                            self.emit(Op::Eq, node);
+                        }
+                    }
+                } else {
+                    self.compile_expression(&actual)?;
+                    self.emit(Op::Pop, node);
+                    let idx = self.chunk.add_constant(Value::Bool(true));
+                    self.emit(Op::LoadConst(idx), node);
+                }
             }
             _ => {
                 // Fallback: compile actual, compile matcher expression, compare with Eq
@@ -1905,16 +2019,8 @@ impl<'a> Compiler<'a> {
         let callee = &children[0];
         let raw_args = &children[1..];
 
-        // Tail-resumptive: resume(val) = val (identity)
-        if callee.kind() == "identifier" && self.node_text(callee) == "resume" {
-            if raw_args.len() == 1 {
-                self.compile_expression(&raw_args[0])?;
-            } else {
-                let idx = self.chunk.add_constant(Value::Unit);
-                self.emit(Op::LoadConst(idx), node);
-            }
-            return Ok(());
-        }
+        // Note: resume(val) is NOT optimized away — it must go through Op::Call
+        // so the VM can detect continuations and restore captured handler/body state.
 
         // Resolve function name for named argument reordering
         let fn_name = match callee.kind() {
@@ -2036,6 +2142,12 @@ impl<'a> Compiler<'a> {
 
         for param in params {
             self.declare_local(param);
+        }
+        // The VM passes the continuation as the last argument;
+        // bind it as 'resume' so handler bodies can call it.
+        // Only add if the user didn't already name a param 'resume'.
+        if !params.iter().any(|p| p == "resume") {
+            self.declare_local("resume");
         }
 
         self.compile_expression(body_node)?;

@@ -154,6 +154,15 @@ pub enum Op {
     PushHandler,
     /// Pop the most recent handler map from the handler stack.
     PopHandler,
+    /// Push a resumable handler (for `handle ... with { ... }`).
+    /// Same as PushHandler but also records a handler boundary for continuation capture.
+    /// The u16 is the offset from this instruction to the instruction after PopHandler,
+    /// used to skip the body when a handler returns without calling resume (abort).
+    PushResumableHandler(u16),
+    /// Perform a user-defined effect operation.
+    /// First arg: constant pool index for "Effect.method" key string.
+    /// Second arg: number of effect arguments on the stack.
+    PerformEffect(u16, u8),
 
     // -- Termination --
     /// Runtime error with message from constant pool.
@@ -585,6 +594,16 @@ impl Chunk {
                     };
                     *offset = (new_target - new_src - 1) as u16;
                 }
+                Op::PushResumableHandler(offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < old_len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
                 _ => {}
             }
         }
@@ -689,6 +708,16 @@ impl Chunk {
                     *offset = (new_target - new_src - 1) as u16;
                 }
                 Op::GetLocalLtIntJumpIfFalse(_, _, offset) => {
+                    let old_target = i + 1 + *offset as usize;
+                    let new_src = old_to_new[i];
+                    let new_target = if old_target < len {
+                        old_to_new[old_target]
+                    } else {
+                        new_len
+                    };
+                    *offset = (new_target - new_src - 1) as u16;
+                }
+                Op::PushResumableHandler(offset) => {
                     let old_target = i + 1 + *offset as usize;
                     let new_src = old_to_new[i];
                     let new_target = if old_target < len {

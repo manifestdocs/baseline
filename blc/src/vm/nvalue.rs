@@ -131,6 +131,26 @@ pub enum HeapObject {
     Set(Vec<NValue>),
     /// Integers that don't fit in 48-bit signed range.
     BigInt(i64),
+    /// One-shot delimited continuation captured at an effect perform site.
+    /// Stores the stack/frame/handler segment between handler boundary and perform.
+    /// One-shot semantics enforced at the VM level (continuation is consumed on call).
+    Continuation {
+        stack_segment: Vec<NValue>,
+        /// Frames stored as (chunk_idx, ip, base_slot, upvalue_idx) tuples
+        /// because CallFrame is private to vm.rs.
+        frame_segment: Vec<(u32, u32, u32, u32)>,
+        upvalue_segment: Vec<Vec<NValue>>,
+        handler_stack_depth: usize,
+        /// Handler stack entries captured between boundary and perform site.
+        handler_stack_segment: Vec<std::collections::HashMap<String, NValue>>,
+        /// Handler boundaries captured between boundary index and current.
+        /// Stored as (stack_depth, frame_depth, upvalue_depth, handler_stack_idx, return_ip).
+        handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)>,
+        /// IP to resume execution at (past PerformEffect in the body).
+        resume_ip: u32,
+        /// Chunk index for the resume point.
+        resume_chunk_idx: u32,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +315,28 @@ impl NValue {
         Self::from_heap(HeapObject::Closure {
             chunk_idx,
             upvalues,
+        })
+    }
+
+    pub fn continuation(
+        stack_segment: Vec<NValue>,
+        frame_segment: Vec<(u32, u32, u32, u32)>,
+        upvalue_segment: Vec<Vec<NValue>>,
+        handler_stack_depth: usize,
+        handler_stack_segment: Vec<std::collections::HashMap<String, NValue>>,
+        handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)>,
+        resume_ip: u32,
+        resume_chunk_idx: u32,
+    ) -> Self {
+        Self::from_heap(HeapObject::Continuation {
+            stack_segment,
+            frame_segment,
+            upvalue_segment,
+            handler_stack_depth,
+            handler_stack_segment,
+            handler_boundary_segment,
+            resume_ip,
+            resume_chunk_idx,
         })
     }
 
@@ -519,6 +561,15 @@ impl NValue {
         self.as_string().map(|s| s.as_ref())
     }
 
+    /// Check if this is a continuation value.
+    #[inline]
+    pub fn is_continuation(&self) -> bool {
+        if !self.is_heap() {
+            return false;
+        }
+        matches!(self.as_heap_ref(), HeapObject::Continuation { .. })
+    }
+
     /// Extract tuple items reference from a heap Tuple.
     #[inline]
     pub fn as_tuple(&self) -> Option<&Vec<NValue>> {
@@ -689,6 +740,7 @@ impl fmt::Display for NValue {
                     write!(f, "Set({})", s.join(", "))
                 }
                 HeapObject::BigInt(i) => write!(f, "{}", i),
+                HeapObject::Continuation { .. } => write!(f, "<continuation>"),
             }
         }
     }
@@ -805,6 +857,7 @@ impl NValue {
                 upvalues: Arc::new(upvalues.iter().map(|v| v.to_value()).collect()),
             },
             HeapObject::NativeMwNext { .. } => Value::Unit,
+            HeapObject::Continuation { .. } => Value::Unit,
             HeapObject::BigInt(i) => Value::Int(*i),
             HeapObject::Map(entries) => Value::Map(Arc::new(
                 entries

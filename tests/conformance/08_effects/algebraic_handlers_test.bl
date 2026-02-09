@@ -1,0 +1,12 @@
+@prelude(script)
+
+// Test abort handler
+test "abort handler returns early" = {
+  let result = handle {
+    Console.println!("before abort")
+    42
+  } with {
+    Console.println!(_msg) -> -1
+  }
+  result == -1
+}

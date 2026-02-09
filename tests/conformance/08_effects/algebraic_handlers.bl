@@ -34,3 +34,43 @@ test "handle with pure body" = {
   }
   result == 6
 }
+
+// Abort handler: returns early without calling resume
+test "abort handler returns early" = {
+  let result = handle {
+    Console.println!("before abort")
+    42
+  } with {
+    Console.println!(_msg) -> -1
+  }
+  result == -1
+}
+
+// Non-tail-resumptive: handler calls resume and does work after
+test "handler with post-resume computation" = {
+  let result = handle {
+    Console.println!("hello")
+    10
+  } with {
+    Console.println!(msg) -> {
+      let rest = resume(())
+      rest + 1
+    }
+  }
+  result == 11
+}
+
+// Multiple effects with post-resume work
+test "multiple effects with resume accumulation" = {
+  let result = handle {
+    Console.println!("a")
+    Console.println!("b")
+    0
+  } with {
+    Console.println!(msg) -> {
+      let rest = resume(())
+      rest + 1
+    }
+  }
+  result == 2
+}
