@@ -1,0 +1,1906 @@
+//! Function compilation context and expression codegen.
+//!
+//! `FnCompileCtx` holds per-function state during JIT compilation and provides
+//! methods for compiling IR expressions to Cranelift IR.
+
+use std::collections::HashMap;
+
+use cranelift_codegen::ir::condcodes::IntCC;
+use cranelift_codegen::ir::{AbiParam, BlockArg, InstBuilder, StackSlotData, StackSlotKind, types};
+use cranelift_codegen::isa::CallConv;
+use cranelift_frontend::{FunctionBuilder, Switch, Variable};
+use cranelift_jit::JITModule;
+use cranelift_module::{FuncId, Module};
+
+use super::super::ir::{BinOp, Expr, IrFunction, MatchArm, Pattern, TagRegistry, UnaryOp};
+use super::super::natives::NativeRegistry;
+use super::super::nvalue::{NValue, PAYLOAD_MASK, TAG_BOOL, TAG_INT};
+use super::analysis::expr_only_refs_params;
+use super::helpers::{NV_FALSE, NV_TRUE, NV_UNIT};
+use crate::analysis::types::Type;
+
+// ---------------------------------------------------------------------------
+// Function compile context
+// ---------------------------------------------------------------------------
+
+pub(super) struct FnCompileCtx<'a, 'b> {
+    pub(super) builder: &'a mut FunctionBuilder<'b>,
+    pub(super) func_ids: &'a [Option<FuncId>],
+    pub(super) module: &'a mut JITModule,
+    pub(super) vars: HashMap<String, Variable>,
+    pub(super) next_var: u32,
+    pub(super) func_names: &'a HashMap<String, usize>,
+    pub(super) ir_functions: &'a [IrFunction],
+    pub(super) current_func_name: String,
+    pub(super) param_vars: Vec<Variable>,
+    pub(super) loop_header: Option<cranelift_codegen::ir::Block>,
+    pub(super) heap_roots: &'a mut Vec<NValue>,
+    pub(super) helper_ids: &'a HashMap<&'a str, FuncId>,
+    pub(super) natives: Option<&'a NativeRegistry>,
+    pub(super) ptr_type: cranelift_codegen::ir::Type,
+    /// Per-function unboxed flags (indexed by function index).
+    pub(super) unboxed_flags: &'a [bool],
+    /// Compile-time enum tag → integer ID mapping.
+    pub(super) tags: &'a TagRegistry,
+    /// SRA: record variables that have been scalar-replaced.
+    /// Maps record variable name → (field name → Cranelift Variable).
+    pub(super) sra_records: HashMap<String, HashMap<String, Variable>>,
+}
+
+pub(super) type CValue = cranelift_codegen::ir::Value;
+
+impl<'a, 'b> FnCompileCtx<'a, 'b> {
+    fn new_var(&mut self) -> Variable {
+        let var = self.builder.declare_var(types::I64);
+        self.next_var += 1;
+        var
+    }
+
+    // -- NaN-boxing helpers --
+
+    /// Emit a NaN-boxed NValue constant.
+    fn emit_nvalue(&mut self, nv: NValue) -> CValue {
+        let bits = nv.raw() as i64;
+        self.builder.ins().iconst(types::I64, bits)
+    }
+
+    /// Emit a NaN-boxed NValue for a heap object, keeping it rooted.
+    fn emit_heap_nvalue(&mut self, nv: NValue) -> CValue {
+        let bits = nv.raw() as i64;
+        self.heap_roots.push(nv);
+        self.builder.ins().iconst(types::I64, bits)
+    }
+
+    /// Untag an Int: extract the 48-bit signed payload from NaN-boxed int.
+    /// ishl 16, sshr 16
+    fn untag_int(&mut self, val: CValue) -> CValue {
+        let shifted_left = self.builder.ins().ishl_imm(val, 16);
+        self.builder.ins().sshr_imm(shifted_left, 16)
+    }
+
+    /// Tag a raw i64 as a NaN-boxed Int: band with PAYLOAD_MASK, bor with TAG_INT.
+    fn tag_int(&mut self, val: CValue) -> CValue {
+        let mask = self.builder.ins().iconst(types::I64, PAYLOAD_MASK as i64);
+        let masked = self.builder.ins().band(val, mask);
+        let tag = self.builder.ins().iconst(types::I64, TAG_INT as i64);
+        self.builder.ins().bor(masked, tag)
+    }
+
+    /// Tag a Cranelift i8 comparison result as a NaN-boxed Bool.
+    fn tag_bool(&mut self, cmp: CValue) -> CValue {
+        let extended = self.builder.ins().uextend(types::I64, cmp);
+        let tag = self.builder.ins().iconst(types::I64, TAG_BOOL as i64);
+        self.builder.ins().bor(extended, tag)
+    }
+
+    /// Check if a NaN-boxed value is truthy (bit 0 set, works for NaN-boxed bools).
+    fn is_truthy(&mut self, val: CValue) -> CValue {
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let bit = self.builder.ins().band(val, one);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.ins().icmp(IntCC::NotEqual, bit, zero)
+    }
+
+    /// Spill values to a stack slot and return the address.
+    fn spill_to_stack(&mut self, values: &[CValue]) -> CValue {
+        let size = (values.len() * 8) as u32;
+        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+            StackSlotKind::ExplicitSlot,
+            size,
+            3, // 8-byte alignment
+        ));
+        for (i, &v) in values.iter().enumerate() {
+            let offset = (i * 8) as i32;
+            self.builder.ins().stack_store(v, slot, offset);
+        }
+        self.builder.ins().stack_addr(self.ptr_type, slot, 0)
+    }
+
+    /// Call a runtime helper function by name.
+    fn call_helper(&mut self, name: &str, args: &[CValue]) -> CValue {
+        let func_id = self.helper_ids[name];
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        let call = self.builder.ins().call(func_ref, args);
+        self.builder.inst_results(call)[0]
+    }
+
+    // -- Base-case speculation --
+
+    fn try_speculate_call(
+        &mut self,
+        name: &str,
+        ir_args: &[Expr],
+    ) -> Result<Option<CValue>, String> {
+        let func_idx = match self.func_names.get(name) {
+            Some(&idx) => idx,
+            None => return Ok(None),
+        };
+        if self.func_ids[func_idx].is_none() {
+            return Ok(None);
+        }
+        let func = &self.ir_functions[func_idx];
+
+        // Look for base case in then_branch OR else_branch.
+        // base_in_then: true = base case is then_branch (branch to base when cond is truthy)
+        //               false = base case is else_branch (branch to base when cond is falsy)
+        let (cond_expr, base_expr, base_in_then) = match &func.body {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let is_simple = |e: &Expr| {
+                    matches!(
+                        e,
+                        Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit
+                    )
+                };
+                if is_simple(then_branch) {
+                    (condition.as_ref(), then_branch.as_ref(), true)
+                } else if let Some(else_br) = else_branch
+                    && is_simple(else_br)
+                {
+                    (condition.as_ref(), else_br.as_ref(), false)
+                } else {
+                    return Ok(None);
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        if !expr_only_refs_params(cond_expr, &func.params) {
+            return Ok(None);
+        }
+        if !expr_only_refs_params(base_expr, &func.params) {
+            return Ok(None);
+        }
+
+        let arg_vals: Vec<CValue> = ir_args
+            .iter()
+            .map(|a| self.compile_expr(a))
+            .collect::<Result<_, _>>()?;
+
+        let mut saved_vars = HashMap::new();
+        for (i, param_name) in func.params.iter().enumerate() {
+            let var = self.new_var();
+            self.builder.def_var(var, arg_vals[i]);
+            if let Some(old) = self.vars.insert(param_name.clone(), var) {
+                saved_vars.insert(param_name.clone(), old);
+            }
+        }
+
+        let cond_val = self.compile_expr(cond_expr)?;
+        let base_val = self.compile_expr(base_expr)?;
+
+        for param_name in &func.params {
+            self.vars.remove(param_name);
+        }
+        for (name, old_var) in saved_vars {
+            self.vars.insert(name, old_var);
+        }
+
+        let call_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        let cmp = self.is_truthy(cond_val);
+        if base_in_then {
+            // Base case in then: branch to base when cond is true
+            self.builder.ins().brif(
+                cmp,
+                merge_block,
+                &[BlockArg::Value(base_val)],
+                call_block,
+                &[],
+            );
+        } else {
+            // Base case in else: branch to base when cond is false
+            self.builder.ins().brif(
+                cmp,
+                call_block,
+                &[],
+                merge_block,
+                &[BlockArg::Value(base_val)],
+            );
+        }
+
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+        let func_id = self.func_ids[func_idx].unwrap();
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        let callee_unboxed = func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
+        let call_result = if callee_unboxed {
+            // Callee expects raw i64: untag args, tag result
+            let untagged_args: Vec<CValue> = arg_vals.iter().map(|&v| self.untag_int(v)).collect();
+            let call = self.builder.ins().call(func_ref, &untagged_args);
+            let raw = self.builder.inst_results(call)[0];
+            self.tag_int(raw)
+        } else {
+            let call = self.builder.ins().call(func_ref, &arg_vals);
+            self.builder.inst_results(call)[0]
+        };
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(call_result)]);
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(Some(self.builder.block_params(merge_block)[0]))
+    }
+
+    // -- Unboxed expression compiler (scalar-only fast path) --
+    //
+    // Values are raw i64: ints as plain signed integers, bools as 0/1.
+    // No NaN-boxing overhead. Boxing only happens at function boundaries.
+
+    pub(super) fn compile_expr_unboxed(&mut self, expr: &Expr) -> Result<CValue, String> {
+        match expr {
+            Expr::Int(n) => Ok(self.builder.ins().iconst(types::I64, *n)),
+
+            Expr::Float(f) => {
+                // Float in unboxed mode: store as raw bits
+                Ok(self.builder.ins().iconst(types::I64, f.to_bits() as i64))
+            }
+
+            Expr::Bool(b) => Ok(self.builder.ins().iconst(types::I64, *b as i64)),
+
+            Expr::Unit => Ok(self.builder.ins().iconst(types::I64, 0)),
+
+            Expr::Var(name, _) => {
+                if let Some(&var) = self.vars.get(name) {
+                    Ok(self.builder.use_var(var))
+                } else {
+                    Err(format!("Unknown variable: {}", name))
+                }
+            }
+
+            Expr::BinOp { op, lhs, rhs, .. } => {
+                let l = self.compile_expr_unboxed(lhs)?;
+                let r = self.compile_expr_unboxed(rhs)?;
+                match op {
+                    BinOp::Add => Ok(self.builder.ins().iadd(l, r)),
+                    BinOp::Sub => Ok(self.builder.ins().isub(l, r)),
+                    BinOp::Mul => Ok(self.builder.ins().imul(l, r)),
+                    BinOp::Div => Ok(self.builder.ins().sdiv(l, r)),
+                    BinOp::Mod => Ok(self.builder.ins().srem(l, r)),
+                    BinOp::Eq => {
+                        let cmp = self.builder.ins().icmp(IntCC::Equal, l, r);
+                        Ok(self.builder.ins().uextend(types::I64, cmp))
+                    }
+                    BinOp::Ne => {
+                        let cmp = self.builder.ins().icmp(IntCC::NotEqual, l, r);
+                        Ok(self.builder.ins().uextend(types::I64, cmp))
+                    }
+                    BinOp::Lt => {
+                        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, l, r);
+                        Ok(self.builder.ins().uextend(types::I64, cmp))
+                    }
+                    BinOp::Gt => {
+                        let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r);
+                        Ok(self.builder.ins().uextend(types::I64, cmp))
+                    }
+                    BinOp::Le => {
+                        let cmp = self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r);
+                        Ok(self.builder.ins().uextend(types::I64, cmp))
+                    }
+                    BinOp::Ge => {
+                        let cmp = self
+                            .builder
+                            .ins()
+                            .icmp(IntCC::SignedGreaterThanOrEqual, l, r);
+                        Ok(self.builder.ins().uextend(types::I64, cmp))
+                    }
+                    BinOp::ListConcat => Err("ListConcat cannot be JIT-compiled".into()),
+                }
+            }
+
+            Expr::UnaryOp { op, operand, .. } => {
+                let val = self.compile_expr_unboxed(operand)?;
+                match op {
+                    UnaryOp::Neg => Ok(self.builder.ins().ineg(val)),
+                    UnaryOp::Not => {
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let cmp = self.builder.ins().icmp(IntCC::Equal, val, zero);
+                        Ok(self.builder.ins().uextend(types::I64, cmp))
+                    }
+                }
+            }
+
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let cond_val = self.compile_expr_unboxed(condition)?;
+
+                let then_block = self.builder.create_block();
+                let else_block = self.builder.create_block();
+                let merge_block = self.builder.create_block();
+                self.builder.append_block_param(merge_block, types::I64);
+
+                // In unboxed mode, truthy = != 0
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let cmp = self.builder.ins().icmp(IntCC::NotEqual, cond_val, zero);
+                self.builder
+                    .ins()
+                    .brif(cmp, then_block, &[], else_block, &[]);
+
+                self.builder.switch_to_block(then_block);
+                self.builder.seal_block(then_block);
+                let then_val = self.compile_expr_unboxed(then_branch)?;
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(then_val)]);
+
+                self.builder.switch_to_block(else_block);
+                self.builder.seal_block(else_block);
+                let else_val = if let Some(else_expr) = else_branch {
+                    self.compile_expr_unboxed(else_expr)?
+                } else {
+                    self.builder.ins().iconst(types::I64, 0)
+                };
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(else_val)]);
+
+                self.builder.switch_to_block(merge_block);
+                self.builder.seal_block(merge_block);
+                Ok(self.builder.block_params(merge_block)[0])
+            }
+
+            Expr::Let { pattern, value, .. } => {
+                let val = self.compile_expr_unboxed(value)?;
+                // Only Var patterns in scalar-only functions
+                if let Pattern::Var(name) = pattern.as_ref() {
+                    let var = self.new_var();
+                    self.builder.def_var(var, val);
+                    self.vars.insert(name.clone(), var);
+                }
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+
+            Expr::Block(exprs, _) => {
+                let mut result = self.builder.ins().iconst(types::I64, 0);
+                for e in exprs {
+                    result = self.compile_expr_unboxed(e)?;
+                }
+                Ok(result)
+            }
+
+            Expr::CallDirect { name, args, .. } => {
+                // Try base-case speculation first (unboxed mode)
+                if let Some(val) = self.try_speculate_call_unboxed(name, args)? {
+                    return Ok(val);
+                }
+
+                if let Some(&func_idx) = self.func_names.get(name) {
+                    if let Some(func_id) = self.func_ids[func_idx] {
+                        let callee_unboxed =
+                            func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
+                        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+
+                        if callee_unboxed {
+                            // Unboxed → unboxed: pass raw values, receive raw result
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| self.compile_expr_unboxed(a))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let call = self.builder.ins().call(func_ref, &arg_vals);
+                            Ok(self.builder.inst_results(call)[0])
+                        } else {
+                            // Unboxed → boxed: tag args, untag result
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| {
+                                    let raw = self.compile_expr_unboxed(a)?;
+                                    Ok(self.tag_int(raw))
+                                })
+                                .collect::<Result<Vec<_>, String>>()?;
+                            let call = self.builder.ins().call(func_ref, &arg_vals);
+                            let boxed_result = self.builder.inst_results(call)[0];
+                            Ok(self.untag_int(boxed_result))
+                        }
+                    } else {
+                        Err(format!(
+                            "Function '{}' not JIT-compiled (fallback required)",
+                            name
+                        ))
+                    }
+                } else {
+                    Err(format!("Unknown function: {}", name))
+                }
+            }
+
+            Expr::TailCall { name, args, .. } => {
+                if name == &self.current_func_name
+                    && let Some(loop_header) = self.loop_header
+                {
+                    // Self-recursive tail call in unboxed mode: pass raw values
+                    let arg_vals: Vec<CValue> = args
+                        .iter()
+                        .map(|a| self.compile_expr_unboxed(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    for (var, val) in self.param_vars.iter().zip(arg_vals.iter()) {
+                        self.builder.def_var(*var, *val);
+                    }
+
+                    self.builder.ins().jump(loop_header, &[]);
+
+                    let dead_block = self.builder.create_block();
+                    self.builder.switch_to_block(dead_block);
+                    self.builder.seal_block(dead_block);
+
+                    return Ok(self.builder.ins().iconst(types::I64, 0));
+                }
+
+                // Non-self tail call → regular call
+                if let Some(&func_idx) = self.func_names.get(name) {
+                    if let Some(func_id) = self.func_ids[func_idx] {
+                        let callee_unboxed =
+                            func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
+                        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+
+                        if callee_unboxed {
+                            // Both unboxed — use return_call for guaranteed TCE
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| self.compile_expr_unboxed(a))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            self.builder.ins().return_call(func_ref, &arg_vals);
+
+                            let dead_block = self.builder.create_block();
+                            self.builder.switch_to_block(dead_block);
+                            self.builder.seal_block(dead_block);
+                            Ok(self.builder.ins().iconst(types::I64, 0))
+                        } else {
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| {
+                                    let raw = self.compile_expr_unboxed(a)?;
+                                    Ok(self.tag_int(raw))
+                                })
+                                .collect::<Result<Vec<_>, String>>()?;
+                            let call = self.builder.ins().call(func_ref, &arg_vals);
+                            let boxed_result = self.builder.inst_results(call)[0];
+                            Ok(self.untag_int(boxed_result))
+                        }
+                    } else {
+                        Err(format!(
+                            "Function '{}' not JIT-compiled (fallback required)",
+                            name
+                        ))
+                    }
+                } else {
+                    Err(format!("Unknown function: {}", name))
+                }
+            }
+
+            Expr::And(a, b) => {
+                let a_val = self.compile_expr_unboxed(a)?;
+                let zero_val = self.builder.ins().iconst(types::I64, 0);
+
+                let eval_b = self.builder.create_block();
+                let merge = self.builder.create_block();
+                self.builder.append_block_param(merge, types::I64);
+
+                let cmp = self.builder.ins().icmp(IntCC::NotEqual, a_val, zero_val);
+                self.builder
+                    .ins()
+                    .brif(cmp, eval_b, &[], merge, &[BlockArg::Value(zero_val)]);
+
+                self.builder.switch_to_block(eval_b);
+                self.builder.seal_block(eval_b);
+                let b_val = self.compile_expr_unboxed(b)?;
+                self.builder.ins().jump(merge, &[BlockArg::Value(b_val)]);
+
+                self.builder.switch_to_block(merge);
+                self.builder.seal_block(merge);
+                Ok(self.builder.block_params(merge)[0])
+            }
+
+            Expr::Or(a, b) => {
+                let a_val = self.compile_expr_unboxed(a)?;
+                let one_val = self.builder.ins().iconst(types::I64, 1);
+
+                let eval_b = self.builder.create_block();
+                let merge = self.builder.create_block();
+                self.builder.append_block_param(merge, types::I64);
+
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let cmp = self.builder.ins().icmp(IntCC::NotEqual, a_val, zero);
+                self.builder
+                    .ins()
+                    .brif(cmp, merge, &[BlockArg::Value(one_val)], eval_b, &[]);
+
+                self.builder.switch_to_block(eval_b);
+                self.builder.seal_block(eval_b);
+                let b_val = self.compile_expr_unboxed(b)?;
+                self.builder.ins().jump(merge, &[BlockArg::Value(b_val)]);
+
+                self.builder.switch_to_block(merge);
+                self.builder.seal_block(merge);
+                Ok(self.builder.block_params(merge)[0])
+            }
+
+            _ => Err(format!("Unsupported expression in unboxed JIT: {:?}", expr)),
+        }
+    }
+
+    /// Base-case speculation for unboxed mode.
+    /// Same logic as try_speculate_call but using raw unboxed values.
+    fn try_speculate_call_unboxed(
+        &mut self,
+        name: &str,
+        ir_args: &[Expr],
+    ) -> Result<Option<CValue>, String> {
+        let func_idx = match self.func_names.get(name) {
+            Some(&idx) => idx,
+            None => return Ok(None),
+        };
+        if self.func_ids[func_idx].is_none() {
+            return Ok(None);
+        }
+        // Only speculate on unboxed callees
+        if func_idx >= self.unboxed_flags.len() || !self.unboxed_flags[func_idx] {
+            return Ok(None);
+        }
+        let func = &self.ir_functions[func_idx];
+
+        // Look for base case in then_branch OR else_branch
+        let (cond_expr, base_expr, base_in_then) = match &func.body {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let is_simple = |e: &Expr| {
+                    matches!(
+                        e,
+                        Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit
+                    )
+                };
+                if is_simple(then_branch) {
+                    (condition.as_ref(), then_branch.as_ref(), true)
+                } else if let Some(else_br) = else_branch
+                    && is_simple(else_br)
+                {
+                    (condition.as_ref(), else_br.as_ref(), false)
+                } else {
+                    return Ok(None);
+                }
+            }
+            _ => return Ok(None),
+        };
+
+        if !expr_only_refs_params(cond_expr, &func.params) {
+            return Ok(None);
+        }
+        if !expr_only_refs_params(base_expr, &func.params) {
+            return Ok(None);
+        }
+
+        // Compile args in unboxed mode
+        let arg_vals: Vec<CValue> = ir_args
+            .iter()
+            .map(|a| self.compile_expr_unboxed(a))
+            .collect::<Result<_, _>>()?;
+
+        // Temporarily bind callee params to arg values
+        let mut saved_vars = HashMap::new();
+        for (i, param_name) in func.params.iter().enumerate() {
+            let var = self.new_var();
+            self.builder.def_var(var, arg_vals[i]);
+            if let Some(old) = self.vars.insert(param_name.clone(), var) {
+                saved_vars.insert(param_name.clone(), old);
+            }
+        }
+
+        // Compile condition and base case in unboxed mode
+        let cond_val = self.compile_expr_unboxed(cond_expr)?;
+        let base_val = self.compile_expr_unboxed(base_expr)?;
+
+        // Restore vars
+        for param_name in &func.params {
+            self.vars.remove(param_name);
+        }
+        for (name, old_var) in saved_vars {
+            self.vars.insert(name, old_var);
+        }
+
+        let call_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        // Unboxed truthy check: != 0
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let cmp = self.builder.ins().icmp(IntCC::NotEqual, cond_val, zero);
+        if base_in_then {
+            self.builder.ins().brif(
+                cmp,
+                merge_block,
+                &[BlockArg::Value(base_val)],
+                call_block,
+                &[],
+            );
+        } else {
+            self.builder.ins().brif(
+                cmp,
+                call_block,
+                &[],
+                merge_block,
+                &[BlockArg::Value(base_val)],
+            );
+        }
+
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+
+        // Call the unboxed function: pass raw args, receive raw result
+        let func_id = self.func_ids[func_idx].unwrap();
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        let call = self.builder.ins().call(func_ref, &arg_vals);
+        let call_result = self.builder.inst_results(call)[0];
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(call_result)]);
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(Some(self.builder.block_params(merge_block)[0]))
+    }
+
+    // -- Main expression compiler --
+
+    pub(super) fn compile_expr(&mut self, expr: &Expr) -> Result<CValue, String> {
+        match expr {
+            Expr::Int(n) => Ok(self.emit_nvalue(NValue::int(*n))),
+
+            Expr::Float(f) => Ok(self.emit_nvalue(NValue::float(*f))),
+
+            Expr::Bool(b) => {
+                let bits = if *b { NV_TRUE } else { NV_FALSE };
+                Ok(self.builder.ins().iconst(types::I64, bits as i64))
+            }
+
+            Expr::Unit => Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64)),
+
+            Expr::String(s) => {
+                let nv = NValue::string(s.as_str().into());
+                Ok(self.emit_heap_nvalue(nv))
+            }
+
+            Expr::Var(name, _) => {
+                if let Some(&var) = self.vars.get(name) {
+                    Ok(self.builder.use_var(var))
+                } else if let Some(&func_idx) = self.func_names.get(name) {
+                    // Function reference as NaN-boxed Function value
+                    Ok(self.emit_nvalue(NValue::function(func_idx)))
+                } else {
+                    Err(format!("Unknown variable: {}", name))
+                }
+            }
+
+            Expr::BinOp { op, lhs, rhs, ty } => {
+                let is_int = matches!(ty, Some(Type::Int));
+                let lhs_val = self.compile_expr(lhs)?;
+                let rhs_val = self.compile_expr(rhs)?;
+
+                if is_int {
+                    // Untag both operands
+                    let l = self.untag_int(lhs_val);
+                    let r = self.untag_int(rhs_val);
+                    match op {
+                        BinOp::Add => {
+                            let res = self.builder.ins().iadd(l, r);
+                            Ok(self.tag_int(res))
+                        }
+                        BinOp::Sub => {
+                            let res = self.builder.ins().isub(l, r);
+                            Ok(self.tag_int(res))
+                        }
+                        BinOp::Mul => {
+                            let res = self.builder.ins().imul(l, r);
+                            Ok(self.tag_int(res))
+                        }
+                        BinOp::Div => {
+                            let res = self.builder.ins().sdiv(l, r);
+                            Ok(self.tag_int(res))
+                        }
+                        BinOp::Mod => {
+                            let res = self.builder.ins().srem(l, r);
+                            Ok(self.tag_int(res))
+                        }
+                        BinOp::Eq => {
+                            let cmp = self.builder.ins().icmp(IntCC::Equal, l, r);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::Ne => {
+                            let cmp = self.builder.ins().icmp(IntCC::NotEqual, l, r);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::Lt => {
+                            let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, l, r);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::Gt => {
+                            let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::Le => {
+                            let cmp = self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::Ge => {
+                            let cmp =
+                                self.builder
+                                    .ins()
+                                    .icmp(IntCC::SignedGreaterThanOrEqual, l, r);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::ListConcat => {
+                            Ok(self.call_helper("jit_list_concat", &[lhs_val, rhs_val]))
+                        }
+                    }
+                } else {
+                    // Non-int: compare raw NaN-boxed bits for equality/ordering,
+                    // or use runtime helpers for complex types.
+                    // For simple cases (Bool comparison), raw bit comparison works.
+                    match op {
+                        BinOp::Eq => {
+                            let result = self.call_helper("jit_values_equal", &[lhs_val, rhs_val]);
+                            Ok(result)
+                        }
+                        BinOp::Ne => {
+                            let eq = self.call_helper("jit_values_equal", &[lhs_val, rhs_val]);
+                            // Flip: if eq is NV_TRUE, return NV_FALSE and vice versa
+                            let one = self.builder.ins().iconst(types::I64, 1);
+                            Ok(self.builder.ins().bxor(eq, one))
+                        }
+                        // For non-int arithmetic, untag and retag (handles mixed types)
+                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
+                            let l = self.untag_int(lhs_val);
+                            let r = self.untag_int(rhs_val);
+                            let res = match op {
+                                BinOp::Add => self.builder.ins().iadd(l, r),
+                                BinOp::Sub => self.builder.ins().isub(l, r),
+                                BinOp::Mul => self.builder.ins().imul(l, r),
+                                BinOp::Div => self.builder.ins().sdiv(l, r),
+                                BinOp::Mod => self.builder.ins().srem(l, r),
+                                _ => unreachable!(),
+                            };
+                            Ok(self.tag_int(res))
+                        }
+                        BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
+                            let l = self.untag_int(lhs_val);
+                            let r = self.untag_int(rhs_val);
+                            let cc = match op {
+                                BinOp::Lt => IntCC::SignedLessThan,
+                                BinOp::Gt => IntCC::SignedGreaterThan,
+                                BinOp::Le => IntCC::SignedLessThanOrEqual,
+                                BinOp::Ge => IntCC::SignedGreaterThanOrEqual,
+                                _ => unreachable!(),
+                            };
+                            let cmp = self.builder.ins().icmp(cc, l, r);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::ListConcat => {
+                            Ok(self.call_helper("jit_list_concat", &[lhs_val, rhs_val]))
+                        }
+                    }
+                }
+            }
+
+            Expr::UnaryOp { op, operand, .. } => {
+                let val = self.compile_expr(operand)?;
+                match op {
+                    UnaryOp::Neg => {
+                        let raw = self.untag_int(val);
+                        let negated = self.builder.ins().ineg(raw);
+                        Ok(self.tag_int(negated))
+                    }
+                    UnaryOp::Not => {
+                        // Check bit 0 (truthy check), invert
+                        let one = self.builder.ins().iconst(types::I64, 1);
+                        let bit = self.builder.ins().band(val, one);
+                        let zero = self.builder.ins().iconst(types::I64, 0);
+                        let is_falsy = self.builder.ins().icmp(IntCC::Equal, bit, zero);
+                        Ok(self.tag_bool(is_falsy))
+                    }
+                }
+            }
+
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                let cond_val = self.compile_expr(condition)?;
+
+                let then_block = self.builder.create_block();
+                let else_block = self.builder.create_block();
+                let merge_block = self.builder.create_block();
+                self.builder.append_block_param(merge_block, types::I64);
+
+                let cmp = self.is_truthy(cond_val);
+                self.builder
+                    .ins()
+                    .brif(cmp, then_block, &[], else_block, &[]);
+
+                self.builder.switch_to_block(then_block);
+                self.builder.seal_block(then_block);
+                let then_val = self.compile_expr(then_branch)?;
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(then_val)]);
+
+                self.builder.switch_to_block(else_block);
+                self.builder.seal_block(else_block);
+                let else_val = if let Some(else_expr) = else_branch {
+                    self.compile_expr(else_expr)?
+                } else {
+                    self.builder.ins().iconst(types::I64, NV_UNIT as i64)
+                };
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(else_val)]);
+
+                self.builder.switch_to_block(merge_block);
+                self.builder.seal_block(merge_block);
+                Ok(self.builder.block_params(merge_block)[0])
+            }
+
+            Expr::Let { pattern, value, .. } => {
+                let val = self.compile_expr(value)?;
+                self.bind_pattern(pattern, val)?;
+                Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
+            }
+
+            Expr::Block(exprs, _) => {
+                // SRA: find non-escaping record bindings and track them
+                let sra_candidates = Self::find_sra_candidates(exprs);
+                let sra_names: std::collections::HashSet<&str> =
+                    sra_candidates.iter().map(|(n, _)| n.as_str()).collect();
+
+                let mut result = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                for e in exprs {
+                    // SRA: intercept Let bindings to MakeRecord for candidates
+                    if let Expr::Let { pattern, value, .. } = e {
+                        if let Pattern::Var(name) = pattern.as_ref() {
+                            if sra_names.contains(name.as_str()) {
+                                if let Expr::MakeRecord(fields, _) = value.as_ref() {
+                                    let mut field_vars = HashMap::new();
+                                    for (fname, fexpr) in fields {
+                                        let val = self.compile_expr(fexpr)?;
+                                        let var = self.new_var();
+                                        self.builder.def_var(var, val);
+                                        field_vars.insert(fname.clone(), var);
+                                    }
+                                    self.sra_records.insert(name.clone(), field_vars);
+                                    result = self.builder.ins().iconst(
+                                        types::I64,
+                                        NV_UNIT as i64,
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+                    result = self.compile_expr(e)?;
+                }
+                Ok(result)
+            }
+
+            Expr::CallDirect { name, args, .. } => {
+                if let Some(val) = self.try_speculate_call(name, args)? {
+                    return Ok(val);
+                }
+
+                if let Some(&func_idx) = self.func_names.get(name) {
+                    if let Some(func_id) = self.func_ids[func_idx] {
+                        let callee_unboxed =
+                            func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
+                        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+
+                        if callee_unboxed {
+                            // Boxed → unboxed: untag args, tag result
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| {
+                                    let boxed = self.compile_expr(a)?;
+                                    Ok(self.untag_int(boxed))
+                                })
+                                .collect::<Result<Vec<_>, String>>()?;
+                            let call = self.builder.ins().call(func_ref, &arg_vals);
+                            let raw_result = self.builder.inst_results(call)[0];
+                            Ok(self.tag_int(raw_result))
+                        } else {
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| self.compile_expr(a))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            let call = self.builder.ins().call(func_ref, &arg_vals);
+                            Ok(self.builder.inst_results(call)[0])
+                        }
+                    } else {
+                        Err(format!(
+                            "Function '{}' not JIT-compiled (fallback required)",
+                            name
+                        ))
+                    }
+                } else {
+                    Err(format!("Unknown function: {}", name))
+                }
+            }
+
+            Expr::TailCall { name, args, .. } => {
+                if name == &self.current_func_name
+                    && let Some(loop_header) = self.loop_header
+                {
+                    let arg_vals: Vec<CValue> = args
+                        .iter()
+                        .map(|a| self.compile_expr(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    for (var, val) in self.param_vars.iter().zip(arg_vals.iter()) {
+                        self.builder.def_var(*var, *val);
+                    }
+
+                    self.builder.ins().jump(loop_header, &[]);
+
+                    let dead_block = self.builder.create_block();
+                    self.builder.switch_to_block(dead_block);
+                    self.builder.seal_block(dead_block);
+
+                    return Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64));
+                }
+
+                // Non-self tail call → regular call
+                if let Some(&func_idx) = self.func_names.get(name) {
+                    if let Some(func_id) = self.func_ids[func_idx] {
+                        let callee_unboxed =
+                            func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
+                        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+
+                        if callee_unboxed {
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| {
+                                    let boxed = self.compile_expr(a)?;
+                                    Ok(self.untag_int(boxed))
+                                })
+                                .collect::<Result<Vec<_>, String>>()?;
+                            let call = self.builder.ins().call(func_ref, &arg_vals);
+                            let raw_result = self.builder.inst_results(call)[0];
+                            Ok(self.tag_int(raw_result))
+                        } else {
+                            // Both boxed — use return_call for guaranteed TCE
+                            let arg_vals: Vec<CValue> = args
+                                .iter()
+                                .map(|a| self.compile_expr(a))
+                                .collect::<Result<Vec<_>, _>>()?;
+                            self.builder.ins().return_call(func_ref, &arg_vals);
+
+                            let dead_block = self.builder.create_block();
+                            self.builder.switch_to_block(dead_block);
+                            self.builder.seal_block(dead_block);
+                            Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
+                        }
+                    } else {
+                        Err(format!(
+                            "Function '{}' not JIT-compiled (fallback required)",
+                            name
+                        ))
+                    }
+                } else {
+                    Err(format!("Unknown function: {}", name))
+                }
+            }
+
+            Expr::And(a, b) => {
+                let a_val = self.compile_expr(a)?;
+                let false_val = self.builder.ins().iconst(types::I64, NV_FALSE as i64);
+                let cmp = self.is_truthy(a_val);
+
+                let eval_b = self.builder.create_block();
+                let merge = self.builder.create_block();
+                self.builder.append_block_param(merge, types::I64);
+
+                self.builder
+                    .ins()
+                    .brif(cmp, eval_b, &[], merge, &[BlockArg::Value(false_val)]);
+
+                self.builder.switch_to_block(eval_b);
+                self.builder.seal_block(eval_b);
+                let b_val = self.compile_expr(b)?;
+                self.builder.ins().jump(merge, &[BlockArg::Value(b_val)]);
+
+                self.builder.switch_to_block(merge);
+                self.builder.seal_block(merge);
+                Ok(self.builder.block_params(merge)[0])
+            }
+
+            Expr::Or(a, b) => {
+                let a_val = self.compile_expr(a)?;
+                let true_val = self.builder.ins().iconst(types::I64, NV_TRUE as i64);
+                let cmp = self.is_truthy(a_val);
+
+                let eval_b = self.builder.create_block();
+                let merge = self.builder.create_block();
+                self.builder.append_block_param(merge, types::I64);
+
+                self.builder
+                    .ins()
+                    .brif(cmp, merge, &[BlockArg::Value(true_val)], eval_b, &[]);
+
+                self.builder.switch_to_block(eval_b);
+                self.builder.seal_block(eval_b);
+                let b_val = self.compile_expr(b)?;
+                self.builder.ins().jump(merge, &[BlockArg::Value(b_val)]);
+
+                self.builder.switch_to_block(merge);
+                self.builder.seal_block(merge);
+                Ok(self.builder.block_params(merge)[0])
+            }
+
+            // -- Phase 2: CallNative + Concat --
+            Expr::CallNative {
+                module: mod_name,
+                method,
+                args,
+                ..
+            } => {
+                let qualified = format!("{}.{}", mod_name, method);
+                let registry = self.natives.ok_or("No native registry for JIT")?;
+                let native_id = registry
+                    .lookup(&qualified)
+                    .ok_or_else(|| format!("Unknown native: {}", qualified))?;
+
+                let arg_vals: Vec<CValue> = args
+                    .iter()
+                    .map(|a| self.compile_expr(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let args_addr = self.spill_to_stack(&arg_vals);
+                let registry_ptr = self
+                    .builder
+                    .ins()
+                    .iconst(self.ptr_type, registry as *const NativeRegistry as i64);
+                let id_val = self.builder.ins().iconst(types::I64, native_id as i64);
+                let count_val = self.builder.ins().iconst(types::I64, arg_vals.len() as i64);
+
+                Ok(self.call_helper(
+                    "jit_call_native",
+                    &[registry_ptr, id_val, args_addr, count_val],
+                ))
+            }
+
+            Expr::Concat(parts) => {
+                let part_vals: Vec<CValue> = parts
+                    .iter()
+                    .map(|e| self.compile_expr(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let addr = self.spill_to_stack(&part_vals);
+                let count = self
+                    .builder
+                    .ins()
+                    .iconst(types::I64, part_vals.len() as i64);
+                Ok(self.call_helper("jit_concat", &[addr, count]))
+            }
+
+            // -- Phase 3: Constructors --
+            Expr::MakeEnum { tag, payload, .. } => {
+                let tag_nv = NValue::string(tag.as_str().into());
+                let tag_val = self.emit_heap_nvalue(tag_nv);
+                let payload_val = self.compile_expr(payload)?;
+                if let Some(id) = self.tags.get_id(tag) {
+                    let id_val = self.builder.ins().iconst(types::I64, id as i64);
+                    Ok(self.call_helper("jit_make_enum_with_id", &[tag_val, id_val, payload_val]))
+                } else {
+                    Ok(self.call_helper("jit_make_enum", &[tag_val, payload_val]))
+                }
+            }
+
+            Expr::MakeStruct { name, fields, .. } => {
+                let name_nv = NValue::string(name.as_str().into());
+                let name_val = self.emit_heap_nvalue(name_nv);
+
+                let mut pair_vals = Vec::with_capacity(fields.len() * 2);
+                for (fname, fexpr) in fields {
+                    let key_nv = NValue::string(fname.as_str().into());
+                    let key_val = self.emit_heap_nvalue(key_nv);
+                    let val = self.compile_expr(fexpr)?;
+                    pair_vals.push(key_val);
+                    pair_vals.push(val);
+                }
+
+                let addr = self.spill_to_stack(&pair_vals);
+                let count = self.builder.ins().iconst(types::I64, fields.len() as i64);
+                Ok(self.call_helper("jit_make_struct", &[name_val, addr, count]))
+            }
+
+            Expr::MakeList(items, _) => {
+                let item_vals: Vec<CValue> = items
+                    .iter()
+                    .map(|e| self.compile_expr(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let addr = self.spill_to_stack(&item_vals);
+                let count = self
+                    .builder
+                    .ins()
+                    .iconst(types::I64, item_vals.len() as i64);
+                Ok(self.call_helper("jit_make_list", &[addr, count]))
+            }
+
+            Expr::MakeRecord(fields, _) => {
+                let mut pair_vals = Vec::with_capacity(fields.len() * 2);
+                for (fname, fexpr) in fields {
+                    let key_nv = NValue::string(fname.as_str().into());
+                    let key_val = self.emit_heap_nvalue(key_nv);
+                    let val = self.compile_expr(fexpr)?;
+                    pair_vals.push(key_val);
+                    pair_vals.push(val);
+                }
+
+                let addr = self.spill_to_stack(&pair_vals);
+                let count = self.builder.ins().iconst(types::I64, fields.len() as i64);
+                Ok(self.call_helper("jit_make_record", &[addr, count]))
+            }
+
+            Expr::MakeTuple(items, _) => {
+                let item_vals: Vec<CValue> = items
+                    .iter()
+                    .map(|e| self.compile_expr(e))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                let addr = self.spill_to_stack(&item_vals);
+                let count = self
+                    .builder
+                    .ins()
+                    .iconst(types::I64, item_vals.len() as i64);
+                Ok(self.call_helper("jit_make_tuple", &[addr, count]))
+            }
+
+            Expr::MakeRange(start, end) => {
+                let start_val = self.compile_expr(start)?;
+                let end_val = self.compile_expr(end)?;
+                Ok(self.call_helper("jit_make_range", &[start_val, end_val]))
+            }
+
+            Expr::UpdateRecord { base, updates, .. } => {
+                // SRA: if base is a scalar-replaced record, update field variables directly
+                if let Expr::Var(name, _) = base.as_ref() {
+                    if self.sra_records.contains_key(name.as_str()) {
+                        // Compile updated field values and def_var them
+                        for (fname, fexpr) in updates {
+                            let val = self.compile_expr(fexpr)?;
+                            if let Some(field_vars) = self.sra_records.get(name.as_str()) {
+                                if let Some(&var) = field_vars.get(fname.as_str()) {
+                                    self.builder.def_var(var, val);
+                                }
+                            }
+                        }
+                        return Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64));
+                    }
+                }
+                let base_val = self.compile_expr(base)?;
+
+                let mut pair_vals = Vec::with_capacity(updates.len() * 2);
+                for (fname, fexpr) in updates {
+                    let key_nv = NValue::string(fname.as_str().into());
+                    let key_val = self.emit_heap_nvalue(key_nv);
+                    let val = self.compile_expr(fexpr)?;
+                    pair_vals.push(key_val);
+                    pair_vals.push(val);
+                }
+
+                let addr = self.spill_to_stack(&pair_vals);
+                let count = self.builder.ins().iconst(types::I64, updates.len() as i64);
+                Ok(self.call_helper("jit_update_record", &[base_val, addr, count]))
+            }
+
+            Expr::GetField { object, field, .. } => {
+                // SRA: if object is a scalar-replaced record, read field variable directly
+                if let Expr::Var(name, _) = object.as_ref() {
+                    if let Some(field_vars) = self.sra_records.get(name.as_str()) {
+                        if let Some(&var) = field_vars.get(field.as_str()) {
+                            return Ok(self.builder.use_var(var));
+                        }
+                    }
+                }
+                let obj_val = self.compile_expr(object)?;
+                let field_nv = NValue::string(field.as_str().into());
+                let field_val = self.emit_heap_nvalue(field_nv);
+                Ok(self.call_helper("jit_get_field", &[obj_val, field_val]))
+            }
+
+            // -- Phase 4: Match --
+            Expr::Match { subject, arms, .. } => self.compile_match(subject, arms),
+
+            // -- Phase 5: For, Try --
+            Expr::For {
+                binding,
+                iterable,
+                body,
+            } => self.compile_for(binding, iterable, body),
+
+            Expr::Try { expr: inner, .. } => self.compile_try(inner),
+
+            Expr::MakeClosure { func_idx, captures } => {
+                if captures.is_empty() {
+                    // Zero-capture: emit NValue::function directly (no heap allocation)
+                    Ok(self.emit_heap_nvalue(NValue::function(*func_idx)))
+                } else {
+                    // Compile each capture expression
+                    let cap_vals: Vec<CValue> = captures
+                        .iter()
+                        .map(|c| self.compile_expr(c))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    let addr = self.spill_to_stack(&cap_vals);
+                    let idx_val = self.builder.ins().iconst(types::I64, *func_idx as i64);
+                    let count_val = self.builder.ins().iconst(types::I64, captures.len() as i64);
+                    Ok(self.call_helper("jit_make_closure", &[idx_val, addr, count_val]))
+                }
+            }
+
+            Expr::GetClosureVar(idx) => {
+                // __closure is the first parameter (param_vars[0])
+                let closure_param = self.builder.use_var(self.param_vars[0]);
+                let idx_val = self.builder.ins().iconst(types::I64, *idx as i64);
+                Ok(self.call_helper("jit_closure_upvalue", &[closure_param, idx_val]))
+            }
+
+            Expr::CallIndirect { callee, args, .. } => {
+                let callee_val = self.compile_expr(callee)?;
+                let compiled_args: Vec<CValue> = args
+                    .iter()
+                    .map(|a| self.compile_expr(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                // Check if closure or plain function
+                let is_closure = self.call_helper("jit_is_closure", &[callee_val]);
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let cmp = self.builder.ins().icmp(IntCC::NotEqual, is_closure, zero);
+
+                let closure_block = self.builder.create_block();
+                let function_block = self.builder.create_block();
+                let merge_block = self.builder.create_block();
+                self.builder.append_block_param(merge_block, types::I64);
+                self.builder.ins().brif(cmp, closure_block, &[], function_block, &[]);
+
+                // Closure path: call_indirect(sig_N+1, fn_ptr, [closure, args...])
+                self.builder.switch_to_block(closure_block);
+                self.builder.seal_block(closure_block);
+                let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
+                let mut cargs = vec![callee_val];
+                cargs.extend(&compiled_args);
+                let closure_sig = self.build_indirect_sig(args.len() + 1);
+                let sig_ref_c = self.builder.import_signature(closure_sig);
+                let result_c = self.builder.ins().call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+                let ret_c = self.builder.inst_results(result_c)[0];
+                self.builder.ins().jump(merge_block, &[BlockArg::Value(ret_c)]);
+
+                // Function path: call_indirect(sig_N, fn_ptr, [args...])
+                self.builder.switch_to_block(function_block);
+                self.builder.seal_block(function_block);
+                let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+                let func_sig = self.build_indirect_sig(args.len());
+                let sig_ref_f = self.builder.import_signature(func_sig);
+                let result_f = self.builder.ins().call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
+                let ret_f = self.builder.inst_results(result_f)[0];
+                self.builder.ins().jump(merge_block, &[BlockArg::Value(ret_f)]);
+
+                // Merge
+                self.builder.switch_to_block(merge_block);
+                self.builder.seal_block(merge_block);
+                Ok(self.builder.block_params(merge_block)[0])
+            }
+
+            // Remaining unsupported constructs
+            _ => Err(format!("Unsupported expression in JIT: {:?}", expr)),
+        }
+    }
+
+    /// Build a Cranelift signature for indirect calls with `n_params` I64 params.
+    fn build_indirect_sig(&self, n_params: usize) -> cranelift_codegen::ir::Signature {
+        let mut sig = self.module.make_signature();
+        sig.call_conv = CallConv::Tail;
+        for _ in 0..n_params {
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        sig.returns.push(AbiParam::new(types::I64));
+        sig
+    }
+
+    // -- Match compilation --
+
+    fn compile_match(&mut self, subject: &Expr, arms: &[MatchArm]) -> Result<CValue, String> {
+        let subject_val = self.compile_expr(subject)?;
+
+        if arms.is_empty() {
+            return Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64));
+        }
+
+        // Check if this match is eligible for Switch dispatch
+        if self.is_switch_eligible(arms) {
+            return self.compile_match_switch(subject_val, arms);
+        }
+
+        self.compile_match_linear(subject_val, arms)
+    }
+
+    /// Check if a match can use Cranelift Switch dispatch.
+    /// Eligible when all arms are Constructor patterns (with optional trailing Wildcard/Var),
+    /// and all constructor tags have known integer IDs.
+    fn is_switch_eligible(&self, arms: &[MatchArm]) -> bool {
+        if arms.is_empty() {
+            return false;
+        }
+        let mut has_constructor = false;
+        for (i, arm) in arms.iter().enumerate() {
+            let is_last = i == arms.len() - 1;
+            match &arm.pattern {
+                Pattern::Constructor(tag, _) => {
+                    if self.tags.get_id(tag).is_none() {
+                        return false;
+                    }
+                    has_constructor = true;
+                }
+                Pattern::Wildcard | Pattern::Var(_) => {
+                    // Only allowed as the last arm (default case)
+                    if !is_last {
+                        return false;
+                    }
+                }
+                _ => return false, // Literal or Tuple — not switch-eligible
+            }
+        }
+        has_constructor
+    }
+
+    /// Compile a match using Cranelift Switch (jump table / binary search).
+    fn compile_match_switch(
+        &mut self,
+        subject_val: CValue,
+        arms: &[MatchArm],
+    ) -> Result<CValue, String> {
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        // Store subject in a variable for use across blocks
+        let subj_var = self.new_var();
+        self.builder.def_var(subj_var, subject_val);
+
+        // Extract tag_id once via helper call
+        let subj = self.builder.use_var(subj_var);
+        let tag_id_val = self.call_helper("jit_enum_tag_id", &[subj]);
+
+        // Build Switch + per-arm blocks
+        let mut switch = Switch::new();
+        let mut arm_blocks = Vec::new();
+        let mut default_arm: Option<usize> = None;
+
+        for (i, arm) in arms.iter().enumerate() {
+            match &arm.pattern {
+                Pattern::Constructor(tag, _) => {
+                    let id = self.tags.get_id(tag).unwrap(); // checked in is_switch_eligible
+                    let block = self.builder.create_block();
+                    switch.set_entry(id as u128, block);
+                    arm_blocks.push((i, block));
+                }
+                Pattern::Wildcard | Pattern::Var(_) => {
+                    default_arm = Some(i);
+                }
+                _ => unreachable!("non-eligible pattern in switch"),
+            }
+        }
+
+        // Default block: handles wildcard/var or returns unit
+        let default_block = self.builder.create_block();
+        switch.emit(self.builder, tag_id_val, default_block);
+
+        // Compile each constructor arm body
+        for (arm_idx, block) in &arm_blocks {
+            self.builder.switch_to_block(*block);
+            self.builder.seal_block(*block);
+            let subj_again = self.builder.use_var(subj_var);
+            self.bind_pattern_vars(&arms[*arm_idx].pattern, subj_again)?;
+            let body_val = self.compile_expr(&arms[*arm_idx].body)?;
+            self.builder
+                .ins()
+                .jump(merge_block, &[BlockArg::Value(body_val)]);
+        }
+
+        // Compile default arm
+        self.builder.switch_to_block(default_block);
+        self.builder.seal_block(default_block);
+        if let Some(idx) = default_arm {
+            let subj_again = self.builder.use_var(subj_var);
+            self.bind_pattern_vars(&arms[idx].pattern, subj_again)?;
+            let body_val = self.compile_expr(&arms[idx].body)?;
+            self.builder
+                .ins()
+                .jump(merge_block, &[BlockArg::Value(body_val)]);
+        } else {
+            let unit_val = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+            self.builder
+                .ins()
+                .jump(merge_block, &[BlockArg::Value(unit_val)]);
+        }
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(self.builder.block_params(merge_block)[0])
+    }
+
+    /// Linear cascade match (original implementation, used as fallback).
+    fn compile_match_linear(
+        &mut self,
+        subject_val: CValue,
+        arms: &[MatchArm],
+    ) -> Result<CValue, String> {
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        // Store subject in a variable so we can use it across blocks
+        let subj_var = self.new_var();
+        self.builder.def_var(subj_var, subject_val);
+
+        for (i, arm) in arms.iter().enumerate() {
+            let is_last = i == arms.len() - 1;
+            let body_block = self.builder.create_block();
+            let next_test = if is_last {
+                None
+            } else {
+                Some(self.builder.create_block())
+            };
+
+            let subj = self.builder.use_var(subj_var);
+            self.compile_pattern_test(&arm.pattern, subj, body_block, next_test, merge_block)?;
+
+            // Body block
+            self.builder.switch_to_block(body_block);
+            self.builder.seal_block(body_block);
+            let subj_again = self.builder.use_var(subj_var);
+            self.bind_pattern_vars(&arm.pattern, subj_again)?;
+            let body_val = self.compile_expr(&arm.body)?;
+            self.builder
+                .ins()
+                .jump(merge_block, &[BlockArg::Value(body_val)]);
+
+            if let Some(next) = next_test {
+                self.builder.switch_to_block(next);
+                self.builder.seal_block(next);
+            }
+        }
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(self.builder.block_params(merge_block)[0])
+    }
+
+    /// Emit a pattern test. On match, jump to body_block. On mismatch, jump to
+    /// next_test (or merge with unit if last arm).
+    fn compile_pattern_test(
+        &mut self,
+        pattern: &Pattern,
+        subject: CValue,
+        body_block: cranelift_codegen::ir::Block,
+        next_test: Option<cranelift_codegen::ir::Block>,
+        merge_block: cranelift_codegen::ir::Block,
+    ) -> Result<(), String> {
+        match pattern {
+            Pattern::Wildcard | Pattern::Var(_) => {
+                // Always matches
+                self.builder.ins().jump(body_block, &[]);
+            }
+            Pattern::Literal(lit_expr) => {
+                let lit_val = self.compile_expr(lit_expr)?;
+                let eq_result = self.call_helper("jit_values_equal", &[subject, lit_val]);
+                let cmp = self.is_truthy(eq_result);
+                let fallthrough = next_test.unwrap_or(merge_block);
+                let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
+                    vec![BlockArg::Value(
+                        self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+                    )]
+                } else {
+                    vec![]
+                };
+                self.builder
+                    .ins()
+                    .brif(cmp, body_block, &[], fallthrough, &fallthrough_args);
+            }
+            Pattern::Constructor(tag, sub_patterns) => {
+                // Use integer tag_id comparison when available (faster than string compare)
+                let cmp = if let Some(id) = self.tags.get_id(tag) {
+                    let tag_id_val = self.call_helper("jit_enum_tag_id", &[subject]);
+                    let expected = self.builder.ins().iconst(types::I64, id as i64);
+                    self.builder.ins().icmp(IntCC::Equal, tag_id_val, expected)
+                } else {
+                    let tag_nv = NValue::string(tag.as_str().into());
+                    let tag_val = self.emit_heap_nvalue(tag_nv);
+                    let eq_result = self.call_helper("jit_enum_tag_eq", &[subject, tag_val]);
+                    self.is_truthy(eq_result)
+                };
+
+                if sub_patterns.is_empty() {
+                    let fallthrough = next_test.unwrap_or(merge_block);
+                    let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
+                        vec![BlockArg::Value(
+                            self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+                        )]
+                    } else {
+                        vec![]
+                    };
+                    self.builder
+                        .ins()
+                        .brif(cmp, body_block, &[], fallthrough, &fallthrough_args);
+                } else {
+                    // Need to check sub-patterns on the payload
+                    let check_payload = self.builder.create_block();
+                    let fallthrough = next_test.unwrap_or(merge_block);
+                    let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
+                        vec![BlockArg::Value(
+                            self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+                        )]
+                    } else {
+                        vec![]
+                    };
+                    self.builder.ins().brif(
+                        cmp,
+                        check_payload,
+                        &[],
+                        fallthrough,
+                        &fallthrough_args,
+                    );
+
+                    self.builder.switch_to_block(check_payload);
+                    self.builder.seal_block(check_payload);
+
+                    // For single sub-pattern, extract payload directly
+                    if sub_patterns.len() == 1 {
+                        // Sub-pattern is applied to the enum payload
+                        // Just jump to body — binding happens in bind_pattern_vars
+                        self.builder.ins().jump(body_block, &[]);
+                    } else {
+                        // Multiple sub-patterns → payload must be a tuple
+                        self.builder.ins().jump(body_block, &[]);
+                    }
+                }
+            }
+            Pattern::Tuple(sub_patterns) => {
+                // Tuples always match structurally, but sub-patterns might need checking.
+                // For simplicity, tuples always match (sub-patterns are just bindings).
+                // More complex tuple patterns with nested literals would need recursive checking.
+                let has_complex = sub_patterns
+                    .iter()
+                    .any(|p| !matches!(p, Pattern::Var(_) | Pattern::Wildcard));
+                if has_complex {
+                    // TODO: complex tuple pattern matching
+                    self.builder.ins().jump(body_block, &[]);
+                } else {
+                    self.builder.ins().jump(body_block, &[]);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind variables from a match pattern to the subject value.
+    fn bind_pattern_vars(&mut self, pattern: &Pattern, subject: CValue) -> Result<(), String> {
+        match pattern {
+            Pattern::Wildcard => {}
+            Pattern::Var(name) => {
+                let var = self.new_var();
+                self.builder.def_var(var, subject);
+                self.vars.insert(name.clone(), var);
+            }
+            Pattern::Literal(_) => {}
+            Pattern::Constructor(_, sub_patterns) => {
+                if !sub_patterns.is_empty() {
+                    let payload = self.call_helper("jit_enum_payload", &[subject]);
+                    if sub_patterns.len() == 1 {
+                        self.bind_pattern_vars(&sub_patterns[0], payload)?;
+                    } else {
+                        // Payload is a tuple — extract each element
+                        for (i, sub) in sub_patterns.iter().enumerate() {
+                            let idx = self.builder.ins().iconst(types::I64, i as i64);
+                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
+                            self.bind_pattern_vars(sub, elem)?;
+                        }
+                    }
+                }
+            }
+            Pattern::Tuple(sub_patterns) => {
+                for (i, sub) in sub_patterns.iter().enumerate() {
+                    let idx = self.builder.ins().iconst(types::I64, i as i64);
+                    let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
+                    self.bind_pattern_vars(sub, elem)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind a let-pattern (Var, Wildcard, Tuple, Constructor).
+    fn bind_pattern(&mut self, pattern: &Pattern, val: CValue) -> Result<(), String> {
+        match pattern {
+            Pattern::Var(name) => {
+                let var = self.new_var();
+                self.builder.def_var(var, val);
+                self.vars.insert(name.clone(), var);
+            }
+            Pattern::Wildcard => {}
+            Pattern::Tuple(sub_patterns) => {
+                for (i, sub) in sub_patterns.iter().enumerate() {
+                    let idx = self.builder.ins().iconst(types::I64, i as i64);
+                    let elem = self.call_helper("jit_tuple_get", &[val, idx]);
+                    self.bind_pattern(sub, elem)?;
+                }
+            }
+            Pattern::Constructor(_, sub_patterns) => {
+                if sub_patterns.is_empty() {
+                    // Nothing to bind
+                } else {
+                    let payload = self.call_helper("jit_enum_payload", &[val]);
+                    if sub_patterns.len() == 1 {
+                        self.bind_pattern(&sub_patterns[0], payload)?;
+                    } else {
+                        for (i, sub) in sub_patterns.iter().enumerate() {
+                            let idx = self.builder.ins().iconst(types::I64, i as i64);
+                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
+                            self.bind_pattern(sub, elem)?;
+                        }
+                    }
+                }
+            }
+            _ => return Err("Unsupported pattern in let binding".into()),
+        }
+        Ok(())
+    }
+
+    // -- For loop compilation --
+
+    fn compile_for(
+        &mut self,
+        binding: &str,
+        iterable: &Expr,
+        body: &Expr,
+    ) -> Result<CValue, String> {
+        let list_val = self.compile_expr(iterable)?;
+
+        // Get list length
+        let len_nv = self.call_helper("jit_list_length", &[list_val]);
+        let len = self.untag_int(len_nv);
+
+        // Store list in a variable
+        let list_var = self.new_var();
+        self.builder.def_var(list_var, list_val);
+
+        // Index variable starts at 0
+        let idx_var = self.new_var();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(idx_var, zero);
+
+        // Loop header
+        let loop_head = self.builder.create_block();
+        let loop_body = self.builder.create_block();
+        let loop_exit = self.builder.create_block();
+
+        self.builder.ins().jump(loop_head, &[]);
+        self.builder.switch_to_block(loop_head);
+        // Don't seal yet — back edge from loop body
+
+        let idx = self.builder.use_var(idx_var);
+        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
+        self.builder.ins().brif(cmp, loop_body, &[], loop_exit, &[]);
+
+        // Loop body
+        self.builder.switch_to_block(loop_body);
+        self.builder.seal_block(loop_body);
+
+        let list = self.builder.use_var(list_var);
+        let idx_tagged = self.tag_int(idx);
+        let elem = self.call_helper("jit_list_get", &[list, idx_tagged]);
+
+        // Bind loop variable
+        let bind_var = self.new_var();
+        self.builder.def_var(bind_var, elem);
+        self.vars.insert(binding.to_string(), bind_var);
+
+        // Compile body (result is discarded)
+        let _body_val = self.compile_expr(body)?;
+
+        // Increment index
+        let cur_idx = self.builder.use_var(idx_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let next_idx = self.builder.ins().iadd(cur_idx, one);
+        self.builder.def_var(idx_var, next_idx);
+
+        self.builder.ins().jump(loop_head, &[]);
+
+        // Seal loop header now
+        self.builder.seal_block(loop_head);
+
+        // Exit
+        self.builder.switch_to_block(loop_exit);
+        self.builder.seal_block(loop_exit);
+
+        Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
+    }
+
+    // -- Try expression compilation --
+
+    fn compile_try(&mut self, inner: &Expr) -> Result<CValue, String> {
+        let val = self.compile_expr(inner)?;
+
+        // Check if the value is Err or None → early return
+        let is_err_val = self.call_helper("jit_is_err", &[val]);
+        let is_none_val = self.call_helper("jit_is_none", &[val]);
+
+        // Combine: should_return = is_err || is_none
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let err_bit = self.builder.ins().band(is_err_val, one);
+        let none_bit = self.builder.ins().band(is_none_val, one);
+        let should_return = self.builder.ins().bor(err_bit, none_bit);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let cmp = self
+            .builder
+            .ins()
+            .icmp(IntCC::NotEqual, should_return, zero);
+
+        let unwrap_block = self.builder.create_block();
+        let return_block = self.builder.create_block();
+
+        self.builder
+            .ins()
+            .brif(cmp, return_block, &[], unwrap_block, &[]);
+
+        // Return block: propagate the Err/None value
+        self.builder.switch_to_block(return_block);
+        self.builder.seal_block(return_block);
+        self.builder.ins().return_(&[val]);
+
+        // Unwrap block: extract Ok/Some payload
+        self.builder.switch_to_block(unwrap_block);
+        self.builder.seal_block(unwrap_block);
+        let payload = self.call_helper("jit_enum_payload", &[val]);
+        Ok(payload)
+    }
+
+    // -- SRA (Scalar Replacement of Aggregates) --
+
+    /// Check if a variable only appears in GetField or UpdateRecord base positions.
+    /// Returns false (escapes) if the variable is used in any other context.
+    fn var_escapes_in_expr(expr: &Expr, name: &str) -> bool {
+        match expr {
+            Expr::Var(n, _) if n == name => true, // bare use = escape
+            Expr::GetField { object, .. } => {
+                // GetField on our var is fine — but check if var appears elsewhere in field subtree
+                if let Expr::Var(n, _) = object.as_ref() {
+                    if n == name {
+                        return false; // this is a safe use
+                    }
+                }
+                Self::var_escapes_in_expr(object, name)
+            }
+            Expr::UpdateRecord { base, updates, .. } => {
+                // UpdateRecord with our var as base is fine
+                let base_escapes = if let Expr::Var(n, _) = base.as_ref() {
+                    if n == name {
+                        false // safe use
+                    } else {
+                        Self::var_escapes_in_expr(base, name)
+                    }
+                } else {
+                    Self::var_escapes_in_expr(base, name)
+                };
+                if base_escapes {
+                    return true;
+                }
+                updates.iter().any(|(_, v)| Self::var_escapes_in_expr(v, name))
+            }
+            // Recurse into all children
+            Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_)
+            | Expr::Unit | Expr::Hole => false,
+            Expr::Var(_, _) => false, // different name
+            Expr::BinOp { lhs, rhs, .. } => {
+                Self::var_escapes_in_expr(lhs, name) || Self::var_escapes_in_expr(rhs, name)
+            }
+            Expr::UnaryOp { operand, .. } => Self::var_escapes_in_expr(operand, name),
+            Expr::And(l, r) | Expr::Or(l, r) => {
+                Self::var_escapes_in_expr(l, name) || Self::var_escapes_in_expr(r, name)
+            }
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                Self::var_escapes_in_expr(condition, name)
+                    || Self::var_escapes_in_expr(then_branch, name)
+                    || else_branch.as_ref().is_some_and(|e| Self::var_escapes_in_expr(e, name))
+            }
+            Expr::Block(exprs, _) => exprs.iter().any(|e| Self::var_escapes_in_expr(e, name)),
+            Expr::Let { value, .. } => Self::var_escapes_in_expr(value, name),
+            Expr::CallDirect { args, .. } | Expr::CallNative { args, .. }
+            | Expr::TailCall { args, .. } => {
+                args.iter().any(|a| Self::var_escapes_in_expr(a, name))
+            }
+            Expr::CallIndirect { callee, args, .. } => {
+                Self::var_escapes_in_expr(callee, name)
+                    || args.iter().any(|a| Self::var_escapes_in_expr(a, name))
+            }
+            Expr::MakeEnum { payload, .. } => Self::var_escapes_in_expr(payload, name),
+            Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
+                fields.iter().any(|(_, v)| Self::var_escapes_in_expr(v, name))
+            }
+            Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
+                items.iter().any(|e| Self::var_escapes_in_expr(e, name))
+            }
+            Expr::MakeRange(s, e) => {
+                Self::var_escapes_in_expr(s, name) || Self::var_escapes_in_expr(e, name)
+            }
+            Expr::Match { subject, arms, .. } => {
+                Self::var_escapes_in_expr(subject, name)
+                    || arms.iter().any(|a| Self::var_escapes_in_expr(&a.body, name))
+            }
+            Expr::For { iterable, body, .. } => {
+                Self::var_escapes_in_expr(iterable, name) || Self::var_escapes_in_expr(body, name)
+            }
+            Expr::Lambda { body, .. } => Self::var_escapes_in_expr(body, name),
+            Expr::Try { expr, .. } => Self::var_escapes_in_expr(expr, name),
+            Expr::Concat(parts) => parts.iter().any(|p| Self::var_escapes_in_expr(p, name)),
+            Expr::MakeClosure { captures, .. } => {
+                captures.iter().any(|c| Self::var_escapes_in_expr(c, name))
+            }
+            Expr::GetClosureVar(_) => false,
+            _ => true, // conservative: escape for anything else
+        }
+    }
+
+    /// Find SRA candidates in a block: Let bindings to MakeRecord where the
+    /// variable never escapes (only used in GetField/UpdateRecord).
+    pub(super) fn find_sra_candidates(exprs: &[Expr]) -> Vec<(String, Vec<String>)> {
+        let mut candidates = Vec::new();
+        for (i, expr) in exprs.iter().enumerate() {
+            if let Expr::Let { pattern, value, .. } = expr {
+                if let Pattern::Var(name) = pattern.as_ref() {
+                    if let Expr::MakeRecord(fields, _) = value.as_ref() {
+                        let field_names: Vec<String> =
+                            fields.iter().map(|(k, _)| k.clone()).collect();
+                        // Check if variable escapes in subsequent expressions
+                        let escapes = exprs[i + 1..]
+                            .iter()
+                            .any(|e| Self::var_escapes_in_expr(e, name));
+                        if !escapes {
+                            candidates.push((name.clone(), field_names));
+                        }
+                    }
+                }
+            }
+        }
+        candidates
+    }
+}
