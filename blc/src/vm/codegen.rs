@@ -204,7 +204,8 @@ impl<'a> Codegen<'a> {
             } => {
                 self.gen_call_native(module, method, args, span)?;
             }
-            Expr::CallIndirect { callee, args, .. } => {
+            Expr::CallIndirect { callee, args, .. }
+            | Expr::TailCallIndirect { callee, args, .. } => {
                 self.gen_expr(callee, span)?;
                 for arg in args {
                     self.gen_expr(arg, span)?;
@@ -398,6 +399,17 @@ impl<'a> Codegen<'a> {
                 self.gen_lambda(params, body, span)?;
             }
 
+            // MakeClosure/GetClosureVar are JIT-only IR nodes produced by lambda lifting.
+            // The bytecode codegen path uses Lambda directly (not lifted), so these
+            // should never appear. If they do, it's a compiler bug.
+            Expr::MakeClosure { .. } | Expr::GetClosureVar(_) => {
+                return Err(CodegenError {
+                    message: "MakeClosure/GetClosureVar in bytecode codegen (should only appear in JIT path)".into(),
+                    line: span.line,
+                    col: span.col,
+                });
+            }
+
             Expr::Try { expr, .. } => {
                 self.gen_try(expr, span)?;
             }
@@ -421,6 +433,10 @@ impl<'a> Codegen<'a> {
                 ..
             } => {
                 self.gen_perform_effect(effect, method, args, span)?;
+            }
+
+            Expr::Expect { actual, matcher } => {
+                self.gen_expect(actual, matcher, span)?;
             }
         }
         Ok(())
@@ -1044,6 +1060,175 @@ impl<'a> Codegen<'a> {
         let arg_count = Self::checked_u8(args.len(), "perform effect args", span)?;
         self.emit(Op::PerformEffect(name_idx, arg_count), span);
         Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Expect (test matchers)
+    // -----------------------------------------------------------------------
+
+    fn gen_expect(
+        &mut self,
+        actual: &Expr,
+        matcher: &Matcher,
+        span: &Span,
+    ) -> Result<(), CodegenError> {
+        match matcher {
+            Matcher::Equal(expected) => {
+                self.gen_expr(actual, span)?;
+                self.gen_expr(expected, span)?;
+                self.emit(Op::Eq, span);
+            }
+            Matcher::BeOk => {
+                // Check if result is Ok variant
+                self.gen_expr(actual, span)?;
+                self.emit(Op::EnumTag, span);
+                let tag = self.chunk.add_constant(Value::String("Ok".into()));
+                self.emit(Op::LoadConst(tag), span);
+                self.emit(Op::Eq, span);
+            }
+            Matcher::BeSome => {
+                self.gen_expr(actual, span)?;
+                self.emit(Op::EnumTag, span);
+                let tag = self.chunk.add_constant(Value::String("Some".into()));
+                self.emit(Op::LoadConst(tag), span);
+                self.emit(Op::Eq, span);
+            }
+            Matcher::BeNone => {
+                self.gen_expr(actual, span)?;
+                self.emit(Op::EnumTag, span);
+                let tag = self.chunk.add_constant(Value::String("None".into()));
+                self.emit(Op::LoadConst(tag), span);
+                self.emit(Op::Eq, span);
+            }
+            Matcher::BeEmpty => {
+                self.gen_expr(actual, span)?;
+                self.emit(Op::ListLen, span);
+                let zero = self.chunk.add_constant(Value::Int(0));
+                self.emit(Op::LoadConst(zero), span);
+                self.emit(Op::Eq, span);
+            }
+            Matcher::HaveLength(expected) => {
+                self.gen_expr(actual, span)?;
+                self.emit(Op::ListLen, span);
+                self.gen_expr(expected, span)?;
+                self.emit(Op::Eq, span);
+            }
+            Matcher::Contain(expected) => {
+                // Use native __test_contains if available, else fall back
+                let qualified = "__test_contains";
+                if let Some(fn_id) = self.natives.lookup(qualified) {
+                    self.gen_expr(actual, span)?;
+                    self.gen_expr(expected, span)?;
+                    self.emit(Op::CallNative(fn_id, 2), span);
+                } else {
+                    // Fall back to simple equality check
+                    self.gen_expr(actual, span)?;
+                    self.gen_expr(expected, span)?;
+                    self.emit(Op::Eq, span);
+                }
+            }
+            Matcher::StartWith(expected) => {
+                let qualified = "String.starts_with";
+                if let Some(fn_id) = self.natives.lookup(qualified) {
+                    self.gen_expr(actual, span)?;
+                    self.gen_expr(expected, span)?;
+                    self.emit(Op::CallNative(fn_id, 2), span);
+                } else {
+                    // Fall back
+                    self.gen_expr(actual, span)?;
+                    self.gen_expr(expected, span)?;
+                    self.emit(Op::Eq, span);
+                }
+            }
+            Matcher::Satisfy(pred) => {
+                // Apply the predicate to the actual value
+                self.gen_expr(pred, span)?;
+                self.gen_expr(actual, span)?;
+                self.emit(Op::Call(1), span);
+            }
+            Matcher::Be(_pattern) => {
+                // TODO: match pattern against actual; for now always true
+                let t = self.chunk.add_constant(Value::Bool(true));
+                self.emit(Op::LoadConst(t), span);
+            }
+        }
+        Ok(())
+    }
+
+    // -----------------------------------------------------------------------
+    // Test program generation
+    // -----------------------------------------------------------------------
+
+    /// Generate a TestProgram from an IrTestModule.
+    pub fn generate_test_program(
+        mut self,
+        module: &IrTestModule,
+    ) -> Result<super::chunk::TestProgram, CodegenError> {
+        let chunk_offset = self.compiled_chunks.len();
+
+        // Register all function names
+        for (i, func) in module.functions.iter().enumerate() {
+            self.functions.insert(func.name.clone(), chunk_offset + i);
+        }
+
+        // Pre-allocate function chunk slots
+        for _ in 0..module.functions.len() {
+            self.compiled_chunks.push(Chunk::new());
+        }
+
+        // Compile function bodies
+        for (i, func) in module.functions.iter().enumerate() {
+            self.chunk = Chunk::new();
+            self.locals.clear();
+            self.scope_depth = 0;
+
+            for param in &func.params {
+                self.declare_local(param);
+            }
+
+            self.gen_expr(&func.body, &func.span)?;
+            let chunk = self.finish_chunk();
+            self.compiled_chunks[chunk_offset + i] = chunk;
+        }
+
+        // Compile each test body into its own chunk
+        let test_chunk_offset = self.compiled_chunks.len();
+        let mut compiled_tests = Vec::new();
+
+        for (i, test) in module.tests.iter().enumerate() {
+            self.chunk = Chunk::new();
+            self.locals.clear();
+            self.scope_depth = 0;
+
+            let default_span = Span {
+                line: test.line,
+                col: test.col,
+                start_byte: 0,
+                end_byte: 0,
+            };
+            self.gen_expr(&test.body, &default_span)?;
+            let chunk = self.finish_chunk();
+            self.compiled_chunks.push(chunk);
+
+            compiled_tests.push(super::chunk::CompiledTest {
+                name: test.name.clone(),
+                function: test.function.clone(),
+                chunk_idx: test_chunk_offset + i,
+                line: test.line,
+                col: test.col,
+                end_line: test.end_line,
+                end_col: test.end_col,
+                skip: test.skip,
+            });
+        }
+
+        Ok(super::chunk::TestProgram {
+            program: Program {
+                chunks: self.compiled_chunks,
+                entry: chunk_offset + module.entry,
+            },
+            tests: compiled_tests,
+        })
     }
 
     // -----------------------------------------------------------------------

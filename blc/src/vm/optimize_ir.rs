@@ -1,6 +1,6 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use super::ir::{BinOp, Expr, HandlerClause, IrModule, MatchArm, Pattern, UnaryOp};
+use super::ir::{BinOp, Expr, HandlerClause, IrFunction, IrModule, Matcher, MatchArm, Pattern, Span, TagRegistry, UnaryOp};
 
 /// Run all IR optimization passes on the module.
 pub fn optimize(module: &mut IrModule) {
@@ -21,6 +21,593 @@ pub fn optimize(module: &mut IrModule) {
         func.body = eliminate_dead_lets(func.body.clone());
         func.body = simplify_blocks(func.body.clone());
     }
+    // Lambda lifting: transform Lambda nodes into MakeClosure + lifted functions
+    lift_lambdas(module);
+    // Build tag registry: assign integer IDs to all enum tags
+    build_tag_registry(module);
+}
+
+// ---------------------------------------------------------------------------
+// Lambda Lifting
+// ---------------------------------------------------------------------------
+
+/// Compute the free variables of an expression.
+/// `bound` tracks variables bound in the current scope.
+/// `top_level` contains function names that don't need capturing.
+fn free_vars(expr: &Expr, bound: &HashSet<String>, top_level: &HashSet<String>) -> HashSet<String> {
+    let mut result = HashSet::new();
+    free_vars_inner(expr, bound, top_level, &mut result);
+    result
+}
+
+fn free_vars_inner(
+    expr: &Expr,
+    bound: &HashSet<String>,
+    top_level: &HashSet<String>,
+    out: &mut HashSet<String>,
+) {
+    match expr {
+        Expr::Var(name, _) => {
+            if !bound.contains(name) && !top_level.contains(name) {
+                out.insert(name.clone());
+            }
+        }
+        Expr::GetClosureVar(_) => {} // Already resolved — not free
+        Expr::MakeClosure { captures, .. } => {
+            for c in captures {
+                free_vars_inner(c, bound, top_level, out);
+            }
+        }
+        Expr::Lambda { params, body, .. } => {
+            let mut inner_bound = bound.clone();
+            for p in params {
+                inner_bound.insert(p.clone());
+            }
+            free_vars_inner(body, &inner_bound, top_level, out);
+        }
+        Expr::Let { pattern, value, .. } => {
+            free_vars_inner(value, bound, top_level, out);
+            // The pattern binds names for subsequent expressions in the same block,
+            // but Let is a single node here — the binding is visible in the block
+            // that contains this Let, handled by Block below.
+        }
+        Expr::Block(exprs, _) => {
+            // Process sequentially: each Let adds to bound for subsequent exprs
+            let mut block_bound = bound.clone();
+            for e in exprs {
+                free_vars_inner(e, &block_bound, top_level, out);
+                if let Expr::Let { pattern, .. } = e {
+                    collect_pattern_names(pattern, &mut block_bound);
+                }
+            }
+        }
+        Expr::For { binding, iterable, body } => {
+            free_vars_inner(iterable, bound, top_level, out);
+            let mut inner_bound = bound.clone();
+            inner_bound.insert(binding.clone());
+            free_vars_inner(body, &inner_bound, top_level, out);
+        }
+        Expr::Match { subject, arms, .. } => {
+            free_vars_inner(subject, bound, top_level, out);
+            for arm in arms {
+                let mut arm_bound = bound.clone();
+                collect_pattern_names(&arm.pattern, &mut arm_bound);
+                free_vars_inner(&arm.body, &arm_bound, top_level, out);
+            }
+        }
+        // All other nodes: recurse into children
+        _ => {
+            visit_expr_children(expr, &mut |child| {
+                free_vars_inner(child, bound, top_level, out);
+            });
+        }
+    }
+}
+
+/// Collect variable names introduced by a pattern.
+fn collect_pattern_names(pattern: &Pattern, names: &mut HashSet<String>) {
+    match pattern {
+        Pattern::Var(name) => { names.insert(name.clone()); }
+        Pattern::Constructor(_, sub) | Pattern::Tuple(sub) => {
+            for p in sub {
+                collect_pattern_names(p, names);
+            }
+        }
+        Pattern::Wildcard | Pattern::Literal(_) => {}
+    }
+}
+
+/// Replace occurrences of free variable names with GetClosureVar(index).
+fn replace_free_vars(expr: Expr, fv_map: &HashMap<String, usize>) -> Expr {
+    transform_expr(expr, &mut |e| {
+        if let Expr::Var(ref name, _) = e {
+            if let Some(&idx) = fv_map.get(name) {
+                return Expr::GetClosureVar(idx);
+            }
+        }
+        e
+    })
+}
+
+/// Lift all Lambda expressions into top-level functions with explicit captures.
+fn lift_lambdas(module: &mut IrModule) {
+    let top_level: HashSet<String> = module.functions.iter().map(|f| f.name.clone()).collect();
+    let mut counter: usize = 0;
+    let mut new_functions: Vec<IrFunction> = Vec::new();
+
+    // Process each existing function (iterate by index since we append new ones)
+    let original_count = module.functions.len();
+    for fi in 0..original_count {
+        let body = module.functions[fi].body.clone();
+        let lifted = lift_lambdas_in_expr(
+            body,
+            &top_level,
+            &mut counter,
+            &mut new_functions,
+            original_count,
+        );
+        module.functions[fi].body = lifted;
+    }
+
+    module.functions.extend(new_functions);
+}
+
+/// Recursively lift lambdas in an expression (bottom-up).
+fn lift_lambdas_in_expr(
+    expr: Expr,
+    top_level: &HashSet<String>,
+    counter: &mut usize,
+    new_functions: &mut Vec<IrFunction>,
+    base_idx: usize,
+) -> Expr {
+    transform_expr(expr, &mut |e| {
+        if let Expr::Lambda { params, body, ty } = e {
+            // Compute free variables of the lambda body
+            let params_set: HashSet<String> = params.iter().cloned().collect();
+            let fvs = free_vars(&body, &params_set, top_level);
+            let mut fv_list: Vec<String> = fvs.into_iter().collect();
+            fv_list.sort(); // Deterministic ordering
+
+            // Build mapping from free var name to closure index
+            let fv_map: HashMap<String, usize> = fv_list
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.clone(), i))
+                .collect();
+
+            // Replace free vars in body with GetClosureVar(i)
+            let transformed_body = if fv_map.is_empty() {
+                *body
+            } else {
+                replace_free_vars(*body, &fv_map)
+            };
+
+            // Create the lifted function
+            let func_name = format!("__lambda_{}", *counter);
+            *counter += 1;
+            let func_idx = base_idx + new_functions.len();
+
+            let mut lifted_params = Vec::with_capacity(1 + params.len());
+            if !fv_list.is_empty() {
+                lifted_params.push("__closure".to_string());
+            }
+            lifted_params.extend(params);
+
+            new_functions.push(IrFunction {
+                name: func_name,
+                params: lifted_params,
+                body: transformed_body,
+                ty: ty.clone(),
+                span: Span { line: 0, col: 0, start_byte: 0, end_byte: 0 },
+            });
+
+            if fv_list.is_empty() {
+                // Zero captures: just a function reference, no heap allocation
+                Expr::MakeClosure {
+                    func_idx,
+                    captures: vec![],
+                }
+            } else {
+                Expr::MakeClosure {
+                    func_idx,
+                    captures: fv_list.into_iter().map(|name| Expr::Var(name, None)).collect(),
+                }
+            }
+        } else {
+            e
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Tag Registry Builder
+// ---------------------------------------------------------------------------
+
+/// Walk all functions in the module, collecting enum tags from `MakeEnum` and
+/// `Pattern::Constructor` nodes, and register them in the module's TagRegistry.
+fn build_tag_registry(module: &mut IrModule) {
+    for func in &module.functions {
+        collect_tags_from_expr(&func.body, &mut module.tags);
+    }
+}
+
+/// Collect enum tag strings from an expression tree.
+fn collect_tags_from_expr(expr: &Expr, tags: &mut TagRegistry) {
+    visit_expr(expr, &mut |e| {
+        match e {
+            Expr::MakeEnum { tag, .. } => {
+                tags.register(tag);
+            }
+            Expr::Match { arms, .. } => {
+                for arm in arms {
+                    collect_tags_from_pattern(&arm.pattern, tags);
+                }
+            }
+            _ => {}
+        }
+    });
+}
+
+/// Collect enum tag strings from a pattern.
+fn collect_tags_from_pattern(pattern: &Pattern, tags: &mut TagRegistry) {
+    match pattern {
+        Pattern::Constructor(tag, sub_patterns) => {
+            tags.register(tag);
+            for sub in sub_patterns {
+                collect_tags_from_pattern(sub, tags);
+            }
+        }
+        _ => {}
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Generic tree-walk utilities
+// ---------------------------------------------------------------------------
+
+/// Recursively transform an expression tree bottom-up.
+///
+/// Walks all children first (applying `f` recursively), then applies `f`
+/// to the reconstructed node. This handles the exhaustive `Expr` match
+/// once, so callers only need to handle the variants they care about.
+fn transform_expr(expr: Expr, f: &mut impl FnMut(Expr) -> Expr) -> Expr {
+    let walked = walk_expr_children(expr, |child| transform_expr(child, f));
+    f(walked)
+}
+
+/// Walk all immediate children of an expression, applying `f` to each child.
+/// The node itself is NOT transformed — only its children are.
+///
+/// This is the single exhaustive match that replaces all the duplicated
+/// boilerplate across the optimizer passes.
+fn walk_expr_children(expr: Expr, mut f: impl FnMut(Expr) -> Expr) -> Expr {
+    match expr {
+        // Literals — no children
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_)
+        | Expr::Unit | Expr::Hole | Expr::Var(_, _) => expr,
+
+        // Binary operations
+        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
+            op,
+            lhs: Box::new(f(*lhs)),
+            rhs: Box::new(f(*rhs)),
+            ty,
+        },
+        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
+            op,
+            operand: Box::new(f(*operand)),
+            ty,
+        },
+        Expr::And(l, r) => Expr::And(Box::new(f(*l)), Box::new(f(*r))),
+        Expr::Or(l, r) => Expr::Or(Box::new(f(*l)), Box::new(f(*r))),
+
+        // Control flow
+        Expr::If { condition, then_branch, else_branch, ty } => Expr::If {
+            condition: Box::new(f(*condition)),
+            then_branch: Box::new(f(*then_branch)),
+            else_branch: else_branch.map(|e| Box::new(f(*e))),
+            ty,
+        },
+        Expr::Match { subject, arms, ty } => Expr::Match {
+            subject: Box::new(f(*subject)),
+            arms: arms.into_iter().map(|arm| MatchArm {
+                pattern: arm.pattern,
+                body: f(arm.body),
+            }).collect(),
+            ty,
+        },
+        Expr::For { binding, iterable, body } => Expr::For {
+            binding,
+            iterable: Box::new(f(*iterable)),
+            body: Box::new(f(*body)),
+        },
+
+        // Bindings
+        Expr::Let { pattern, value, ty } => Expr::Let {
+            pattern,
+            value: Box::new(f(*value)),
+            ty,
+        },
+        Expr::Block(exprs, ty) => Expr::Block(
+            exprs.into_iter().map(&mut f).collect(),
+            ty,
+        ),
+
+        // Calls
+        Expr::CallDirect { name, args, ty } => Expr::CallDirect {
+            name,
+            args: args.into_iter().map(&mut f).collect(),
+            ty,
+        },
+        Expr::CallNative { module, method, args, ty } => Expr::CallNative {
+            module,
+            method,
+            args: args.into_iter().map(&mut f).collect(),
+            ty,
+        },
+        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
+            callee: Box::new(f(*callee)),
+            args: args.into_iter().map(&mut f).collect(),
+            ty,
+        },
+        Expr::TailCallIndirect { callee, args, ty } => Expr::TailCallIndirect {
+            callee: Box::new(f(*callee)),
+            args: args.into_iter().map(&mut f).collect(),
+            ty,
+        },
+        Expr::TailCall { name, args, ty } => Expr::TailCall {
+            name,
+            args: args.into_iter().map(&mut f).collect(),
+            ty,
+        },
+
+        // Constructors
+        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
+            tag,
+            payload: Box::new(f(*payload)),
+            ty,
+        },
+        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
+            name,
+            fields: fields.into_iter().map(|(k, v)| (k, f(v))).collect(),
+            ty,
+        },
+
+        // Data construction
+        Expr::MakeList(items, ty) => Expr::MakeList(
+            items.into_iter().map(&mut f).collect(),
+            ty,
+        ),
+        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
+            fields.into_iter().map(|(k, v)| (k, f(v))).collect(),
+            ty,
+        ),
+        Expr::MakeTuple(items, ty) => Expr::MakeTuple(
+            items.into_iter().map(&mut f).collect(),
+            ty,
+        ),
+        Expr::MakeRange(s, e) => Expr::MakeRange(
+            Box::new(f(*s)),
+            Box::new(f(*e)),
+        ),
+        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
+            base: Box::new(f(*base)),
+            updates: updates.into_iter().map(|(k, v)| (k, f(v))).collect(),
+            ty,
+        },
+
+        // Field access
+        Expr::GetField { object, field, ty } => Expr::GetField {
+            object: Box::new(f(*object)),
+            field,
+            ty,
+        },
+
+        // Functions
+        Expr::Lambda { params, body, ty } => Expr::Lambda {
+            params,
+            body: Box::new(f(*body)),
+            ty,
+        },
+        Expr::MakeClosure { func_idx, captures } => Expr::MakeClosure {
+            func_idx,
+            captures: captures.into_iter().map(&mut f).collect(),
+        },
+        Expr::GetClosureVar(_) => expr,
+
+        // Error handling
+        Expr::Try { expr, ty } => Expr::Try {
+            expr: Box::new(f(*expr)),
+            ty,
+        },
+
+        // String interpolation
+        Expr::Concat(parts) => Expr::Concat(
+            parts.into_iter().map(&mut f).collect(),
+        ),
+
+        // Effect handlers
+        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
+            handlers: handlers.into_iter().map(|(name, methods)| {
+                (name, methods.into_iter().map(|(mk, h)| (mk, f(h))).collect())
+            }).collect(),
+            body: Box::new(f(*body)),
+        },
+        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
+            body: Box::new(f(*body)),
+            clauses: clauses.into_iter().map(|c| HandlerClause {
+                body: f(c.body),
+                ..c
+            }).collect(),
+        },
+        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
+            effect,
+            method,
+            args: args.into_iter().map(&mut f).collect(),
+            ty,
+        },
+
+        // Test expressions
+        Expr::Expect { actual, matcher } => {
+            let actual = Box::new(f(*actual));
+            let matcher = match *matcher {
+                Matcher::Equal(e) => Matcher::Equal(Box::new(f(*e))),
+                Matcher::HaveLength(e) => Matcher::HaveLength(Box::new(f(*e))),
+                Matcher::Contain(e) => Matcher::Contain(Box::new(f(*e))),
+                Matcher::StartWith(e) => Matcher::StartWith(Box::new(f(*e))),
+                Matcher::Satisfy(e) => Matcher::Satisfy(Box::new(f(*e))),
+                other => other,
+            };
+            Expr::Expect { actual, matcher: Box::new(matcher) }
+        }
+    }
+}
+
+/// Visit all nodes in an expression tree (read-only, depth-first).
+fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
+    f(expr);
+    visit_expr_children(expr, f);
+}
+
+/// Visit all immediate children of an expression (read-only).
+fn visit_expr_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
+    match expr {
+        // Literals — no children
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_)
+        | Expr::Unit | Expr::Hole | Expr::Var(_, _) => {}
+
+        // Binary operations
+        Expr::BinOp { lhs, rhs, .. } => {
+            visit_expr(lhs, f);
+            visit_expr(rhs, f);
+        }
+        Expr::UnaryOp { operand, .. } => visit_expr(operand, f),
+        Expr::And(l, r) | Expr::Or(l, r) => {
+            visit_expr(l, f);
+            visit_expr(r, f);
+        }
+
+        // Control flow
+        Expr::If { condition, then_branch, else_branch, .. } => {
+            visit_expr(condition, f);
+            visit_expr(then_branch, f);
+            if let Some(e) = else_branch {
+                visit_expr(e, f);
+            }
+        }
+        Expr::Match { subject, arms, .. } => {
+            visit_expr(subject, f);
+            for arm in arms {
+                visit_expr(&arm.body, f);
+            }
+        }
+        Expr::For { iterable, body, .. } => {
+            visit_expr(iterable, f);
+            visit_expr(body, f);
+        }
+
+        // Bindings
+        Expr::Let { value, .. } => visit_expr(value, f),
+        Expr::Block(exprs, _) => {
+            for e in exprs {
+                visit_expr(e, f);
+            }
+        }
+
+        // Calls
+        Expr::CallDirect { args, .. }
+        | Expr::CallNative { args, .. }
+        | Expr::TailCall { args, .. } => {
+            for a in args {
+                visit_expr(a, f);
+            }
+        }
+        Expr::CallIndirect { callee, args, .. }
+        | Expr::TailCallIndirect { callee, args, .. } => {
+            visit_expr(callee, f);
+            for a in args {
+                visit_expr(a, f);
+            }
+        }
+
+        // Constructors
+        Expr::MakeEnum { payload, .. } => visit_expr(payload, f),
+        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
+            for (_, v) in fields {
+                visit_expr(v, f);
+            }
+        }
+
+        // Data construction
+        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
+            for item in items {
+                visit_expr(item, f);
+            }
+        }
+        Expr::MakeRange(s, e) => {
+            visit_expr(s, f);
+            visit_expr(e, f);
+        }
+        Expr::UpdateRecord { base, updates, .. } => {
+            visit_expr(base, f);
+            for (_, v) in updates {
+                visit_expr(v, f);
+            }
+        }
+
+        // Field access
+        Expr::GetField { object, .. } => visit_expr(object, f),
+
+        // Functions
+        Expr::Lambda { body, .. } => visit_expr(body, f),
+        Expr::MakeClosure { captures, .. } => {
+            for c in captures {
+                visit_expr(c, f);
+            }
+        }
+        Expr::GetClosureVar(_) => {}
+
+        // Error handling
+        Expr::Try { expr, .. } => visit_expr(expr, f),
+
+        // String interpolation
+        Expr::Concat(parts) => {
+            for p in parts {
+                visit_expr(p, f);
+            }
+        }
+
+        // Effect handlers
+        Expr::WithHandlers { handlers, body, .. } => {
+            for (_, methods) in handlers {
+                for (_, h) in methods {
+                    visit_expr(h, f);
+                }
+            }
+            visit_expr(body, f);
+        }
+        Expr::HandleEffect { body, clauses, .. } => {
+            visit_expr(body, f);
+            for c in clauses {
+                visit_expr(&c.body, f);
+            }
+        }
+        Expr::PerformEffect { args, .. } => {
+            for a in args {
+                visit_expr(a, f);
+            }
+        }
+
+        // Test expressions
+        Expr::Expect { actual, matcher } => {
+            visit_expr(actual, f);
+            match matcher.as_ref() {
+                Matcher::Equal(e) | Matcher::HaveLength(e) | Matcher::Contain(e)
+                | Matcher::StartWith(e) | Matcher::Satisfy(e) => visit_expr(e, f),
+                _ => {}
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -34,6 +621,10 @@ fn propagate_and_fold(expr: Expr) -> Expr {
     propagate_expr(expr, &mut env)
 }
 
+/// Propagate constants through an expression tree, folding as we go.
+///
+/// This pass needs scope-aware tracking (Block/Lambda/For push new scopes),
+/// so it does a manual walk rather than using `transform_expr`.
 fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
     match expr {
         Expr::Var(ref name, _) => {
@@ -96,128 +687,7 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
             }
         }
 
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ty,
-        } => Expr::If {
-            condition: Box::new(propagate_expr(*condition, env)),
-            then_branch: Box::new(propagate_expr(*then_branch, env)),
-            else_branch: else_branch.map(|e| Box::new(propagate_expr(*e, env))),
-            ty,
-        },
-
-        Expr::Match { subject, arms, ty } => Expr::Match {
-            subject: Box::new(propagate_expr(*subject, env)),
-            arms: arms
-                .into_iter()
-                .map(|arm| MatchArm {
-                    pattern: arm.pattern,
-                    body: propagate_expr(arm.body, env),
-                })
-                .collect(),
-            ty,
-        },
-
-        Expr::CallDirect { name, args, ty } => Expr::CallDirect {
-            name,
-            args: args.into_iter().map(|a| propagate_expr(a, env)).collect(),
-            ty,
-        },
-
-        Expr::CallNative {
-            module,
-            method,
-            args,
-            ty,
-        } => Expr::CallNative {
-            module,
-            method,
-            args: args.into_iter().map(|a| propagate_expr(a, env)).collect(),
-            ty,
-        },
-
-        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
-            callee: Box::new(propagate_expr(*callee, env)),
-            args: args.into_iter().map(|a| propagate_expr(a, env)).collect(),
-            ty,
-        },
-
-        Expr::TailCall { name, args, ty } => Expr::TailCall {
-            name,
-            args: args.into_iter().map(|a| propagate_expr(a, env)).collect(),
-            ty,
-        },
-
-        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
-            tag,
-            payload: Box::new(propagate_expr(*payload, env)),
-            ty,
-        },
-
-        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
-            name,
-            fields: fields
-                .into_iter()
-                .map(|(k, v)| (k, propagate_expr(v, env)))
-                .collect(),
-            ty,
-        },
-
-        Expr::MakeList(items, ty) => Expr::MakeList(
-            items.into_iter().map(|e| propagate_expr(e, env)).collect(),
-            ty,
-        ),
-
-        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
-            fields
-                .into_iter()
-                .map(|(k, v)| (k, propagate_expr(v, env)))
-                .collect(),
-            ty,
-        ),
-
-        Expr::MakeTuple(items, ty) => Expr::MakeTuple(
-            items.into_iter().map(|e| propagate_expr(e, env)).collect(),
-            ty,
-        ),
-
-        Expr::MakeRange(start, end) => Expr::MakeRange(
-            Box::new(propagate_expr(*start, env)),
-            Box::new(propagate_expr(*end, env)),
-        ),
-
-        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
-            base: Box::new(propagate_expr(*base, env)),
-            updates: updates
-                .into_iter()
-                .map(|(k, v)| (k, propagate_expr(v, env)))
-                .collect(),
-            ty,
-        },
-
-        Expr::GetField { object, field, ty } => Expr::GetField {
-            object: Box::new(propagate_expr(*object, env)),
-            field,
-            ty,
-        },
-
-        Expr::And(lhs, rhs) => Expr::And(
-            Box::new(propagate_expr(*lhs, env)),
-            Box::new(propagate_expr(*rhs, env)),
-        ),
-
-        Expr::Or(lhs, rhs) => Expr::Or(
-            Box::new(propagate_expr(*lhs, env)),
-            Box::new(propagate_expr(*rhs, env)),
-        ),
-
-        Expr::For {
-            binding,
-            iterable,
-            body,
-        } => {
+        Expr::For { binding, iterable, body } => {
             // The binding shadows, so push a new scope for the body
             env.push(HashMap::new());
             let result = Expr::For {
@@ -241,39 +711,8 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
             result
         }
 
-        Expr::Try { expr, ty } => Expr::Try {
-            expr: Box::new(propagate_expr(*expr, env)),
-            ty,
-        },
-
-        Expr::Concat(parts) => {
-            Expr::Concat(parts.into_iter().map(|e| propagate_expr(e, env)).collect())
-        }
-
-        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
-            handlers: handlers.into_iter().map(|(name, methods)| {
-                (name, methods.into_iter().map(|(mk, h)| (mk, propagate_expr(h, env))).collect())
-            }).collect(),
-            body: Box::new(propagate_expr(*body, env)),
-        },
-
-        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
-            body: Box::new(propagate_expr(*body, env)),
-            clauses: clauses.into_iter().map(|c| HandlerClause {
-                body: propagate_expr(c.body, env),
-                ..c
-            }).collect(),
-        },
-
-        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
-            effect,
-            method,
-            args: args.into_iter().map(|a| propagate_expr(a, env)).collect(),
-            ty,
-        },
-
-        // Literals pass through unchanged
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
+        // All other nodes: recurse into children with propagate_expr
+        other => walk_expr_children(other, |child| propagate_expr(child, env)),
     }
 }
 
@@ -385,352 +824,59 @@ const INLINE_MAX_ROUNDS: usize = 3;
 
 /// Count the number of AST nodes in an expression (for inlining budget).
 fn expr_node_count(expr: &Expr) -> usize {
-    match expr {
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
-        | Expr::Var(_, _) => 1,
-        Expr::BinOp { lhs, rhs, .. } => 1 + expr_node_count(lhs) + expr_node_count(rhs),
-        Expr::UnaryOp { operand, .. } => 1 + expr_node_count(operand),
-        Expr::And(l, r) | Expr::Or(l, r) => 1 + expr_node_count(l) + expr_node_count(r),
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            1 + expr_node_count(condition)
-                + expr_node_count(then_branch)
-                + else_branch.as_ref().map_or(0, |e| expr_node_count(e))
-        }
-        Expr::CallDirect { args, .. }
-        | Expr::CallNative { args, .. }
-        | Expr::TailCall { args, .. } => {
-            1 + args.iter().map(expr_node_count).sum::<usize>()
-        }
-        Expr::CallIndirect { callee, args, .. } => {
-            1 + expr_node_count(callee) + args.iter().map(expr_node_count).sum::<usize>()
-        }
-        Expr::Let { value, .. } => 1 + expr_node_count(value),
-        Expr::Block(exprs, _) => exprs.iter().map(expr_node_count).sum::<usize>(),
-        Expr::Match { subject, arms, .. } => {
-            1 + expr_node_count(subject)
-                + arms.iter().map(|a| expr_node_count(&a.body)).sum::<usize>()
-        }
-        Expr::Lambda { body, .. } => 1 + expr_node_count(body),
-        Expr::MakeEnum { payload, .. } => 1 + expr_node_count(payload),
-        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
-            1 + fields.iter().map(|(_, v)| expr_node_count(v)).sum::<usize>()
-        }
-        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
-            items.iter().map(expr_node_count).sum::<usize>()
-        }
-        Expr::MakeRange(s, e) => 1 + expr_node_count(s) + expr_node_count(e),
-        Expr::UpdateRecord { base, updates, .. } => {
-            1 + expr_node_count(base)
-                + updates.iter().map(|(_, v)| expr_node_count(v)).sum::<usize>()
-        }
-        Expr::GetField { object, .. } => 1 + expr_node_count(object),
-        Expr::For { iterable, body, .. } => 1 + expr_node_count(iterable) + expr_node_count(body),
-        Expr::Try { expr, .. } => 1 + expr_node_count(expr),
-        Expr::Concat(parts) => parts.iter().map(expr_node_count).sum::<usize>(),
-        Expr::WithHandlers { handlers, body, .. } => {
-            1 + handlers.iter().map(|(_, methods)| methods.iter().map(|(_, h)| expr_node_count(h)).sum::<usize>()).sum::<usize>()
-                + expr_node_count(body)
-        }
-        Expr::HandleEffect { body, clauses, .. } => {
-            1 + expr_node_count(body)
-                + clauses.iter().map(|c| expr_node_count(&c.body)).sum::<usize>()
-        }
-        Expr::PerformEffect { args, .. } => {
-            1 + args.iter().map(expr_node_count).sum::<usize>()
-        }
-    }
+    let mut count = 0;
+    visit_expr(expr, &mut |_| count += 1);
+    count
 }
 
 /// Check if an expression contains a call (direct or tail) to the named function.
 fn references_function(expr: &Expr, name: &str) -> bool {
-    match expr {
-        Expr::CallDirect {
-            name: n, args, ..
+    let mut found = false;
+    visit_expr(expr, &mut |e| {
+        if found { return; }
+        match e {
+            Expr::CallDirect { name: n, .. } | Expr::TailCall { name: n, .. } => {
+                if n == name {
+                    found = true;
+                }
+            }
+            _ => {}
         }
-        | Expr::TailCall {
-            name: n, args, ..
-        } => n == name || args.iter().any(|a| references_function(a, name)),
-        Expr::BinOp { lhs, rhs, .. } => {
-            references_function(lhs, name) || references_function(rhs, name)
-        }
-        Expr::UnaryOp { operand, .. } => references_function(operand, name),
-        Expr::And(l, r) | Expr::Or(l, r) => {
-            references_function(l, name) || references_function(r, name)
-        }
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            references_function(condition, name)
-                || references_function(then_branch, name)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|e| references_function(e, name))
-        }
-        Expr::Let { value, .. } => references_function(value, name),
-        Expr::Block(exprs, _) => exprs.iter().any(|e| references_function(e, name)),
-        Expr::Match { subject, arms, .. } => {
-            references_function(subject, name)
-                || arms.iter().any(|a| references_function(&a.body, name))
-        }
-        Expr::CallNative { args, .. } => args.iter().any(|a| references_function(a, name)),
-        Expr::CallIndirect { callee, args, .. } => {
-            references_function(callee, name)
-                || args.iter().any(|a| references_function(a, name))
-        }
-        Expr::Lambda { body, .. } => references_function(body, name),
-        Expr::MakeEnum { payload, .. } => references_function(payload, name),
-        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
-            fields.iter().any(|(_, v)| references_function(v, name))
-        }
-        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
-            items.iter().any(|e| references_function(e, name))
-        }
-        Expr::MakeRange(s, e) => references_function(s, name) || references_function(e, name),
-        Expr::UpdateRecord { base, updates, .. } => {
-            references_function(base, name)
-                || updates.iter().any(|(_, v)| references_function(v, name))
-        }
-        Expr::GetField { object, .. } => references_function(object, name),
-        Expr::For { iterable, body, .. } => {
-            references_function(iterable, name) || references_function(body, name)
-        }
-        Expr::Try { expr, .. } => references_function(expr, name),
-        Expr::Concat(parts) => parts.iter().any(|e| references_function(e, name)),
-        Expr::WithHandlers { handlers, body, .. } => {
-            handlers.iter().any(|(_, methods)| methods.iter().any(|(_, h)| references_function(h, name)))
-                || references_function(body, name)
-        }
-        Expr::HandleEffect { body, clauses, .. } => {
-            references_function(body, name)
-                || clauses.iter().any(|c| references_function(&c.body, name))
-        }
-        Expr::PerformEffect { args, .. } => {
-            args.iter().any(|a| references_function(a, name))
-        }
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
-        | Expr::Var(_, _) => false,
-    }
+    });
+    found
 }
 
 /// Rename all occurrences of variables in `rename_map` within an expression.
 fn rename_vars(expr: Expr, rename_map: &HashMap<String, String>) -> Expr {
-    match expr {
-        Expr::Var(name, ty) => {
-            if let Some(new_name) = rename_map.get(&name) {
-                Expr::Var(new_name.clone(), ty)
-            } else {
-                Expr::Var(name, ty)
+    transform_expr(expr, &mut |e| {
+        match e {
+            Expr::Var(name, ty) => {
+                if let Some(new_name) = rename_map.get(&name) {
+                    Expr::Var(new_name.clone(), ty)
+                } else {
+                    Expr::Var(name, ty)
+                }
             }
+            Expr::Let { pattern, value, ty } => {
+                let new_pattern = rename_pattern(*pattern, rename_map);
+                Expr::Let {
+                    pattern: Box::new(new_pattern),
+                    value,
+                    ty,
+                }
+            }
+            // Lambda/For shadow — need to filter rename_map
+            // Note: transform_expr already walked children with the full
+            // rename_map, which is correct because children were walked
+            // bottom-up before we get here. The shadowing only affects
+            // the body, which transform_expr already recursed into.
+            // Since transform_expr is bottom-up, the Var nodes inside
+            // were already renamed. No extra handling needed — the
+            // transform_expr walk handles this correctly because
+            // variable renaming is context-free (rename if in map).
+            other => other,
         }
-        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
-            op,
-            lhs: Box::new(rename_vars(*lhs, rename_map)),
-            rhs: Box::new(rename_vars(*rhs, rename_map)),
-            ty,
-        },
-        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
-            op,
-            operand: Box::new(rename_vars(*operand, rename_map)),
-            ty,
-        },
-        Expr::And(l, r) => Expr::And(
-            Box::new(rename_vars(*l, rename_map)),
-            Box::new(rename_vars(*r, rename_map)),
-        ),
-        Expr::Or(l, r) => Expr::Or(
-            Box::new(rename_vars(*l, rename_map)),
-            Box::new(rename_vars(*r, rename_map)),
-        ),
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ty,
-        } => Expr::If {
-            condition: Box::new(rename_vars(*condition, rename_map)),
-            then_branch: Box::new(rename_vars(*then_branch, rename_map)),
-            else_branch: else_branch.map(|e| Box::new(rename_vars(*e, rename_map))),
-            ty,
-        },
-        Expr::CallDirect { name, args, ty } => Expr::CallDirect {
-            name,
-            args: args
-                .into_iter()
-                .map(|a| rename_vars(a, rename_map))
-                .collect(),
-            ty,
-        },
-        Expr::TailCall { name, args, ty } => Expr::TailCall {
-            name,
-            args: args
-                .into_iter()
-                .map(|a| rename_vars(a, rename_map))
-                .collect(),
-            ty,
-        },
-        Expr::CallNative {
-            module,
-            method,
-            args,
-            ty,
-        } => Expr::CallNative {
-            module,
-            method,
-            args: args
-                .into_iter()
-                .map(|a| rename_vars(a, rename_map))
-                .collect(),
-            ty,
-        },
-        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
-            callee: Box::new(rename_vars(*callee, rename_map)),
-            args: args
-                .into_iter()
-                .map(|a| rename_vars(a, rename_map))
-                .collect(),
-            ty,
-        },
-        Expr::Let { pattern, value, ty } => {
-            let new_pattern = rename_pattern(*pattern, rename_map);
-            Expr::Let {
-                pattern: Box::new(new_pattern),
-                value: Box::new(rename_vars(*value, rename_map)),
-                ty,
-            }
-        }
-        Expr::Block(exprs, ty) => Expr::Block(
-            exprs
-                .into_iter()
-                .map(|e| rename_vars(e, rename_map))
-                .collect(),
-            ty,
-        ),
-        Expr::Match { subject, arms, ty } => Expr::Match {
-            subject: Box::new(rename_vars(*subject, rename_map)),
-            arms: arms
-                .into_iter()
-                .map(|arm| MatchArm {
-                    pattern: arm.pattern,
-                    body: rename_vars(arm.body, rename_map),
-                })
-                .collect(),
-            ty,
-        },
-        Expr::Lambda { params, body, ty } => {
-            // Lambda params shadow — don't rename inside if shadowed
-            let mut inner_map = rename_map.clone();
-            for p in &params {
-                inner_map.remove(p);
-            }
-            Expr::Lambda {
-                params,
-                body: Box::new(rename_vars(*body, &inner_map)),
-                ty,
-            }
-        }
-        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
-            tag,
-            payload: Box::new(rename_vars(*payload, rename_map)),
-            ty,
-        },
-        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
-            name,
-            fields: fields
-                .into_iter()
-                .map(|(k, v)| (k, rename_vars(v, rename_map)))
-                .collect(),
-            ty,
-        },
-        Expr::MakeList(items, ty) => Expr::MakeList(
-            items
-                .into_iter()
-                .map(|e| rename_vars(e, rename_map))
-                .collect(),
-            ty,
-        ),
-        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
-            fields
-                .into_iter()
-                .map(|(k, v)| (k, rename_vars(v, rename_map)))
-                .collect(),
-            ty,
-        ),
-        Expr::MakeTuple(items, ty) => Expr::MakeTuple(
-            items
-                .into_iter()
-                .map(|e| rename_vars(e, rename_map))
-                .collect(),
-            ty,
-        ),
-        Expr::MakeRange(s, e) => Expr::MakeRange(
-            Box::new(rename_vars(*s, rename_map)),
-            Box::new(rename_vars(*e, rename_map)),
-        ),
-        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
-            base: Box::new(rename_vars(*base, rename_map)),
-            updates: updates
-                .into_iter()
-                .map(|(k, v)| (k, rename_vars(v, rename_map)))
-                .collect(),
-            ty,
-        },
-        Expr::GetField { object, field, ty } => Expr::GetField {
-            object: Box::new(rename_vars(*object, rename_map)),
-            field,
-            ty,
-        },
-        Expr::For {
-            binding,
-            iterable,
-            body,
-        } => {
-            let mut inner_map = rename_map.clone();
-            inner_map.remove(&binding);
-            Expr::For {
-                binding,
-                iterable: Box::new(rename_vars(*iterable, rename_map)),
-                body: Box::new(rename_vars(*body, &inner_map)),
-            }
-        }
-        Expr::Try { expr, ty } => Expr::Try {
-            expr: Box::new(rename_vars(*expr, rename_map)),
-            ty,
-        },
-        Expr::Concat(parts) => Expr::Concat(
-            parts
-                .into_iter()
-                .map(|e| rename_vars(e, rename_map))
-                .collect(),
-        ),
-        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
-            handlers: handlers.into_iter().map(|(name, methods)| {
-                (name, methods.into_iter().map(|(mk, h)| (mk, rename_vars(h, rename_map))).collect())
-            }).collect(),
-            body: Box::new(rename_vars(*body, rename_map)),
-        },
-        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
-            body: Box::new(rename_vars(*body, rename_map)),
-            clauses: clauses.into_iter().map(|c| HandlerClause {
-                body: rename_vars(c.body, rename_map),
-                ..c
-            }).collect(),
-        },
-        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
-            effect,
-            method,
-            args: args.into_iter().map(|a| rename_vars(a, rename_map)).collect(),
-            ty,
-        },
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => expr,
-    }
+    })
 }
 
 fn rename_pattern(pattern: Pattern, rename_map: &HashMap<String, String>) -> Pattern {
@@ -796,217 +942,32 @@ fn inline_expr(
     inlineable: &HashMap<String, (Vec<String>, Expr)>,
     counter: &mut usize,
 ) -> Expr {
-    match expr {
-        Expr::CallDirect { name, args, ty } => {
-            let args: Vec<Expr> = args
-                .into_iter()
-                .map(|a| inline_expr(a, inlineable, counter))
-                .collect();
-
-            if let Some((params, body)) = inlineable.get(&name)
-                && params.len() == args.len()
-            {
-                // Build let bindings with fresh names
-                let mut stmts = Vec::new();
-                let mut rename_map = HashMap::new();
-                for (param, arg) in params.iter().zip(args) {
-                    let fresh = format!("__inl_{}_{}", param, *counter);
-                    *counter += 1;
-                    rename_map.insert(param.clone(), fresh.clone());
-                    stmts.push(Expr::Let {
-                        pattern: Box::new(Pattern::Var(fresh)),
-                        value: Box::new(arg),
-                        ty: None,
-                    });
+    // Use transform_expr for the recursive walk, intercept at CallDirect
+    transform_expr(expr, &mut |e| {
+        if let Expr::CallDirect { name, args, ty } = &e {
+            if let Some((params, body)) = inlineable.get(name) {
+                if params.len() == args.len() {
+                    // Build let bindings with fresh names
+                    let mut stmts = Vec::new();
+                    let mut rename_map = HashMap::new();
+                    for (param, arg) in params.iter().zip(args.iter()) {
+                        let fresh = format!("__inl_{}_{}", param, *counter);
+                        *counter += 1;
+                        rename_map.insert(param.clone(), fresh.clone());
+                        stmts.push(Expr::Let {
+                            pattern: Box::new(Pattern::Var(fresh)),
+                            value: Box::new(arg.clone()),
+                            ty: None,
+                        });
+                    }
+                    let inlined_body = rename_vars(body.clone(), &rename_map);
+                    stmts.push(inlined_body);
+                    return Expr::Block(stmts, ty.clone());
                 }
-                let inlined_body = rename_vars(body.clone(), &rename_map);
-                stmts.push(inlined_body);
-                return Expr::Block(stmts, ty);
             }
-            Expr::CallDirect { name, args, ty }
         }
-        // Recurse into subexpressions
-        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
-            op,
-            lhs: Box::new(inline_expr(*lhs, inlineable, counter)),
-            rhs: Box::new(inline_expr(*rhs, inlineable, counter)),
-            ty,
-        },
-        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
-            op,
-            operand: Box::new(inline_expr(*operand, inlineable, counter)),
-            ty,
-        },
-        Expr::And(l, r) => Expr::And(
-            Box::new(inline_expr(*l, inlineable, counter)),
-            Box::new(inline_expr(*r, inlineable, counter)),
-        ),
-        Expr::Or(l, r) => Expr::Or(
-            Box::new(inline_expr(*l, inlineable, counter)),
-            Box::new(inline_expr(*r, inlineable, counter)),
-        ),
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ty,
-        } => Expr::If {
-            condition: Box::new(inline_expr(*condition, inlineable, counter)),
-            then_branch: Box::new(inline_expr(*then_branch, inlineable, counter)),
-            else_branch: else_branch.map(|e| Box::new(inline_expr(*e, inlineable, counter))),
-            ty,
-        },
-        Expr::Let { pattern, value, ty } => Expr::Let {
-            pattern,
-            value: Box::new(inline_expr(*value, inlineable, counter)),
-            ty,
-        },
-        Expr::Block(exprs, ty) => Expr::Block(
-            exprs
-                .into_iter()
-                .map(|e| inline_expr(e, inlineable, counter))
-                .collect(),
-            ty,
-        ),
-        Expr::Match { subject, arms, ty } => Expr::Match {
-            subject: Box::new(inline_expr(*subject, inlineable, counter)),
-            arms: arms
-                .into_iter()
-                .map(|arm| MatchArm {
-                    pattern: arm.pattern,
-                    body: inline_expr(arm.body, inlineable, counter),
-                })
-                .collect(),
-            ty,
-        },
-        Expr::TailCall { name, args, ty } => Expr::TailCall {
-            name,
-            args: args
-                .into_iter()
-                .map(|a| inline_expr(a, inlineable, counter))
-                .collect(),
-            ty,
-        },
-        Expr::CallNative {
-            module,
-            method,
-            args,
-            ty,
-        } => Expr::CallNative {
-            module,
-            method,
-            args: args
-                .into_iter()
-                .map(|a| inline_expr(a, inlineable, counter))
-                .collect(),
-            ty,
-        },
-        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
-            callee: Box::new(inline_expr(*callee, inlineable, counter)),
-            args: args
-                .into_iter()
-                .map(|a| inline_expr(a, inlineable, counter))
-                .collect(),
-            ty,
-        },
-        Expr::Lambda { params, body, ty } => Expr::Lambda {
-            params,
-            body: Box::new(inline_expr(*body, inlineable, counter)),
-            ty,
-        },
-        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
-            tag,
-            payload: Box::new(inline_expr(*payload, inlineable, counter)),
-            ty,
-        },
-        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
-            name,
-            fields: fields
-                .into_iter()
-                .map(|(k, v)| (k, inline_expr(v, inlineable, counter)))
-                .collect(),
-            ty,
-        },
-        Expr::MakeList(items, ty) => Expr::MakeList(
-            items
-                .into_iter()
-                .map(|e| inline_expr(e, inlineable, counter))
-                .collect(),
-            ty,
-        ),
-        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
-            fields
-                .into_iter()
-                .map(|(k, v)| (k, inline_expr(v, inlineable, counter)))
-                .collect(),
-            ty,
-        ),
-        Expr::MakeTuple(items, ty) => Expr::MakeTuple(
-            items
-                .into_iter()
-                .map(|e| inline_expr(e, inlineable, counter))
-                .collect(),
-            ty,
-        ),
-        Expr::MakeRange(s, e) => Expr::MakeRange(
-            Box::new(inline_expr(*s, inlineable, counter)),
-            Box::new(inline_expr(*e, inlineable, counter)),
-        ),
-        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
-            base: Box::new(inline_expr(*base, inlineable, counter)),
-            updates: updates
-                .into_iter()
-                .map(|(k, v)| (k, inline_expr(v, inlineable, counter)))
-                .collect(),
-            ty,
-        },
-        Expr::GetField { object, field, ty } => Expr::GetField {
-            object: Box::new(inline_expr(*object, inlineable, counter)),
-            field,
-            ty,
-        },
-        Expr::For {
-            binding,
-            iterable,
-            body,
-        } => Expr::For {
-            binding,
-            iterable: Box::new(inline_expr(*iterable, inlineable, counter)),
-            body: Box::new(inline_expr(*body, inlineable, counter)),
-        },
-        Expr::Try { expr, ty } => Expr::Try {
-            expr: Box::new(inline_expr(*expr, inlineable, counter)),
-            ty,
-        },
-        Expr::Concat(parts) => Expr::Concat(
-            parts
-                .into_iter()
-                .map(|e| inline_expr(e, inlineable, counter))
-                .collect(),
-        ),
-        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
-            handlers: handlers.into_iter().map(|(name, methods)| {
-                (name, methods.into_iter().map(|(mk, h)| (mk, inline_expr(h, inlineable, counter))).collect())
-            }).collect(),
-            body: Box::new(inline_expr(*body, inlineable, counter)),
-        },
-        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
-            body: Box::new(inline_expr(*body, inlineable, counter)),
-            clauses: clauses.into_iter().map(|c| HandlerClause {
-                body: inline_expr(c.body, inlineable, counter),
-                ..c
-            }).collect(),
-        },
-        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
-            effect,
-            method,
-            args: args.into_iter().map(|a| inline_expr(a, inlineable, counter)).collect(),
-            ty,
-        },
-        // Literals pass through
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
-        | Expr::Var(_, _) => expr,
-    }
+        e
+    })
 }
 
 /// Shallow structural equality check (for detecting if inlining changed anything).
@@ -1022,13 +983,11 @@ fn exprs_equal(a: &Expr, b: &Expr) -> bool {
 /// Simplify blocks: remove non-final Unit expressions, flatten nested blocks,
 /// unwrap single-element blocks.
 fn simplify_blocks(expr: Expr) -> Expr {
-    match expr {
-        Expr::Block(exprs, ty) => {
-            // Recursively simplify children first
+    transform_expr(expr, &mut |e| {
+        if let Expr::Block(exprs, ty) = e {
+            // Flatten nested blocks
             let mut simplified: Vec<Expr> = Vec::new();
             for e in exprs {
-                let e = simplify_blocks(e);
-                // Flatten nested blocks
                 if let Expr::Block(inner, _) = e {
                     simplified.extend(inner);
                 } else {
@@ -1046,167 +1005,10 @@ fn simplify_blocks(expr: Expr) -> Expr {
                 return simplified.into_iter().next().unwrap();
             }
             Expr::Block(simplified, ty)
+        } else {
+            e
         }
-        // Recurse into all other expression types
-        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
-            op,
-            lhs: Box::new(simplify_blocks(*lhs)),
-            rhs: Box::new(simplify_blocks(*rhs)),
-            ty,
-        },
-        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
-            op,
-            operand: Box::new(simplify_blocks(*operand)),
-            ty,
-        },
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ty,
-        } => Expr::If {
-            condition: Box::new(simplify_blocks(*condition)),
-            then_branch: Box::new(simplify_blocks(*then_branch)),
-            else_branch: else_branch.map(|e| Box::new(simplify_blocks(*e))),
-            ty,
-        },
-        Expr::Let { pattern, value, ty } => Expr::Let {
-            pattern,
-            value: Box::new(simplify_blocks(*value)),
-            ty,
-        },
-        Expr::CallDirect { name, args, ty } => Expr::CallDirect {
-            name,
-            args: args.into_iter().map(simplify_blocks).collect(),
-            ty,
-        },
-        Expr::TailCall { name, args, ty } => Expr::TailCall {
-            name,
-            args: args.into_iter().map(simplify_blocks).collect(),
-            ty,
-        },
-        Expr::CallNative {
-            module,
-            method,
-            args,
-            ty,
-        } => Expr::CallNative {
-            module,
-            method,
-            args: args.into_iter().map(simplify_blocks).collect(),
-            ty,
-        },
-        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
-            callee: Box::new(simplify_blocks(*callee)),
-            args: args.into_iter().map(simplify_blocks).collect(),
-            ty,
-        },
-        Expr::And(l, r) => Expr::And(
-            Box::new(simplify_blocks(*l)),
-            Box::new(simplify_blocks(*r)),
-        ),
-        Expr::Or(l, r) => Expr::Or(
-            Box::new(simplify_blocks(*l)),
-            Box::new(simplify_blocks(*r)),
-        ),
-        Expr::Match { subject, arms, ty } => Expr::Match {
-            subject: Box::new(simplify_blocks(*subject)),
-            arms: arms
-                .into_iter()
-                .map(|arm| MatchArm {
-                    pattern: arm.pattern,
-                    body: simplify_blocks(arm.body),
-                })
-                .collect(),
-            ty,
-        },
-        Expr::Lambda { params, body, ty } => Expr::Lambda {
-            params,
-            body: Box::new(simplify_blocks(*body)),
-            ty,
-        },
-        Expr::MakeEnum { tag, payload, ty } => Expr::MakeEnum {
-            tag,
-            payload: Box::new(simplify_blocks(*payload)),
-            ty,
-        },
-        Expr::MakeStruct { name, fields, ty } => Expr::MakeStruct {
-            name,
-            fields: fields
-                .into_iter()
-                .map(|(k, v)| (k, simplify_blocks(v)))
-                .collect(),
-            ty,
-        },
-        Expr::MakeList(items, ty) => {
-            Expr::MakeList(items.into_iter().map(simplify_blocks).collect(), ty)
-        }
-        Expr::MakeRecord(fields, ty) => Expr::MakeRecord(
-            fields
-                .into_iter()
-                .map(|(k, v)| (k, simplify_blocks(v)))
-                .collect(),
-            ty,
-        ),
-        Expr::MakeTuple(items, ty) => {
-            Expr::MakeTuple(items.into_iter().map(simplify_blocks).collect(), ty)
-        }
-        Expr::MakeRange(s, e) => Expr::MakeRange(
-            Box::new(simplify_blocks(*s)),
-            Box::new(simplify_blocks(*e)),
-        ),
-        Expr::UpdateRecord { base, updates, ty } => Expr::UpdateRecord {
-            base: Box::new(simplify_blocks(*base)),
-            updates: updates
-                .into_iter()
-                .map(|(k, v)| (k, simplify_blocks(v)))
-                .collect(),
-            ty,
-        },
-        Expr::GetField { object, field, ty } => Expr::GetField {
-            object: Box::new(simplify_blocks(*object)),
-            field,
-            ty,
-        },
-        Expr::For {
-            binding,
-            iterable,
-            body,
-        } => Expr::For {
-            binding,
-            iterable: Box::new(simplify_blocks(*iterable)),
-            body: Box::new(simplify_blocks(*body)),
-        },
-        Expr::Try { expr, ty } => Expr::Try {
-            expr: Box::new(simplify_blocks(*expr)),
-            ty,
-        },
-        Expr::Concat(parts) => {
-            Expr::Concat(parts.into_iter().map(simplify_blocks).collect())
-        }
-        Expr::WithHandlers { handlers, body } => Expr::WithHandlers {
-            handlers: handlers.into_iter().map(|(name, methods)| {
-                (name, methods.into_iter().map(|(mk, h)| (mk, simplify_blocks(h))).collect())
-            }).collect(),
-            body: Box::new(simplify_blocks(*body)),
-        },
-        Expr::HandleEffect { body, clauses } => Expr::HandleEffect {
-            body: Box::new(simplify_blocks(*body)),
-            clauses: clauses.into_iter().map(|c| HandlerClause {
-                body: simplify_blocks(c.body),
-                ..c
-            }).collect(),
-        },
-        Expr::PerformEffect { effect, method, args, ty } => Expr::PerformEffect {
-            effect,
-            method,
-            args: args.into_iter().map(simplify_blocks).collect(),
-            ty,
-        },
-        // Leaves pass through
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole
-        | Expr::Var(_, _) => expr,
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,223 +1022,28 @@ fn eliminate_dead_lets(expr: Expr) -> Expr {
     remove_dead_lets(expr, &counts)
 }
 
+/// Count variable references in an expression tree.
 fn count_var_uses(expr: &Expr, counts: &mut HashMap<String, usize>) {
-    match expr {
-        Expr::Var(name, _) => {
+    visit_expr(expr, &mut |e| {
+        if let Expr::Var(name, _) = e {
             *counts.entry(name.clone()).or_insert(0) += 1;
         }
-        Expr::Let { value, .. } => {
-            count_var_uses(value, counts);
-        }
-        Expr::Block(exprs, _) => {
-            for e in exprs {
-                count_var_uses(e, counts);
-            }
-        }
-        Expr::BinOp { lhs, rhs, .. } => {
-            count_var_uses(lhs, counts);
-            count_var_uses(rhs, counts);
-        }
-        Expr::UnaryOp { operand, .. } => {
-            count_var_uses(operand, counts);
-        }
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            count_var_uses(condition, counts);
-            count_var_uses(then_branch, counts);
-            if let Some(e) = else_branch {
-                count_var_uses(e, counts);
-            }
-        }
-        Expr::Match { subject, arms, .. } => {
-            count_var_uses(subject, counts);
-            for arm in arms {
-                count_var_uses(&arm.body, counts);
-            }
-        }
-        Expr::CallDirect { args, .. }
-        | Expr::CallNative { args, .. }
-        | Expr::TailCall { args, .. } => {
-            for a in args {
-                count_var_uses(a, counts);
-            }
-        }
-        Expr::CallIndirect { callee, args, .. } => {
-            count_var_uses(callee, counts);
-            for a in args {
-                count_var_uses(a, counts);
-            }
-        }
-        Expr::MakeEnum { payload, .. } => {
-            count_var_uses(payload, counts);
-        }
-        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
-            for (_, v) in fields {
-                count_var_uses(v, counts);
-            }
-        }
-        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
-            for item in items {
-                count_var_uses(item, counts);
-            }
-        }
-        Expr::MakeRange(start, end) => {
-            count_var_uses(start, counts);
-            count_var_uses(end, counts);
-        }
-        Expr::UpdateRecord { base, updates, .. } => {
-            count_var_uses(base, counts);
-            for (_, v) in updates {
-                count_var_uses(v, counts);
-            }
-        }
-        Expr::GetField { object, .. } => {
-            count_var_uses(object, counts);
-        }
-        Expr::And(lhs, rhs) | Expr::Or(lhs, rhs) => {
-            count_var_uses(lhs, counts);
-            count_var_uses(rhs, counts);
-        }
-        Expr::For { iterable, body, .. } => {
-            count_var_uses(iterable, counts);
-            count_var_uses(body, counts);
-        }
-        Expr::Lambda { body, .. } => {
-            count_var_uses(body, counts);
-        }
-        Expr::Try { expr, .. } => {
-            count_var_uses(expr, counts);
-        }
-        Expr::Concat(parts) => {
-            for p in parts {
-                count_var_uses(p, counts);
-            }
-        }
-        Expr::WithHandlers { handlers, body, .. } => {
-            for (_, methods) in handlers {
-                for (_, h) in methods {
-                    count_var_uses(h, counts);
-                }
-            }
-            count_var_uses(body, counts);
-        }
-        Expr::HandleEffect { body, clauses, .. } => {
-            count_var_uses(body, counts);
-            for c in clauses {
-                count_var_uses(&c.body, counts);
-            }
-        }
-        Expr::PerformEffect { args, .. } => {
-            for a in args {
-                count_var_uses(a, counts);
-            }
-        }
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => {}
-    }
+    });
 }
 
+/// Remove dead let bindings (literal-valued, zero references).
 fn remove_dead_lets(expr: Expr, counts: &HashMap<String, usize>) -> Expr {
-    match expr {
-        Expr::Let { pattern, value, ty } => {
-            let value = remove_dead_lets(*value, counts);
-            // Only eliminate if: simple var binding, literal value, zero references
-            if let Pattern::Var(ref name) = *pattern
-                && is_literal(&value)
+    transform_expr(expr, &mut |e| {
+        if let Expr::Let { ref pattern, ref value, .. } = e {
+            if let Pattern::Var(ref name) = **pattern
+                && is_literal(value)
                 && counts.get(name).copied().unwrap_or(0) == 0
             {
                 return Expr::Unit;
             }
-            Expr::Let {
-                pattern,
-                value: Box::new(value),
-                ty,
-            }
         }
-        Expr::Block(exprs, ty) => {
-            let exprs: Vec<Expr> = exprs
-                .into_iter()
-                .map(|e| remove_dead_lets(e, counts))
-                .collect();
-            Expr::Block(exprs, ty)
-        }
-        Expr::BinOp { op, lhs, rhs, ty } => Expr::BinOp {
-            op,
-            lhs: Box::new(remove_dead_lets(*lhs, counts)),
-            rhs: Box::new(remove_dead_lets(*rhs, counts)),
-            ty,
-        },
-        Expr::UnaryOp { op, operand, ty } => Expr::UnaryOp {
-            op,
-            operand: Box::new(remove_dead_lets(*operand, counts)),
-            ty,
-        },
-        Expr::If {
-            condition,
-            then_branch,
-            else_branch,
-            ty,
-        } => Expr::If {
-            condition: Box::new(remove_dead_lets(*condition, counts)),
-            then_branch: Box::new(remove_dead_lets(*then_branch, counts)),
-            else_branch: else_branch.map(|e| Box::new(remove_dead_lets(*e, counts))),
-            ty,
-        },
-        Expr::Match { subject, arms, ty } => Expr::Match {
-            subject: Box::new(remove_dead_lets(*subject, counts)),
-            arms: arms
-                .into_iter()
-                .map(|arm| MatchArm {
-                    pattern: arm.pattern,
-                    body: remove_dead_lets(arm.body, counts),
-                })
-                .collect(),
-            ty,
-        },
-        Expr::CallDirect { name, args, ty } => Expr::CallDirect {
-            name,
-            args: args
-                .into_iter()
-                .map(|a| remove_dead_lets(a, counts))
-                .collect(),
-            ty,
-        },
-        Expr::CallNative {
-            module,
-            method,
-            args,
-            ty,
-        } => Expr::CallNative {
-            module,
-            method,
-            args: args
-                .into_iter()
-                .map(|a| remove_dead_lets(a, counts))
-                .collect(),
-            ty,
-        },
-        Expr::CallIndirect { callee, args, ty } => Expr::CallIndirect {
-            callee: Box::new(remove_dead_lets(*callee, counts)),
-            args: args
-                .into_iter()
-                .map(|a| remove_dead_lets(a, counts))
-                .collect(),
-            ty,
-        },
-        Expr::TailCall { name, args, ty } => Expr::TailCall {
-            name,
-            args: args
-                .into_iter()
-                .map(|a| remove_dead_lets(a, counts))
-                .collect(),
-            ty,
-        },
-        // Everything else: return as-is (literals, Var, etc.)
-        other => other,
-    }
+        e
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -1467,6 +1074,7 @@ mod tests {
                 span: dummy_span(),
             }],
             entry: 0,
+            tags: TagRegistry::new(),
         }
     }
 
@@ -1755,6 +1363,7 @@ mod tests {
                 },
             ],
             entry: 0,
+            tags: TagRegistry::new(),
         }
     }
 
@@ -1980,6 +1589,7 @@ mod tests {
                 },
             ],
             entry: 0,
+            tags: TagRegistry::new(),
         };
 
         let mut module = module;
@@ -2016,5 +1626,204 @@ mod tests {
         };
         assert!(references_function(&body, "f"));
         assert!(!references_function(&body, "g"));
+    }
+
+    #[test]
+    fn build_tag_registry_collects_tags() {
+        // MakeEnum + match with constructor patterns
+        let body = Expr::Block(
+            vec![
+                Expr::MakeEnum {
+                    tag: "MyTag".into(),
+                    payload: Box::new(Expr::Int(1)),
+                    ty: None,
+                },
+                Expr::Match {
+                    subject: Box::new(Expr::Var("x".into(), None)),
+                    arms: vec![
+                        MatchArm {
+                            pattern: Pattern::Constructor("Some".into(), vec![Pattern::Var("v".into())]),
+                            body: Expr::Int(1),
+                        },
+                        MatchArm {
+                            pattern: Pattern::Constructor("None".into(), vec![]),
+                            body: Expr::Int(0),
+                        },
+                    ],
+                    ty: None,
+                },
+            ],
+            None,
+        );
+
+        let mut module = make_module(body);
+        optimize(&mut module);
+
+        // Well-known tags + MyTag should all be registered
+        assert!(module.tags.get_id("None").is_some());
+        assert!(module.tags.get_id("Some").is_some());
+        assert!(module.tags.get_id("MyTag").is_some());
+    }
+
+    // -- Lambda lifting tests --
+
+    #[test]
+    fn free_vars_simple() {
+        use std::collections::HashSet;
+        // |x| x + y → free vars = {y}
+        let expr = Expr::BinOp {
+            op: BinOp::Add,
+            lhs: Box::new(Expr::Var("x".into(), None)),
+            rhs: Box::new(Expr::Var("y".into(), None)),
+            ty: None,
+        };
+        let bound: HashSet<String> = ["x".into()].into();
+        let top: HashSet<String> = HashSet::new();
+        let fvs = super::free_vars(&expr, &bound, &top);
+        assert_eq!(fvs, ["y".into()].into());
+    }
+
+    #[test]
+    fn free_vars_excludes_top_level() {
+        use std::collections::HashSet;
+        // |x| foo(x) → foo is top-level, not free
+        let expr = Expr::CallDirect {
+            name: "foo".into(),
+            args: vec![Expr::Var("x".into(), None)],
+            ty: None,
+        };
+        let bound: HashSet<String> = ["x".into()].into();
+        let top: HashSet<String> = ["foo".into()].into();
+        let fvs = super::free_vars(&expr, &bound, &top);
+        assert!(fvs.is_empty());
+    }
+
+    #[test]
+    fn free_vars_nested_let() {
+        use std::collections::HashSet;
+        // { let a = y; a + z } → free = {y, z}
+        let expr = Expr::Block(
+            vec![
+                Expr::Let {
+                    pattern: Box::new(Pattern::Var("a".into())),
+                    value: Box::new(Expr::Var("y".into(), None)),
+                    ty: None,
+                },
+                Expr::BinOp {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Var("a".into(), None)),
+                    rhs: Box::new(Expr::Var("z".into(), None)),
+                    ty: None,
+                },
+            ],
+            None,
+        );
+        let bound: HashSet<String> = HashSet::new();
+        let top: HashSet<String> = HashSet::new();
+        let fvs = super::free_vars(&expr, &bound, &top);
+        assert!(fvs.contains("y"));
+        assert!(fvs.contains("z"));
+        assert!(!fvs.contains("a")); // bound by let
+    }
+
+    #[test]
+    fn lift_lambda_no_captures() {
+        // main() = let f = |x| x + 1; f
+        let body = Expr::Block(
+            vec![
+                Expr::Let {
+                    pattern: Box::new(Pattern::Var("f".into())),
+                    value: Box::new(Expr::Lambda {
+                        params: vec!["x".into()],
+                        body: Box::new(Expr::BinOp {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Var("x".into(), None)),
+                            rhs: Box::new(Expr::Int(1)),
+                            ty: None,
+                        }),
+                        ty: None,
+                    }),
+                    ty: None,
+                },
+                Expr::Var("f".into(), None),
+            ],
+            None,
+        );
+
+        let mut module = make_module(body);
+        optimize(&mut module);
+
+        // Should have lifted the lambda into a new function
+        assert!(
+            module.functions.len() > 1,
+            "Expected lifted function, got {} functions",
+            module.functions.len()
+        );
+        // The lifted function should have name starting with __lambda_
+        let lifted = module.functions.last().unwrap();
+        assert!(lifted.name.starts_with("__lambda_"), "Got: {}", lifted.name);
+        // No __closure param (zero captures)
+        assert!(
+            !lifted.params.contains(&"__closure".to_string()),
+            "Zero-capture lambda should not have __closure param"
+        );
+    }
+
+    #[test]
+    fn lift_lambda_with_captures() {
+        // main(y) = let f = |x| x + y; f
+        // y is a function param, not a literal, so it won't be propagated away
+        let body = Expr::Block(
+            vec![
+                Expr::Let {
+                    pattern: Box::new(Pattern::Var("f".into())),
+                    value: Box::new(Expr::Lambda {
+                        params: vec!["x".into()],
+                        body: Box::new(Expr::BinOp {
+                            op: BinOp::Add,
+                            lhs: Box::new(Expr::Var("x".into(), None)),
+                            rhs: Box::new(Expr::Var("y".into(), None)),
+                            ty: None,
+                        }),
+                        ty: None,
+                    }),
+                    ty: None,
+                },
+                Expr::Var("f".into(), None),
+            ],
+            None,
+        );
+
+        let mut module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec!["y".into()],
+                body,
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        optimize(&mut module);
+
+        // Should have lifted function
+        assert!(
+            module.functions.len() > 1,
+            "Expected lifted function, got {} functions",
+            module.functions.len()
+        );
+        let lifted = module.functions.last().unwrap();
+        assert!(lifted.name.starts_with("__lambda_"), "Got: {}", lifted.name);
+        // Should have __closure as first param
+        assert_eq!(lifted.params[0], "__closure");
+        // Body should contain GetClosureVar(0) for 'y'
+        let mut found_closure_var = false;
+        super::visit_expr(&lifted.body, &mut |e| {
+            if matches!(e, Expr::GetClosureVar(0)) {
+                found_closure_var = true;
+            }
+        });
+        assert!(found_closure_var, "Expected GetClosureVar(0) in lifted body");
     }
 }

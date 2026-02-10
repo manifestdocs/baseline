@@ -1322,6 +1322,47 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 Ok(self.builder.block_params(merge_block)[0])
             }
 
+            Expr::TailCallIndirect { callee, args, .. } => {
+                let callee_val = self.compile_expr(callee)?;
+                let compiled_args: Vec<CValue> = args
+                    .iter()
+                    .map(|a| self.compile_expr(a))
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                // Check if closure or plain function
+                let is_closure = self.call_helper("jit_is_closure", &[callee_val]);
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                let cmp = self.builder.ins().icmp(IntCC::NotEqual, is_closure, zero);
+
+                let closure_block = self.builder.create_block();
+                let function_block = self.builder.create_block();
+                self.builder.ins().brif(cmp, closure_block, &[], function_block, &[]);
+
+                // Closure path: return_call_indirect(sig_N+1, fn_ptr, [closure, args...])
+                self.builder.switch_to_block(closure_block);
+                self.builder.seal_block(closure_block);
+                let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
+                let mut cargs = vec![callee_val];
+                cargs.extend(&compiled_args);
+                let closure_sig = self.build_indirect_sig(args.len() + 1);
+                let sig_ref_c = self.builder.import_signature(closure_sig);
+                self.builder.ins().return_call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+
+                // Function path: return_call_indirect(sig_N, fn_ptr, [args...])
+                self.builder.switch_to_block(function_block);
+                self.builder.seal_block(function_block);
+                let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+                let func_sig = self.build_indirect_sig(args.len());
+                let sig_ref_f = self.builder.import_signature(func_sig);
+                self.builder.ins().return_call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
+
+                // Dead block (unreachable, but Cranelift needs a current block)
+                let dead_block = self.builder.create_block();
+                self.builder.switch_to_block(dead_block);
+                self.builder.seal_block(dead_block);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+
             // Remaining unsupported constructs
             _ => Err(format!("Unsupported expression in JIT: {:?}", expr)),
         }
@@ -1336,6 +1377,22 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
         }
         sig.returns.push(AbiParam::new(types::I64));
         sig
+    }
+
+    /// Create MemFlags with `readonly` set.
+    ///
+    /// Use this for loads from immutable data (constant pools, frozen record fields).
+    /// Tells Cranelift the memory won't change, enabling load-load reordering and CSE.
+    ///
+    /// NOTE: Currently unused because all field access goes through opaque runtime
+    /// helpers. When direct memory loads are added (bypassing `jit_get_field`), every
+    /// load from immutable data MUST use these flags.
+    #[allow(dead_code)]
+    fn readonly_mem_flags() -> cranelift_codegen::ir::MemFlags {
+        let mut flags = cranelift_codegen::ir::MemFlags::new();
+        flags.set_readonly();
+        flags.set_aligned();
+        flags
     }
 
     // -- Match compilation --
@@ -1848,7 +1905,8 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
             | Expr::TailCall { args, .. } => {
                 args.iter().any(|a| Self::var_escapes_in_expr(a, name))
             }
-            Expr::CallIndirect { callee, args, .. } => {
+            Expr::CallIndirect { callee, args, .. }
+            | Expr::TailCallIndirect { callee, args, .. } => {
                 Self::var_escapes_in_expr(callee, name)
                     || args.iter().any(|a| Self::var_escapes_in_expr(a, name))
             }

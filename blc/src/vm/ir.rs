@@ -1,4 +1,66 @@
+use std::collections::HashMap;
+
 use crate::analysis::types::Type;
+
+// ---------------------------------------------------------------------------
+// Tag Registry — compile-time integer IDs for enum tags
+// ---------------------------------------------------------------------------
+
+/// Maps enum tag strings to integer IDs for fast dispatch.
+///
+/// Pre-registers well-known tags (None=0, Some=1, Ok=2, Err=3).
+/// Additional tags are assigned IDs as they are discovered during IR scanning.
+#[derive(Debug, Clone)]
+pub struct TagRegistry {
+    tag_to_id: HashMap<String, u32>,
+    id_to_tag: Vec<String>,
+}
+
+impl TagRegistry {
+    /// Create a new registry with well-known tags pre-registered.
+    pub fn new() -> Self {
+        let well_known = ["None", "Some", "Ok", "Err"];
+        let mut tag_to_id = HashMap::new();
+        let mut id_to_tag = Vec::new();
+        for (i, tag) in well_known.iter().enumerate() {
+            tag_to_id.insert(tag.to_string(), i as u32);
+            id_to_tag.push(tag.to_string());
+        }
+        TagRegistry { tag_to_id, id_to_tag }
+    }
+
+    /// Register a tag, returning its ID. Idempotent — returns existing ID if already registered.
+    pub fn register(&mut self, tag: &str) -> u32 {
+        if let Some(&id) = self.tag_to_id.get(tag) {
+            return id;
+        }
+        let id = self.id_to_tag.len() as u32;
+        self.tag_to_id.insert(tag.to_string(), id);
+        self.id_to_tag.push(tag.to_string());
+        id
+    }
+
+    /// Look up the integer ID for a tag, returning None if not registered.
+    pub fn get_id(&self, tag: &str) -> Option<u32> {
+        self.tag_to_id.get(tag).copied()
+    }
+
+    /// Look up the tag string for an ID.
+    pub fn get_tag(&self, id: u32) -> Option<&str> {
+        self.id_to_tag.get(id as usize).map(|s| s.as_str())
+    }
+
+    /// Number of registered tags.
+    pub fn len(&self) -> usize {
+        self.id_to_tag.len()
+    }
+}
+
+impl Default for TagRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 // ---------------------------------------------------------------------------
 // IR Module & Function
@@ -10,6 +72,8 @@ pub struct IrModule {
     pub functions: Vec<IrFunction>,
     /// Index of main/main! in `functions`.
     pub entry: usize,
+    /// Compile-time enum tag → integer ID mapping.
+    pub tags: TagRegistry,
 }
 
 /// A single function definition lowered from the CST.
@@ -73,6 +137,12 @@ pub enum Expr {
     /// Tail-recursive self-call (reuses current frame).
     TailCall {
         name: String,
+        args: Vec<Expr>,
+        ty: Option<Type>,
+    },
+    /// Tail call through a closure/function value (uses return_call_indirect).
+    TailCallIndirect {
+        callee: Box<Expr>,
         args: Vec<Expr>,
         ty: Option<Type>,
     },
@@ -161,6 +231,15 @@ pub enum Expr {
         body: Box<Expr>,
         ty: Option<Type>,
     },
+    /// Closure object: captures + lifted function index.
+    /// Produced by lambda lifting; consumed by JIT/codegen.
+    MakeClosure {
+        func_idx: usize,
+        captures: Vec<Expr>,
+    },
+    /// Read a captured variable by index from the implicit closure parameter.
+    /// Produced by lambda lifting inside lifted function bodies.
+    GetClosureVar(usize),
 
     // -- Error handling --
     /// `expr?` — early return on Err/None, unwrap Ok/Some.
@@ -193,6 +272,13 @@ pub enum Expr {
         method: String,
         args: Vec<Expr>,
         ty: Option<Type>,
+    },
+
+    // -- Test expressions --
+    /// `expect <actual> <matcher>` — evaluates to Bool.
+    Expect {
+        actual: Box<Expr>,
+        matcher: Box<Matcher>,
     },
 }
 
@@ -253,6 +339,52 @@ pub enum Pattern {
 }
 
 // ---------------------------------------------------------------------------
+// Test matchers
+// ---------------------------------------------------------------------------
+
+/// Matcher for `expect` expressions in inline tests.
+#[derive(Debug, Clone)]
+pub enum Matcher {
+    Equal(Box<Expr>),
+    BeOk,
+    BeSome,
+    BeNone,
+    BeEmpty,
+    HaveLength(Box<Expr>),
+    Contain(Box<Expr>),
+    StartWith(Box<Expr>),
+    Satisfy(Box<Expr>),
+    Be(Pattern),
+}
+
+// ---------------------------------------------------------------------------
+// Test module
+// ---------------------------------------------------------------------------
+
+/// A single inline test lowered from the CST.
+#[derive(Debug, Clone)]
+pub struct IrTest {
+    pub name: String,
+    pub function: Option<String>,
+    pub body: Expr,
+    pub line: usize,
+    pub col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+    pub skip: bool,
+}
+
+/// A module with both functions and inline tests.
+#[derive(Debug, Clone)]
+pub struct IrTestModule {
+    pub functions: Vec<IrFunction>,
+    pub tests: Vec<IrTest>,
+    pub entry: usize,
+    /// Compile-time enum tag → integer ID mapping.
+    pub tags: TagRegistry,
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -299,6 +431,7 @@ mod tests {
                 },
             }],
             entry: 0,
+            tags: TagRegistry::new(),
         };
         assert_eq!(module.functions.len(), 1);
         assert_eq!(module.entry, 0);
@@ -418,8 +551,22 @@ mod tests {
                 args: vec![],
                 ty: None,
             },
+            Expr::Expect {
+                actual: Box::new(Expr::Int(1)),
+                matcher: Box::new(Matcher::Equal(Box::new(Expr::Int(1)))),
+            },
+            Expr::MakeClosure {
+                func_idx: 0,
+                captures: vec![Expr::Var("x".into(), None)],
+            },
+            Expr::GetClosureVar(0),
+            Expr::TailCallIndirect {
+                callee: Box::new(Expr::Var("f".into(), None)),
+                args: vec![],
+                ty: None,
+            },
         ];
-        assert_eq!(exprs.len(), 33);
+        assert_eq!(exprs.len(), 37);
     }
 
     #[test]
@@ -456,5 +603,33 @@ mod tests {
     fn all_unaryop_variants() {
         let ops = [UnaryOp::Neg, UnaryOp::Not];
         assert_eq!(ops.len(), 2);
+    }
+
+    #[test]
+    fn tag_registry_well_known_tags() {
+        let reg = TagRegistry::new();
+        assert_eq!(reg.get_id("None"), Some(0));
+        assert_eq!(reg.get_id("Some"), Some(1));
+        assert_eq!(reg.get_id("Ok"), Some(2));
+        assert_eq!(reg.get_id("Err"), Some(3));
+        assert_eq!(reg.len(), 4);
+    }
+
+    #[test]
+    fn tag_registry_register_new() {
+        let mut reg = TagRegistry::new();
+        let id = reg.register("MyTag");
+        assert_eq!(id, 4);
+        assert_eq!(reg.get_id("MyTag"), Some(4));
+        assert_eq!(reg.get_tag(4), Some("MyTag"));
+    }
+
+    #[test]
+    fn tag_registry_idempotent() {
+        let mut reg = TagRegistry::new();
+        let id1 = reg.register("Some");
+        let id2 = reg.register("Some");
+        assert_eq!(id1, id2);
+        assert_eq!(id1, 1);
     }
 }
