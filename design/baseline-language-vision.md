@@ -1133,10 +1133,10 @@ export Int.hours : Int -> Duration
 ```baseline
 module Baseline.Concurrent
 
-// Lightweight fibers
-export spawn! : (() -> {e} T) -> {e, Async} Fiber<T>
-export Fiber.await! : Fiber<T> -> {Async} T
-export Fiber.cancel! : Fiber<T> -> {Async} ()
+// Lightweight cells ("cells interlinked")
+export spawn! : (() -> {e} T) -> {e, Async} Cell<T>
+export Cell.await! : Cell<T> -> {Async} T
+export Cell.cancel! : Cell<T> -> {Async} ()
 
 // Parallel operations
 export parallel! : List<() -> {e} T> -> {e, Async} List<T>
@@ -1186,26 +1186,26 @@ Baseline modules export a standard interface:
 
 ## 9. Concurrency Model
 
-Baseline provides structured concurrency with lightweight fibers, channels, and a work-stealing scheduler.
+Baseline provides structured concurrency with lightweight cells, channels, and a work-stealing scheduler.
 
-### 9.1 Fibers
+### 9.1 Cells
 
-Fibers are lightweight cooperative threads (initial stack: 2KB, growable):
+Cells are lightweight cooperative threads (initial stack: 2KB, growable):
 
 ```baseline
-// Spawn a fiber
-let fiber = spawn!(|| expensive_computation())
+// Spawn a cell
+let cell = spawn!(|| expensive_computation())
 
 // Wait for result
-let result = Fiber.await!(fiber)
+let result = Cell.await!(cell)
 
-// Cancel a fiber
-Fiber.cancel!(fiber)
+// Cancel a cell
+Cell.cancel!(cell)
 ```
 
 ### 9.2 Structured Concurrency
 
-Fibers are scoped—parent tasks wait for children:
+Cells are scoped—parent tasks wait for children:
 
 ```baseline
 process! : List<Item> -> {Async} List<r>
@@ -1213,8 +1213,8 @@ process! = |items|
   scope! |s|
     for item in items do
       s.spawn!(|| process_item!(item))
-    // Implicit: wait for all spawned fibers
-    // If any fiber panics, others are cancelled
+    // Implicit: wait for all spawned cells
+    // If any cell panics, others are cancelled
 ```
 
 This prevents:
@@ -1280,7 +1280,7 @@ fetch_all! : List<Url> -> {Http, Async} List<Response>
 fetch_all! = |urls|
   urls
   |> List.map(|url| spawn!(|| Http.get!(url)))
-  |> List.map(Fiber.await!)
+  |> List.map(Cell.await!)
 
 // Provide at the edge
 main! =
@@ -1293,7 +1293,7 @@ main! =
 ```baseline
 Async.runtime({
   threads: 4,                    // Worker threads (default: num_cpus)
-  stack_size: 2.kb,              // Initial fiber stack
+  stack_size: 2.kb,              // Initial cell stack
   max_stack: 1.mb,               // Maximum stack growth
   scheduler: WorkStealing,       // Or: SingleThreaded, Custom
 })
