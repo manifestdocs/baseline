@@ -20,6 +20,206 @@ use super::analysis::{can_jit, compute_unboxed_flags, has_self_tail_call};
 use super::compile::FnCompileCtx;
 use super::{HELPER_NAMES, make_helper_sig};
 
+// ---------------------------------------------------------------------------
+// AOT native function symbol table
+// ---------------------------------------------------------------------------
+
+/// Maps qualified Baseline native name → extern "C" symbol in libbaseline_rt.
+/// Both `!` and non-`!` variants map to the same symbol.
+const AOT_NATIVE_SYMBOLS: &[(&str, &str)] = &[
+    // Console
+    ("Console.println!", "bl_console_println"),
+    ("Console.println", "bl_console_println"),
+    ("Console.print!", "bl_console_print"),
+    ("Console.print", "bl_console_print"),
+    ("Console.error!", "bl_console_error"),
+    ("Console.error", "bl_console_error"),
+    // Log
+    ("Log.info!", "bl_log_info"),
+    ("Log.info", "bl_log_info"),
+    ("Log.warn!", "bl_log_warn"),
+    ("Log.warn", "bl_log_warn"),
+    ("Log.error!", "bl_log_error"),
+    ("Log.error", "bl_log_error"),
+    ("Log.debug!", "bl_log_debug"),
+    ("Log.debug", "bl_log_debug"),
+    // Math
+    ("Math.abs", "bl_math_abs"),
+    ("Math.min", "bl_math_min"),
+    ("Math.max", "bl_math_max"),
+    ("Math.clamp", "bl_math_clamp"),
+    ("Math.pow", "bl_math_pow"),
+    // String
+    ("String.length", "bl_string_length"),
+    ("String.to_upper", "bl_string_to_upper"),
+    ("String.to_lower", "bl_string_to_lower"),
+    ("String.trim", "bl_string_trim"),
+    ("String.contains", "bl_string_contains"),
+    ("String.starts_with", "bl_string_starts_with"),
+    ("String.ends_with", "bl_string_ends_with"),
+    ("String.split", "bl_string_split"),
+    ("String.join", "bl_string_join"),
+    ("String.slice", "bl_string_slice"),
+    ("String.chars", "bl_string_chars"),
+    ("String.char_at", "bl_string_char_at"),
+    ("String.index_of", "bl_string_index_of"),
+    ("String.to_int", "bl_string_to_int"),
+    ("String.from_char_code", "bl_string_from_char_code"),
+    ("String.char_code", "bl_string_char_code"),
+    // Int
+    ("Int.to_string", "bl_int_to_string"),
+    ("Int.parse", "bl_int_parse"),
+    // List (non-HOF)
+    ("List.length", "bl_list_length"),
+    ("List.head", "bl_list_head"),
+    ("List.tail", "bl_list_tail"),
+    ("List.reverse", "bl_list_reverse"),
+    ("List.sort", "bl_list_sort"),
+    ("List.concat", "bl_list_concat_native"),
+    ("List.contains", "bl_list_contains"),
+    // Option
+    ("Option.unwrap", "bl_option_unwrap"),
+    ("Option.unwrap_or", "bl_option_unwrap_or"),
+    ("Option.is_some", "bl_option_is_some"),
+    ("Option.is_none", "bl_option_is_none"),
+    // Result
+    ("Result.unwrap", "bl_result_unwrap"),
+    ("Result.unwrap_or", "bl_result_unwrap_or"),
+    ("Result.is_ok", "bl_result_is_ok"),
+    ("Result.is_err", "bl_result_is_err"),
+    // Time
+    ("Time.now!", "bl_time_now"),
+    ("Time.now", "bl_time_now"),
+];
+
+/// Look up the extern symbol name for a qualified native call.
+pub(super) fn aot_native_symbol(qualified: &str) -> Option<&'static str> {
+    AOT_NATIVE_SYMBOLS
+        .iter()
+        .find(|(name, _)| *name == qualified)
+        .map(|(_, sym)| *sym)
+}
+
+/// Collect all unique native qualified names used in an IrModule.
+fn collect_native_calls(module: &IrModule) -> HashSet<String> {
+    let mut calls = HashSet::new();
+    for func in &module.functions {
+        collect_native_calls_expr(&func.body, &mut calls);
+    }
+    calls
+}
+
+fn collect_native_calls_expr(expr: &Expr, calls: &mut HashSet<String>) {
+    match expr {
+        Expr::CallNative { module, method, args, .. } => {
+            calls.insert(format!("{}.{}", module, method));
+            for a in args {
+                collect_native_calls_expr(a, calls);
+            }
+        }
+        // Recurse into all children
+        Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole => {}
+        Expr::String(_) | Expr::Var(_, _) | Expr::GetClosureVar(_) => {}
+        Expr::BinOp { lhs, rhs, .. } => {
+            collect_native_calls_expr(lhs, calls);
+            collect_native_calls_expr(rhs, calls);
+        }
+        Expr::UnaryOp { operand, .. } => collect_native_calls_expr(operand, calls),
+        Expr::And(a, b) | Expr::Or(a, b) => {
+            collect_native_calls_expr(a, calls);
+            collect_native_calls_expr(b, calls);
+        }
+        Expr::If { condition, then_branch, else_branch, .. } => {
+            collect_native_calls_expr(condition, calls);
+            collect_native_calls_expr(then_branch, calls);
+            if let Some(eb) = else_branch {
+                collect_native_calls_expr(eb, calls);
+            }
+        }
+        Expr::Match { subject, arms, .. } => {
+            collect_native_calls_expr(subject, calls);
+            for arm in arms {
+                collect_native_calls_expr(&arm.body, calls);
+            }
+        }
+        Expr::For { iterable, body, .. } => {
+            collect_native_calls_expr(iterable, calls);
+            collect_native_calls_expr(body, calls);
+        }
+        Expr::Let { value, .. } => collect_native_calls_expr(value, calls),
+        Expr::Block(exprs, _) => {
+            for e in exprs {
+                collect_native_calls_expr(e, calls);
+            }
+        }
+        Expr::Lambda { body, .. } => collect_native_calls_expr(body, calls),
+        Expr::MakeClosure { captures, .. } => {
+            for c in captures {
+                collect_native_calls_expr(c, calls);
+            }
+        }
+        Expr::CallDirect { args, .. } | Expr::TailCall { args, .. } => {
+            for a in args {
+                collect_native_calls_expr(a, calls);
+            }
+        }
+        Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
+            collect_native_calls_expr(callee, calls);
+            for a in args {
+                collect_native_calls_expr(a, calls);
+            }
+        }
+        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
+            for item in items {
+                collect_native_calls_expr(item, calls);
+            }
+        }
+        Expr::Concat(parts) => {
+            for p in parts {
+                collect_native_calls_expr(p, calls);
+            }
+        }
+        Expr::MakeEnum { payload, .. } => collect_native_calls_expr(payload, calls),
+        Expr::MakeStruct { fields, .. } => {
+            for (_, e) in fields {
+                collect_native_calls_expr(e, calls);
+            }
+        }
+        Expr::MakeRecord(fields, _) => {
+            for (_, e) in fields {
+                collect_native_calls_expr(e, calls);
+            }
+        }
+        Expr::UpdateRecord { base, updates, .. } => {
+            collect_native_calls_expr(base, calls);
+            for (_, e) in updates {
+                collect_native_calls_expr(e, calls);
+            }
+        }
+        Expr::GetField { object, .. } => collect_native_calls_expr(object, calls),
+        Expr::MakeRange(a, b) => {
+            collect_native_calls_expr(a, calls);
+            collect_native_calls_expr(b, calls);
+        }
+        Expr::Try { expr, .. } => collect_native_calls_expr(expr, calls),
+        Expr::Expect { actual, .. } => collect_native_calls_expr(actual, calls),
+        Expr::WithHandlers { handlers, body, .. } => {
+            collect_native_calls_expr(body, calls);
+            for (_, methods) in handlers {
+                for (_, handler_expr) in methods {
+                    collect_native_calls_expr(handler_expr, calls);
+                }
+            }
+        }
+        Expr::HandleEffect { body, .. } => collect_native_calls_expr(body, calls),
+        Expr::PerformEffect { args, .. } => {
+            for a in args {
+                collect_native_calls_expr(a, calls);
+            }
+        }
+    }
+}
+
 /// Compile an IrModule to a native object file (bytes).
 pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, String> {
     // Validate: all functions must be JIT-compilable
@@ -97,6 +297,44 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
 
     if trace {
         eprintln!("AOT: {} unique string constants", aot_strings.len());
+    }
+
+    // --- Declare native function imports (linked from libbaseline_rt) ---
+    let native_calls = collect_native_calls(module);
+    let mut aot_native_ids: HashMap<String, FuncId> = HashMap::new();
+
+    if !native_calls.is_empty() {
+        // All AOT native functions share the signature: (ptr, i64) -> i64
+        let mut native_sig = obj_module.make_signature();
+        native_sig.params.push(AbiParam::new(ptr_type));
+        native_sig.params.push(AbiParam::new(types::I64));
+        native_sig.returns.push(AbiParam::new(types::I64));
+
+        // Deduplicate symbols (e.g., "Console.println!" and "Console.println" map to same symbol)
+        let mut declared_symbols: HashMap<&str, FuncId> = HashMap::new();
+
+        for qualified in &native_calls {
+            if let Some(sym) = aot_native_symbol(qualified) {
+                let func_id = if let Some(&id) = declared_symbols.get(sym) {
+                    id
+                } else {
+                    let id = obj_module
+                        .declare_function(sym, Linkage::Import, &native_sig)
+                        .map_err(|e| e.to_string())?;
+                    declared_symbols.insert(sym, id);
+                    id
+                };
+                aot_native_ids.insert(qualified.clone(), func_id);
+            }
+        }
+
+        if trace {
+            eprintln!(
+                "AOT: {} native calls ({} unique symbols)",
+                native_calls.len(),
+                declared_symbols.len()
+            );
+        }
     }
 
     // --- Declare all functions (Tail CC, Local linkage) ---
@@ -177,6 +415,7 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
                 tags: &module.tags,
                 sra_records: HashMap::new(),
                 aot_strings: Some(&aot_strings),
+                aot_native_ids: if aot_native_ids.is_empty() { None } else { Some(&aot_native_ids) },
             };
 
             let result = if is_unboxed {

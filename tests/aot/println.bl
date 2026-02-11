@@ -1,0 +1,4 @@
+@prelude(core)
+
+fn main!() -> {Console} Unit =
+  Console.println!("hello from aot")

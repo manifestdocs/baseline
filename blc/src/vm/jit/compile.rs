@@ -47,6 +47,9 @@ pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     /// AOT string constants: maps string content → DataId in the object module.
     /// When Some, strings are loaded from global data instead of baked as heap pointers.
     pub(super) aot_strings: Option<&'a HashMap<String, DataId>>,
+    /// AOT native function IDs: maps qualified name → FuncId for direct calls.
+    /// When Some, CallNative emits direct calls instead of going through NativeRegistry.
+    pub(super) aot_native_ids: Option<&'a HashMap<String, FuncId>>,
 }
 
 pub(super) type CValue = cranelift_codegen::ir::Value;
@@ -1092,6 +1095,27 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 ..
             } => {
                 let qualified = format!("{}.{}", mod_name, method);
+
+                // AOT path: direct call to extern "C" symbol in libbaseline_rt
+                if let Some(native_ids) = self.aot_native_ids {
+                    let func_id = native_ids
+                        .get(&qualified)
+                        .ok_or_else(|| format!("AOT: unsupported native: {}", qualified))?;
+
+                    let arg_vals: Vec<CValue> = args
+                        .iter()
+                        .map(|a| self.compile_expr(a))
+                        .collect::<Result<Vec<_>, _>>()?;
+
+                    let args_addr = self.spill_to_stack(&arg_vals);
+                    let count_val = self.builder.ins().iconst(types::I64, arg_vals.len() as i64);
+
+                    let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+                    let call = self.builder.ins().call(func_ref, &[args_addr, count_val]);
+                    return Ok(self.builder.inst_results(call)[0]);
+                }
+
+                // JIT path: dispatch through NativeRegistry
                 let registry = self.natives.ok_or("No native registry for JIT")?;
                 let native_id = registry
                     .lookup(&qualified)

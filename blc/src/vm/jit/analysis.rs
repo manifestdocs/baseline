@@ -80,11 +80,22 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
             method,
             ..
         } => {
-            // Need natives registry to resolve the ID
+            let qualified = format!("{}.{}", module, method);
+
+            // AOT path: check if we have a known symbol for this native
             if natives.is_none() {
+                #[cfg(feature = "aot")]
+                {
+                    if super::aot::aot_native_symbol(&qualified).is_none() {
+                        return false;
+                    }
+                    return args.iter().all(|a| expr_can_jit(a, natives));
+                }
+                #[cfg(not(feature = "aot"))]
                 return false;
             }
-            let qualified = format!("{}.{}", module, method);
+
+            // JIT path: resolve through registry
             let reg = natives.unwrap();
             if reg.lookup(&qualified).is_none() {
                 return false;

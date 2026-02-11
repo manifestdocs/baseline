@@ -396,14 +396,21 @@ fn find_baseline_rt_lib() -> Option<PathBuf> {
     //    or relative to the current executable
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
         // During cargo run/test: CARGO_MANIFEST_DIR/target/{debug,release}
-        for profile in &["release", "debug"] {
-            let candidate = PathBuf::from(&manifest_dir)
-                .join("..")
-                .join("target")
-                .join(profile);
-            if candidate.join("libbaseline_rt.a").exists() {
-                return Some(candidate.canonicalize().ok()?);
+        // Pick the newest library if both exist to avoid stale-library bugs.
+        let base = PathBuf::from(&manifest_dir).join("..");
+        let mut best: Option<(PathBuf, std::time::SystemTime)> = None;
+        for profile in &["debug", "release"] {
+            let candidate = base.join("target").join(profile);
+            let lib_path = candidate.join("libbaseline_rt.a");
+            if let Ok(meta) = std::fs::metadata(&lib_path) {
+                let mtime = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+                if best.as_ref().map_or(true, |(_, t)| mtime > *t) {
+                    best = Some((candidate, mtime));
+                }
             }
+        }
+        if let Some((dir, _)) = best {
+            return dir.canonicalize().ok();
         }
     }
 

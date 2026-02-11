@@ -1,0 +1,3 @@
+@prelude(core)
+
+fn main() -> String = Int.to_string(12345)

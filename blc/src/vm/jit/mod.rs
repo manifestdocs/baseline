@@ -361,6 +361,7 @@ pub fn compile_with_natives(
                 tags: &module.tags,
                 sra_records: HashMap::new(),
                 aot_strings: None,
+                aot_native_ids: None,
             };
 
             let result = if is_unboxed {

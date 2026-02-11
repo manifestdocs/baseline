@@ -116,3 +116,41 @@ fn aot_closure_apply() {
     let output = compile_and_run("tests/aot/closure_apply.bl");
     assert_eq!(output, "42");
 }
+
+// --- Phase 3: Native function call tests ---
+
+#[test]
+fn aot_println() {
+    let output = compile_and_run("tests/aot/println.bl");
+    assert_eq!(output, "hello from aot");
+}
+
+#[test]
+fn aot_string_ops() {
+    let output = compile_and_run("tests/aot/string_ops.bl");
+    assert_eq!(output, "11");
+}
+
+#[test]
+fn aot_math_ops() {
+    let output = compile_and_run("tests/aot/math_ops.bl");
+    assert_eq!(output, "1096");
+}
+
+#[test]
+fn aot_list_ops() {
+    let output = compile_and_run("tests/aot/list_ops.bl");
+    assert_eq!(output, "10");
+}
+
+#[test]
+fn aot_option_unwrap() {
+    let output = compile_and_run("tests/aot/option_unwrap.bl");
+    assert_eq!(output, "54");
+}
+
+#[test]
+fn aot_int_convert() {
+    let output = compile_and_run("tests/aot/int_convert.bl");
+    assert_eq!(output, "12345");
+}

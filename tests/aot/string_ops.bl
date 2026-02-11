@@ -1,0 +1,9 @@
+@prelude(core)
+
+fn main() -> Int = {
+  let s = "Hello World"
+  let len = String.length(s)
+  let upper = String.to_upper(s)
+  let has = String.contains(upper, "HELLO")
+  if has then len else 0
+}

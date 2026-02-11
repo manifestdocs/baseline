@@ -1,0 +1,9 @@
+@prelude(core)
+
+fn main() -> Int = {
+  let a = Math.abs(-42)
+  let b = Math.min(10, 20)
+  let c = Math.max(10, 20)
+  let d = Math.pow(2, 10)
+  a + b + c + d
+}
