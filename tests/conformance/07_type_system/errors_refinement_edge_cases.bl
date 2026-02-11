@@ -1,0 +1,16 @@
+@prelude(core)
+
+// Negative test: refinement edge case violations
+// Expected errors: REF_001, REF_002
+
+type Byte = Int where 0 <= self && self <= 255
+
+type DotJson = String where String.ends_with(self, ".json")
+
+type NonEmpty = String where String.length(self) >= 1
+
+fn check_violations() -> () = {
+  let bad_byte : Byte = 256
+  let bad_json : DotJson = "config.yaml"
+  let bad_empty : NonEmpty = ""
+}

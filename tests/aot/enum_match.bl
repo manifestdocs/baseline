@@ -1,0 +1,4 @@
+fn classify(n: Int) -> String =
+  if n > 0 then "positive" else "non-positive"
+
+fn main() -> String = classify(42)

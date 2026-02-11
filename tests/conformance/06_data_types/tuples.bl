@@ -1,8 +1,22 @@
 @prelude(core)
 
-// Conformance: tuple creation is valid syntax
+// Conformance: tuple creation and destructuring
 
-test "tuple exists" = {
+test "tuple creation" = {
   let t = (1, 2)
   true
 }
+
+test "tuple destructuring pair" = {
+  let (a, b) = (3, 7)
+  a + b == 10
+}
+
+test "triple destructuring" = {
+  let (x, y, z) = (10, 20, 30)
+  x + y + z == 60
+}
+
+test "tuple equality" = (1, 2) == (1, 2)
+
+test "tuple inequality" = (1, 2) != (1, 3)

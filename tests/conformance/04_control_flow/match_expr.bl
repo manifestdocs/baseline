@@ -30,3 +30,31 @@ fn to_string(x: Int) -> String = {
 }
 
 test "match wildcard" = to_string(99) == "anything"
+
+// --- Literal patterns ---
+
+fn describe_num(x: Int) -> String = {
+  match x
+    0 -> "zero"
+    1 -> "one"
+    _ -> "other"
+}
+
+test "match literal zero" = describe_num(0) == "zero"
+test "match literal one" = describe_num(1) == "one"
+test "match literal fallthrough" = describe_num(42) == "other"
+
+// --- Tuple patterns ---
+
+test "match tuple destructure" = {
+  let pair = (3, 7)
+  let (a, b) = pair
+  a + b == 10
+}
+
+test "match tuple ignore second" = {
+  let pair = (5, 9)
+  let (a, _) = pair
+  a == 5
+}
+

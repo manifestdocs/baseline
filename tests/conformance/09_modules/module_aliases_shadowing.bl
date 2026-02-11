@@ -1,0 +1,7 @@
+@prelude(core)
+
+// When 'str' is used as a parameter name, it shadows the alias
+fn identity(str: String) -> String = str
+
+fn main() -> Int = str.length("hello")
+// expect: 5

@@ -1,0 +1,6 @@
+fn make_pair(a: Int, b: Int) -> (Int, Int) = (a, b)
+
+fn main() -> Int = {
+  let (a, _b) = make_pair(42, 7)
+  a
+}

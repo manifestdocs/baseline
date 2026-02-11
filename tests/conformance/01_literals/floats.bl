@@ -1,0 +1,15 @@
+@prelude(core)
+
+// Conformance: float literals and arithmetic
+
+test "positive float" = 3.14 == 3.14
+test "negative float" = -1.5 == -1.5
+test "zero float" = 0.0 == 0.0
+test "float addition" = 1.0 + 2.0 == 3.0
+test "float subtraction" = 5.0 - 2.0 == 3.0
+test "float multiplication" = 2.0 * 3.0 == 6.0
+test "float division" = 10.0 / 4.0 == 2.5
+test "float comparison lt" = 1.0 < 2.0
+test "float comparison gt" = 3.0 > 2.0
+test "float comparison le" = 2.0 <= 2.0
+test "float comparison ge" = 2.0 >= 2.0

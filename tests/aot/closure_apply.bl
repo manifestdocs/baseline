@@ -1,0 +1,5 @@
+fn apply(f: (Int) -> Int, x: Int) -> Int = f(x)
+
+fn add_ten(n: Int) -> Int = n + 10
+
+fn main() -> Int = apply(add_ten, 32)

@@ -1,0 +1,50 @@
+@prelude(core)
+
+fn test_set_empty() -> Bool = {
+  let s = Set.empty()
+  Set.len(s) == 0
+}
+
+fn test_set_insert() -> Bool = {
+  let s = Set.empty()
+  let s2 = Set.insert(s, 1)
+  let s3 = Set.insert(s2, 2)
+  let s4 = Set.insert(s3, 1) // Duplicate insert
+  Set.len(s4) == 2 && Set.contains(s4, 1) && Set.contains(s4, 2)
+}
+
+fn test_set_remove() -> Bool = {
+  let s = Set.from_list([1, 2, 3])
+  let s2 = Set.remove(s, 2)
+  Set.len(s2) == 2 && not Set.contains(s2, 2) && Set.contains(s2, 1)
+}
+
+fn test_set_union() -> Bool = {
+  let s1 = Set.from_list([1, 2])
+  let s2 = Set.from_list([2, 3])
+  let cup = Set.union(s1, s2)
+  Set.len(cup) == 3 && Set.contains(cup, 1) && Set.contains(cup, 2) && Set.contains(cup, 3)
+}
+
+fn test_set_intersection() -> Bool = {
+  let s1 = Set.from_list([1, 2])
+  let s2 = Set.from_list([2, 3])
+  let cap = Set.intersection(s1, s2)
+  Set.len(cap) == 1 && Set.contains(cap, 2) && not Set.contains(cap, 1) && not Set.contains(cap, 3)
+}
+
+fn test_set_from_list() -> Bool = {
+  let l = [1, 2, 2, 3]
+  let s = Set.from_list(l)
+  Set.len(s) == 3
+}
+
+fn main() -> String =
+  "Set tests passed"
+  where
+    test "Set.empty" = test_set_empty()
+    test "Set.insert" = test_set_insert()
+    test "Set.remove" = test_set_remove()
+    test "Set.union" = test_set_union()
+    test "Set.intersection" = test_set_intersection()
+    test "Set.from_list" = test_set_from_list()

@@ -1,0 +1,118 @@
+//! Integration tests for AOT compilation.
+//!
+//! These tests compile Baseline source files to native executables and
+//! verify their output matches expected values.
+
+#![cfg(feature = "aot")]
+
+use std::path::Path;
+use std::process::Command;
+
+/// Compile a .bl file to a native executable and run it, returning stdout.
+fn compile_and_run(source_path: &str) -> String {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+    let project_root = Path::new(manifest_dir).parent().unwrap();
+    let source = project_root.join(source_path);
+
+    // Build blc path from target directory
+    let blc = env!("CARGO_BIN_EXE_blc");
+
+    let tmp_dir = std::env::temp_dir();
+    let stem = Path::new(source_path)
+        .file_stem()
+        .unwrap()
+        .to_str()
+        .unwrap();
+    let output = tmp_dir.join(format!("aot_test_{}", stem));
+
+    // Compile
+    let build_result = Command::new(blc)
+        .arg("build")
+        .arg(&source)
+        .arg("-o")
+        .arg(&output)
+        .output()
+        .expect("Failed to run blc build");
+
+    if !build_result.status.success() {
+        let stderr = String::from_utf8_lossy(&build_result.stderr);
+        panic!(
+            "blc build failed for {}:\n{}",
+            source_path, stderr
+        );
+    }
+
+    // Run the compiled executable
+    let run_result = Command::new(&output)
+        .output()
+        .expect("Failed to run compiled executable");
+
+    // Clean up
+    let _ = std::fs::remove_file(&output);
+
+    if !run_result.status.success() {
+        let stderr = String::from_utf8_lossy(&run_result.stderr);
+        panic!(
+            "Executable failed for {}:\n{}",
+            source_path, stderr
+        );
+    }
+
+    String::from_utf8_lossy(&run_result.stdout).trim().to_string()
+}
+
+#[test]
+fn aot_fib() {
+    let output = compile_and_run("tests/aot/fib.bl");
+    assert_eq!(output, "9227465");
+}
+
+#[test]
+fn aot_tak() {
+    let output = compile_and_run("tests/aot/tak.bl");
+    assert_eq!(output, "7");
+}
+
+#[test]
+fn aot_factorial() {
+    let output = compile_and_run("tests/aot/factorial.bl");
+    assert_eq!(output, "3628800");
+}
+
+// --- Phase 2: Heap type tests ---
+
+#[test]
+fn aot_string_hello() {
+    let output = compile_and_run("tests/aot/string_hello.bl");
+    assert_eq!(output, "hello world");
+}
+
+#[test]
+fn aot_string_concat() {
+    let output = compile_and_run("tests/aot/string_concat.bl");
+    assert_eq!(output, "hello world");
+}
+
+#[test]
+fn aot_enum_match() {
+    let output = compile_and_run("tests/aot/enum_match.bl");
+    assert_eq!(output, "positive");
+}
+
+#[test]
+fn aot_tuple_access() {
+    let output = compile_and_run("tests/aot/tuple_access.bl");
+    assert_eq!(output, "42");
+}
+
+#[test]
+fn aot_record_field() {
+    let output = compile_and_run("tests/aot/record_field.bl");
+    assert_eq!(output, "42");
+}
+
+#[test]
+fn aot_closure_apply() {
+    let output = compile_and_run("tests/aot/closure_apply.bl");
+    assert_eq!(output, "42");
+}

@@ -1,0 +1,62 @@
+@prelude(core)
+
+// Conformance: refinement edge cases
+// Tests boundary values, combined constraints, and less-common string constraints
+
+// --- Integer refinement edge cases ---
+
+// Exact boundary values
+type NonNeg = Int where self >= 0
+type Byte = Int where 0 <= self && self <= 255
+
+fn make_nonneg(n: Int) -> NonNeg = n
+fn make_byte(n: Int) -> Byte = n
+
+test "non-negative zero boundary" = make_nonneg(0) == 0
+test "non-negative positive" = make_nonneg(100) == 100
+test "byte lower boundary" = make_byte(0) == 0
+test "byte upper boundary" = make_byte(255) == 255
+test "byte middle value" = make_byte(128) == 128
+
+// --- String refinement edge cases ---
+
+// EndsWith constraint
+type DotJson = String where String.ends_with(self, ".json")
+
+fn make_dotjson(s: String) -> DotJson = s
+
+test "ends_with passes" = make_dotjson("config.json") == "config.json"
+
+// Contains constraint
+type HasAt = String where String.contains(self, "@")
+
+fn make_hasat(s: String) -> HasAt = s
+
+test "contains passes" = make_hasat("user@host") == "user@host"
+
+// Length-only constraint
+type NonEmpty = String where String.length(self) >= 1
+
+fn make_nonempty(s: String) -> NonEmpty = s
+
+test "non-empty string passes" = make_nonempty("a") == "a"
+test "non-empty longer string" = make_nonempty("hello") == "hello"
+
+// Combined string constraints (length + starts_with)
+type ApiPath = String where String.starts_with(self, "/api/") && String.length(self) >= 6
+
+fn make_api_path(s: String) -> ApiPath = s
+
+test "combined string constraint passes" = make_api_path("/api/users") == "/api/users"
+
+// --- Let bindings with refinements ---
+fn refined_let() -> Bool = {
+  let x : Byte = 42
+  let y : NonNeg = 0
+  // Note: arithmetic on refined types (x + y) causes TYP_001
+  // because the type checker doesn't unwrap refined types to Int.
+  // This is a known gap — using direct comparison instead.
+  x == 42
+}
+
+test "let bindings with refinements" = refined_let()

@@ -1,0 +1,3 @@
+fn greet(name: String) -> String = "hello ${name}"
+
+fn main() -> String = greet("world")

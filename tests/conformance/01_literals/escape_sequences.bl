@@ -1,0 +1,14 @@
+@prelude(core)
+
+// Conformance: string escape sequences
+
+test "newline escape" = String.length("\n") == 1
+test "tab escape" = String.length("\t") == 1
+test "backslash escape" = String.length("\\") == 1
+test "escaped quote" = String.length("\"") == 1
+test "carriage return escape" = String.length("\r") == 1
+test "multiple escapes" = String.length("a\nb\tc") == 5
+test "escaped in interpolation" = {
+  let x = 42
+  String.contains("line1\nline2 ${x}", "42") == true
+}

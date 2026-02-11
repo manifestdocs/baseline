@@ -1,0 +1,10 @@
+@prelude(script)
+
+// Conformance: explicit effect declarations (check-pass only)
+// Functions that use effects must declare them in their signature.
+// The caller must also declare all effects transitively.
+
+fn main!() -> {Console} () = {
+  Console.println!("Hello, world")
+  Console.println!("Effects are explicit")
+}

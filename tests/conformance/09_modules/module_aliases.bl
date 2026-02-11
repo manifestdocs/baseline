@@ -1,0 +1,8 @@
+@prelude(core)
+
+fn process(input: String) -> Int = input |> str.trim |> str.length
+
+fn double_all(items: List<Int>) -> List<Int> = lst.map(items, |x| x * 2)
+
+fn main() -> Int = process("  hello  ")
+// expect: 5
