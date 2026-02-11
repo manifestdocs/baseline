@@ -12,6 +12,7 @@ use hyper::body::Incoming;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
@@ -24,6 +25,12 @@ use tokio::sync::Semaphore;
 use crate::vm::nvalue::NValue;
 use crate::vm::radix::{ParamCollector, RadixNode, SmallParams};
 use crate::vm::value::RcStr;
+use crate::vm::vm::Vm;
+
+// Thread-local VM for inline handler execution on Tokio worker threads.
+thread_local! {
+    static HANDLER_VM: RefCell<Vm> = RefCell::new(Vm::new());
+}
 
 // ---------------------------------------------------------------------------
 // Async Server Configuration
@@ -682,6 +689,85 @@ pub fn build_hyper_response_from_sendable(
     }
 }
 
+/// Build a hyper Response directly from a VM handler's NValue result.
+/// Avoids the intermediate SendableValue conversion for better performance.
+pub fn build_hyper_response_from_nvalue(val: &NValue) -> Response<Full<Bytes>> {
+    use crate::vm::nvalue::HeapObject;
+
+    // Unwrap Result enum (Ok/Err) — VM handlers return Ok(response)
+    if val.is_heap() {
+        match val.as_heap_ref() {
+            HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
+                return build_hyper_response_from_nvalue(payload);
+            }
+            HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
+                let msg: String = payload
+                    .as_string()
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "Internal Server Error".to_string());
+                return AsyncResponse::text(500, msg).into_hyper();
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(fields) = val.as_record() {
+        let status = fields
+            .iter()
+            .find(|(k, _)| &**k == "status")
+            .and_then(|(_, v)| {
+                if v.is_any_int() {
+                    StatusCode::from_u16(v.as_any_int() as u16).ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(StatusCode::OK);
+
+        let body = fields
+            .iter()
+            .find(|(k, _)| &**k == "body")
+            .map(|(_, v)| match v.as_string() {
+                Some(s) => Bytes::from(s.to_string()),
+                None => Bytes::new(),
+            })
+            .unwrap_or_default();
+
+        let mut builder = Response::builder().status(status);
+
+        if let Some((_, headers_val)) = fields.iter().find(|(k, _)| &**k == "headers") {
+            if let Some(items) = headers_val.as_list() {
+                for item in items {
+                    if item.is_heap() {
+                        if let HeapObject::Tuple(pair) = item.as_heap_ref() {
+                            if pair.len() == 2 {
+                                if let (Some(k), Some(v)) =
+                                    (pair[0].as_string(), pair[1].as_string())
+                                {
+                                    builder = builder.header(&**k, &**v);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return builder.body(Full::new(body)).unwrap();
+    }
+
+    // Fallback: treat as string body
+    let body = val
+        .as_string()
+        .map(|s| Bytes::from(s.to_string()))
+        .unwrap_or_else(|| Bytes::from(format!("{}", val)));
+    Response::builder()
+        .status(StatusCode::OK)
+        .header("Content-Type", "text/plain")
+        .body(Full::new(body))
+        .unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // Query String Parser
 // ---------------------------------------------------------------------------
@@ -939,6 +1025,8 @@ pub struct AsyncServerContext {
     pub routes: Arc<AsyncRouteTree>,
     /// VM executor for running handlers (None for native-only mode)
     pub executor: Option<Arc<AsyncVmExecutor>>,
+    /// Shared bytecode for inline VM execution (avoids executor overhead)
+    pub chunks: Option<Arc<Vec<Chunk>>>,
     /// Middleware chain (VM handlers)
     pub middleware: Vec<SendableHandler>,
 }
@@ -949,20 +1037,26 @@ impl AsyncServerContext {
         Self {
             routes: Arc::new(routes),
             executor: None,
+            chunks: None,
             middleware: Vec::new(),
         }
     }
 
-    /// Create a full server context with VM executor.
+    /// Create a full server context with VM executor and inline chunks.
     pub fn with_executor(
         routes: AsyncRouteTree,
         chunks: Vec<Chunk>,
         middleware: Vec<SendableHandler>,
     ) -> Self {
-        let executor = AsyncVmExecutor::new(chunks, AsyncExecutorConfig::default());
+        let chunks_arc = Arc::new(chunks);
+        let executor = AsyncVmExecutor::new(
+            (*chunks_arc).clone(),
+            AsyncExecutorConfig::default(),
+        );
         Self {
             routes: Arc::new(routes),
             executor: Some(Arc::new(executor)),
+            chunks: Some(chunks_arc),
             middleware,
         }
     }
@@ -1177,21 +1271,31 @@ async fn handle_request_with_context(
             let response = match handler {
                 AsyncHandler::Native(f) => f(&async_req),
                 AsyncHandler::Vm(vm_handler) => {
-                    // Execute VM handler via async executor
-                    if let Some(executor) = &ctx.executor {
-                        // Convert request to sendable format DIRECTLY
-                        let request_sv = async_req.to_sendable();
-
-                        match executor.execute_handler(vm_handler, request_sv).await {
-                            Ok(result_sv) => {
-                                // Build hyper response directly, skipping AsyncResponse
-                                return Ok(build_hyper_response_from_sendable(&result_sv));
+                    if let Some(chunks) = &ctx.chunks {
+                        // Inline VM execution: no spawn_blocking, no semaphore.
+                        // Runs on Tokio worker thread using thread-local VM.
+                        let chunks = Arc::clone(chunks);
+                        let resp = HANDLER_VM.with(|cell| {
+                            let mut vm = cell.borrow_mut();
+                            let request_nv = async_req.to_nvalue();
+                            let handler_nv = vm_handler.to_nvalue();
+                            match vm.call_nvalue(
+                                &handler_nv,
+                                &[request_nv],
+                                &chunks,
+                                0,
+                                0,
+                            ) {
+                                Ok(result) => build_hyper_response_from_nvalue(&result),
+                                Err(e) => {
+                                    vm.reset();
+                                    eprintln!("[server] Handler error: {}", e);
+                                    AsyncResponse::text(500, "Internal Server Error")
+                                        .into_hyper()
+                                }
                             }
-                            Err(e) => {
-                                eprintln!("[server] Handler error: {}", e);
-                                AsyncResponse::text(500, "Internal Server Error")
-                            }
-                        }
+                        });
+                        return Ok(resp);
                     } else {
                         AsyncResponse::text(501, "VM execution not configured")
                     }

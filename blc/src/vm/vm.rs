@@ -219,6 +219,17 @@ impl Vm {
         }
     }
 
+    /// Reset VM state for reuse (e.g., thread-local VM between requests).
+    /// Preserves allocations but clears all runtime state.
+    pub fn reset(&mut self) {
+        self.stack.clear();
+        self.frames.clear();
+        self.upvalue_stack.clear();
+        self.handler_stack.clear();
+        self.handler_boundaries.clear();
+        self.instruction_count = 0;
+    }
+
     /// Create a VM with a specific instruction limit for sandboxed execution.
     ///
     /// # Arguments
