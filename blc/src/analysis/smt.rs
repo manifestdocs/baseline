@@ -223,13 +223,7 @@ fn parse_spec_block(node: &Node, source: &str, file: &str) -> Option<FuncSpec> {
         return None;
     }
 
-    let location = Location {
-        file: file.to_string(),
-        line: node.start_position().row + 1,
-        col: node.start_position().column + 1,
-        end_line: Some(node.end_position().row + 1),
-        end_col: Some(node.end_position().column + 1),
-    };
+    let location = Location::from_node(file, &node);
 
     Some(FuncSpec {
         name,

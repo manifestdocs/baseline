@@ -322,9 +322,6 @@ fn check_transitive_effects(
             let has_effect = declared.iter().any(|e| e.eq_ignore_ascii_case(effect));
 
             if !has_effect {
-                let start = func_node.start_position();
-                let end = func_node.end_position();
-
                 // Find which callee introduces this effect
                 let via = find_effect_source(
                     func_name,
@@ -340,13 +337,7 @@ fn check_transitive_effects(
                 diagnostics.push(Diagnostic {
                     code: "CAP_001".to_string(),
                     severity: Severity::Error,
-                    location: Location {
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        col: start.column + 1,
-                        end_line: Some(end.row + 1),
-                        end_col: Some(end.column + 1),
-                    },
+                    location: Location::from_node(file, &func_node),
                     message: format!(
                         "Function '{}' transitively requires {{{}}} via '{}' but does not declare it",
                         func_name, effect, via_name
@@ -572,7 +563,6 @@ fn check_effectful_call(
 
     if !has_effect {
         let start = node.start_position();
-        let end = node.end_position();
 
         // Build the suggestion patch
         let (patch, _original_text) = build_effect_patch(func_node, source, &required_effect);
@@ -580,13 +570,7 @@ fn check_effectful_call(
         diagnostics.push(Diagnostic {
             code: "CAP_001".to_string(),
             severity: Severity::Error,
-            location: Location {
-                file: file.to_string(),
-                line: start.row + 1,
-                col: start.column + 1,
-                end_line: Some(end.row + 1),
-                end_col: Some(end.column + 1),
-            },
+            location: Location::from_node(file, &node),
             message: format!("Unauthorized Side Effect: '{}'", call_name),
             context: format!(
                 "Function '{}' declares effects {{{}}}, but calls '{}' which requires {{{}}}.",

@@ -736,18 +736,10 @@ fn check_int_refinement(
     if let Some(int_val) = resolved_value {
         if !interval.contains(int_val) {
             let vn = value_node.unwrap();
-            let start = vn.start_position();
-            let end = vn.end_position();
             diagnostics.push(Diagnostic {
                 code: "REF_001".to_string(),
                 severity: Severity::Error,
-                location: Location {
-                    file: file.to_string(),
-                    line: start.row + 1,
-                    col: start.column + 1,
-                    end_line: Some(end.row + 1),
-                    end_col: Some(end.column + 1),
-                },
+                location: Location::from_node(file, &vn),
                 message: format!(
                     "Refinement Violation: Value {} is out of bounds for type {}",
                     int_val, type_name
@@ -802,18 +794,10 @@ fn check_string_refinement(
             };
 
             if let Err(reason) = constraint.check(string_val) {
-                let start = val.start_position();
-                let end = val.end_position();
                 diagnostics.push(Diagnostic {
                     code: "REF_002".to_string(),
                     severity: Severity::Error,
-                    location: Location {
-                        file: file.to_string(),
-                        line: start.row + 1,
-                        col: start.column + 1,
-                        end_line: Some(end.row + 1),
-                        end_col: Some(end.column + 1),
-                    },
+                    location: Location::from_node(file, &val),
                     message: format!(
                         "Refinement Violation: String {} for type {}",
                         reason, type_name

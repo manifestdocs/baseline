@@ -139,20 +139,12 @@ fn collect_errors(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if node.is_error() {
-        let start = node.start_position();
-        let end = node.end_position();
         let text = node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
 
         diagnostics.push(Diagnostic {
             code: "SYN_001".to_string(),
             severity: Severity::Error,
-            location: Location {
-                file: file.to_string(),
-                line: start.row + 1,
-                col: start.column + 1,
-                end_line: Some(end.row + 1),
-                end_col: Some(end.column + 1),
-            },
+            location: Location::from_node(file, &node),
             message: format!(
                 "Syntax error: unexpected `{}`",
                 text.chars().take(20).collect::<String>()
@@ -161,19 +153,10 @@ fn collect_errors(
             suggestions: vec![],
         });
     } else if node.is_missing() {
-        let start = node.start_position();
-        let end = node.end_position();
-
         diagnostics.push(Diagnostic {
             code: "SYN_002".to_string(),
             severity: Severity::Error,
-            location: Location {
-                file: file.to_string(),
-                line: start.row + 1,
-                col: start.column + 1,
-                end_line: Some(end.row + 1),
-                end_col: Some(end.column + 1),
-            },
+            location: Location::from_node(file, &node),
             message: format!("Missing expected: {}", node.kind()),
             context: "A required syntax element is missing.".to_string(),
             suggestions: vec![Suggestion {

@@ -161,6 +161,21 @@ pub struct Location {
     pub end_col: Option<usize>,
 }
 
+impl Location {
+    /// Build a Location from a tree-sitter node.
+    pub fn from_node(file: &str, node: &tree_sitter::Node) -> Self {
+        let start = node.start_position();
+        let end = node.end_position();
+        Location {
+            file: file.to_string(),
+            line: start.row + 1,
+            col: start.column + 1,
+            end_line: Some(end.row + 1),
+            end_col: Some(end.column + 1),
+        }
+    }
+}
+
 /// A suggested fix for a diagnostic.
 ///
 /// Per spec Appendix A, includes confidence score for LLM repair loops.

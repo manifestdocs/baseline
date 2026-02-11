@@ -172,7 +172,7 @@ impl ModuleLoader {
                 return Err(Diagnostic {
                     code: "IMP_001".to_string(),
                     severity: Severity::Error,
-                    location: node_location(file, import_node),
+                    location: Location::from_node(file,import_node),
                     message: format!("Cannot resolve import `{}`: no base directory", module_name),
                     context: "Imports require a file-based context.".to_string(),
                     suggestions: vec![],
@@ -233,7 +233,7 @@ impl ModuleLoader {
         Err(Diagnostic {
             code: "IMP_001".to_string(),
             severity: Severity::Error,
-            location: node_location(file, import_node),
+            location: Location::from_node(file,import_node),
             message: format!("Module `{}` not found", module_name),
             context: format!("Searched: {}", tried),
             suggestions: vec![],
@@ -267,7 +267,7 @@ impl ModuleLoader {
             return Err(Diagnostic {
                 code: "IMP_002".to_string(),
                 severity: Severity::Error,
-                location: node_location(file, import_node),
+                location: Location::from_node(file,import_node),
                 message: format!(
                     "Circular import detected: {} -> {}",
                     cycle,
@@ -282,7 +282,7 @@ impl ModuleLoader {
         let source = std::fs::read_to_string(path).map_err(|e| Diagnostic {
             code: "IMP_001".to_string(),
             severity: Severity::Error,
-            location: node_location(file, import_node),
+            location: Location::from_node(file,import_node),
             message: format!("Failed to read module `{}`: {}", path.display(), e),
             context: "Check that the file exists and is readable.".to_string(),
             suggestions: vec![],
@@ -297,7 +297,7 @@ impl ModuleLoader {
         let tree = parser.parse(&source, None).ok_or_else(|| Diagnostic {
             code: "IMP_003".to_string(),
             severity: Severity::Error,
-            location: node_location(file, import_node),
+            location: Location::from_node(file,import_node),
             message: format!("Failed to parse module `{}`", path.display()),
             context: "The imported module has syntax errors.".to_string(),
             suggestions: vec![],
@@ -308,7 +308,7 @@ impl ModuleLoader {
             return Err(Diagnostic {
                 code: "IMP_003".to_string(),
                 severity: Severity::Error,
-                location: node_location(file, import_node),
+                location: Location::from_node(file,import_node),
                 message: format!("Imported module `{}` has syntax errors", path.display()),
                 context: "Fix the errors in the imported module first.".to_string(),
                 suggestions: vec![],
@@ -403,17 +403,6 @@ impl ModuleLoader {
     }
 }
 
-fn node_location(file: &str, node: &tree_sitter::Node) -> Location {
-    let start = node.start_position();
-    let end = node.end_position();
-    Location {
-        file: file.to_string(),
-        line: start.row + 1,
-        col: start.column + 1,
-        end_line: Some(end.row + 1),
-        end_col: Some(end.column + 1),
-    }
-}
 
 fn has_syntax_errors(node: &tree_sitter::Node) -> bool {
     if node.is_error() || node.is_missing() {

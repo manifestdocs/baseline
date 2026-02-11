@@ -75,6 +75,62 @@ impl Prelude {
     }
 }
 
+/// Look up the canonical module name for a short alias.
+pub fn module_alias(short: &str) -> Option<&'static str> {
+    match short {
+        "str" => Some("String"),
+        "lst" => Some("List"),
+        "int" => Some("Int"),
+        "map" => Some("Map"),
+        "set" => Some("Set"),
+        "jn" => Some("Json"),
+        "opt" => Some("Option"),
+        "res" => Some("Result"),
+        "mth" => Some("Math"),
+        "con" => Some("Console"),
+        "log" => Some("Log"),
+        "tm" => Some("Time"),
+        "rnd" => Some("Random"),
+        "env" => Some("Env"),
+        "fs" => Some("Fs"),
+        "http" => Some("Http"),
+        "req" => Some("Request"),
+        "rsp" => Some("Response"),
+        "rtr" => Some("Router"),
+        "srv" => Some("Server"),
+        "db" => Some("Db"),
+        _ => None,
+    }
+}
+
+/// Return the short alias for a canonical module name, if one exists.
+pub fn reverse_module_alias(module: &str) -> Option<&'static str> {
+    match module {
+        "String" => Some("str"),
+        "List" => Some("lst"),
+        "Int" => Some("int"),
+        "Map" => Some("map"),
+        "Set" => Some("set"),
+        "Json" => Some("jn"),
+        "Option" => Some("opt"),
+        "Result" => Some("res"),
+        "Math" => Some("mth"),
+        "Console" => Some("con"),
+        "Log" => Some("log"),
+        "Time" => Some("tm"),
+        "Random" => Some("rnd"),
+        "Env" => Some("env"),
+        "Fs" => Some("fs"),
+        "Http" => Some("http"),
+        "Request" => Some("req"),
+        "Response" => Some("rsp"),
+        "Router" => Some("rtr"),
+        "Server" => Some("srv"),
+        "Db" => Some("db"),
+        _ => None,
+    }
+}
+
 /// Walk the root AST node and extract the `@prelude(name)` variant.
 ///
 /// Returns `Prelude::None` if no `@prelude` directive is found.
