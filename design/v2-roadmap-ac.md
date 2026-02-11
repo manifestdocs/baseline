@@ -2,7 +2,7 @@
 
 **Status**: Draft
 **Date**: 2026-02-07
-**Source**: `design/baseline-language-specification-v2.md` (cherry-picked features)
+**Source**: `design/baseline-language-specification.md` (cherry-picked features)
 
 ## Already Implemented (from v2 spec)
 

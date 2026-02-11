@@ -1,0 +1,44 @@
+{
+  "name": "baseline-language",
+  "displayName": "Baseline",
+  "description": "Language support for the Baseline programming language",
+  "version": "0.1.0",
+  "publisher": "baseline-lang",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/manifestdocs/baseline"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "baseline",
+        "aliases": [
+          "Baseline",
+          "baseline"
+        ],
+        "extensions": [
+          ".bl"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icons/baseline-light.png",
+          "dark": "./icons/baseline-dark.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "baseline",
+        "scopeName": "source.baseline",
+        "path": "./syntaxes/baseline.tmLanguage.json"
+      }
+    ]
+  }
+}

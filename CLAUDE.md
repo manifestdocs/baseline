@@ -23,17 +23,18 @@ baseline/
 ├── blc/                    # Self-contained compiler (Rust)
 │   ├── src/analysis/       # Type, Effect, and Refinement checkers
 │   └── src/parse.rs        # Tree-sitter integration
+├── design/                 # Language specification and design docs
+│   └── baseline-language-specification.md  # Authoritative spec (with status markers)
 ├── tree-sitter-baseline/   # Grammar definition and parser
-├── examples/               # v0.1 Feature demonstrations
+├── examples/               # Feature demonstrations
 ├── extensions/             # Editor support (Zed, VS Code)
-├── SPEC_V0_1_DELTA.md      # v0.1 Implementation Constraints
 └── CLAUDE.md
 ```
 
 ## Implemented Features (v0.1)
 
 ### Syntax & Grammar
-- **Functions:** ML-style `name : Sig = body`
+- **Functions:** `fn name(params) -> Type = body`
 - **Tuples:** `(1, "a")`, Unit `()`
 - **Records:** `{ x: Int, y: Int }`, `User { id: 1 }`, `obj.prop`
 - **Control Flow:** `if/else`, `match` (pattern matching), `1..10` (ranges)
@@ -44,8 +45,8 @@ baseline/
 - **Core Types:** `Int`, `String`, `Boolean`, `List<T>`
 - **Refinements:** Integer Intervals (`type Port = Int where self > 0`)
     - *Constraint:* Regex and custom predicates deferred to v0.2.
-- **Effects:** Built-in only (`Console`, `Http`, `Fs`, `Log`, `Time`)
-    - *Constraint:* No distinct `handle` blocks in v0.1.
+- **Effects:** Built-in (`Console`, `Http`, `Fs`, `Log`, `Time`, `Random`, `Env`) + user-defined effect declarations
+    - Effect handlers exist (grammar + interpreter) but type checking is partial.
 
 ## Developer Workflow
 
@@ -66,7 +67,7 @@ baseline/
 ### Coding Guidelines
 - **Rust (Compiler):** Follow standard Rust idioms. Use `tree-sitter` for parsing.
 - **Grammar:** Resolve all conflicts in `grammar.js`. Prefer explicit precedence.
-- **Constraints:** Adhere to `SPEC_V0_1_DELTA.md`. Do not implement v0.2 features (macros, advanced refinements) yet.
+- **Constraints:** Refer to `design/baseline-language-specification.md` for feature status (`[IMPLEMENTED]`/`[PARTIAL]`/`[PLANNED]` markers).
 
 ## Future Work (v0.2+)
 

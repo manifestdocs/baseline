@@ -1,23 +1,28 @@
 # Baseline Language Specification
 
-**Version 0.1.0 — Draft**
+**Version 0.2.0 — Draft**
 
-> A fast, verifiable, LLM-native programming language.
+> A fast, verifiable, dual-audience programming language: native to both LLMs and humans.
 
-> For aspirational features planned for v0.2 and beyond (memory model, compilation targets, advanced testing, concurrency, etc.), see [baseline-language-vision.md](baseline-language-vision.md).
+> For aspirational features planned for v0.3 and beyond (memory model, compilation targets, advanced testing, concurrency, etc.), see [baseline-language-vision.md](baseline-language-vision.md).
+
+---
+
+### Implementation Status Key
+
+This specification describes the full Baseline v0.2 target language. Each feature is marked with its current implementation status in the `blc` compiler:
+
+- **[IMPLEMENTED]** — Working in grammar, type checker, and runtime
+- **[PARTIAL]** — Partially implemented (e.g., grammar exists but no type checking, or type-checks but no runtime)
+- **[PLANNED]** — Designed but not yet implemented; target for v0.2
+
+Features marked `[PLANNED]` are normative design — they describe how the language *will* work and should be implemented to match this specification. The compiler is in bootstrap phase; see conformance tests in `tests/conformance/` for verified behavior.
 
 ---
 
 ## Table of Contents
 
 1. [Introduction](#1-introduction)
-   - 1.1 Design Philosophy
-   - 1.2 Goals
-   - 1.3 Non-Goals
-   - 1.4 Influences
-   - 1.5 LLM-Native Design Principles
-   - 1.6 The One Way Principle
-   - 1.7 Core Design Principles
 2. [Lexical Structure](#2-lexical-structure)
 3. [Types](#3-types)
 4. [Expressions](#4-expressions)
@@ -26,20 +31,14 @@
 7. [Modules](#7-modules)
 8. [Specifications](#8-specifications)
 9. [Testing](#9-testing)
-    - 9.1 Testing Philosophy
-    - 9.2 Inline Tests (Unit Tests)
-    - 9.3 BDD Specifications
-    - 9.4 Async and Effectful Tests
-    - 9.5 Test Organization
-    - 9.6 Assertions and Matchers
-    - 9.7 Test Output for LLMs
-    - 9.8 Best Practices
 10. [Language Server Protocol and Compiler API](#10-language-server-protocol-and-compiler-api)
-    - 10.1-10.6 Standard LSP, Query API, Sessions
-11. [Standard Library](#11-standard-library)
-12. [Grammar](#12-grammar)
+11. [Constrained Generation Protocol](#11-constrained-generation-protocol)
+12. [LLM Bootstrap Kit](#12-llm-bootstrap-kit)
+13. [Standard Library](#13-standard-library)
+14. [Grammar](#14-grammar)
 - [Appendix A: Compiler Errors](#appendix-a-compiler-errors)
 - [Appendix B: Trace Format](#appendix-b-trace-format)
+- [Appendix C: Dual-Audience Design Rationale](#appendix-c-dual-audience-design-rationale)
 
 ---
 
@@ -53,15 +52,17 @@ Baseline is designed around three core principles:
 
 2. **Effects are data** — Side effects are explicit, trackable, and mockable. Pure functions are the default; effects are opt-in capabilities.
 
-3. **LLM-native** — The language is designed for machine generation and analysis. Syntax is unambiguous, errors are structured, and debugging is automated.
+3. **Dual-audience native** — The language is designed for both machine generation and human comprehension. Syntax is unambiguous, errors are structured, and every design choice is evaluated against both audiences. Where the interests of LLMs and humans align (which is most of the time), we optimize aggressively. Where they conflict, we document the tradeoff explicitly.
 
 ### 1.2 Goals
 
-- **Fast compilation**: Development builds in <200ms
-- **Fast execution**: Compiled to native with zero-cost effects and refinements
-- **Small binaries**: Typical services <5MB
-- **Verified correctness**: Specifications checked at compile time
-- **Portable deployment**: Primary target is WebAssembly
+- **Fast compilation**: Development builds in <200ms [IMPLEMENTED]
+- **Fast execution**: Compiled to native with zero-cost effects and refinements [PARTIAL — bytecode VM implemented; native compilation planned]
+- **Small binaries**: Typical services <5MB [PLANNED]
+- **Verified correctness**: Specifications checked at compile time [PARTIAL — type and effect checking implemented; SMT verification planned]
+- **Portable deployment**: Primary target is WebAssembly [PLANNED]
+- **Constrained generation**: Type system supports real-time token filtering during LLM generation [PLANNED]
+- **Zero-shot generability**: Syntax close enough to ML-family languages that LLMs can generate valid Baseline without fine-tuning [IMPLEMENTED]
 
 ### 1.3 Non-Goals
 
@@ -69,17 +70,21 @@ Baseline is designed around three core principles:
 - Gradual typing or dynamic features
 - Object-oriented programming
 - Manual memory management (exposed to user)
+- Syntax optimization at the expense of human readability
+- Novel syntax where established conventions exist
 
 ### 1.4 Influences
 
 Baseline draws from:
 
 - **ML/OCaml**: Type inference, pattern matching, algebraic data types
-- **Rust**: Ownership concepts (simplified), error handling, tooling quality
+- **Rust**: Ownership concepts (simplified), error handling, tooling quality, `fn` keyword
 - **Koka**: Algebraic effects
 - **Liquid Haskell**: Refinement types
 - **Elm**: Friendly errors, simplicity
-- **F#**: Pragmatic functional programming
+- **F#**: Pragmatic functional programming, pipeline operators
+- **Go**: `gofmt`-style canonical formatting, simplicity
+- **Dafny/SPARK**: First-class specifications and verification
 
 ### 1.5 LLM-Native Design Principles
 
@@ -98,8 +103,7 @@ Traditional languages allow virtually unlimited ways to accomplish a task. Basel
 // An LLM doesn't need to "remember" to check boundaries
 type Port = Int where 1 <= self <= 65535
 
-listen : Port -> {Net} Server
-listen = |port|
+fn listen!(port: Port) -> {Net} Server =
   // port is GUARANTEED to be 1-65535 here
   // No defensive coding needed
   ...
@@ -109,9 +113,9 @@ listen = |port|
 
 LLMs cannot step through debuggers or intuit runtime behavior. Baseline provides compile-time verification:
 
-- **SMT-based spec checking**: Mathematical proof of correctness
-- **Exhaustive pattern matching**: Compiler ensures all cases handled
-- **Effect tracking**: Compiler prevents unauthorized side effects
+- **SMT-based spec checking**: Mathematical proof of correctness [PLANNED]
+- **Exhaustive pattern matching**: Compiler ensures all cases handled [IMPLEMENTED]
+- **Effect tracking**: Compiler prevents unauthorized side effects [IMPLEMENTED]
 
 #### 1.5.3 Structured Machine-Readable Output
 
@@ -124,9 +128,9 @@ baseline check --format=json
       ↓
 Parse error JSON
       ↓
-Apply suggested fix
+Apply suggested fix (highest confidence first)
       ↓
-Retry
+Retry (with verification level context)
 ```
 
 #### 1.5.4 Capability-Based Security for Agents
@@ -140,8 +144,7 @@ The effect system serves as a **security sandbox** for autonomous agents:
 // - Delete data
 // - Perform any effect not in the set
 
-agent_task! : Input -> {Log, Db.read} Output
-agent_task! = |input|
+fn agent_task!(input: Input) -> {Log, Db.read} Output =
   Log.info!("Processing ${input}")
   let data = Db.query!("SELECT * FROM items")
   // Fs.delete!("important.txt")  // COMPILE ERROR: Fs not in effect set
@@ -150,7 +153,7 @@ agent_task! = |input|
 
 This makes Baseline suitable for **untrusted AI-generated code** execution.
 
-#### 1.5.5 Interactive Refinement Protocol
+#### 1.5.5 Interactive Refinement Protocol [PLANNED]
 
 The compiler supports a dialogue-based refinement process for LLM integration:
 
@@ -158,17 +161,21 @@ The compiler supports a dialogue-based refinement process for LLM integration:
 // LLM submits code
 { "action": "check", "code": "..." }
 
-// Compiler responds with verification status
+// Compiler responds with verification status and active verification level
 {
   "status": "unverified",
+  "verification_level": "refinements",
+  "higher_level_warnings": [
+    "Full verification has not been run. Use --level=full before merge."
+  ],
   "obligations": [
     {
       "location": { "line": 12, "col": 5 },
       "property": "user.age >= 0",
       "context": "Required by NonNegative refinement",
       "suggestions": [
-        { "action": "assume", "code": "@assume user.age >= 0" },
-        { "action": "guard", "code": "if user.age < 0 then return Err(InvalidAge)" },
+        { "action": "assume", "code": "@assume user.age >= 0", "confidence": 0.3 },
+        { "action": "guard", "code": "if user.age < 0 then return Err(InvalidAge)", "confidence": 0.8 },
         { "action": "query", "question": "What is the schema constraint on users.age?" }
       ]
     }
@@ -188,19 +195,77 @@ The compiler supports a dialogue-based refinement process for LLM integration:
 }
 ```
 
-This protocol enables LLMs to make informed decisions rather than guessing.
+#### 1.5.6 Token-Efficient Design
 
-### 1.6 The One Way Principle
+Baseline's syntax is designed to minimize token consumption while maintaining readability:
+
+- **Common ASCII keywords** that map to single BPE tokens (`fn`, `let`, `if`, `match`)
+- **No exotic Unicode symbols** in core syntax
+- **Type inference** at local scope (types are enforced, not repeatedly spelled out)
+- **Canonical formatting** eliminates tokens wasted on stylistic decisions
+- **Pipeline operators** reduce parenthesis nesting (fewer bracket-matching tokens)
+
+Design guideline: when two syntax options are equally readable, prefer the one that uses fewer tokens. This is measured empirically against common BPE tokenizers (cl100k_base, o200k_base).
+
+### 1.6 Dual-Audience Design
+
+Baseline rejects the premise that LLM-optimized and human-optimized are opposing goals. The shared enemy is **ambiguity, implicitness, and action-at-a-distance** — which have always been the enemies of good software engineering regardless of who writes the code.
+
+#### 1.6.1 Where Interests Align (Optimize Aggressively)
+
+| Feature | LLM Benefit | Human Benefit |
+|---------|-------------|---------------|
+| Pipeline syntax | Left-to-right generation | Top-to-bottom reading |
+| Explicit effects | Prevents hallucinated I/O | Makes side effects visible |
+| Radical locality | Self-contained context windows | Self-contained comprehension |
+| Canonical formatting | No tokens wasted on style | No style arguments |
+| Structured errors | Machine-parseable feedback | Actionable diagnostics |
+| Refinement types | Compile-time constraint checking | Self-documenting contracts |
+| One Way Principle | Fewer decision points | Consistent codebases |
+
+#### 1.6.2 Where Interests Diverge (Document the Tradeoff)
+
+| Decision | LLM Preference | Human Preference | Baseline Choice | Rationale |
+|----------|---------------|------------------|-----------------|-----------|
+| Function syntax | Familiar `fn` keyword | ML-style binding or `fn` | `fn` keyword | Training data compatibility (§5.1) |
+| Row polymorphism | Closed types easier to constrain | Open types more flexible | Bounded at module boundaries | Best of both (§3.2) |
+| Verification levels | Should know which level is active | May not care during dev | Level surfaced in all feedback | Prevents generate-then-surprise (§8.5) |
+| Test syntax | Explicit function application | BDD natural language | Explicit with BDD structure | Clarity over sugar (§9.3) |
+| Formatting | Stripped (minimal tokens) | Generous whitespace | Canonical with whitespace | `gofmt` proved humans adapt; small token cost |
+
+#### 1.6.3 The Legibility Layer
+
+Baseline supports two views of the same source file, rendered by tooling:
+
+**Spec View** (for human review of LLM-generated code):
+```
+fn create_user!(body: UserCreate) -> {Db} Result<User, ValidationError>
+  @requires body.name.len > 0
+  @ensures result.id > 0 when Ok
+  @effects Db.write
+```
+
+**Impl View** (full implementation):
+```baseline
+fn create_user!(body: UserCreate) -> {Db} Result<User, ValidationError> =
+  let user = User {
+    id: Db.next_id!(),
+    name: body.name,
+    email: body.email,
+  }
+  Db.insert!(user)?
+  Ok(user)
+```
+
+Both views are derived from the same source. The spec view is generated by the compiler from type signatures, specifications, and effect annotations. Tooling (IDE, code review, CI) can render either view. A human auditing LLM output reads the spec view first, dips into impl only where something looks wrong.
+
+### 1.7 The One Way Principle
 
 Baseline is opinionated by design. For every common operation, there is one obvious way to do it. This is not merely a convention—it is enforced by the compiler and formatter.
 
-**Rationale**: For LLM code generation, every decision point is a potential error. Multiple equivalent syntaxes mean:
-- More tokens spent choosing an approach
-- Inconsistent codebases
-- Conflicting patterns in training data
-- Style arguments that waste human time
+**Rationale**: For LLM code generation, every decision point is a potential error. Multiple equivalent syntaxes mean more tokens spent choosing an approach, inconsistent codebases, conflicting patterns in training data, and style arguments that waste human time.
 
-#### 1.6.1 Enforced Patterns
+#### 1.7.1 Enforced Patterns
 
 **String Formatting**: Interpolation only
 
@@ -208,7 +273,7 @@ Baseline is opinionated by design. For every common operation, there is one obvi
 // THE way
 let msg = "Hello, ${name}. You have ${count} messages."
 
-// NOT supported - these don't exist in Baseline:
+// NOT supported:
 // format("Hello, {}", name)      // No format function
 // "Hello, " + name               // No string concatenation with +
 // sprintf, printf                // No C-style formatting
@@ -244,13 +309,8 @@ match user
 // Or with combinators
 user |> Option.map(|u| u.name) |> Option.unwrap_or("Anonymous")
 
-// Type system enforces it
-find_user : Id -> User?  // Returns Option<User>
-
 // NOT supported:
-// null      // Keyword doesn't exist
-// undefined // Keyword doesn't exist
-// nil       // Keyword doesn't exist
+// null, undefined, nil   // Keywords don't exist
 ```
 
 **Data Transformation**: Combinators, not loops
@@ -283,7 +343,6 @@ let result = input
 
 // Discouraged - lint warning:
 let result = transform(validate(parse(input)))
-// Warning: prefer pipe operator for chained transformations
 ```
 
 **Imports**: Explicit, not wildcard
@@ -295,21 +354,19 @@ import Json.{encode, decode}
 
 // Discouraged - lint warning:
 import Http.*
-// Warning: prefer explicit imports; wildcard obscures dependencies
 ```
 
 **Function Definition**: One syntax
 
 ```baseline
 // THE way
-greet : String -> String
-greet = |name| "Hello, ${name}"
+fn greet(name: String) -> String =
+  "Hello, ${name}"
 
-// NOT supported - these syntaxes don't exist:
-// fn greet(name: String) -> String { }
+// NOT supported:
+// greet : String -> String / greet = |name| ...  // v0.1 split style
 // func greet(name) { }
 // def greet(name):
-// function greet(name) { }
 ```
 
 **Equality**: One operator
@@ -319,173 +376,85 @@ greet = |name| "Hello, ${name}"
 if a == b then ...
 
 // NOT supported:
-// a === b    // Strict equality doesn't exist (no type coercion)
-// a.equals(b) // Method form doesn't exist for primitives
-// eq(a, b)    // Function form discouraged
+// a === b, a.equals(b), eq(a, b)
 ```
 
-#### 1.6.2 Permitted Flexibility
+#### 1.7.2 Permitted Flexibility
 
 Some patterns genuinely have multiple valid forms based on context:
 
-**Pattern Matching Depth**
-
-```baseline
-// Simple: inline match
-let name = match user
-  Some(u) -> u.name
-  None    -> "Anonymous"
-
-// Complex: explicit match
-let result = match response
-  Ok({data, meta}) -> process(data, meta)
-  Err(Timeout)     -> retry()
-  Err(NotFound)    -> default_value
-  Err(e)           -> fail(e)
-
-// Both are idiomatic - context determines choice
-```
-
-**Function Body Style**
-
 ```baseline
 // Expression body (short functions)
-double : Int -> Int
-double = |x| x * 2
+fn double(x: Int) -> Int = x * 2
 
 // Block body (multi-step)
-process : Input -> Output
-process = |input| {
+fn process(input: Input) -> Output = {
   let parsed = parse(input)
   let validated = validate(parsed)
   transform(validated)
 }
 ```
 
-### 1.7 Core Design Principles
+### 1.8 Core Design Principles
 
-#### 1.7.1 Composition Over Inheritance
+#### 1.8.1 Composition Over Inheritance
 
-Baseline has no classes, no inheritance, no `extends`. Instead, it uses:
+Baseline has no classes, no inheritance, no `extends`. Instead:
 
 **Records for Data**
 
 ```baseline
-// NOT this (doesn't exist):
-// class User extends Entity { ... }
-
-// THIS: composition via records
 type Entity = { id: Id, created_at: Timestamp }
 type User = { entity: Entity, name: String, email: Email }
 ```
 
-**Structural Typing for Polymorphism**
+**Structural Typing for Polymorphism** [PLANNED]
 
 ```baseline
-// NOT this (doesn't exist):
-// interface Named { name: String }
-// class User implements Named { }
-
-// THIS: structural typing with row polymorphism
-greet : { name: String, ..rest } -> String
-greet = |entity| "Hello, ${entity.name}"
+fn greet(entity: { name: String, ..rest }) -> String =
+  "Hello, ${entity.name}"
 
 // Works for ANY record with a name field
-type User = { name: String, email: Email, role: Role }
-type Company = { name: String, employees: Int }
-type Pet = { name: String, species: String }
-
 greet(user)     // Works
 greet(company)  // Works
 greet(pet)      // Works
 ```
 
-**Behavior via Functions**
-
-```baseline
-// NOT this (doesn't exist):
-// class Animal { abstract speak(): String }
-// class Dog extends Animal { speak() { return "woof" } }
-
-// THIS: functions as values
-type Speaker = { speak: () -> String }
-
-let dog_speaker: Speaker = { speak: || "woof" }
-let cat_speaker: Speaker = { speak: || "meow" }
-
-make_noise : Speaker -> String
-make_noise = |s| s.speak()
-```
-
 **Capabilities via Effects**
 
 ```baseline
-// NOT this (doesn't exist):
-// interface Loggable { log(msg: String): void }
-// class Service implements Loggable { }
-
-// THIS: effects as capabilities
 effect Log {
   debug! : String -> ()
   info! : String -> ()
   error! : String -> ()
 }
 
-// Functions declare what capabilities they need
-process! : Data -> {Log, Db} Result
-process! = |data|
+fn process!(data: Data) -> {Log, Db} Result =
   Log.info!("Processing ${data.id}")
-  // ...
+  ...
 ```
 
-#### 1.7.2 Parse, Don't Validate
+#### 1.8.2 Parse, Don't Validate
 
-This principle, articulated by Alexis King, states: **use types to make illegal states unrepresentable**. Instead of validating data and hoping it stays valid, parse it into a type that guarantees validity.
-
-**The Problem with Validation**
+Use types to make illegal states unrepresentable. Instead of validating data and hoping it stays valid, parse it into a type that guarantees validity.
 
 ```baseline
-// BAD: Validation doesn't prevent future misuse
-process_email_bad : String -> {Http} Result
-process_email_bad = |email|
-  if not String.contains(email, "@") then
-    return Err(InvalidEmail)
-
-  // email is still just a String
-  // nothing prevents passing an invalid string here
-  // the validation might not happen in all code paths
-  send_welcome!(email)
-
-// Somewhere else in the codebase...
-send_newsletter!(user_input)  // Oops, forgot to validate!
-```
-
-**The Solution: Parse Into Types**
-
-```baseline
-// GOOD: The type IS the validation
+// GOOD: The type IS the validation [PLANNED — regex refinements]
 type Email = String where String.matches(self, r".+@.+\..+")
 
-process_email : Email -> {Http} Result
-process_email = |email|
+fn process_email!(email: Email) -> {Http} Result =
   // email is GUARANTEED valid by the type system
-  // impossible to have an invalid Email
   send_welcome!(email)
 
 // The "parsing" happens once, at the boundary
-handle_signup! : Request -> {Http} Response
-handle_signup! = |req|
-  let raw_email = req.body.email  // String
-
-  match Email.parse(raw_email)
+fn handle_signup!(req: Request) -> {Http} Response =
+  match Email.parse(req.body.email)
     Ok(email) ->
-      process_email(email)  // Type-safe, guaranteed valid
+      process_email!(email)
       Ok(Response.success())
     Err(_) ->
       Ok(Response.bad_request("Invalid email"))
 ```
-
-**Key Benefits:**
 
 | Aspect | Validate | Parse |
 |--------|----------|-------|
@@ -498,89 +467,32 @@ handle_signup! = |req|
 **More Examples:**
 
 ```baseline
-// Parse, don't validate: IDs
+// Different ID types can't be mixed
 type UserId = Int where self > 0
 type OrderId = Int where self > 0
-
-// These are different types! Can't mix them up.
-get_user : UserId -> {Db} User?
-get_order : OrderId -> {Db} Order?
-
 get_user(order_id)  // Compile error: expected UserId, got OrderId
 
+// Non-empty lists [PLANNED — collection refinements]
+type NonEmpty<T> = List<T> where List.length(self) > 0
+fn head(list: NonEmpty<T>) -> T =
+  Option.unwrap(List.get(list, 0))  // Safe!
 
-// Parse, don't validate: Collections
-type NonEmpty<T> = List<T> where List.len(self) > 0
-
-head : NonEmpty<T> -> T
-head = |list| Option.unwrap(List.get(list, 0))  // Safe! List is guaranteed non-empty
-
-// Can't call head on empty list - type prevents it
-head([])        // Compile error: [] is not NonEmpty
-head([1, 2, 3]) // OK: [1, 2, 3] satisfies NonEmpty
-
-
-// Parse, don't validate: State machines
+// State machines
 type UnverifiedUser = { email: String, token: String }
 type VerifiedUser = { email: Email, verified_at: Timestamp }
-
-// Can't send to unverified users - different type!
-send_newsletter! : VerifiedUser -> {Http} Result
-send_newsletter! = |user| ...
-
-// The only way to get a VerifiedUser is through verification
-verify! : (UnverifiedUser, Token) -> {Db} VerifiedUser?
-verify! = |user, token|
-  if token == user.token then
-    Some({ email: Result.unwrap(Email.parse(user.email)), verified_at: Time.now!() })
-  else
-    None
+fn send_newsletter!(user: VerifiedUser) -> {Http} Result = ...
+// Can't pass UnverifiedUser — different type!
 ```
 
-**Boundary Parsing Pattern:**
+#### 1.8.3 Make Illegal States Unrepresentable
 
 ```baseline
-// All external input enters through "parsing boundaries"
-// Internal code only works with parsed types
-
-// HTTP handler: the boundary
-handle_request! : RawRequest -> {Http, Db} Response
-handle_request! = |raw|
-  // Parse at the boundary
-  let request = Request.parse(raw)?        // Validates structure
-  let user_id = UserId.parse(request.user_id)?  // Validates ID
-  let email = Email.parse(request.email)?  // Validates email
-
-  // Internal processing uses parsed types
-  // No validation needed - types guarantee correctness
-  process!(user_id, email)
-
-
-// Internal function: no validation, just logic
-process! : (UserId, Email) -> {Db} ProcessResult
-process! = |user_id, email|
-  // user_id is guaranteed positive
-  // email is guaranteed well-formed
-  // Just do the work
-  let user = Db.get_user!(user_id)?
-  send_notification!(user, email)
-```
-
-#### 1.7.3 Make Illegal States Unrepresentable
-
-The combination of composition and parse-don't-validate leads to a broader principle: **design types so that invalid states cannot be constructed**.
-
-```baseline
-// BAD: This type allows invalid states
+// BAD: Allows nonsensical combinations
 type ConnectionBad = {
   status: String,        // "connected", "disconnected", "error"
   socket: Socket?,       // Only valid when connected
   error: String?,        // Only valid when error
-  retry_count: Int,      // Only meaningful when error
 }
-// Can construct: { status: "connected", socket: None, error: "oops", retry_count: -5 }
-// Nonsensical!
-
 
 // GOOD: Invalid states are unrepresentable
 type Connection =
@@ -588,22 +500,15 @@ type Connection =
   | Connected(Socket)
   | Error({ message: String, retry_count: Int where self >= 0 })
 
-// Can only construct valid states:
-// Disconnected - no socket, no error
-// Connected(socket) - has socket, no error
-// Error({...}) - has error info, no socket
-
-
-// Pattern matching ensures exhaustive handling
-handle : Connection -> Action
-handle = |conn| match conn
-  Disconnected        -> reconnect()
-  Connected(socket)   -> use_socket(socket)
-  Error({ retry_count, .. }) if retry_count < 3 -> retry()
-  Error(_)            -> give_up()
+fn handle(conn: Connection) -> Action =
+  match conn
+    Disconnected        -> reconnect()
+    Connected(socket)   -> use_socket(socket)
+    Error({ retry_count, .. }) if retry_count < 3 -> retry()  // [PLANNED] guard & record patterns
+    Error(_)            -> give_up()
 ```
 
-These principles are not suggestions—they are enabled and enforced by Baseline's type system. Inheritance is impossible. Unvalidated data at internal boundaries is a type error. Invalid states are unrepresentable. The compiler is your partner in maintaining these invariants.
+These principles are not suggestions—they are enabled and enforced by Baseline's type system.
 
 ---
 
@@ -651,10 +556,12 @@ save!
 Reserved words:
 
 ```
-let match if then else where with
+fn let match if then else where with
 type alias effect module import export
-true false not
+true false not for do in
 ```
+
+**Design note**: All reserved words are common English words that map to single tokens in standard BPE tokenizers (cl100k_base, o200k_base). The keyword `fn` was chosen over `fun`, `func`, or `function` because it is the most token-efficient while remaining immediately recognizable from Rust, Kotlin, and other modern languages.
 
 ### 2.4 Literals
 
@@ -718,7 +625,7 @@ Interpolation ${works} here too.
 ```baseline
 true, false     // Bool
 ()              // Unit (the empty tuple)
-'a', '😀'       // Char (Unicode scalar value)
+'a', '😀'       // Char (Unicode scalar value) [PLANNED]
 ```
 
 ### 2.5 Operators
@@ -732,7 +639,7 @@ true, false     // Bool
 | `*` | Multiplication | 7 |
 | `/` | Division | 7 |
 | `%` | Modulo | 7 |
-| `**` | Exponentiation | 8 (right-assoc) |
+| `**` | Exponentiation | 8 (right-assoc) | [PLANNED — use `Math.pow` for now] |
 | `-` (unary) | Negation | 9 |
 
 #### Comparison
@@ -756,12 +663,12 @@ true, false     // Bool
 
 #### Pipeline and Composition
 
-| Operator | Description | Precedence |
-|----------|-------------|------------|
-| `\|>` | Forward pipe | 1 |
-| `<\|` | Backward pipe | 1 |
-| `>>` | Forward compose | 1 |
-| `<<` | Backward compose | 1 |
+| Operator | Description | Precedence | Status |
+|----------|-------------|------------|--------|
+| `\|>` | Forward pipe | 1 | [IMPLEMENTED] |
+| `<\|` | Backward pipe | 1 | [PLANNED] |
+| `>>` | Forward compose | 1 | [PLANNED] |
+| `<<` | Backward compose | 1 | [PLANNED] |
 
 #### Error Handling
 
@@ -778,95 +685,45 @@ true, false     // Bool
 < >     // Type parameters (in type context)
 ,       // Separator
 :       // Type annotation
-=       // Binding, assignment
+=       // Binding, definition
 ->      // Function type, match arm
-=>      // Fat arrow (reserved for future use)
-|       // Function parameters, match patterns, union types
+|       // Lambda parameters, match patterns, union types
 .       // Field access
 ..      // Spread operator
 @       // Attribute prefix
 _       // Wildcard pattern
 ```
 
-### 2.7 Diff-Friendly Syntax Rules
+### 2.7 Canonical Formatting
 
-Baseline's syntax is designed to minimize cascading changes when code is modified, which is critical for LLM-generated patches and version control:
+Baseline ships with `baseline fmt`, which enforces a single canonical format. Like Go's `gofmt`, this is not optional — CI pipelines should reject unformatted code. [PARTIAL — formatting conventions defined; standalone `baseline fmt` CLI not yet implemented]
 
-#### Trailing Commas
-
-Trailing commas are **always allowed** and **recommended** in multi-line constructs:
+The canonical format:
+- 2-space indentation
+- Generous vertical whitespace between top-level declarations
+- Trailing commas in multi-line constructs
+- Closing delimiters on their own line in multi-line constructs
+- Single blank line between functions
+- No trailing whitespace
+- Newline at end of file
 
 ```baseline
-// Good: Adding a field only changes one line
+// Trailing commas: always allowed, always recommended in multi-line
 type User = {
   name: String,
   email: String,
-  age: Int,     // Trailing comma allowed
+  age: Int,     // Trailing comma
 }
 
-// Good: Adding an argument only changes one line
-let result = some_function(
-  arg1,
-  arg2,
-  arg3,         // Trailing comma allowed
-)
-
-// Good: Adding a variant only changes one line
-type Status =
-  | Active
-  | Inactive
-  | Pending     // No comma needed for variants (use |)
-```
-
-#### No Significant Whitespace
-
-Indentation is **convention only**, not syntax. The following are equivalent:
-
-```baseline
-// Conventional formatting
+// Indentation is convention, not syntax. These are equivalent:
 let result = match x
   Some(v) -> v
   None -> default
 
-// Unconventional but valid
-let result = match x Some(v) -> v None -> default
-
-// Also valid (explicit block)
-let result = match x {
-  Some(v) -> v
-  None -> default
-}
+let result = match x { Some(v) -> v; None -> default }
 ```
 
-#### Statement Terminators
-
-Baseline uses newlines as statement separators, but semicolons are available:
-
-```baseline
-// Without semicolons (preferred)
-let x = 1
-let y = 2
-x + y
-
-// With semicolons (equivalent)
-let x = 1; let y = 2; x + y
-```
-
-#### Closing Delimiters
-
-In multi-line constructs, closing delimiters should appear on their own line:
-
-```baseline
-// Recommended
-let config = {
-  host: "localhost",
-  port: 8080,
-}
-
-// Not recommended (but valid)
-let config = { host: "localhost",
-  port: 8080 }
-```
+**Rationale**: Canonical formatting eliminates an entire class of token-prediction decisions for LLMs. The Go community proved that humans adapt to enforced formatting within weeks. The small token overhead of whitespace is justified by the elimination of formatting inconsistency.
 
 ---
 
@@ -875,13 +732,13 @@ let config = { host: "localhost",
 ### 3.1 Primitive Types
 
 ```baseline
-Bool        // true or false
-Int         // 64-bit signed integer
-Float       // 64-bit IEEE 754 floating point
-Char        // Unicode scalar value
-String      // UTF-8 string (immutable)
-Unit        // The unit type, written ()
-Never       // The bottom type (no values)
+Bool        // true or false                        [IMPLEMENTED]
+Int         // 64-bit signed integer                [IMPLEMENTED]
+Float       // 64-bit IEEE 754 floating point       [IMPLEMENTED]
+Char        // Unicode scalar value                 [PLANNED]
+String      // UTF-8 string (immutable)             [IMPLEMENTED]
+Unit        // The unit type, written ()            [IMPLEMENTED]
+Never       // The bottom type (no values)          [PLANNED]
 ```
 
 ### 3.2 Compound Types
@@ -893,7 +750,6 @@ Never       // The bottom type (no values)
 (Int, String, Bool)         // Triple
 ()                          // Unit (empty tuple)
 
-// Usage
 let pair = (42, "hello")
 let (x, y) = pair           // Destructuring
 pair.0                      // Field access (returns 42)
@@ -905,35 +761,51 @@ pair.0                      // Field access (returns 42)
 List<Int>                   // Homogeneous list
 [1, 2, 3]                   // List literal
 []                          // Empty list (type inferred)
-[1, ..rest]                 // List pattern with rest
+[1, ..rest]                 // List pattern with rest [PLANNED]
 
-// Usage
 let nums = [1, 2, 3]
-List.len(nums)              // 3
+List.length(nums)           // 3
 List.get(nums, 0)           // Some(1)
-[0, ..nums]                 // Prepend: [0, 1, 2, 3]
-[..nums, 4]                 // Append: [1, 2, 3, 4]
+[0, ..nums]                 // Prepend: [0, 1, 2, 3] [PLANNED]
+[..nums, 4]                 // Append: [1, 2, 3, 4] [PLANNED]
 ```
 
 #### Records
 
-Records are structurally typed with row polymorphism:
+Records are structurally typed with **bounded row polymorphism** [PLANNED — row polymorphism not yet implemented; basic records are [IMPLEMENTED]]:
 
 ```baseline
 { name: String, age: Int }  // Record type
 
-// Usage
 let user = { name: "Alice", age: 30 }
 user.name                   // "Alice"
 { ..user, age: 31 }         // Update: { name: "Alice", age: 31 }
 
-// Row polymorphism
-greet : { name: String, ..r } -> String
-greet = |person| "Hello, ${person.name}"
+// Row polymorphism (within a module)
+fn greet(person: { name: String, ..r }) -> String =
+  "Hello, ${person.name}"
 
 greet({ name: "Bob", age: 25 })         // Works
 greet({ name: "Carol", role: "Admin" }) // Also works
 ```
+
+**Bounded Row Polymorphism (v0.2 revision)** [PLANNED]
+
+Row variables (`..r`) are permitted in function signatures but are **resolved to concrete types at module boundaries**. Exported functions must have fully concrete record types or use named type aliases:
+
+```baseline
+// INTERNAL: row polymorphism allowed
+fn greet(person: { name: String, ..r }) -> String =
+  "Hello, ${person.name}"
+
+// EXPORTED: must use concrete type or named alias
+export type Named = { name: String }
+
+export fn greet(person: Named) -> String =
+  "Hello, ${person.name}"
+```
+
+**Rationale**: Unbounded row variables at module boundaries create an open-ended type inference problem during constrained generation — the set of valid completions depends on unknown call sites. Bounding row variables at exports gives the LLM a concrete type to work against while preserving flexibility internally. This follows the MoonBit pattern of "mandatory type signatures at module boundaries with inference locally."
 
 #### Functions
 
@@ -972,10 +844,7 @@ type Json =
   | Array(List<Json>)
   | Object(Map<String, Json>)
 
-// Usage
 let x: Option<Int> = Some(42)
-let y: Option<Int> = None
-
 match x
   Some(n) -> "Got ${n}"
   None    -> "Nothing"
@@ -984,8 +853,8 @@ match x
 #### Parameterized Types
 
 ```baseline
-type Map<K, V>              // Built-in map type
-type Set<T>                 // Built-in set type
+type Map<K, V>
+type Set<T>
 type Tree<T> =
   | Leaf(T)
   | Node(Tree<T>, Tree<T>)
@@ -993,168 +862,113 @@ type Tree<T> =
 
 ### 3.4 Refinement Types
 
-Refinement types add constraints to base types:
+Refinement types add constraints to base types. Integer interval refinements are [IMPLEMENTED]; string and collection refinements are [PLANNED]:
 
 ```baseline
-type Port = Int where 1 <= self <= 65535
-type Email = String where String.matches(self, r".+@.+\..+")
-type NonEmpty<T> = List<T> where List.len(self) > 0
-type Positive = Int where self > 0
-type Percentage = Float where 0.0 <= self <= 100.0
+type Port = Int where 1 <= self <= 65535                     // [IMPLEMENTED]
+type Email = String where String.matches(self, r".+@.+\..+") // [PLANNED] regex refinements
+type NonEmpty<T> = List<T> where List.length(self) > 0       // [PLANNED] collection refinements
+type Positive = Int where self > 0                           // [IMPLEMENTED]
+type Percentage = Float where 0.0 <= self <= 100.0           // [PLANNED] float refinements
 ```
 
 Refinements are checked at boundaries:
 
 ```baseline
-// The refinement is checked when calling this function
-listen : Port -> {Net} Server
-listen = |port|
+fn listen!(port: Port) -> {Net} Server =
   // Inside here, port is guaranteed to be 1-65535
   ...
 
-// Compile error: 70000 does not satisfy 1 <= self <= 65535
-listen(70000)
+listen!(70000)  // Compile error: 70000 does not satisfy 1 <= self <= 65535
 
-// Runtime check at boundary
 let user_input: Int = read_port()
-listen(user_input)  // Checked at runtime, returns Result
+listen!(user_input)  // Checked at runtime, returns Result
 ```
 
 Refinement operators:
 
 ```baseline
-where self > 0                  // Comparison
-where self != ""                // Inequality
-where List.len(self) > 0        // Function call on self
-where String.matches(self, regex) // Pattern matching
-where String.contains(self, x)  // Collection membership
-where self >= other             // Reference other fields (in records)
-where predicate(self)           // Custom predicate function
+where self > 0                  // Comparison [IMPLEMENTED]
+where self != ""                // Inequality [IMPLEMENTED]
+where List.length(self) > 0     // Function call on self [PLANNED]
+where String.matches(self, regex) // Pattern matching [PLANNED]
+where String.contains(self, x)  // Collection membership [PLANNED]
+where self >= other             // Reference other fields (in records) [PLANNED]
+where predicate(self)           // Custom predicate function [PLANNED]
 ```
 
-#### Regex Subset for Refinements
+#### Regex Subset for Refinements [PLANNED]
 
-When using `String.matches()` in refinement types, Baseline uses a **deterministic regex subset** to ensure consistent behavior between compile-time checking and runtime validation:
-
-```baseline
-// Supported regex features
-/abc/           // Literal characters
-/[a-z]/         // Character classes
-/[^0-9]/        // Negated character classes
-/./             // Any character (except newline)
-/a*/            // Zero or more (greedy)
-/a+/            // One or more (greedy)
-/a?/            // Zero or one
-/a{3}/          // Exactly N
-/a{2,5}/        // Between N and M
-/(ab)/          // Grouping
-/a|b/           // Alternation
-/^abc$/         // Anchors
-/\d \w \s/      // Character class shortcuts
-```
+When using `String.matches()` in refinement types, Baseline uses a **deterministic regex subset** to ensure consistent behavior:
 
 ```baseline
-// NOT supported (to ensure determinism and prevent ReDoS)
-// No backreferences: \1, \2
-// No lookahead: (?=...), (?!...)
-// No lookbehind: (?<=...), (?<!...)
-// No possessive quantifiers: a++
-// No atomic groups: (?>...)
-// No recursive patterns
+// Supported
+/abc/  /[a-z]/  /[^0-9]/  /./  /a*/  /a+/  /a?/  /a{3}/  /a{2,5}/
+/(ab)/  /a|b/  /^abc$/  /\d \w \s/
+
+// NOT supported (determinism and ReDoS prevention)
+// No backreferences, lookahead, lookbehind, possessive quantifiers,
+// atomic groups, or recursive patterns
 ```
 
 For complex validation beyond this subset, use predicate functions:
 
 ```baseline
-// Complex validation via predicate
 type ValidEmail = String where is_valid_email(self)
 
-// The predicate has full language power
-is_valid_email : String -> Bool
-is_valid_email = |s|
+fn is_valid_email(s: String) -> Bool =
   let parts = String.split(s, "@")
-  List.len(parts) == 2
-    && List.get(parts, 0) |> Option.map(|p| String.len(p) > 0) == Some(true)
+  List.length(parts) == 2
+    && List.get(parts, 0) |> Option.map(|p| String.length(p) > 0) == Some(true)
     && List.get(parts, 1) |> Option.map(|p| String.contains(p, ".")) == Some(true)
 ```
 
-This ensures:
-- **Consistency**: Same behavior at compile-time and runtime
-- **Security**: No catastrophic backtracking (ReDoS attacks)
-- **Portability**: Same behavior on all platforms
-
 ### 3.5 Optional and Result Types
-
-These are so common they have special syntax:
 
 ```baseline
 T?          // Sugar for Option<T>
 
-// Usage
-find : Id -> User?
-find = |id| ...
-
-parse : String -> Result<Int, ParseError>
-parse = |s| ...
+fn find(id: Id) -> User? = ...
+fn parse(s: String) -> Result<Int, ParseError> = ...
 ```
 
-### 3.6 Type Inference
+### 3.6 Type Inference [PARTIAL]
 
-Baseline uses bidirectional type inference. Type annotations are required at:
-
-- Module boundaries (exported functions)
-- Effectful functions
-- Ambiguous situations
-
-Type annotations are optional for:
-
-- Local variables
-- Lambda expressions
-- Private functions (inferred)
+Baseline uses bidirectional type inference. Type annotations are required at module boundaries (exported functions) and effectful functions. Type annotations are optional for local variables, lambda expressions, and private functions. [PARTIAL — local inference works; module boundary enforcement and full bidirectional HM inference are planned]
 
 ```baseline
 // Annotation required (exported)
-export greet : String -> String
-greet = |name| "Hello, ${name}"
+export fn greet(name: String) -> String =
+  "Hello, ${name}"
 
 // Annotation optional (local)
 let nums = [1, 2, 3]                        // Inferred as List<Int>
 let doubled = List.map(nums, |x| x * 2)     // Inferred
 ```
 
----
+**Design note**: Mandatory signatures at module boundaries serve both audiences. For LLMs, they provide the "contract boundary" that catches hallucinated methods and wrong types at compile time. For humans, they serve as documentation that is always accurate.
 
 ### 3.7 Tiered Refinement Types
 
-Baseline implements a **tiered refinement system** designed to balance verification power with ease of use.
+#### Tier 1: Automatic Refinements (Zero Annotation) [PLANNED]
+- **Null Safety**: `T?` is checked exhaustively. [IMPLEMENTED]
+- **Division by Zero**: `x / y` requires `y` to be non-zero. [PLANNED]
+- **Array Bounds**: Static analysis eliminates bounds checks where possible. [PLANNED]
 
-#### Tier 1: Automatic Refinements (Zero Annotation)
-Common safety properties are handled automatically by the compiler without user intervention:
-
-- **Null Safety**: `T?` is checked exhaustively.
-- **Division by Zero**: `x / y` requires `y` to be non-zero (via control flow analysis).
-- **Array Bounds**: Static analysis eliminates bounds checks where possible.
-
-#### Tier 2: Simple Refinements
-Users can define refined types using simple predicates (Linear Arithmetic):
+#### Tier 2: Simple Refinements [PARTIAL — integer intervals implemented]
 
 ```baseline
 type Port = Int where self > 0 && self < 65536
 type Probability = Float where self >= 0.0 && self <= 1.0
-
-connect : (Host, Port) -> Connection
-connect = |host, port| ... // port is guaranteed valid
 ```
 
-#### Tier 3: Contracts
-For critical boundaries, explicit pre- and post-conditions can be added:
+#### Tier 3: Contracts [PLANNED]
 
 ```baseline
-// "Parse, Don't Validate"
-// Instead of validating 'email' inside the function,
-// require a valid Email type as input.
-send_email! : Email -> {Http} Result
+fn send_email!(email: Email) -> {Http} Result = ...
 ```
+
+---
 
 ## 4. Expressions
 
@@ -1163,11 +977,9 @@ send_email! : Email -> {Http} Result
 ```baseline
 let x = 42
 let (a, b) = get_pair()
-let { name, age } = get_user()
-let [first, ..rest] = get_list()
-
-// With type annotation
-let x: Int = 42
+let { name, age } = get_user()          // [PLANNED] record destructuring in let
+let [first, ..rest] = get_list()        // [PLANNED] list destructuring in let
+let x: Int = 42              // With type annotation
 
 // Let is an expression
 let result =
@@ -1181,13 +993,6 @@ let result =
 ```baseline
 if condition then expr1 else expr2
 
-// Multi-line
-if condition then
-  expr1
-else
-  expr2
-
-// Chained
 if cond1 then
   expr1
 else if cond2 then
@@ -1195,7 +1000,6 @@ else if cond2 then
 else
   expr3
 
-// If is an expression
 let max = if a > b then a else b
 ```
 
@@ -1209,18 +1013,18 @@ match expr
 
 // Patterns
 match value
-  42              -> "exact value"
-  x               -> "bind to x"
-  _               -> "wildcard"
-  (a, b)          -> "tuple"
-  [x, y, z]       -> "list of 3"
-  [head, ..tail]  -> "list with rest"
-  { name, age }   -> "record"
-  { name, .. }    -> "partial record"
-  Some(x)         -> "variant"
-  None            -> "variant"
-  x if x > 0      -> "guard"
-  1 | 2 | 3       -> "or pattern"
+  42              -> "exact value"       // [IMPLEMENTED]
+  x               -> "bind to x"        // [IMPLEMENTED]
+  _               -> "wildcard"          // [IMPLEMENTED]
+  (a, b)          -> "tuple"             // [IMPLEMENTED]
+  [x, y, z]       -> "list of 3"        // [PLANNED]
+  [head, ..tail]  -> "list with rest"    // [PLANNED]
+  { name, age }   -> "record"            // [PLANNED]
+  { name, .. }    -> "partial record"    // [PLANNED]
+  Some(x)         -> "variant"           // [IMPLEMENTED]
+  None            -> "variant"           // [IMPLEMENTED]
+  x if x > 0      -> "guard"            // [PLANNED]
+  1 | 2 | 3       -> "or pattern"       // [PLANNED]
 ```
 
 Pattern matching is exhaustive. The compiler verifies all cases are handled.
@@ -1233,47 +1037,28 @@ Pattern matching is exhaustive. The compiler verifies all cases are handled.
   let y = 20
   x + y         // Block returns last expression
 }
-
-// Single expression blocks
-{ x + y }
-
-// Used for scoping
-let result = {
-  let temp = expensive_computation()
-  transform(temp)
-}
-// temp is not visible here
 ```
 
 ### 4.5 Pipelines
 
 ```baseline
-// Forward pipe: x |> f is f(x)
 value
 |> transform
 |> validate
 |> save
-
-// Equivalent to
-save(validate(transform(value)))
 
 // With lambdas
 numbers
 |> List.filter(|n| n > 0)
 |> List.map(|n| n * 2)
 |> List.sum
-
-// Backward pipe (less common)
-print <| format <| compute(x)
 ```
 
 ### 4.6 Function Application
 
 ```baseline
-// Standard application
 f(x)
 f(x, y)
-f(x, y, z)
 
 // Named arguments (order-independent)
 create_user(name: "Alice", age: 30)
@@ -1283,32 +1068,59 @@ create_user(age: 30, name: "Alice")  // Same
 ### 4.7 Field Access
 
 ```baseline
-user.name               // Record field
-tuple.0                 // Tuple index
-response.body.data.users.first  // Chained field access
+user.name
+tuple.0
+response.body.data.users.first
 ```
 
 ### 4.8 Error Handling Expressions
 
 ```baseline
-// Propagate error (return early if Err/None)
-let value = fallible_operation()?
-
-// Unwrap (panics if None/Err — use in tests or when logically guaranteed)
-let value = Option.unwrap(maybe_none)
-let value = Result.unwrap(fallible_result)
-
-// Unwrap with default
-let value = Option.unwrap_or(maybe_none, default_value)
-
-// Try-catch style
-try
-  risky_operation()
-catch
-  NetworkError(e) -> handle_network(e)
-  TimeoutError    -> retry()
-  _               -> fail()
+let value = fallible_operation()?          // Propagate
+let value = Option.unwrap_or(maybe, default)  // Default
 ```
+
+### 4.9 Typed Holes [PARTIAL]
+
+The `??` operator represents code to be generated later. Unlike comments or TODO markers, typed holes are **valid syntax** that the compiler reasons about. [PARTIAL — `??` syntax parsed; structured JSON output below is planned]
+
+```baseline
+fn process_order!(order: Order) -> {Db, Http} Result<Receipt, OrderError> =
+  let validated = validate(order)?
+  let payment = charge_payment!(validated.total, validated.payment_method)?
+  let receipt = ??  // Hole: expected type Receipt
+  Ok(receipt)
+```
+
+The compiler reports typed holes as structured information:
+
+```json
+{
+  "holes": [
+    {
+      "location": { "line": 4, "col": 17 },
+      "expected_type": "Receipt",
+      "available_bindings": [
+        { "name": "validated", "type": "ValidatedOrder" },
+        { "name": "payment", "type": "PaymentConfirmation" }
+      ],
+      "available_functions": [
+        { "name": "Receipt.from_payment", "type": "(ValidatedOrder, PaymentConfirmation) -> Receipt" }
+      ],
+      "constraints": ["Must satisfy return type Result<Receipt, OrderError>"],
+      "effects_available": ["Db", "Http"]
+    }
+  ]
+}
+```
+
+Holes can carry constraints:
+
+```baseline
+let receipt = ?? where Receipt.total(self) == validated.total
+```
+
+Typed holes enable partial compilation, LLM collaboration (the compiler tells the LLM exactly what type and constraints a hole needs), incremental development, and verified control / generated data separation.
 
 ---
 
@@ -1317,29 +1129,36 @@ catch
 ### 5.1 Function Definitions
 
 ```baseline
-// Named function
-greet : String -> String
-greet = |name| "Hello, ${name}"
+fn greet(name: String) -> String =
+  "Hello, ${name}"
 
-// Multiple parameters
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
-// Pattern matching in parameters
-first : List<T> -> T?
-first = |list| match list
-  [x, .._] -> Some(x)
-  []       -> None
+fn first<T>(list: List<T>) -> T? =       // [PLANNED] user-defined generics + list patterns
+  match list
+    [x, .._] -> Some(x)
+    []       -> None
 
-// With where clause for local definitions
-quicksort : List<Int> -> List<Int>
-quicksort = |list| match list
-  [] -> []
-  [pivot, ..rest] ->
-    let smaller = List.filter(rest, |x| x < pivot)
-    let larger = List.filter(rest, |x| x >= pivot)
-    quicksort(smaller) ++ [pivot] ++ quicksort(larger)
+fn quicksort(list: List<Int>) -> List<Int> =  // [PLANNED] list patterns
+  match list
+    [] -> []
+    [pivot, ..rest] ->
+      let smaller = List.filter(rest, |x| x < pivot)
+      let larger = List.filter(rest, |x| x >= pivot)
+      quicksort(smaller) ++ [pivot] ++ quicksort(larger)
 ```
+
+**Design rationale (v0.1 → v0.2 change)**:
+
+The v0.1 syntax split signature and implementation across two lines (`greet : String -> String` / `greet = |name| ...`). This was changed to `fn` keyword syntax for three reasons:
+
+1. **Training data compatibility**: LLMs have trained on billions of lines using `fn`/`func`/`def` + parameters-in-parens. The v0.1 ML-style split declaration fights the statistical prior of the entire training corpus. Empirical testing showed current models frequently merge the two lines or generate one without the other.
+
+2. **Single-token keyword**: `fn` maps to a single BPE token in all major tokenizers. It serves as an unambiguous "function definition starts here" signal.
+
+3. **Parameter type locality**: `fn greet(name: String)` co-locates the parameter name and type. The v0.1 style required mentally zipping together the type signature with parameter names across two lines.
+
+The tradeoff: v0.1's ML-style was more theoretically elegant and separated the type from the implementation. This capability is preserved through specifications (§8.1) and typed holes (§4.9).
 
 ### 5.2 Anonymous Functions (Lambdas)
 
@@ -1348,9 +1167,6 @@ quicksort = |list| match list
 |a, b| a + b                // Multiple parameters
 |_| 42                      // Ignored parameter
 |(x, y)| x + y              // Destructuring
-
-// With type annotations
-|x: Int| -> String { Int.to_string(x) }
 
 // Multi-line
 |request| {
@@ -1365,44 +1181,34 @@ quicksort = |list| match list
 Functions that perform side effects are marked with `!`:
 
 ```baseline
-// Declaration
-fetch_user! : Id -> {Http, Log} User?
-fetch_user! = |id|
+fn fetch_user!(id: Id) -> {Http, Log} User? =
   Log.debug!("Fetching user ${id}")
   Http.get!("/users/${id}")? |> Response.decode
 
-// Calling effectful functions
-main! : {Console, Http} ()
-main! =
+fn main!() -> {Console, Http} () =
   let user = fetch_user!(42)?
   Console.print!("Got user: ${user.name}")
 ```
 
-Rules for effectful functions:
-
+Rules:
 1. Must be declared with `!` suffix
 2. Must declare their effects in the type signature
 3. Can only be called from other effectful functions
 4. Can call pure functions freely
 
-### 5.4 Generic Functions
+### 5.4 Generic Functions [PLANNED]
+
+User-defined generic functions and type constraints are not yet implemented. Built-in generic functions (e.g., `List.map`, `Option.map`) use schema-based instantiation.
 
 ```baseline
-identity : T -> T
-identity = |x| x
+fn identity<T>(x: T) -> T = x
 
-map : (List<A>, A -> B) -> List<B>
-map = |list, f| match list
-  []        -> []
-  [x, ..xs] -> [f(x), ..map(xs, f)]
+fn map<A, B>(list: List<A>, f: A -> B) -> List<B> =
+  match list
+    []        -> []
+    [x, ..xs] -> [f(x), ..map(xs, f)]
 
-// With constraints
-compare : (T, T) -> Ordering where T: Ord
-compare = |a, b| Ord.compare(a, b)
-
-// Multiple type parameters
-zip : (List<A>, List<B>) -> List<(A, B)>
-zip = |as, bs| ...
+fn compare<T: Ord>(a: T, b: T) -> Ordering = Ord.compare(a, b)
 ```
 
 ---
@@ -1410,8 +1216,6 @@ zip = |as, bs| ...
 ## 6. Effects
 
 ### 6.1 Effect Declarations
-
-Effects are declared as capabilities:
 
 ```baseline
 effect Console {
@@ -1438,55 +1242,43 @@ effect Random {
 
 ### 6.2 Using Effects
 
-Functions declare which effects they require:
-
 ```baseline
-// Single effect
-log_message! : String -> {Console} ()
-log_message! = |msg| Console.print!("[LOG] ${msg}")
+fn log_message!(msg: String) -> {Console} () =
+  Console.print!("[LOG] ${msg}")
 
-// Multiple effects
-fetch_with_logging! : String -> {Http, Console} Result<Response, Error>
-fetch_with_logging! = |url|
+fn fetch_with_logging!(url: String) -> {Http, Console} Result<Response, Error> =
   Console.print!("Fetching ${url}")
   let response = Http.get!(url)?
   Console.print!("Got ${response.status}")
   Ok(response)
 
-// Effect polymorphism
-timed! : (() -> {e} T) -> {e, Time} (T, Duration)
-timed! = |action|
+// Effect polymorphism [PLANNED]
+fn timed!<T, e>(action: () -> {e} T) -> {e, Time} (T, Duration) =
   let start = Time.now!()
   let result = action()
   let elapsed = Time.now!() - start
   (result, elapsed)
 ```
 
-### 6.3 Effect Handlers
+### 6.3 Effect Handlers [PARTIAL]
 
-Effects are provided at the edges of the program:
+The grammar supports `handle`/`with` expressions for algebraic effect handlers. Type checking of handle expressions is incomplete (falls through to `Unit`). Mock handler infrastructure is planned.
 
 ```baseline
-main! : () -> ()
-main! =
+fn main!() -> () =
   let http = Http.default()
   let console = Console.stdout()
-  let time = Time.system()
+  run_app!() with { http, console }
 
-  run_app!() with { http, console, time }
-
-// Custom handlers for testing
+// Custom handlers for testing [PLANNED — mock infrastructure]
 test "fetch user" =
   let mock_http = Http.mock([
-    ("/users/1", Ok({ id: 1, name: "Alice" }))
+    ("/users/1", Ok({ id: 1, name: "Alice" })),
   ])
-  let mock_console = Console.buffer()
-
   let result = fetch_with_logging!("/users/1")
-    with { http: mock_http, console: mock_console }
+    with { http: mock_http, console: Console.buffer() }
 
   expect result == Ok({ id: 1, name: "Alice" })
-  expect String.contains(mock_console.output, "Fetching")
 ```
 
 ### 6.4 Effect Inference
@@ -1494,8 +1286,7 @@ test "fetch user" =
 When effects are not explicitly declared, they are inferred:
 
 ```baseline
-// Effects inferred as {Http, Console}
-fetch_and_print! = |url|
+fn fetch_and_print!(url: String) =
   let data = Http.get!(url)?
   Console.print!(data.body)
   Ok(())
@@ -1503,102 +1294,57 @@ fetch_and_print! = |url|
 
 ### 6.5 Pure Functions
 
-Functions without the `!` suffix are pure and cannot use effects:
+Functions without `!` are pure and cannot use effects:
 
 ```baseline
-// Pure function: no effects allowed
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
-// This would be a compile error:
-bad : Int -> Int
-bad = |x|
+fn bad(x: Int) -> Int =
   Console.print!("x is ${x}")  // Error: pure function cannot use effects
   x
 ```
 
 ### 6.6 Built-in Effects
 
-| Effect | Description |
-|--------|-------------|
-| `Console` | Terminal I/O |
-| `Http` | HTTP client |
-| `Fs` | File system |
-| `Net` | TCP/UDP sockets |
-| `Db` | Database access |
-| `Time` | Current time, delays |
-| `Random` | Random number generation |
-| `Env` | Environment variables |
-| `Process` | Spawn processes |
-| `Log` | Structured logging |
-| `Metrics` | Observability metrics |
+| Effect | Description | Status |
+|--------|-------------|--------|
+| `Console` | Terminal I/O | [IMPLEMENTED] |
+| `Http` | HTTP client | [IMPLEMENTED] |
+| `Fs` | File system | [IMPLEMENTED] |
+| `Net` | TCP/UDP sockets | [PLANNED] |
+| `Db` | Database access | [PARTIAL — namespace registered, no methods] |
+| `Time` | Current time, delays | [IMPLEMENTED] |
+| `Random` | Random number generation | [PARTIAL — type signatures exist, no VM runtime] |
+| `Env` | Environment variables | [IMPLEMENTED] |
+| `Process` | Spawn processes | [PLANNED] |
+| `Log` | Structured logging | [IMPLEMENTED] |
+| `Metrics` | Observability metrics | [PARTIAL — namespace registered, no methods] |
 
 ### 6.7 The Standard Prelude
-
-To reduce boilerplate for scripts and simple programs, Baseline provides a **standard prelude** with default effect handlers:
-
-```baseline
-// WITHOUT prelude: explicit handler setup
-module MyScript
-
-import Baseline.Effects.*
-
-main! : () -> ()
-main! =
-  let console = Console.stdout()
-  let fs = Fs.system()
-  let http = Http.default()
-  let time = Time.system()
-  let random = Random.system()
-  let env = Env.system()
-
-  run!() with { console, fs, http, time, random, env }
-
-run! : () -> {Console, Fs, Http, Time, Random, Env} ()
-run! =
-  Console.print!("Hello!")
-  // ... actual logic
-```
 
 ```baseline
 // WITH prelude: just write code
 @prelude(script)
 module MyScript
 
-main! =
+fn main!() =
   Console.print!("Hello!")
   let data = Http.get!("https://api.example.com/data")?
   Fs.write_text!("output.txt", data.body)
 ```
 
-#### Available Preludes
+| Prelude | Pure Modules | Effectful Modules | Use Case |
+|---------|-------------|-------------------|----------|
+| `none` | (nothing) | (nothing) | Bare minimum |
+| `minimal` | Option, Result | (none) | Minimal programs |
+| `pure` | Option, Result, String, List, Json, Math | (none) | Pure computation |
+| `core` | Option, Result, String, List, Map, Set, Json, Math, Int | (none) | General computation |
+| `script` | (all core) | Console, Log, Time, Random, Env, Fs | CLI tools |
+| `server` | (all core) + Router, Request, Response, Server | Console, Log, Time, Env, Server, Db, Metrics | Web servers |
 
-| Prelude | Effects Included | Use Case |
-|---------|------------------|----------|
-| `script` | Console, Fs, Http, Time, Random, Env, Process | CLI tools, scripts |
-| `server` | Http, Db, Log, Time, Metrics, Env | Web servers |
-| `minimal` | Console, Time | Simple programs |
-| `pure` | (none) | Pure computation only |
+Custom preludes via `baseline.toml` [PLANNED]:
 
-```baseline
-@prelude(server)
-module MyApi
-
-// Db, Http, Log, etc. are all available without setup
-main! =
-  let app = Router.new()
-    |> Router.get("/health", || Ok({ status: "ok" }))
-    |> Router.get("/users", || Db.query!("SELECT * FROM users"))
-
-  Server.listen!(8080, app)
-```
-
-#### Custom Preludes
-
-Projects can define their own preludes:
-
-```baseline
-// In baseline.toml
+```toml
 [prelude.mycompany]
 effects = ["Console", "Log", "Http", "Db", "Metrics"]
 handlers = {
@@ -1607,40 +1353,23 @@ handlers = {
 }
 ```
 
-```baseline
-@prelude(mycompany)
-module MyService
+### 6.8 Row Polymorphism [PLANNED]
 
-// Uses company-standard logging and metrics automatically
-main! =
-  Log.info!("Starting service")
-  Metrics.increment!("service.starts")
-  ...
-```
-
-This dramatically reduces boilerplate for LLM-generated code while maintaining explicit effect tracking.
-
----
-
-### 6.8 Row Polymorphism
-
-Baseline's effect system is built on **row polymorphism**. This enables:
-
-1.  **Inference**: Functions that pass effects through don't need explicit annotations.
-2.  **Composition**: Effects combine naturally without the ordering issues of Monad Transformers.
+Baseline's effect system is built on row polymorphism:
 
 ```baseline
 // 'e' is a row variable capturing "other effects"
-// map works regardless of what effects 'f' performs
-map : (List<a, e>, a -> {e} b) -> {e} List<b, e>
+fn map<A, B, e>(list: List<A>, f: A -> {e} B) -> {e} List<B> = ...
 ```
 
-### 6.9 Direct Style
+### 6.9 Direct Style [PLANNED]
 
-Baseline compiles algebraic effects to **Direct Style** code (using standard control flow or delimited continuations), avoiding the "colored function" problem of async/await.
+Baseline compiles algebraic effects to Direct Style code, avoiding the "colored function" problem of async/await.
 
 - **No `async`/`await` keywords**: Asynchronous IO is just an effect.
 - **Unified abstraction**: Async, Generators, and Exceptions are all just Effects.
+
+---
 
 ## 7. Modules
 
@@ -1650,50 +1379,30 @@ Each file is a module. The module name matches the file path:
 
 ```baseline
 // File: src/api/users.bl
-
 @module Api.Users
-
-// Module contents...
 ```
 
 ### 7.2 Imports
 
 ```baseline
-// Import entire module
-import Http
-Http.get!(url)
-
-// Import specific items
-import Http.{ get!, post! }
-get!(url)
-
-// Import with alias
-import Http as H
-H.get!(url)
-
-// Import all (use sparingly)
-import Http.*
-get!(url)
+import Http                    // Import entire module
+import Http.{get!, post!}      // Import specific items
+import Http as H               // Import with alias [PLANNED]
+import Http.*                  // Import all (lint warning)
 ```
 
-### 7.3 Exports
+### 7.3 Exports [PARTIAL]
 
-By default, all top-level definitions are private. Use `export` to make them public:
+The `export` keyword is accepted by the parser but visibility is not yet enforced — all top-level definitions are currently public. When visibility enforcement is implemented, unexported definitions will become private.
 
 ```baseline
-// Public
-export greet : String -> String
-greet = |name| "Hello, ${name}"
+export fn greet(name: String) -> String =
+  "Hello, ${name}"
 
-// Private (not exported)
-helper : String -> String
-helper = |s| String.trim(s)
+fn helper(s: String) -> String = String.trim(s)  // Will be private when enforced
 
-// Export types
 export type User = { name: String, age: Int }
 export type Status = Active | Inactive
-
-// Export effect
 export effect MyEffect { ... }
 ```
 
@@ -1701,12 +1410,12 @@ export effect MyEffect { ... }
 
 ```
 my-project/
-├── baseline.toml         // Project configuration
+├── baseline.toml
 ├── src/
-│   ├── main.bl     // Entry point
-│   ├── lib.bl      // Library root (optional)
+│   ├── main.bl
+│   ├── lib.bl
 │   ├── api/
-│   │   ├── mod.bl  // Api module
+│   │   ├── mod.bl
 │   │   ├── users.bl
 │   │   └── posts.bl
 │   └── util/
@@ -1715,26 +1424,23 @@ my-project/
     └── api_test.bl
 ```
 
+**Design note**: Flat module structure is preferred over deep nesting. Each module should be comprehensible independently, reducing the context needed to generate correct code. This respects both LLM context window limitations and human cognitive load.
+
 ### 7.5 Visibility
 
 ```baseline
-// Public: accessible from any module
-export fn
-
-// Private: accessible only within this module
-fn
-
-// Internal: accessible within the same package (future)
-internal fn
+export fn    // Public: accessible from any module [PARTIAL — parsed but not enforced]
+fn           // Private: accessible only within this module [PARTIAL — currently public]
+internal fn  // Internal: accessible within the same package [PLANNED]
 ```
 
 ---
 
 ## 8. Specifications
 
-### 8.1 Function Specifications
+### 8.1 Function Specifications [PARTIAL]
 
-Specifications declare the contract a function must satisfy:
+Specifications declare the contract a function must satisfy. Specification attributes (`@spec`, `@given`, `@returns`, `@requires`, `@ensures`, `@pure`, `@total`) are parsed by the grammar but not semantically verified by the compiler.
 
 ```baseline
 @spec divide
@@ -1743,24 +1449,33 @@ Specifications declare the contract a function must satisfy:
 @ensures result * denominator <= numerator
 @ensures result * denominator > numerator - denominator
 
-divide : (Int, Int) -> Int
-divide = |n, d| n / d
+fn divide(n: Int, d: Int) -> Int = n / d
 ```
-
-Specification attributes:
 
 | Attribute | Description |
 |-----------|-------------|
 | `@spec name` | Names the specification |
 | `@given` | Declares inputs with optional refinements |
 | `@returns` | Declares output type |
-| `@requires` | Preconditions (alternative to refinements) |
+| `@requires` | Preconditions |
 | `@ensures` | Postconditions |
 | `@effects` | Declares required effects |
 | `@pure` | Asserts function is pure |
 | `@total` | Asserts function terminates for all inputs |
 
-### 8.2 Type Specifications
+**Type-first development**: Specifications let you write the contract before the implementation. An LLM can be given just the spec and typed hole:
+
+```baseline
+@spec sort_descending
+@given list: List<Int>
+@returns List<Int>
+@ensures List.length(result) == List.length(list)
+@ensures List.all(List.zip(result, List.drop(result, 1)), |(a, b)| a >= b)
+
+fn sort_descending(list: List<Int>) -> List<Int> = ??
+```
+
+### 8.2 Type Specifications [PLANNED]
 
 ```baseline
 @spec User
@@ -1768,15 +1483,13 @@ Specification attributes:
 @invariant String.contains(self.email, "@")
 
 type User = {
-  name: String where String.len(self) > 0,
+  name: String where String.length(self) > 0,
   age: Int where self >= 0,
   email: String where String.matches(self, r".+@.+"),
 }
 ```
 
-### 8.3 API Specifications
-
-For web APIs, Baseline provides first-class API specs:
+### 8.3 API Specifications [PLANNED]
 
 ```baseline
 @api UserApi
@@ -1805,7 +1518,6 @@ type Endpoints = {
   delete_user,
 }
 
-// Implementation
 implement Endpoints = {
   list_users = || Db.query!("SELECT * FROM users"),
 
@@ -1821,11 +1533,11 @@ implement Endpoints = {
 }
 ```
 
-### 8.4 Specification Verification
+### 8.4 Specification Verification [PLANNED]
 
 The compiler verifies specifications using SMT solving:
 
-```baseline
+```
 $ baseline check
 
 Checking specifications...
@@ -1837,48 +1549,20 @@ Checking specifications...
 Specifications: 4 verified, 0 failed
 ```
 
-When verification fails:
+### 8.5 Verification Levels [PLANNED]
+
+**v0.2 revision**: Verification levels are surfaced in all compiler output to prevent the "worked locally, broke in CI" problem.
 
 ```baseline
-$ baseline check
-
-Checking specifications...
-  ✗ divide: postcondition may fail
-
-    Counter-example found:
-      numerator = 7
-      denominator = 3
-      result = 2
-
-    Postcondition violated:
-      result * denominator <= numerator  // 6 <= 7 ✓
-      result * denominator > numerator - denominator  // 6 > 4 ✓
-
-    Note: Verification inconclusive, may be false positive.
-    Add @assume or refine specification.
-```
-
-### 8.5 Verification Levels
-
-Baseline supports multiple verification levels to balance thoroughness with speed:
-
-```baseline
-// Module-level default
 @verify(level: refinements)
 module MyModule
 
-// Function-level override
 @verify(level: full)
-critical_function : Input -> Output
-critical_function = |input| ...
+fn critical_function(input: Input) -> Output = ...
 
-// Skip verification (escape hatch)
 @verify(skip: "Performance critical, manually audited 2024-01-15")
-unsafe_but_fast : Data -> Data
-unsafe_but_fast = |data| ...
+fn unsafe_but_fast(data: Data) -> Data = ...
 ```
-
-#### Verification Level Definitions
 
 | Level | Checks | Speed | Use Case |
 |-------|--------|-------|----------|
@@ -1888,36 +1572,49 @@ unsafe_but_fast = |data| ...
 | `skip` | Types only, specs unchecked | Fast | Escape hatch |
 
 ```bash
-# Command line overrides
 baseline check                    # Uses level from source annotations
 baseline check --level=types      # Fast check only
 baseline check --level=full       # Full verification
 baseline check --timeout=30s      # Set SMT timeout
 ```
 
+#### Verification Level Awareness
+
+**Every** compiler response includes the active verification level:
+
+```json
+{
+  "status": "ok",
+  "verification_level": "refinements",
+  "checked": ["types", "refinements"],
+  "unchecked": ["specs", "smt"],
+  "warning": "Postconditions in @spec divide are unchecked at level 'refinements'. Run with --level=full to verify.",
+  "diagnostics": []
+}
+```
+
+This ensures an LLM agent always knows what level of verification passed, what properties remain unverified, and what command to run for full verification.
+
+**Rationale**: In v0.1, an LLM could generate code that passed `--level=refinements`, then CI running `--level=full` would find spec violations. The LLM received confusing feedback — the code "worked" but now "doesn't." Surfacing the level in every response lets the agent proactively run higher checks or annotate its output with the verification level achieved.
+
 #### Handling SMT Timeouts
 
-When the SMT solver cannot prove a property within the timeout:
-
-```baseline
-$ baseline check --level=full
-
-Checking specifications...
-  ? process_data: verification timeout after 10s
-
-    The solver could not prove or disprove:
-      @ensures result.len <= input.len * 2
-
-    Options:
-      1. Increase timeout: baseline check --timeout=60s
-      2. Add intermediate lemma to help the solver
-      3. Mark as assumed: @assume result.len <= input.len * 2
-      4. Skip verification: @verify(skip: "...")
+```json
+{
+  "status": "timeout",
+  "verification_level": "full",
+  "property": "@ensures result.len <= input.len * 2",
+  "timeout_seconds": 10,
+  "suggestions": [
+    { "action": "increase_timeout", "command": "baseline check --timeout=60s", "confidence": 0.3 },
+    { "action": "add_lemma", "description": "Add intermediate lemma to help the solver", "confidence": 0.5 },
+    { "action": "assume", "code": "@assume result.len <= input.len * 2", "confidence": 0.2 },
+    { "action": "skip", "code": "@verify(skip: \"SMT timeout\")", "confidence": 0.1 }
+  ]
+}
 ```
 
 #### Assumptions
-
-When you know something the solver cannot prove:
 
 ```baseline
 @spec transform
@@ -1926,112 +1623,113 @@ When you know something the solver cannot prove:
 @assume db_items_are_valid  // External invariant
 @ensures result.len == data.len
 
-transform : List<Item> -> {Db} List<Result>
-transform = |data| ...
+fn transform!(data: List<Item>) -> {Db} List<Result> = ...
 ```
 
-Assumptions are:
-- Tracked by the compiler
-- Reported in verification summaries
-- Candidates for future formal proofs
+Assumptions are tracked by the compiler, reported in summaries, and flagged in constrained generation mode.
+
+### 8.6 The Neurosymbolic Feedback Loop [PLANNED]
+
+Baseline closes the loop between LLM generation and formal verification:
+
+1. **Prompt**: Agent receives type signature with refinements and specifications.
+2. **Generation**: Agent generates code (optionally with constrained generation — §11).
+3. **Verification**: Compiler checks code against refinement types using SMT. Verification level is explicitly reported.
+4. **Feedback**: On failure, compiler produces a **counter-example** with structured suggestions.
+5. **Repair**: Agent fixes code based on counter-example.
+
+This turns the compiler into a **verifier** for the probabilistic output of the LLM. Formal verification as a feedback signal is categorically more powerful than testing alone.
+
+### 8.7 Verified Control / Generated Data Separation
+
+Baseline encourages architecturally separating **verified control flow** from **LLM-generated data transformations**:
+
+```baseline
+// VERIFIED: Control flow is specified and formally checked
+@spec order_pipeline
+@ensures all orders processed or error logged
+@verify(level: full)
+
+fn order_pipeline!(orders: List<Order>) -> {Db, Log, Http} List<Result<Receipt, OrderError>> =
+  orders
+  |> List.map(|order| {
+    let validated = validate(order)?
+    let charged = charge_payment!(validated)?
+    let receipt = generate_receipt(validated, charged)  // LLM-generated
+    Ok(receipt)
+  })
+
+// GENERATED: Data transformation, verified by types + tests
+fn generate_receipt(order: ValidatedOrder, payment: PaymentConfirmation) -> Receipt =
+  Receipt {
+    id: ReceiptId.new(),
+    order_id: order.id,
+    amount: payment.amount,
+    timestamp: payment.timestamp,
+    items: order.items |> List.map(format_line_item),
+  }
+```
+
+The control flow is formally verified. The data transformation is type-checked and tested. Typed holes (§4.9) make this explicit: verified control flow is concrete code, data transformations start as holes.
 
 ---
 
-### 8.6 The Neurosymbolic Feedback Loop
-
-Baseline is architected to close the loop between LLM generation and formal verification.
-
-1.  **Prompt**: The Agent is given a type signature with refinements.
-    `split_bill : (Total: Money, People: Int where self > 0) -> List<Money>`
-2.  **Generation**: The Agent generates code.
-3.  **Verification**: The compiler checks the code against the refinement types using SMT.
-4.  **Feedback**: If verification fails, the compiler produces a **counter-example** (e.g., "Verification failed when People = 0").
-5.  **Repair**: The Agent attempts to fix the code (e.g., adding a check `if people == 0`) based on the counter-example.
-
-This turns the compiler into a **verifier** for the probabilistic output of the LLM.
-
 ## 9. Testing
-
-Baseline provides a comprehensive testing framework inspired by RSpec and Vitest, with first-class support for BDD-style specifications and inline unit tests.
 
 ### 9.1 Testing Philosophy
 
-Baseline testing follows three principles:
-
 1. **Specs are documentation** — Tests should read like requirements
-2. **Given-When-Then structure** — Separates setup, action, and assertion
+2. **Explicit over implicit** — Test behavior is clear from syntax alone
 3. **LLM-friendly** — Structured format enables AI generation and verification
 
-### 9.2 Inline Tests (Unit Tests)
-
-For simple pure functions, inline tests in `where` blocks:
+### 9.2 Inline Tests (Unit Tests) [IMPLEMENTED]
 
 ```baseline
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 where
   test "adds positive numbers" = add(1, 2) == 3
   test "handles negatives" = add(-1, 1) == 0
   test "zero identity" = add(0, 5) == 5
 ```
 
-These are best for:
-- Pure utility functions
-- Simple transformations
-- Quick sanity checks
+### 9.3 BDD Specifications [IMPLEMENTED]
 
-### 9.3 BDD Specifications
-
-For APIs, business logic, and complex behavior, use `describe`/`it` blocks with Given-When-Then:
-
-#### Basic Structure
+**v0.2 revision**: The `given`/`when`/`expect` syntax from v0.1 was revised to use explicit function application. The v0.1 `when List.sort` was ambiguous — is `List.sort` being called on the given value, or is it a label? Explicit application eliminates this while preserving BDD structure.
 
 ```baseline
 describe "List.sort" {
   it "sorts numbers in ascending order" {
-    given [3, 1, 4, 1, 5]
-    when List.sort
-    expect [1, 1, 3, 4, 5]
+    expect List.sort([3, 1, 4, 1, 5]) to_equal [1, 1, 3, 4, 5]
   }
 
   it "handles empty lists" {
-    given []
-    when List.sort
-    expect []
+    expect List.sort([]) to_equal []
   }
 
   it "handles single element" {
-    given [42]
-    when List.sort
-    expect [42]
+    expect List.sort([42]) to_equal [42]
   }
 }
 ```
 
-#### Nested Contexts
+#### Setup-Act-Assert with Let Bindings
 
 ```baseline
 describe "UserService" {
   describe "create_user" {
     context "with valid data" {
       it "creates the user" {
-        given { name: "Alice", email: "alice@example.com" }
-        when create_user
-        expect Ok(User { id: _, name: "Alice", email: "alice@example.com" })
-      }
-
-      it "assigns a unique id" {
-        given { name: "Alice", email: "alice@example.com" }
-        when create_user
-        expect Ok(User { id: id }) where id > 0
+        let input = { name: "Alice", email: "alice@example.com" }
+        let result = create_user(input)
+        expect result to_be Ok(User { id: _, name: "Alice", email: "alice@example.com" })
       }
     }
 
     context "with invalid email" {
       it "returns validation error" {
-        given { name: "Alice", email: "not-an-email" }
-        when create_user
-        expect Err(ValidationError { field: "email", .. })
+        let input = { name: "Alice", email: "not-an-email" }
+        let result = create_user(input)
+        expect result to_be Err(ValidationError { field: "email", .. })
       }
     }
 
@@ -2041,221 +1739,106 @@ describe "UserService" {
       }
 
       it "returns conflict error" {
-        given { name: "New User", email: "taken@example.com" }
-        when create_user
-        expect Err(EmailExists)
+        let input = { name: "New User", email: "taken@example.com" }
+        let result = create_user(input)
+        expect result to_be Err(EmailExists)
       }
     }
   }
 }
 ```
 
-#### Fixtures with `let`
-
-Lazy-evaluated fixtures for test data:
+#### Fixtures
 
 ```baseline
 describe "PostService" {
-  // Fixtures - evaluated lazily, cached per test
   let alice = User { id: 1, name: "Alice", role: Admin }
   let bob = User { id: 2, name: "Bob", role: Member }
   let alice_post = Post { id: 1, author_id: alice.id, content: "Hello" }
-  let bob_post = Post { id: 2, author_id: bob.id, content: "World" }
 
   describe "delete_post" {
     context "when user owns the post" {
       it "deletes successfully" {
-        given { user: alice, post: alice_post }
-        when delete_post
-        expect Ok(())
+        expect delete_post(alice, alice_post) to_be Ok(())
       }
     }
 
     context "when user does not own the post" {
       it "returns unauthorized" {
-        given { user: bob, post: alice_post }
-        when delete_post
-        expect Err(Unauthorized)
-      }
-    }
-
-    context "when user is admin" {
-      it "can delete any post" {
-        given { user: alice, post: bob_post }
-        when delete_post
-        expect Ok(())
+        expect delete_post(bob, alice_post) to_be Err(Unauthorized)
       }
     }
   }
 }
 ```
 
-#### Setup and Teardown Hooks
+#### Hooks [PARTIAL]
+
+`before_each` and `after_each` are [IMPLEMENTED]. `before_all` and `after_all` are [PLANNED].
 
 ```baseline
 describe "Database operations" {
-  // Runs once before all tests in this describe
-  before_all {
-    Db.migrate!()
-  }
-
-  // Runs before each test
-  before_each {
-    Db.begin_transaction!()
-  }
-
-  // Runs after each test
-  after_each {
-    Db.rollback!()
-  }
-
-  // Runs once after all tests
-  after_all {
-    Db.cleanup!()
-  }
+  before_all { Db.migrate!() }         // [PLANNED]
+  before_each { Db.begin_transaction!() }  // [IMPLEMENTED]
+  after_each { Db.rollback!() }        // [IMPLEMENTED]
+  after_all { Db.cleanup!() }          // [PLANNED]
 
   it "inserts records" {
-    given User { name: "Test", email: "test@test.com" }
-    when Db.insert
-    expect Ok(_)
+    let user = User { name: "Test", email: "test@test.com" }
+    expect Db.insert!(user) to_be Ok(_)
   }
 }
 ```
 
-#### Mocking Effects with `with`
+#### Mocking Effects [PLANNED]
 
 ```baseline
 describe "WeatherService" {
   let mock_http = Http.mock([
     ("https://api.weather.com/current", Ok({ temp: 72, conditions: "sunny" })),
-    ("https://api.weather.com/forecast", Ok({ days: [...] })),
   ])
 
   it "fetches current weather" {
     with { http: mock_http }
-    given "New York"
-    when get_current_weather
-    expect Ok({ temp: 72, conditions: "sunny" })
+    expect get_current_weather!("New York") to_be Ok({ temp: 72, conditions: "sunny" })
   }
 
   it "handles API errors gracefully" {
     with { http: Http.mock_error(Timeout) }
-    given "New York"
-    when get_current_weather
-    expect Err(ServiceUnavailable)
+    expect get_current_weather!("New York") to_be Err(ServiceUnavailable)
   }
 }
 ```
 
-### 9.4 Async and Effectful Tests
-
-```baseline
-describe "async operations" {
-  it "fetches data concurrently" {
-    with { async: Async.runtime(), http: Http.default() }
-
-    given [
-      "https://api.example.com/users",
-      "https://api.example.com/posts",
-    ]
-    when |urls| parallel!(List.map(urls, Http.get!))
-    expect [Ok(_), Ok(_)]
-  }
-
-  it "times out slow requests" {
-    with {
-      async: Async.runtime(),
-      http: Http.mock_delay(5.seconds),
-    }
-
-    given "https://slow.example.com"
-    when |url| Http.get!(url) |> Result.timeout(1.second)
-    expect Err(Timeout)
-  }
-}
-```
-
-### 9.5 Test Organization
-
-#### File Structure
-
-```
-my-project/
-├── src/
-│   ├── user.bl         // Contains inline tests
-│   └── api.bl          // Contains inline tests
-└── test/
-    ├── user_spec.bl    // BDD specs for user module
-    ├── api_spec.bl     // BDD specs for api module
-    ├── integration/
-    │   └── full_flow_spec.bl
-    └── fixtures/
-        └── test_data.bl
-```
-
-#### Focused and Skipped Tests
+### 9.4 Focused and Skipped Tests [IMPLEMENTED]
 
 ```baseline
 describe "Feature" {
-  // Only run this test (for debugging)
-  it.only "focused test" {
-    ...
-  }
-
-  // Skip this test
-  it.skip "not implemented yet" {
-    ...
-  }
-
-  // Skip with reason
-  it.skip("waiting on API v2") "new feature" {
-    ...
-  }
+  it.only "focused test" { ... }
+  it.skip "not implemented yet" { ... }
+  it.skip("waiting on API v2") "new feature" { ... }
 }
 ```
 
-### 9.6 Assertions and Matchers
+### 9.5 Assertions and Matchers [PARTIAL]
 
 ```baseline
-describe "Matchers" {
-  it "supports various matchers" {
-    // Equality
-    expect 1 + 1 to_equal 2
-    expect result to_be Ok(_)
-
-    // Comparison
-    expect count to_be_greater_than 0
-    expect age to_be_between 0 and 120
-
-    // Collections
-    expect list to_contain 42
-    expect list to_have_length 3
-    expect list to_be_empty
-
-    // Strings
-    expect message to_start_with "Error:"
-    expect message to_contain "not found"
-    expect message to_match r"user \d+"
-
-    // Results and Options
-    expect result to_be_ok
-    expect result to_be_err
-    expect option to_be_some
-    expect option to_be_none
-
-    // Types
-    expect value to_be_type User
-    expect error to_be_type ValidationError
-
-    // Custom matchers
-    expect user to_satisfy |u| u.age >= 18
-  }
-}
+expect 1 + 1 to_equal 2                     // [IMPLEMENTED]
+expect result to_be Ok(_)                    // [IMPLEMENTED]
+expect count to_be_greater_than 0            // [IMPLEMENTED]
+expect age to_be_between 0 and 120           // [IMPLEMENTED]
+expect list to_contain 42                    // [IMPLEMENTED]
+expect list to_have_length 3                 // [IMPLEMENTED]
+expect list to_be_empty                      // [IMPLEMENTED]
+expect message to_start_with "Error:"        // [IMPLEMENTED]
+expect message to_match r"user \d+"          // [PLANNED]
+expect result to_be_ok                       // [IMPLEMENTED]
+expect option to_be_some                     // [IMPLEMENTED]
+expect value to_be_type User                 // [PLANNED]
+expect user to_satisfy |u| u.age >= 18       // [IMPLEMENTED]
 ```
 
-### 9.7 Test Output for LLMs
-
-JSON output for LLM integration:
+### 9.6 Test Output for LLMs [PARTIAL]
 
 ```bash
 $ baseline test --format json
@@ -2268,14 +1851,14 @@ $ baseline test --format json
     "passed": 9,
     "failed": 1,
     "skipped": 0,
-    "duration_ms": 142
+    "duration_ms": 142,
+    "verification_level": "refinements"
   },
   "failures": [
     {
       "name": "UserService > delete_post > returns unauthorized",
       "location": "test/user_spec.bl:45",
-      "given": { "user": "bob", "post": "alice_post" },
-      "when": "delete_post",
+      "expression": "delete_post(bob, alice_post)",
       "expected": "Err(Unauthorized)",
       "actual": "Err(NotFound)",
       "diff": {
@@ -2284,15 +1867,18 @@ $ baseline test --format json
         "actual_variant": "NotFound"
       },
       "suggestions": [
-        "Check authorization logic runs before existence check",
-        "Verify post lookup includes author_id"
+        {
+          "action": "check_ordering",
+          "description": "Check authorization logic runs before existence check",
+          "confidence": 0.7
+        }
       ]
     }
   ]
 }
 ```
 
-### 9.8 Best Practices
+### 9.7 Best Practices
 
 #### Spec-First Development (Recommended for LLMs)
 
@@ -2301,36 +1887,27 @@ $ baseline test --format json
 describe "PasswordService" {
   describe "validate_password" {
     it "accepts strong passwords" {
-      given "Str0ng!Pass"
-      when validate_password
-      expect Ok(())
+      expect validate_password("Str0ng!Pass") to_be Ok(())
     }
 
     it "rejects short passwords" {
-      given "short"
-      when validate_password
-      expect Err(TooShort { min: 8, actual: 5 })
+      expect validate_password("short") to_be Err(TooShort { min: 8, actual: 5 })
     }
 
     it "requires uppercase" {
-      given "alllowercase1!"
-      when validate_password
-      expect Err(MissingUppercase)
+      expect validate_password("alllowercase1!") to_be Err(MissingUppercase)
     }
 
     it "requires number" {
-      given "NoNumbersHere!"
-      when validate_password
-      expect Err(MissingNumber)
+      expect validate_password("NoNumbersHere!") to_be Err(MissingNumber)
     }
   }
 }
 
 // 2. Then implement to satisfy the spec
-validate_password : String -> Result<(), PasswordError>
-validate_password = |password|
-  if String.len(password) < 8 then
-    Err(TooShort { min: 8, actual: String.len(password) })
+fn validate_password(password: String) -> Result<(), PasswordError> =
+  if String.length(password) < 8 then
+    Err(TooShort { min: 8, actual: String.length(password) })
   else if not String.any(password, Char.is_uppercase) then
     Err(MissingUppercase)
   else if not String.any(password, Char.is_digit) then
@@ -2339,120 +1916,38 @@ validate_password = |password|
     Ok(())
 ```
 
-#### Test Naming
-
-```baseline
-// Good: Describes behavior
-it "returns unauthorized when user lacks permission" { ... }
-it "retries failed requests up to 3 times" { ... }
-it "caches results for 5 minutes" { ... }
-
-// Bad: Describes implementation
-it "calls check_permission function" { ... }
-it "uses retry loop" { ... }
-it "sets cache TTL" { ... }
-```
-
-#### One Assertion Per Test
-
-```baseline
-// Good: One clear expectation
-it "creates user with correct name" {
-  given { name: "Alice", email: "alice@test.com" }
-  when create_user
-  expect Ok(User { name: "Alice", .. })
-}
-
-it "creates user with correct email" {
-  given { name: "Alice", email: "alice@test.com" }
-  when create_user
-  expect Ok(User { email: "alice@test.com", .. })
-}
-
-// Acceptable: Related assertions in one test
-it "creates user with provided data" {
-  given { name: "Alice", email: "alice@test.com" }
-  when create_user
-  expect Ok(user)
-  expect user.name to_equal "Alice"
-  expect user.email to_equal "alice@test.com"
-  expect user.id to_be_greater_than 0
-}
-```
-
 ---
 
 ## 10. Language Server Protocol and Compiler API
 
 ### 10.1 Overview
 
-Baseline exposes its compiler internals via a queryable API, enabling IDEs, LLMs, and automated tools to interact with the language semantically. This goes beyond traditional LSP to support AI-assisted development.
+Baseline exposes its compiler internals via a queryable API, enabling IDEs, LLMs, and automated tools to interact with the language semantically.
 
-### 10.2 Standard LSP Features
+### 10.2 Standard LSP Features [PARTIAL — LSP stub exists with basic diagnostics; most features planned]
 
-Baseline implements the full Language Server Protocol:
+Diagnostics (with verification level context), Completion, Hover, Go to Definition, Find References, Rename, Code Actions, Formatting (`baseline fmt` integration).
 
-- **Diagnostics**: Errors, warnings, hints
-- **Completion**: Context-aware suggestions
-- **Hover**: Type information and documentation
-- **Go to Definition**: Navigate to declarations
-- **Find References**: All usages of a symbol
-- **Rename**: Safe refactoring
-- **Code Actions**: Quick fixes and refactorings
-- **Formatting**: baseline fmt integration
-
-### 10.3 Extended Query API
-
-Beyond standard LSP, Baseline provides semantic queries:
+### 10.3 Extended Query API [PLANNED]
 
 #### Type Queries
 
 ```json
-// Request: What type does this expression have?
-{
-  "method": "baseline/typeAt",
-  "params": {
-    "file": "src/api.bl",
-    "position": { "line": 42, "character": 15 }
-  }
-}
+{ "method": "baseline/typeAt", "params": { "file": "src/api.bl", "position": { "line": 42, "character": 15 } } }
 
 // Response
-{
-  "type": "Option<User>",
-  "expanded": "Some(User) | None",
-  "refinements": [],
-  "effects": []
-}
+{ "type": "Option<User>", "expanded": "Some(User) | None", "refinements": [], "effects": [] }
 ```
 
 #### Function Search
 
 ```json
-// Request: Find functions matching a type signature
-{
-  "method": "baseline/searchByType",
-  "params": {
-    "signature": "List<A> -> (A -> B) -> List<B>",
-    "scope": "visible"  // or "all", "module", "project"
-  }
-}
+{ "method": "baseline/searchByType", "params": { "signature": "List<A> -> (A -> B) -> List<B>", "scope": "visible" } }
 
 // Response
 {
   "matches": [
-    {
-      "name": "List.map",
-      "module": "Baseline.Collections",
-      "signature": "List<A> -> (A -> B) -> List<B>",
-      "doc": "Applies a function to each element..."
-    },
-    {
-      "name": "List.filter_map",
-      "module": "Baseline.Collections",
-      "signature": "List<A> -> (A -> B?) -> List<B>",
-      "doc": "Maps and filters in one pass..."
-    }
+    { "name": "List.map", "module": "Baseline.Collections", "signature": "List<A> -> (A -> B) -> List<B>" }
   ]
 }
 ```
@@ -2460,14 +1955,7 @@ Beyond standard LSP, Baseline provides semantic queries:
 #### Effect Queries
 
 ```json
-// Request: What effects are available in this scope?
-{
-  "method": "baseline/availableEffects",
-  "params": {
-    "file": "src/api.bl",
-    "position": { "line": 42, "character": 0 }
-  }
-}
+{ "method": "baseline/availableEffects", "params": { "file": "src/api.bl", "position": { "line": 42, "character": 0 } } }
 
 // Response
 {
@@ -2482,20 +1970,12 @@ Beyond standard LSP, Baseline provides semantic queries:
 #### Specification Queries
 
 ```json
-// Request: What spec does this function need to satisfy?
-{
-  "method": "baseline/specFor",
-  "params": {
-    "function": "Api.Users.create_user"
-  }
-}
+{ "method": "baseline/specFor", "params": { "function": "Api.Users.create_user" } }
 
 // Response
 {
   "spec": {
-    "given": [
-      { "name": "body", "type": "UserCreate", "refinements": ["name.len > 0"] }
-    ],
+    "given": [{ "name": "body", "type": "UserCreate", "refinements": ["name.len > 0"] }],
     "returns": { "type": "User | ValidationError" },
     "ensures": ["result.id > 0 when Ok"],
     "effects": ["Db"]
@@ -2503,26 +1983,22 @@ Beyond standard LSP, Baseline provides semantic queries:
 }
 ```
 
-### 10.4 Programmatic Compilation API
-
-For build tools and LLM integrations:
+### 10.4 Programmatic Compilation API [PLANNED]
 
 ```json
-// Request: Check code without writing to disk
 {
   "method": "baseline/checkSource",
   "params": {
     "source": "let x: Int = \"hello\"",
-    "context": {
-      "imports": ["Baseline.Core.*"],
-      "effects": ["Console"]
-    }
+    "context": { "imports": ["Baseline.Core.*"], "effects": ["Console"] },
+    "verification_level": "refinements"
   }
 }
 
 // Response
 {
   "status": "error",
+  "verification_level": "refinements",
   "diagnostics": [
     {
       "severity": "error",
@@ -2532,57 +2008,33 @@ For build tools and LLM integrations:
       "expected": "Int",
       "actual": "String",
       "suggestions": [
-        {
-          "action": "parse",
-          "code": "let x: Int = \"hello\".parse()?",
-          "confidence": 0.6
-        },
-        {
-          "action": "change_type",
-          "code": "let x: String = \"hello\"",
-          "confidence": 0.8
-        }
+        { "action": "parse", "code": "let x: Int = Int.parse(\"hello\")?", "confidence": 0.6 },
+        { "action": "change_type", "code": "let x: String = \"hello\"", "confidence": 0.8 }
       ]
     }
   ]
 }
 ```
 
-### 10.5 Interactive Refinement Session
-
-For LLM integration, a stateful session API:
+### 10.5 Interactive Refinement Session [PLANNED]
 
 ```json
-// Start a session
+// Start session
 { "method": "baseline/session/start", "params": { "project": "myapp" } }
-// Response: { "sessionId": "abc123" }
+// Response: { "sessionId": "abc123", "default_verification_level": "refinements" }
 
-// Submit code for checking
-{
-  "method": "baseline/session/check",
-  "params": {
-    "sessionId": "abc123",
-    "file": "src/api.bl",
-    "source": "..."
-  }
-}
+// Submit code
+{ "method": "baseline/session/check", "params": { "sessionId": "abc123", "file": "src/api.bl", "source": "...", "verification_level": "full" } }
 
-// Ask about verification failures
-{
-  "method": "baseline/session/query",
-  "params": {
-    "sessionId": "abc123",
-    "question": "Why can't you prove user.age >= 0?"
-  }
-}
+// Query verification failures
+{ "method": "baseline/session/query", "params": { "sessionId": "abc123", "question": "Why can't you prove user.age >= 0?" } }
 
 // Response
 {
-  "answer": "The field `age` in type `User` has type `Int` with no refinement. The database schema shows `age INT` which allows negative values.",
+  "answer": "The field `age` in type `User` has type `Int` with no refinement.",
   "suggestions": [
-    "Add CHECK constraint to database: age >= 0",
-    "Add refinement to type: age: Int where self >= 0",
-    "Add runtime guard: if user.age < 0 then return Err(InvalidAge)"
+    { "action": "add_refinement", "code": "age: Int where self >= 0", "confidence": 0.7 },
+    { "action": "add_guard", "code": "if user.age < 0 then return Err(InvalidAge)", "confidence": 0.6 }
   ]
 }
 
@@ -2590,162 +2042,385 @@ For LLM integration, a stateful session API:
 { "method": "baseline/session/end", "params": { "sessionId": "abc123" } }
 ```
 
-### 10.6 Bulk Operations for LLM Agents
-
-For agents processing multiple files:
+### 10.6 Bulk Operations for LLM Agents [PLANNED]
 
 ```json
-// Request: Analyze entire module
-{
-  "method": "baseline/analyzeModule",
-  "params": {
-    "module": "Api.Users",
-    "include": ["types", "functions", "specs", "tests"]
-  }
-}
+{ "method": "baseline/analyzeModule", "params": { "module": "Api.Users", "include": ["types", "functions", "specs", "tests"] } }
 
-// Response: Complete module information for context
-{
-  "module": "Api.Users",
-  "types": [...],
-  "functions": [...],
-  "specs": [...],
-  "tests": [...],
-  "dependencies": [...],
-  "dependents": [...]
-}
+// Response
+{ "module": "Api.Users", "types": [...], "functions": [...], "specs": [...], "tests": [...], "dependencies": [...], "dependents": [...] }
 ```
 
 ---
 
-## 11. Standard Library
+## 11. Constrained Generation Protocol [PLANNED]
 
-### 11.1 Core Types
+**New in v0.2**
+
+This section specifies how Baseline's type system can be used to **constrain LLM token generation in real time**, preventing ill-typed code from ever being produced.
+
+### 11.1 Motivation
+
+The standard LLM code generation loop is: Generate → Compile → Get errors → Fix → Retry. Each cycle costs time, tokens, and money. Type errors account for 33.6% of all LLM code generation failures.
+
+Research from ETH Zurich demonstrated that type-constrained decoding using prefix automata can cut compilation errors by more than half and increase functional correctness by 3.5–5.5%.
+
+Baseline's type system — with its simple decidable refinements, explicit effect annotations, and mandatory module-boundary signatures — is specifically designed to support this:
+
+```
+Generate (with type constraints at each token) → Compile → Verify specs
+```
+
+The first step produces code **guaranteed to type-check**. The second step only verifies specifications and refinements.
+
+### 11.2 Protocol Specification
+
+The Constrained Generation Protocol (CGP) extends the Interactive Refinement Protocol with token-level guidance:
+
+```json
+// Initialize constrained generation session
+{
+  "method": "baseline/cgp/start",
+  "params": {
+    "sessionId": "abc123",
+    "context": {
+      "file": "src/api.bl",
+      "position": { "line": 42 },
+      "scope": {
+        "bindings": [
+          { "name": "user", "type": "User" },
+          { "name": "config", "type": "ServerConfig" }
+        ],
+        "effects": ["Http", "Log", "Db"],
+        "expected_type": "Result<Response, ApiError>"
+      }
+    }
+  }
+}
+
+// Response: Initial valid token set
+{
+  "sessionId": "abc123",
+  "valid_tokens": ["let", "match", "if", "user", "config", "Http", "Log", "Db", "Ok", "Err"],
+  "invalid_tokens": ["Fs", "Process", "Random"],
+  "reason": { "Fs": "Effect Fs not in scope", "Process": "Effect Process not in scope" }
+}
+```
+
+#### Token-by-Token Constraint Updates
+
+```json
+// LLM generates: "let result = Http."
+{ "method": "baseline/cgp/advance", "params": { "sessionId": "abc123", "tokens": ["let", " result", " =", " Http", "."] } }
+
+// Response: Valid completions after "Http."
+{
+  "valid_tokens": ["get!", "post!", "put!", "delete!", "head!"],
+  "type_context": "Http method call, expecting: String -> Result<Response, HttpError>",
+  "partial_type": "Http.??? : String -> {Http} Result<Response, HttpError>"
+}
+```
+
+#### Effect Enforcement During Generation
+
+```json
+// LLM attempts: "Fs"
+{ "method": "baseline/cgp/advance", "params": { "sessionId": "abc123", "tokens": ["Fs"] } }
+
+// Response: Token rejected
+{
+  "status": "rejected",
+  "reason": "Effect Fs is not in the current capability set {Http, Log, Db}",
+  "valid_alternatives": ["Http", "Log", "Db", "let", "match", "if"],
+  "security_note": "This constraint enforces the capability-based security model"
+}
+```
+
+#### Refinement-Aware Generation
+
+```json
+// Context: fn listen!(port: Port) where Port = Int where 1 <= self <= 65535
+// LLM generates: "listen!(70000)"
+{ "method": "baseline/cgp/advance", "params": { "sessionId": "abc123", "tokens": ["listen!", "(", "70000", ")"] } }
+
+// Response: Refinement violation
+{
+  "status": "refinement_violation",
+  "constraint": "1 <= self <= 65535",
+  "actual_value": 70000,
+  "suggestion": "Use a value between 1 and 65535, or use a variable with Port type"
+}
+```
+
+### 11.3 Implementation Requirements
+
+For the CGP to work efficiently, Baseline's type system must satisfy:
+
+1. **Incremental type checking**: The type of a partial program must be computable after each token. Baseline's bidirectional type inference supports this — the expected type flows down from annotations, and the synthesized type flows up from expressions.
+
+2. **Decidable type membership**: Given a partial token sequence, the set of valid next tokens must be computable in bounded time. Baseline's refinement types use linear arithmetic (decidable) and a restricted regex subset (decidable).
+
+3. **Effect set closure**: The set of valid effect calls is statically known from the function signature. No dynamic dispatch on effects.
+
+4. **Tokenizer alignment**: Baseline's keywords are chosen to align with common BPE tokenizers. Each keyword maps to a single token, preventing the "token misalignment problem" identified in the Domino paper.
+
+### 11.4 Graceful Degradation
+
+Not all LLM deployment environments support constrained generation. The CGP is designed as an optional optimization:
+
+| Mode | Guarantee | Speed | Requirement |
+|------|-----------|-------|-------------|
+| Unconstrained | None | Fastest generation | Standard LLM inference |
+| Grammar-constrained | Syntactically valid | Slight overhead | Grammar-aware sampler |
+| Type-constrained | Type-correct | Moderate overhead | CGP server running |
+| Full-constrained | Type-correct + effects | Higher overhead | CGP server + effect checker |
+
+Each mode is strictly more powerful than the previous. Projects choose their constraint level based on criticality and available infrastructure.
+
+### 11.5 Integration with Existing Infrastructure
+
+The CGP integrates with existing constrained generation frameworks:
+
+- **Outlines/Guidance**: CGP can export Baseline's grammar as a JSON Schema or regex for use with existing structured generation libraries.
+- **vLLM/TGI**: CGP token masks can be provided as logit bias arrays.
+- **Custom inference**: The CGP server provides a simple HTTP API for token validation.
+
+---
+
+## 12. LLM Bootstrap Kit [PLANNED]
+
+**New in v0.2**
+
+New languages face a cold-start problem: LLMs generate better code in languages with massive training corpora, but corpora only grow if languages are widely adopted.
+
+### 12.1 `llms.txt` Specification File
+
+Every Baseline installation includes an `llms.txt` file designed for inclusion in LLM system prompts:
+
+```
+# Baseline Language Quick Reference
+
+## Syntax Summary
+- Functions: fn name(param: Type) -> ReturnType = body
+- Effects: fn name!(param: Type) -> {Effect1, Effect2} ReturnType = body
+- Types: type Name = Int where self > 0
+- Pipes: value |> transform |> validate
+- Lambdas: |x| x + 1
+- Pattern matching: match expr { pattern -> result }
+- Error propagation: fallible_operation()?
+- Let bindings: let x = expr
+- Conditionals: if cond then expr1 else expr2
+- Records: { field: value, field2: value2 }
+- Sum types: type T = | Variant1(Type) | Variant2
+- Typed holes: ?? (compiler reports expected type)
+
+## Key Rules
+- Pure functions have no ! suffix and cannot use effects
+- Effectful functions end with ! and declare effects: {Http, Db}
+- All exported functions require type annotations
+- Pattern matching is exhaustive
+- Trailing commas always allowed
+- String interpolation: "Hello, ${name}"
+- No null/undefined/nil — use Option<T> (sugar: T?)
+- No exceptions — use Result<T, E> with ? propagation
+- No classes/inheritance — use records + sum types + effects
+
+## Common Patterns
+fn pure_function(x: Int) -> Int = x * 2
+fn effectful!(x: Int) -> {Db} Result<String, Error> = Db.query!(x)?
+type Validated = String where String.length(self) > 0
+let result = input |> parse |> validate |> transform
+```
+
+### 12.2 Canonical Few-Shot Examples
+
+The distribution includes curated examples covering common patterns:
+
+```baseline
+// Example: CRUD API endpoint
+@prelude(server)
+module Examples.Crud
+
+export type Todo = {
+  id: Int where self > 0,
+  title: String where String.length(self) > 0,
+  completed: Bool,
+}
+
+type CreateTodo = {
+  title: String where String.length(self) > 0,
+}
+
+export fn list_todos!() -> {Db} List<Todo> =
+  Db.query!("SELECT * FROM todos")
+
+export fn get_todo!(id: Int) -> {Db} Result<Todo, NotFound> =
+  Db.query_one!("SELECT * FROM todos WHERE id = ?", id)
+  |> Option.ok_or(NotFound)
+
+export fn create_todo!(body: CreateTodo) -> {Db} Todo =
+  Db.insert!("todos", { title: body.title, completed: false })
+
+export fn delete_todo!(id: Int) -> {Db} Result<(), NotFound> =
+  let deleted = Db.delete!("todos", id)
+  if deleted then Ok(()) else Err(NotFound)
+
+// Example: Pure data transformation with inline tests
+fn summarize(todos: List<Todo>) -> { total: Int, completed: Int, pending: Int } =
+  let total = List.length(todos)
+  let completed = todos |> List.filter(|t| t.completed) |> List.length
+  { total: total, completed: completed, pending: total - completed }
+where
+  test "empty list" = summarize([]) == { total: 0, completed: 0, pending: 0 }
+  test "mixed" = summarize([
+    { id: 1, title: "A", completed: true },
+    { id: 2, title: "B", completed: false },
+  ]) == { total: 2, completed: 1, pending: 1 }
+```
+
+### 12.3 Training Corpus Strategy
+
+To maximize LLM generability without requiring fine-tuning:
+
+1. **Syntactic proximity**: Baseline's `fn`/`let`/`match`/`if-then-else` syntax is deliberately close to Rust, OCaml, F#, and Kotlin — languages with substantial representation in training corpora.
+
+2. **Standard library naming**: Function names follow widely-adopted conventions (`map`, `filter`, `fold`, `unwrap`, `ok_or`) shared across Rust, Haskell, OCaml, and Scala.
+
+3. **Progressive complexity**: Few-shot examples are ordered from simple (pure functions with inline tests) to complex (effectful APIs with specifications).
+
+4. **Negative examples**: The `llms.txt` explicitly shows what syntax does NOT exist, helping LLMs avoid generating patterns from other languages.
+
+### 12.4 Model Compatibility Testing
+
+The project maintains a benchmark suite:
+
+```bash
+baseline benchmark --model claude-sonnet --tasks standard
+baseline benchmark --model gpt-4 --tasks standard
+```
+
+This produces structured output comparing pass rates, token efficiency, and feedback loop iterations across models, enabling data-driven syntax decisions.
+
+---
+
+## 13. Standard Library
+
+### 13.1 Core Types
 
 ```baseline
 module Baseline.Core
 
-// Primitive operations
-export (+), (-), (*), (/), (%), (**)
+export (+), (-), (*), (/), (%)    // [IMPLEMENTED]
+// export (**)                     // [PLANNED — use Math.pow for now]
 export (==), (!=), (<), (>), (<=), (>=)
 export (&&), (||), not
 
 // Option
 export type Option<T> = Some(T) | None
-export Option.map : (Option<T>, T -> U) -> Option<U>
-export Option.and_then : (Option<T>, T -> Option<U>) -> Option<U>
-export Option.unwrap : Option<T> -> T  // panics if None
-export Option.unwrap_or : (Option<T>, T) -> T
-export Option.ok_or : (Option<T>, E) -> Result<T, E>
+export fn Option.map<T, U>(opt: Option<T>, f: T -> U) -> Option<U>
+export fn Option.and_then<T, U>(opt: Option<T>, f: T -> Option<U>) -> Option<U>
+export fn Option.unwrap<T>(opt: Option<T>) -> T
+export fn Option.unwrap_or<T>(opt: Option<T>, default: T) -> T
+export fn Option.ok_or<T, E>(opt: Option<T>, err: E) -> Result<T, E>  // [PLANNED]
 
 // Result
 export type Result<T, E> = Ok(T) | Err(E)
-export Result.map : (Result<T, E>, T -> U) -> Result<U, E>
-export Result.map_err : (Result<T, E>, E -> F) -> Result<T, F>
-export Result.and_then : (Result<T, E>, T -> Result<U, E>) -> Result<U, E>
-export Result.unwrap : Result<T, E> -> T  // panics if Err
-export Result.unwrap_or : (Result<T, E>, T) -> T
+export fn Result.map<T, U, E>(res: Result<T, E>, f: T -> U) -> Result<U, E>
+export fn Result.map_err<T, E, F>(res: Result<T, E>, f: E -> F) -> Result<T, F>  // [PLANNED]
+export fn Result.and_then<T, U, E>(res: Result<T, E>, f: T -> Result<U, E>) -> Result<U, E>  // [PLANNED]
+export fn Result.unwrap<T, E>(res: Result<T, E>) -> T
+export fn Result.unwrap_or<T, E>(res: Result<T, E>, default: T) -> T
 ```
 
-### 11.2 Collections
+### 13.2 Collections
 
 ```baseline
 module Baseline.Collections
 
 // List
-export type List<T>
-export List.empty : () -> List<T>
-export List.singleton : T -> List<T>
-export List.len : List<T> -> Int
-export List.get : (List<T>, Int) -> T?
-export List.first : List<T> -> T?
-export List.last : List<T> -> T?
-export List.map : (List<T>, T -> U) -> List<U>
-export List.filter : (List<T>, T -> Bool) -> List<T>
-export List.fold : (List<T>, U, (U, T) -> U) -> U
-export List.find : (List<T>, T -> Bool) -> T?
-export List.any : (List<T>, T -> Bool) -> Bool
-export List.all : (List<T>, T -> Bool) -> Bool
-export List.sort : List<T> -> List<T> where T: Ord
-export List.reverse : List<T> -> List<T>
-export List.concat : (List<T>, List<T>) -> List<T>
-export (++) : (List<T>, List<T>) -> List<T>
+export fn List.length<T>(list: List<T>) -> Int          // [IMPLEMENTED]
+export fn List.get<T>(list: List<T>, index: Int) -> T?   // [PLANNED]
+export fn List.head<T>(list: List<T>) -> T?              // [IMPLEMENTED]
+export fn List.tail<T>(list: List<T>) -> List<T>         // [IMPLEMENTED]
+export fn List.map<T, U>(list: List<T>, f: T -> U) -> List<U>     // [IMPLEMENTED]
+export fn List.filter<T>(list: List<T>, f: T -> Bool) -> List<T>   // [IMPLEMENTED]
+export fn List.fold<T, U>(list: List<T>, init: U, f: (U, T) -> U) -> U  // [IMPLEMENTED]
+export fn List.find<T>(list: List<T>, f: T -> Bool) -> T?          // [IMPLEMENTED]
+export fn List.any<T>(list: List<T>, f: T -> Bool) -> Bool         // [PLANNED]
+export fn List.all<T>(list: List<T>, f: T -> Bool) -> Bool         // [PLANNED]
+export fn List.sort<T>(list: List<T>) -> List<T>                   // [IMPLEMENTED — no type constraint]
+export fn List.reverse<T>(list: List<T>) -> List<T>                // [IMPLEMENTED]
+export fn List.concat<T>(a: List<T>, b: List<T>) -> List<T>       // [IMPLEMENTED]
+export fn (++)<T>(a: List<T>, b: List<T>) -> List<T>              // [IMPLEMENTED]
 
 // Map
-export type Map<K, V>
-export Map.empty : () -> Map<K, V>
-export Map.singleton : (K, V) -> Map<K, V>
-export Map.insert : (Map<K, V>, K, V) -> Map<K, V>
-export Map.get : (Map<K, V>, K) -> V?
-export Map.remove : (Map<K, V>, K) -> Map<K, V>
-export Map.contains : (Map<K, V>, K) -> Bool
-export Map.keys : Map<K, V> -> List<K>
-export Map.values : Map<K, V> -> List<V>
+export fn Map.empty<K, V>() -> Map<K, V>
+export fn Map.insert<K, V>(m: Map<K, V>, key: K, val: V) -> Map<K, V>
+export fn Map.get<K, V>(m: Map<K, V>, key: K) -> V?
+export fn Map.remove<K, V>(m: Map<K, V>, key: K) -> Map<K, V>
+export fn Map.contains<K, V>(m: Map<K, V>, key: K) -> Bool
+export fn Map.keys<K, V>(m: Map<K, V>) -> List<K>
+export fn Map.values<K, V>(m: Map<K, V>) -> List<V>
 
 // Set
-export type Set<T>
-export Set.empty : () -> Set<T>
-export Set.singleton : T -> Set<T>
-export Set.insert : (Set<T>, T) -> Set<T>
-export Set.remove : (Set<T>, T) -> Set<T>
-export Set.contains : (Set<T>, T) -> Bool
-export Set.union : (Set<T>, Set<T>) -> Set<T>
-export Set.intersection : (Set<T>, Set<T>) -> Set<T>
+export fn Set.empty<T>() -> Set<T>
+export fn Set.insert<T>(s: Set<T>, val: T) -> Set<T>
+export fn Set.remove<T>(s: Set<T>, val: T) -> Set<T>
+export fn Set.contains<T>(s: Set<T>, val: T) -> Bool
+export fn Set.union<T>(a: Set<T>, b: Set<T>) -> Set<T>
+export fn Set.intersection<T>(a: Set<T>, b: Set<T>) -> Set<T>
 ```
 
-### 11.3 Text
+### 13.3 Text
 
 ```baseline
 module Baseline.Text
 
-export String.len : String -> Int
-export String.is_empty : String -> Bool
-export String.chars : String -> List<Char>
-export String.bytes : String -> List<Int>
-export String.split : (String, String) -> List<String>
-export String.join : (List<String>, String) -> String
-export String.trim : String -> String
-export String.starts_with : (String, String) -> Bool
-export String.ends_with : (String, String) -> Bool
-export String.contains : (String, String) -> Bool
-export String.replace : (String, String, String) -> String
-export String.to_upper : String -> String
-export String.to_lower : String -> String
-export String.matches : (String, Regex) -> Bool
-export String.find_all : (String, Regex) -> List<Match>
+export fn String.length(s: String) -> Int                          // [IMPLEMENTED]
+export fn String.is_empty(s: String) -> Bool                       // [PLANNED]
+export fn String.chars(s: String) -> List<String>                  // [IMPLEMENTED — returns List<String>, not List<Char>]
+export fn String.split(s: String, sep: String) -> List<String>     // [IMPLEMENTED]
+export fn String.join(parts: List<String>, sep: String) -> String  // [IMPLEMENTED]
+export fn String.trim(s: String) -> String                         // [IMPLEMENTED]
+export fn String.starts_with(s: String, prefix: String) -> Bool    // [IMPLEMENTED]
+export fn String.ends_with(s: String, suffix: String) -> Bool      // [IMPLEMENTED]
+export fn String.contains(s: String, sub: String) -> Bool          // [IMPLEMENTED]
+export fn String.replace(s: String, from: String, to: String) -> String  // [PLANNED]
+export fn String.to_upper(s: String) -> String                     // [IMPLEMENTED]
+export fn String.to_lower(s: String) -> String                     // [IMPLEMENTED]
+export fn String.matches(s: String, re: Regex) -> Bool             // [PLANNED]
 
-export type Regex
-export Regex.new : String -> Result<Regex, RegexError>
-export Regex.is_match : (Regex, String) -> Bool
-export Regex.captures : (Regex, String) -> List<String>?
+export type Regex                                                   // [PLANNED]
+export fn Regex.new(pattern: String) -> Result<Regex, RegexError>  // [PLANNED]
+export fn Regex.is_match(re: Regex, s: String) -> Bool             // [PLANNED]
+export fn Regex.captures(re: Regex, s: String) -> List<String>?    // [PLANNED]
 ```
 
-### 11.4 IO
+### 13.4 IO [PARTIAL]
+
+The Fs effect is partially implemented. Currently uses `String` paths rather than a `Path` type.
 
 ```baseline
 module Baseline.IO
 
 export effect Fs {
-  read! : Path -> Result<Bytes, IoError>
-  read_text! : Path -> Result<String, IoError>
-  write! : (Path, Bytes) -> Result<(), IoError>
-  write_text! : (Path, String) -> Result<(), IoError>
-  append! : (Path, Bytes) -> Result<(), IoError>
-  delete! : Path -> Result<(), IoError>
-  exists! : Path -> Bool
-  list_dir! : Path -> Result<List<Path>, IoError>
-  create_dir! : Path -> Result<(), IoError>
-  metadata! : Path -> Result<Metadata, IoError>
+  read_text! : String -> String              // [IMPLEMENTED — as Fs.read!]
+  write_text! : (String, String) -> Unit     // [IMPLEMENTED — as Fs.write!]
+  delete! : String -> Unit                   // [IMPLEMENTED]
+  exists! : String -> Bool                   // [IMPLEMENTED]
+  list_dir! : String -> List<String>         // [IMPLEMENTED — as Fs.list_dir!]
+  create_dir! : String -> Unit              // [PLANNED]
+  metadata! : String -> Metadata            // [PLANNED]
 }
 
-export type Path
-export Path.from_str : String -> Path
-export Path.join : (Path, String) -> Path
-export Path.parent : Path -> Path?
-export Path.file_name : Path -> String?
-export Path.extension : Path -> String?
+export type Path                             // [PLANNED]
+export fn Path.from_str(s: String) -> Path   // [PLANNED]
+export fn Path.join(p: Path, s: String) -> Path  // [PLANNED]
+export fn Path.parent(p: Path) -> Path?      // [PLANNED]
+export fn Path.file_name(p: Path) -> String? // [PLANNED]
+export fn Path.extension(p: Path) -> String? // [PLANNED]
 
-export type Metadata = {
+export type Metadata = {                     // [PLANNED]
   size: Int,
   is_file: Bool,
   is_dir: Bool,
@@ -2756,11 +2431,9 @@ export type Metadata = {
 
 ---
 
-## 12. Grammar
+## 14. Grammar
 
-### 12.1 Notation
-
-This grammar uses the following notation:
+### 14.1 Notation
 
 - `'text'` — Terminal (literal text)
 - `Name` — Non-terminal
@@ -2770,24 +2443,20 @@ This grammar uses the following notation:
 - `A+` — One or more
 - `(A B)` — Grouping
 
-### 12.2 Lexical Grammar
+### 14.2 Lexical Grammar
 
 ```ebnf
-(* Whitespace and comments *)
 whitespace = ' ' | '\t' | '\n' | '\r'
 line_comment = '//' (~'\n')* '\n'
 block_comment = '/*' (block_comment | ~'*/')* '*/'
 
-(* Identifiers *)
 lower_ident = lower (lower | upper | digit | '_')*
 upper_ident = upper (lower | upper | digit | '_')*
-effect_ident = upper_ident '!'?
 
 lower = 'a'..'z'
 upper = 'A'..'Z'
 digit = '0'..'9'
 
-(* Literals *)
 int_lit = '-'? digit ('_'? digit)*
         | '0x' hex_digit ('_'? hex_digit)*
         | '0b' bin_digit ('_'? bin_digit)*
@@ -2804,86 +2473,70 @@ string_char = ~('"' | '\\' | '$')
             | '\\' escape_char
             | '${' expression '}'
 
-char_lit = '\'' (char_char | escape_char) '\''
+char_lit = '\'' (char_char | escape_char) '\''    (* [PLANNED] *)
 
 bool_lit = 'true' | 'false'
 
-(* Operators *)
-operator = '+' | '-' | '*' | '/' | '%' | '**'
-         | '==' | '!=' | '<' | '>' | '<=' | '>='
-         | '&&' | '||' | 'not'
-         | '|>' | '<|' | '>>' | '<<'
-         | '?'
-         | '++' | '..'
+operator = '+' | '-' | '*' | '/' | '%'         (* [IMPLEMENTED] *)
+         | '**'                                  (* [PLANNED] *)
+         | '==' | '!=' | '<' | '>' | '<=' | '>='  (* [IMPLEMENTED] *)
+         | '&&' | '||' | 'not'                  (* [IMPLEMENTED] *)
+         | '|>'                                  (* [IMPLEMENTED] *)
+         | '<|' | '>>' | '<<'                   (* [PLANNED] *)
+         | '?'                                   (* [IMPLEMENTED] *)
+         | '++' | '..'                           (* [IMPLEMENTED] *)
 ```
 
-### 12.3 Syntactic Grammar
+### 14.3 Syntactic Grammar
 
 ```ebnf
 (* Module *)
 module = module_decl? import* declaration*
-
 module_decl = '@module' module_path
-
 module_path = upper_ident ('.' upper_ident)*
-
 import = 'import' module_path import_spec?
-
-import_spec = '.' '{' ident (',' ident)* '}'
+import_spec = '.' '{' ident (',' ident)* ','? '}'
             | '.' '*'
-            | 'as' upper_ident
+            | 'as' upper_ident                   (* [PLANNED] *)
 
 (* Declarations *)
-declaration = type_decl
-            | effect_decl
-            | function_decl
-            | spec_decl
+declaration = type_decl | effect_decl | function_decl | spec_decl
 
 (* Type declarations *)
 type_decl = 'export'? 'type' upper_ident type_params? '=' type_body where_clause?
-
 type_params = '<' upper_ident (',' upper_ident)* '>'
-
-type_body = type_expr
-          | variant_list
-          | record_type
-
+type_body = type_expr | variant_list | record_type
 variant_list = '|'? variant ('|' variant)*
-
 variant = upper_ident ('(' type_expr (',' type_expr)* ')')?
-
 record_type = '{' record_field (',' record_field)* ','? '}'
-
 record_field = lower_ident ':' type_expr refinement?
-
 refinement = 'where' expression
 
 (* Type expressions *)
 type_expr = type_primary ('->' type_expr)?
           | type_primary '?'
-
 type_primary = upper_ident type_args?
              | lower_ident
              | '(' type_expr (',' type_expr)* ')'
              | '{' effect_list '}' type_expr
              | record_type
-
 type_args = '<' type_expr (',' type_expr)* '>'
-
 effect_list = upper_ident (',' upper_ident)*
 
 (* Effect declarations *)
 effect_decl = 'export'? 'effect' upper_ident '{' effect_method* '}'
-
 effect_method = lower_ident '!' ':' type_expr
 
-(* Function declarations *)
-function_decl = 'export'? lower_ident '!'? ':' type_expr
-                lower_ident '!'? '=' expression where_clause?
+(* Function declarations — v0.2 syntax *)
+function_decl = 'export'? 'fn' lower_ident '!'? type_params?
+                '(' param_list ')' ('->' type_expr)? '=' expression
+                where_clause?
+
+param_list = (param (',' param)* ','?)?
+param = lower_ident ':' type_expr
 
 (* Specification declarations *)
 spec_decl = '@spec' lower_ident spec_attr*
-
 spec_attr = '@given' param_list
           | '@returns' type_expr
           | '@requires' expression
@@ -2891,51 +2544,31 @@ spec_attr = '@given' param_list
           | '@effects' '{' effect_list '}'
           | '@pure'
           | '@total'
+          | '@assume' lower_ident
 
 (* Expressions *)
-expression = let_expr
-           | if_expr
-           | match_expr
-           | try_expr
-           | lambda_expr
-           | pipe_expr
+expression = let_expr | if_expr | match_expr | lambda_expr | pipe_expr | hole_expr
 
 let_expr = 'let' pattern (':' type_expr)? '=' expression expression?
-
-if_expr = 'if' expression 'then' expression 'else' expression
-
+if_expr = 'if' expression 'then' expression ('else' 'if' expression 'then' expression)* 'else' expression
 match_expr = 'match' expression match_arm+
-
 match_arm = pattern guard? '->' expression
-
-guard = 'if' expression
-
-try_expr = 'try' expression 'catch' match_arm+
-
-lambda_expr = '|' param_list '|' expression
-
-param_list = pattern (',' pattern)*
+guard = 'if' expression                                          (* [PLANNED] *)
+lambda_expr = '|' lambda_params '|' expression
+lambda_params = pattern (',' pattern)*
+hole_expr = '??' ('where' expression)?
 
 pipe_expr = or_expr ('|>' or_expr)*
-
 or_expr = and_expr ('||' and_expr)*
-
 and_expr = cmp_expr ('&&' cmp_expr)*
-
 cmp_expr = add_expr (cmp_op add_expr)*
-
 cmp_op = '==' | '!=' | '<' | '>' | '<=' | '>='
-
 add_expr = mul_expr (('+' | '-' | '++') mul_expr)*
-
 mul_expr = pow_expr (('*' | '/' | '%') pow_expr)*
-
-pow_expr = unary_expr ('**' pow_expr)?
-
+pow_expr = unary_expr ('**' pow_expr)?                            (* [PLANNED] — use Math.pow *)
 unary_expr = ('not' | '-')? postfix_expr
 
 postfix_expr = primary_expr postfix_op*
-
 postfix_op = '(' arg_list ')'
            | '.' lower_ident
            | '.' int_lit
@@ -2945,15 +2578,14 @@ primary_expr = lower_ident
              | upper_ident
              | literal
              | '(' expression (',' expression)* ')'
-             | '[' (expression (',' expression)*)? ']'
-             | '{' (record_init (',' record_init)*)? '}'
+             | '[' (expression (',' expression)* ','?)? ']'
+             | '{' (record_init (',' record_init)* ','?)? '}'
              | '{' expression '}'
 
 record_init = lower_ident ':' expression
             | '..' expression
 
-arg_list = (arg (',' arg)*)?
-
+arg_list = (arg (',' arg)* ','?)?
 arg = expression
     | lower_ident ':' expression
 
@@ -2963,15 +2595,14 @@ pattern = '_'
         | literal
         | upper_ident ('(' pattern (',' pattern)* ')')?
         | '(' pattern (',' pattern)* ')'
-        | '[' (pattern (',' pattern)*)? ('..' lower_ident?)? ']'
-        | '{' field_pattern (',' field_pattern)* ('..' )? '}'
-        | pattern '|' pattern
+        | '[' (pattern (',' pattern)*)? ('..' lower_ident?)? ']'    (* [PLANNED] *)
+        | '{' field_pattern (',' field_pattern)* ('..')? '}'       (* [PLANNED] *)
+        | pattern '|' pattern                                      (* [PLANNED] *)
 
 field_pattern = lower_ident (':' pattern)?
 
 (* Where clauses *)
 where_clause = 'where' where_item+
-
 where_item = 'test' string_lit '=' expression
            | 'property' string_lit '=' expression
            | 'contract' string_lit '=' contract_body
@@ -2979,8 +2610,39 @@ where_item = 'test' string_lit '=' expression
 
 contract_body = 'given' expression 'when' expression 'then' expression
 
+(* Testing — BDD syntax *)
+test_decl = 'describe' string_lit '{' test_item* '}'
+test_item = test_decl
+          | 'context' string_lit '{' test_item* '}'
+          | 'it' ('.' 'only' | '.' 'skip' ('(' string_lit ')')?)? string_lit '{' test_body '}'
+          | 'before_all' '{' expression '}'
+          | 'before_each' '{' expression '}'
+          | 'after_all' '{' expression '}'
+          | 'after_each' '{' expression '}'
+          | 'let' lower_ident '=' expression
+          | 'with' '{' record_init (',' record_init)* '}'
+
+test_body = (let_expr | with_clause | expect_expr)*
+with_clause = 'with' '{' record_init (',' record_init)* '}'
+expect_expr = 'expect' expression matcher
+matcher = 'to_equal' expression
+        | 'to_be' pattern
+        | 'to_be_greater_than' expression
+        | 'to_be_between' expression 'and' expression
+        | 'to_contain' expression
+        | 'to_have_length' expression
+        | 'to_be_empty'
+        | 'to_start_with' expression
+        | 'to_match' expression
+        | 'to_be_ok'
+        | 'to_be_err'
+        | 'to_be_some'
+        | 'to_be_none'
+        | 'to_be_type' upper_ident
+        | 'to_satisfy' lambda_expr
+
 (* Literals *)
-literal = int_lit | float_lit | string_lit | char_lit | bool_lit | '()'
+literal = int_lit | float_lit | string_lit | char_lit (* [PLANNED] *) | bool_lit | '()'
 ```
 
 ---
@@ -3009,6 +2671,7 @@ All compiler errors follow this JSON schema:
         },
         "message": { "type": "string" },
         "context": { "type": "object" },
+        "verification_level": { "type": "string" },
         "suggestions": {
           "type": "array",
           "items": {
@@ -3016,7 +2679,8 @@ All compiler errors follow this JSON schema:
             "properties": {
               "action": { "type": "string" },
               "code": { "type": "string" },
-              "confidence": { "type": "number" }
+              "confidence": { "type": "number" },
+              "description": { "type": "string" }
             }
           }
         }
@@ -3026,15 +2690,17 @@ All compiler errors follow this JSON schema:
 }
 ```
 
+**v0.2 addition** `[PLANNED]`: Every error response includes `verification_level` indicating which level of checking detected the error, and `suggestions` are sorted by `confidence` (highest first) to optimize LLM repair loops. Currently, the compiler emits errors with `code`, `message`, `location`, and `context` fields but does not include `verification_level` or confidence-scored suggestions.
+
 ---
 
-## Appendix B: Trace Format
+## Appendix B: Trace Format `[PLANNED]`
 
-Traces are stored in a binary format for efficiency. The schema:
+Traces are stored in a binary format for efficiency:
 
 ```
 TraceFile {
-  magic: [u8; 4] = "RKTC"
+  magic: [u8; 4] = "BLTC"
   version: u16
   flags: u16
   event_count: u64
@@ -3065,6 +2731,57 @@ EventType {
   Error = 0x08
 }
 ```
+
+---
+
+## Appendix C: Dual-Audience Design Rationale
+
+This appendix documents the empirical research that informed v0.2 design decisions.
+
+### C.1 Function Syntax Change
+
+**v0.1**: `greet : String -> String` / `greet = |name| "Hello, ${name}"`
+**v0.2**: `fn greet(name: String) -> String = "Hello, ${name}"`
+
+**Evidence**: The MultiPL-E benchmark found training data abundance is the strongest predictor of LLM code generation accuracy. The `fn name(params) -> Type = body` pattern appears in Rust (~15% of GitHub code repos), Kotlin, and Swift. The ML-style split declaration appears primarily in OCaml and Haskell (<2% combined). Models generate the `fn` pattern correctly at significantly higher rates without fine-tuning.
+
+**Human impact**: Minimal. Both syntaxes are readable. The `fn` keyword provides a visual anchor for scanning code. Parameter-type co-location reduces eye movement when reading function signatures.
+
+### C.2 Test Syntax Change
+
+**v0.1**: `given [3, 1, 4] / when List.sort / expect [1, 1, 3, 4, 5]`
+**v0.2**: `expect List.sort([3, 1, 4, 1, 5]) to_equal [1, 1, 3, 4, 5]`
+
+**Evidence**: The v0.1 `when` clause created ambiguity about whether the identifier is being called or is a label. This is exactly the kind of ambiguity that type-constrained decoding cannot resolve (it's semantic, not syntactic). Explicit function application is unambiguous in both directions — the LLM knows it's generating a function call, and the human reader knows they're reading one.
+
+**Human impact**: Slightly more verbose, but BDD structure (`describe`/`context`/`it`) provides the narrative scaffolding. The actual assertion line is clearer.
+
+### C.3 Bounded Row Polymorphism
+
+**v0.1**: Unbounded row polymorphism everywhere
+**v0.2**: Row variables resolved to concrete types at module boundaries
+
+**Evidence**: ETH Zurich's type-constrained decoding work requires the set of valid completions to be computable at each token. Unbounded row variables make this set infinite (any field access could be valid if some call site provides it). Bounding at module boundaries makes the valid completion set finite and computable.
+
+**Human impact**: Minimal. Internal functions retain full flexibility. Exported functions require either concrete types or named aliases, which is better documentation practice regardless.
+
+### C.4 Verification Level Surfacing
+
+**v0.1**: Verification level was a CLI flag
+**v0.2**: Verification level is reported in every compiler response
+
+**Evidence**: The METR study found a 39-point perception gap between actual and perceived productivity with AI tools. A major source of this gap is delayed feedback — code appears to work at one level but fails at another. Making the verification level explicit in every response enables LLM agents to reason about what has and hasn't been verified.
+
+**Human impact**: Positive. Developers also benefit from knowing whether their code has passed type checking only vs. full specification verification.
+
+### C.5 Constrained Generation Protocol
+
+**v0.1**: Not present
+**v0.2**: Full protocol specification
+
+**Evidence**: Type errors account for 33.6% of all LLM code generation failures. Type-constrained decoding cuts compilation errors by more than half and increases functional correctness by 3.5–5.5%. Baseline's type system (decidable refinements, explicit effects, mandatory boundary signatures) was specifically designed to enable this.
+
+**Human impact**: None (the CGP operates during LLM inference and is invisible to human users).
 
 ---
 

@@ -7,7 +7,7 @@ export const features: Feature[] = [
 	{
 		title: 'Algebraic Effects',
 		description:
-			'Side effects declared in type signatures and enforced by the compiler. Built-in: Console, Http, Fs, Db, Net, Log, Time, and more.'
+			'Side effects declared in type signatures and enforced by the compiler. Built-in: Console, Http, Fs, Log, Time, Random, Env, and more.'
 	},
 	{
 		title: 'Refinement Types',
@@ -17,7 +17,7 @@ export const features: Feature[] = [
 	{
 		title: 'Pattern Matching',
 		description:
-			'Exhaustive matches on sum types, records, lists, and tuples. Destructuring built in.'
+			'Exhaustive matches on sum types and tuples with constructor destructuring. The compiler rejects unhandled branches.'
 	},
 	{
 		title: 'Pipe Operator',
