@@ -907,21 +907,63 @@ impl<'a> Codegen<'a> {
         }
 
         let has_interpolation = parts.iter().any(|p| !matches!(p, Expr::String(_)));
-        let mut segment_count = 0;
 
-        for part in parts {
-            self.gen_expr(part, span)?;
-            if segment_count > 0 {
+        // When mixing string literals and expressions (e.g. "prefix ${expr}"),
+        // expression parts may contain inlined Block/Let from the optimizer.
+        // Evaluating those while string literals sit as untracked values on the
+        // stack corrupts local-slot numbering. Fix: pre-evaluate all non-string
+        // parts into temp locals so the stack is clean during each evaluation.
+        let needs_temp_locals = has_interpolation
+            && parts.len() > 1
+            && parts.iter().any(|p| matches!(p, Expr::String(_)));
+
+        if needs_temp_locals {
+            self.begin_scope();
+
+            // Phase 1: evaluate non-string parts into temp locals
+            let mut prepared: Vec<Option<String>> = Vec::with_capacity(parts.len());
+            for (i, part) in parts.iter().enumerate() {
+                if matches!(part, Expr::String(_)) {
+                    prepared.push(None); // will emit directly in phase 2
+                } else {
+                    self.gen_expr(part, span)?;
+                    let temp = format!("__concat_{}", i);
+                    self.declare_local(&temp);
+                    prepared.push(Some(temp));
+                }
+            }
+
+            // Phase 2: load all parts and concatenate
+            let mut segment_count = 0;
+            for (i, prep) in prepared.iter().enumerate() {
+                match prep {
+                    None => self.gen_expr(&parts[i], span)?,
+                    Some(name) => self.gen_var(name, span)?,
+                }
+                if segment_count > 0 {
+                    self.emit(Op::Concat, span);
+                }
+                segment_count += 1;
+            }
+
+            self.end_scope(span);
+        } else {
+            // Simple path: no interleaving risk (all expressions or single part)
+            let mut segment_count = 0;
+            for part in parts {
+                self.gen_expr(part, span)?;
+                if segment_count > 0 {
+                    self.emit(Op::Concat, span);
+                }
+                segment_count += 1;
+            }
+
+            // If single interpolation expression, ensure it's converted to string via Concat
+            if segment_count == 1 && has_interpolation {
+                let idx = self.chunk.add_constant(NValue::string("".into()));
+                self.emit(Op::LoadConst(idx), span);
                 self.emit(Op::Concat, span);
             }
-            segment_count += 1;
-        }
-
-        // If single interpolation expression, ensure it's converted to string via Concat
-        if segment_count == 1 && has_interpolation {
-            let idx = self.chunk.add_constant(NValue::string("".into()));
-            self.emit(Op::LoadConst(idx), span);
-            self.emit(Op::Concat, span);
         }
 
         Ok(())

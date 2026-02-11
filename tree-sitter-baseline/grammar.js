@@ -45,6 +45,7 @@ module.exports = grammar({
     $.raw_hash_string_content,
     $.raw_hash_string_end,
     $._error_sentinel,  // Never used in grammar; detects error recovery
+    $._call_lparen,     // '(' that is NOT preceded by a newline (for call expressions)
   ],
 
   conflicts: $ => [
@@ -326,8 +327,11 @@ module.exports = grammar({
     )),
 
     // f(x, y) or f(name: "Alice", age: 30)
+    // $._call_lparen is an external token that matches '(' only when NO newline
+    // appears between it and the preceding token. This prevents newline-separated
+    // expressions from being parsed as call arguments: `42\n(a, b)` is NOT a call.
     call_expression: $ => prec.left(PREC.CALL, seq(
-      $._expression, '(', optional(commaSep(choice($.named_argument, $._expression))), ')'
+      $._expression, $._call_lparen, optional(commaSep(choice($.named_argument, $._expression))), ')'
     )),
 
     named_argument: $ => seq(field('name', $.identifier), ':', $._expression),

@@ -2189,8 +2189,8 @@
             "name": "_expression"
           },
           {
-            "type": "STRING",
-            "value": "("
+            "type": "SYMBOL",
+            "name": "_call_lparen"
           },
           {
             "type": "CHOICE",
@@ -3898,6 +3898,10 @@
     {
       "type": "SYMBOL",
       "name": "_error_sentinel"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "_call_lparen"
     }
   ],
   "inline": [],

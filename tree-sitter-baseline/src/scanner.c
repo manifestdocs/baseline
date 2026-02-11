@@ -26,6 +26,7 @@ enum TokenType {
   RAW_HASH_STRING_CONTENT,      // text inside r#"..."#
   RAW_HASH_STRING_END,          // "# (closing raw hash string)
   ERROR_SENTINEL,               // never used in grammar; detects error recovery
+  CALL_LPAREN,                  // '(' for call expressions, only when no newline precedes
 };
 
 void *tree_sitter_baseline_external_scanner_create() { return NULL; }
@@ -54,6 +55,28 @@ bool tree_sitter_baseline_external_scanner_scan(void *p, TSLexer *lexer,
   // Error recovery: all symbols valid. Let internal lexer handle it.
   if (valid_symbols[ERROR_SENTINEL]) {
     return false;
+  }
+
+  // ---- Call '(' — match only when no newline precedes ----
+  if (valid_symbols[CALL_LPAREN]) {
+    // Peek ahead: skip spaces/tabs (NOT newlines) to check if next char is '('.
+    // If we hit a newline first, this is NOT a call.
+    bool saw_newline = false;
+    while (lexer->lookahead == ' ' || lexer->lookahead == '\t' ||
+           lexer->lookahead == '\n' || lexer->lookahead == '\r') {
+      if (lexer->lookahead == '\n' || lexer->lookahead == '\r') {
+        saw_newline = true;
+        break;  // Stop at newline — don't consume further
+      }
+      skip(lexer);
+    }
+    if (!saw_newline && lexer->lookahead == '(') {
+      advance(lexer);
+      lexer->mark_end(lexer);
+      lexer->result_symbol = CALL_LPAREN;
+      return true;
+    }
+    // Fall through: don't return false — other external tokens may still match
   }
 
   // ---- String opening: r", r#", " vs """ ----
