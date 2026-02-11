@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["blc", "tree-sitter-baseline"]
+members = ["blc", "baseline-rt", "tree-sitter-baseline"]
 
 [workspace.package]
 version = "0.1.0"

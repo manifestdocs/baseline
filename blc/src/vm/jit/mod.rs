@@ -11,6 +11,9 @@ mod analysis;
 mod compile;
 mod helpers;
 
+#[cfg(feature = "aot")]
+pub mod aot;
+
 #[cfg(test)]
 mod tests;
 
@@ -73,6 +76,9 @@ impl JitProgram {
     ///
     /// Calls through the platform-CC entry wrapper, which internally calls
     /// the Tail-CC entry function. This avoids ABI mismatch on transmute.
+    ///
+    /// Heap values created during execution are tracked in a thread-local arena
+    /// and freed after the return value is extracted.
     pub fn run_entry_nvalue(&self) -> Option<NValue> {
         if self.entry_wrapper.is_null() {
             return None;
@@ -86,20 +92,36 @@ impl JitProgram {
             .collect();
         helpers::set_fn_table(fn_table);
 
+        // RAII guard: ensures fn_table and arena are cleaned up on panic.
+        // On the normal path, we drop it explicitly after extracting the return value.
+        struct CleanupGuard;
+        impl Drop for CleanupGuard {
+            fn drop(&mut self) {
+                helpers::clear_fn_table();
+                drop(helpers::jit_arena_drain());
+            }
+        }
+        let guard = CleanupGuard;
+
         let raw = func();
 
-        // Clear the function pointer table
-        helpers::clear_fn_table();
-
-        if self.entry_unboxed {
+        // Extract the return value BEFORE draining the arena.
+        // borrow_from_raw increments the Arc refcount, so the return value
+        // (and everything reachable from it) survives the arena drain.
+        let result = if self.entry_unboxed {
             // Entry function returns raw i64 (not NaN-boxed), convert to NValue::Int
-            Some(NValue::int(raw as i64))
+            NValue::int(raw as i64)
         } else {
             // SAFETY: raw is a valid NValue encoding produced by JIT code.
-            // Borrow semantics: clone the value so the JIT's heap_roots retain
-            // their ownership of the original.
-            Some(unsafe { NValue::borrow_from_raw(raw) })
-        }
+            // borrow_from_raw clones the value, bumping Arc refcount.
+            unsafe { NValue::borrow_from_raw(raw) }
+        };
+
+        // Drop guard: clears fn_table and drains arena (frees intermediate heap values).
+        // The return value survives because we already cloned it above.
+        drop(guard);
+
+        Some(result)
     }
 
     /// Execute the entry function (must be a 0-arg function returning i64).
@@ -116,7 +138,7 @@ impl JitProgram {
     }
 }
 /// Names of all runtime helper functions we register with Cranelift.
-const HELPER_NAMES: &[&str] = &[
+pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_call_native",
     "jit_concat",
     "jit_make_enum",
@@ -144,6 +166,11 @@ const HELPER_NAMES: &[&str] = &[
     "jit_closure_fn_ptr",
     "jit_function_fn_ptr",
     "jit_list_concat",
+    // AOT-specific helpers
+    "jit_make_string",
+    "jit_print_result",
+    "jit_drain_arena",
+    "jit_init_fn_table",
 ];
 
 /// Compiles an IrModule to native code via Cranelift.
@@ -204,6 +231,10 @@ pub fn compile_with_natives(
     builder.symbol("jit_closure_fn_ptr", jit_closure_fn_ptr as *const u8);
     builder.symbol("jit_function_fn_ptr", jit_function_fn_ptr as *const u8);
     builder.symbol("jit_list_concat", jit_list_concat as *const u8);
+    builder.symbol("jit_make_string", jit_make_string as *const u8);
+    builder.symbol("jit_print_result", jit_print_result as *const u8);
+    builder.symbol("jit_drain_arena", jit_drain_arena as *const u8);
+    builder.symbol("jit_init_fn_table", jit_init_fn_table as *const u8);
 
     let mut jit_module = JITModule::new(builder);
     let ptr_type = jit_module.target_config().pointer_type();
@@ -248,6 +279,7 @@ pub fn compile_with_natives(
 
     // Phase 2: Compile each function
     let mut fb_ctx = FunctionBuilderContext::new();
+    let mut codegen_ctx = cranelift_codegen::Context::new();
 
     if trace {
         for (i, func) in module.functions.iter().enumerate() {
@@ -262,6 +294,14 @@ pub fn compile_with_natives(
         }
     }
 
+    // Build name→index map once (used by all function compilations)
+    let func_names: HashMap<String, usize> = module
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(idx, f)| (f.name.clone(), idx))
+        .collect();
+
     for (i, func) in module.functions.iter().enumerate() {
         if !compilable[i] {
             continue;
@@ -271,13 +311,6 @@ pub fn compile_with_natives(
 
         let mut cl_func = cranelift_codegen::ir::Function::new();
         cl_func.signature = build_signature(&mut jit_module, func.params.len(), ptr_type);
-
-        let func_names: HashMap<String, usize> = module
-            .functions
-            .iter()
-            .enumerate()
-            .map(|(idx, f)| (f.name.clone(), idx))
-            .collect();
 
         let compile_result = {
             let mut fn_builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
@@ -327,6 +360,7 @@ pub fn compile_with_natives(
                 unboxed_flags: &unboxed_flags,
                 tags: &module.tags,
                 sra_records: HashMap::new(),
+                aot_strings: None,
             };
 
             let result = if is_unboxed {
@@ -363,9 +397,10 @@ pub fn compile_with_natives(
             }
         }
 
-        let mut ctx = cranelift_codegen::Context::for_function(cl_func);
+        codegen_ctx.clear();
+        codegen_ctx.func = cl_func;
         jit_module
-            .define_function(func_id, &mut ctx)
+            .define_function(func_id, &mut codegen_ctx)
             .map_err(|e| format!("JIT compile error in '{}': {}", func.name, e))?;
 
         if trace {
@@ -479,8 +514,8 @@ fn build_signature(
 }
 
 /// Build a Cranelift signature for a named runtime helper.
-fn make_helper_sig(
-    module: &mut JITModule,
+pub(super) fn make_helper_sig<M: Module>(
+    module: &mut M,
     name: &str,
     ptr_type: cranelift_codegen::ir::Type,
 ) -> cranelift_codegen::ir::Signature {
@@ -557,6 +592,27 @@ fn make_helper_sig(
         }
         "jit_is_closure" | "jit_closure_fn_ptr" | "jit_function_fn_ptr" => {
             // (val) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_string" => {
+            // (ptr, len) -> u64
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_print_result" => {
+            // (bits) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_drain_arena" => {
+            // () -> u64
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_init_fn_table" => {
+            // (table_ptr, count) -> u64
+            sig.params.push(AbiParam::new(ptr_type));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

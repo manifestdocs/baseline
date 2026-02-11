@@ -22,6 +22,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use crate::vm::nvalue::NValue;
+use crate::vm::radix::RadixNode;
 use crate::vm::value::RcStr;
 
 // ---------------------------------------------------------------------------
@@ -163,19 +164,14 @@ pub struct AsyncRouteTree {
     root: Arc<AsyncRadixNode>,
 }
 
-#[derive(Default)]
-struct AsyncRadixNode {
-    children: HashMap<String, AsyncRadixNode>,
-    param: Option<(String, Box<AsyncRadixNode>)>,
-    handlers: HashMap<String, AsyncHandler>,
-}
+type AsyncRadixNode = RadixNode<AsyncHandler>;
 
 /// Handler representation for async execution.
 /// Can be either a VM function reference or a native fast path.
 #[derive(Clone)]
 pub enum AsyncHandler {
     /// VM function handler (uses SendableHandler for thread safety)
-    Vm(crate::vm::async_executor::SendableHandler),
+    Vm(crate::vm::sendable::SendableHandler),
     /// Native fast path for common patterns (JSON response, etc.)
     Native(Arc<dyn Fn(&AsyncRequest) -> AsyncResponse + Send + Sync>),
 }
@@ -330,8 +326,8 @@ impl AsyncRequest {
 
     /// Convert to SendableValue record for cross-thread transfer.
     /// This avoids intermediate NValue/RcStr allocations.
-    pub fn to_sendable(&self) -> crate::vm::async_executor::SendableValue {
-        use crate::vm::async_executor::SendableValue;
+    pub fn to_sendable(&self) -> crate::vm::sendable::SendableValue {
+        use crate::vm::sendable::SendableValue;
 
         let headers: Vec<SendableValue> = self
             .headers
@@ -493,8 +489,8 @@ impl AsyncResponse {
 
     /// Create from SendableValue response.
     /// Avoids converting back to NValue on the IO thread.
-    pub fn from_sendable_val(val: &crate::vm::async_executor::SendableValue) -> Self {
-        use crate::vm::async_executor::SendableValue;
+    pub fn from_sendable_val(val: &crate::vm::sendable::SendableValue) -> Self {
+        use crate::vm::sendable::SendableValue;
 
         if let SendableValue::Record(fields) = val {
             let status = fields
@@ -804,7 +800,7 @@ impl AsyncRouteTree {
                     .ok_or("Route must have 'handler'")?;
 
                 if let Some(sendable) =
-                    crate::vm::async_executor::SendableHandler::from_nvalue(handler_val)
+                    crate::vm::sendable::SendableHandler::from_nvalue(handler_val)
                 {
                     builder = builder.route(method, path, AsyncHandler::Vm(sendable));
                 } else {
@@ -829,7 +825,8 @@ impl Default for AsyncRouteTree {
 // Async Server Entry Point
 // ---------------------------------------------------------------------------
 
-use crate::vm::async_executor::{AsyncExecutorConfig, AsyncVmExecutor, SendableHandler};
+use crate::vm::async_executor::{AsyncExecutorConfig, AsyncVmExecutor};
+use crate::vm::sendable::SendableHandler;
 use crate::vm::chunk::Chunk;
 
 /// Context for the async server, holding shared state.

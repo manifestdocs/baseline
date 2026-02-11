@@ -3,25 +3,9 @@ use tree_sitter::Node;
 
 use crate::analysis::types::{Type, TypeMap};
 
+use super::chunk::CompileError;
 use super::ir::*;
 use super::natives::NativeRegistry;
-
-// ---------------------------------------------------------------------------
-// Lowering Error
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct LowerError {
-    pub message: String,
-    pub line: usize,
-    pub col: usize,
-}
-
-impl std::fmt::Display for LowerError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}:{}] {}", self.line, self.col, self.message)
-    }
-}
 
 // ---------------------------------------------------------------------------
 // Lowerer
@@ -68,7 +52,7 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     /// Lower a full source file into an IrModule.
-    pub fn lower_module(&mut self, root: &Node) -> Result<IrModule, LowerError> {
+    pub fn lower_module(&mut self, root: &Node) -> Result<IrModule, CompileError> {
         // First pass: collect function names and parameter names
         // Handles both top-level function_def and function_def wrapped in spec_block
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
@@ -101,7 +85,7 @@ impl<'a> Lowerer<'a> {
         }
 
         if func_nodes.is_empty() {
-            return Err(LowerError {
+            return Err(CompileError {
                 message: "No function definitions found".into(),
                 line: 1,
                 col: 0,
@@ -134,7 +118,7 @@ impl<'a> Lowerer<'a> {
         let entry = functions
             .iter()
             .position(|f| f.name == "main!" || f.name == "main")
-            .ok_or_else(|| LowerError {
+            .ok_or_else(|| CompileError {
                 message: "No 'main' or 'main!' function found".into(),
                 line: 1,
                 col: 0,
@@ -149,7 +133,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Lower function definitions for a module (no entry point required).
-    pub fn lower_module_functions(&mut self, root: &Node) -> Result<Vec<IrFunction>, LowerError> {
+    pub fn lower_module_functions(&mut self, root: &Node) -> Result<Vec<IrFunction>, CompileError> {
         // First pass: collect function names (unwrap spec_block)
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
@@ -201,7 +185,7 @@ impl<'a> Lowerer<'a> {
         Ok(functions)
     }
 
-    fn lower_function_def(&mut self, node: &Node, name: &str) -> Result<IrFunction, LowerError> {
+    fn lower_function_def(&mut self, node: &Node, name: &str) -> Result<IrFunction, CompileError> {
         let body_node = node
             .child_by_field_name("body")
             .ok_or_else(|| self.error("Function missing body".into(), node))?;
@@ -251,7 +235,7 @@ impl<'a> Lowerer<'a> {
     // Expression lowering
     // -----------------------------------------------------------------------
 
-    pub fn lower_expression(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    pub fn lower_expression(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let kind = node.kind();
         match kind {
             // -- Tail-position propagating --
@@ -324,14 +308,14 @@ impl<'a> Lowerer<'a> {
     // Literals
     // -----------------------------------------------------------------------
 
-    fn lower_integer(&self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_integer(&self, node: &Node) -> Result<Expr, CompileError> {
         let text = self.node_text(node);
         let val: i64 = crate::parse::parse_int_literal(&text)
             .ok_or_else(|| self.error(format!("Invalid integer: {}", text), node))?;
         Ok(Expr::Int(val))
     }
 
-    fn lower_float(&self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_float(&self, node: &Node) -> Result<Expr, CompileError> {
         let text = self.node_text(node);
         let val: f64 = text
             .parse()
@@ -339,7 +323,7 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::Float(val))
     }
 
-    fn lower_boolean(&self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_boolean(&self, node: &Node) -> Result<Expr, CompileError> {
         let text = self.node_text(node);
         Ok(Expr::Bool(text == "true"))
     }
@@ -348,7 +332,7 @@ impl<'a> Lowerer<'a> {
     // String literals (with interpolation desugaring)
     // -----------------------------------------------------------------------
 
-    fn lower_string_literal(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_string_literal(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut parts: Vec<Expr> = Vec::new();
 
         for i in 0..node.named_child_count() {
@@ -391,7 +375,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_raw_string(&self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_raw_string(&self, node: &Node) -> Result<Expr, CompileError> {
         Ok(Expr::String(self.raw_string_content(node)))
     }
 
@@ -441,7 +425,7 @@ impl<'a> Lowerer<'a> {
     // Variables
     // -----------------------------------------------------------------------
 
-    fn lower_identifier(&self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_identifier(&self, node: &Node) -> Result<Expr, CompileError> {
         let name = self.node_text(node);
         let ty = self
             .type_map
@@ -454,7 +438,7 @@ impl<'a> Lowerer<'a> {
     // Unary & Binary
     // -----------------------------------------------------------------------
 
-    fn lower_unary(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_unary(&mut self, node: &Node) -> Result<Expr, CompileError> {
         // Constant folding
         if let Some(val) = self.try_eval_const(node) {
             return Ok(val);
@@ -486,7 +470,7 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn lower_binary(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_binary(&mut self, node: &Node) -> Result<Expr, CompileError> {
         // Constant folding
         if let Some(val) = self.try_eval_const(node) {
             return Ok(val);
@@ -627,7 +611,7 @@ impl<'a> Lowerer<'a> {
     // Blocks & Let
     // -----------------------------------------------------------------------
 
-    fn lower_block(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_block(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut children: Vec<Node> = Vec::new();
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
@@ -655,7 +639,7 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::Block(exprs, None))
     }
 
-    fn lower_let(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_let(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let pattern_node = node
             .named_child(0)
             .ok_or_else(|| self.error("Let binding missing pattern".into(), node))?;
@@ -699,7 +683,7 @@ impl<'a> Lowerer<'a> {
     // If/Else
     // -----------------------------------------------------------------------
 
-    fn lower_if(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_if(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
 
@@ -732,7 +716,7 @@ impl<'a> Lowerer<'a> {
     // Match
     // -----------------------------------------------------------------------
 
-    fn lower_match(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_match(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
 
@@ -776,7 +760,7 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn lower_pattern(&self, node: &Node) -> Result<Pattern, LowerError> {
+    fn lower_pattern(&self, node: &Node) -> Result<Pattern, CompileError> {
         match node.kind() {
             "wildcard_pattern" => Ok(Pattern::Wildcard),
             "identifier" => Ok(Pattern::Var(self.node_text(node))),
@@ -851,7 +835,7 @@ impl<'a> Lowerer<'a> {
     // For loops
     // -----------------------------------------------------------------------
 
-    fn lower_for(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_for(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
 
@@ -874,7 +858,7 @@ impl<'a> Lowerer<'a> {
     // Range
     // -----------------------------------------------------------------------
 
-    fn lower_range(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_range(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let lhs = node
             .named_child(0)
             .ok_or_else(|| self.error("Range missing start".into(), node))?;
@@ -892,7 +876,7 @@ impl<'a> Lowerer<'a> {
     // Calls (with resolution)
     // -----------------------------------------------------------------------
 
-    fn lower_call(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_call(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
 
@@ -1040,21 +1024,29 @@ impl<'a> Lowerer<'a> {
     fn try_resolve_qualified(&self, field_expr: &Node) -> Option<(String, String, String)> {
         let obj = field_expr.named_child(0)?;
         let method = field_expr.named_child(1)?;
-        if obj.kind() == "type_identifier" {
-            let module = self.node_text(&obj);
-            let method_name = self.node_text(&method);
-            let qualified = format!("{}.{}", module, method_name);
-            Some((module, method_name, qualified))
+        let module = if obj.kind() == "type_identifier" {
+            self.node_text(&obj)
+        } else if obj.kind() == "identifier" {
+            // Resolve short module aliases (e.g. "str" → "String")
+            let name = self.node_text(&obj);
+            if let Some(canonical) = crate::prelude::module_alias(&name) {
+                canonical.to_string()
+            } else {
+                return None;
+            }
         } else {
-            None
-        }
+            return None;
+        };
+        let method_name = self.node_text(&method);
+        let qualified = format!("{}.{}", module, method_name);
+        Some((module, method_name, qualified))
     }
 
     // -----------------------------------------------------------------------
     // Pipe operator (desugared into calls)
     // -----------------------------------------------------------------------
 
-    fn lower_pipe(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_pipe(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let lhs_node = node
             .named_child(0)
             .ok_or_else(|| self.error("Pipe missing left operand".into(), node))?;
@@ -1186,7 +1178,7 @@ impl<'a> Lowerer<'a> {
     // Lambda
     // -----------------------------------------------------------------------
 
-    fn lower_lambda(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_lambda(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
 
@@ -1216,7 +1208,7 @@ impl<'a> Lowerer<'a> {
     // Data structures
     // -----------------------------------------------------------------------
 
-    fn lower_map_literal(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_map_literal(&mut self, node: &Node) -> Result<Expr, CompileError> {
         // Desugar #{ k1: v1, k2: v2 } into Map.insert(Map.insert(Map.empty(), k1, v1), k2, v2)
         let mut result = Expr::CallNative {
             module: "Map".to_string(),
@@ -1248,7 +1240,7 @@ impl<'a> Lowerer<'a> {
         Ok(result)
     }
 
-    fn lower_set_literal(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_set_literal(&mut self, node: &Node) -> Result<Expr, CompileError> {
         // Desugar #{ v1, v2 } into Set.insert(Set.insert(Set.empty(), v1), v2)
         let mut result = Expr::CallNative {
             module: "Set".to_string(),
@@ -1271,7 +1263,7 @@ impl<'a> Lowerer<'a> {
         Ok(result)
     }
 
-    fn lower_list(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_list(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut elems = Vec::new();
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
@@ -1280,7 +1272,7 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::MakeList(elems, None))
     }
 
-    fn lower_record(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_record(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut fields = Vec::new();
         for i in 0..node.named_child_count() {
             let field_init = node.named_child(i).unwrap();
@@ -1300,7 +1292,7 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::MakeRecord(fields, None))
     }
 
-    fn lower_tuple(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_tuple(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let count = node.named_child_count();
         if count == 0 {
             return Ok(Expr::Unit);
@@ -1318,7 +1310,7 @@ impl<'a> Lowerer<'a> {
         Ok(Expr::MakeTuple(elems, None))
     }
 
-    fn lower_field_access(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_field_access(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let obj = node
             .named_child(0)
             .ok_or_else(|| self.error("Field access missing object".into(), node))?;
@@ -1336,7 +1328,7 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn lower_struct_expression(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_struct_expression(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let type_node = node
             .named_child(0)
             .ok_or_else(|| self.error("Struct expression missing type".into(), node))?;
@@ -1371,7 +1363,7 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn lower_nullary_constructor(&self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_nullary_constructor(&self, node: &Node) -> Result<Expr, CompileError> {
         let name = self.node_text(node);
         Ok(Expr::MakeEnum {
             tag: name,
@@ -1384,7 +1376,7 @@ impl<'a> Lowerer<'a> {
     // Try expression
     // -----------------------------------------------------------------------
 
-    fn lower_try(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_try(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let expr_node = node
             .named_child(0)
             .ok_or_else(|| self.error("Try expression missing operand".into(), node))?;
@@ -1399,7 +1391,7 @@ impl<'a> Lowerer<'a> {
     // Record update
     // -----------------------------------------------------------------------
 
-    fn lower_record_update(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_record_update(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
 
@@ -1431,7 +1423,7 @@ impl<'a> Lowerer<'a> {
     // Expect expressions (test matchers)
     // -----------------------------------------------------------------------
 
-    fn lower_expect(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_expect(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let actual_node = node
             .child_by_field_name("actual")
             .ok_or_else(|| self.error("expect missing actual".into(), node))?;
@@ -1492,7 +1484,7 @@ impl<'a> Lowerer<'a> {
         })
     }
 
-    fn lower_matcher_arg(&mut self, matcher_node: &Node) -> Result<Expr, LowerError> {
+    fn lower_matcher_arg(&mut self, matcher_node: &Node) -> Result<Expr, CompileError> {
         if let Some(arg) = matcher_node.named_child(0) {
             self.lower_expression(&arg)
         } else {
@@ -1505,7 +1497,7 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     /// Lower a full source file into an IrTestModule (functions + inline tests).
-    pub fn lower_module_with_tests(&mut self, root: &Node) -> Result<IrTestModule, LowerError> {
+    pub fn lower_module_with_tests(&mut self, root: &Node) -> Result<IrTestModule, CompileError> {
         // First pass: collect function names and parameter names
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
@@ -1609,7 +1601,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         node: &Node,
         function: &Option<String>,
-    ) -> Result<Option<IrTest>, LowerError> {
+    ) -> Result<Option<IrTest>, CompileError> {
         let count = node.named_child_count();
         if count < 2 {
             return Ok(None);
@@ -1671,7 +1663,7 @@ impl<'a> Lowerer<'a> {
         before_hooks: &[Node],
         after_hooks: &[Node],
         out: &mut Vec<IrTest>,
-    ) -> Result<(), LowerError> {
+    ) -> Result<(), CompileError> {
         let name_node = node.child_by_field_name("name");
         let raw_name = name_node
             .map(|n| {
@@ -1746,7 +1738,7 @@ impl<'a> Lowerer<'a> {
         has_only: bool,
         before_hooks: &[Node],
         after_hooks: &[Node],
-    ) -> Result<Option<IrTest>, LowerError> {
+    ) -> Result<Option<IrTest>, CompileError> {
         let name_node = match node.child_by_field_name("name") {
             Some(n) => n,
             None => return Ok(None),
@@ -1845,8 +1837,8 @@ impl<'a> Lowerer<'a> {
         }
     }
 
-    fn error(&self, message: String, node: &Node) -> LowerError {
-        LowerError {
+    fn error(&self, message: String, node: &Node) -> CompileError {
+        CompileError {
             message,
             line: node.start_position().row + 1,
             col: node.start_position().column,
@@ -1875,7 +1867,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         fn_name: &str,
         arg_nodes: &[Node],
-    ) -> Result<Vec<Expr>, LowerError> {
+    ) -> Result<Vec<Expr>, CompileError> {
         let has_named = arg_nodes.iter().any(|a| a.kind() == "named_argument");
         if !has_named {
             // All positional — lower as-is
@@ -1938,7 +1930,7 @@ impl<'a> Lowerer<'a> {
     // -----------------------------------------------------------------------
 
     /// Lower `with { Effect: handler_expr } body` to WithHandlers IR.
-    fn lower_with_expression(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_with_expression(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let body_node = node
             .child_by_field_name("body")
             .ok_or_else(|| self.error("with_expression missing body".into(), node))?;
@@ -1973,7 +1965,7 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Lower `handle body with { Effect.method!(args) -> handler_body }` to HandleEffect IR.
-    fn lower_handle_expression(&mut self, node: &Node) -> Result<Expr, LowerError> {
+    fn lower_handle_expression(&mut self, node: &Node) -> Result<Expr, CompileError> {
         use crate::vm::ir::HandlerClause;
 
         let body_node = node

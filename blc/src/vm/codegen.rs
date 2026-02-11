@@ -2,27 +2,10 @@ use std::collections::HashMap;
 
 use crate::analysis::types::Type;
 
-use super::chunk::{Chunk, Op, Program};
+use super::chunk::{Chunk, CompileError, Op, Program};
 use super::ir::*;
 use super::natives::NativeRegistry;
-use super::value::Value;
-
-// ---------------------------------------------------------------------------
-// Codegen Error
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-pub struct CodegenError {
-    pub message: String,
-    pub line: usize,
-    pub col: usize,
-}
-
-impl std::fmt::Display for CodegenError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}:{}] {}", self.line, self.col, self.message)
-    }
-}
+use super::nvalue::NValue;
 
 // ---------------------------------------------------------------------------
 // Local / Upvalue / Frame (same semantics as the old compiler)
@@ -90,7 +73,7 @@ impl<'a> Codegen<'a> {
     // -----------------------------------------------------------------------
 
     /// Generate a complete Program from an IrModule.
-    pub fn generate_program(mut self, module: &IrModule) -> Result<Program, CodegenError> {
+    pub fn generate_program(mut self, module: &IrModule) -> Result<Program, CompileError> {
         let chunk_offset = self.compiled_chunks.len();
 
         // First pass: register all function names with chunk indices
@@ -129,7 +112,7 @@ impl<'a> Codegen<'a> {
     pub fn generate_module(
         mut self,
         functions: &[IrFunction],
-    ) -> Result<(Vec<Chunk>, HashMap<String, usize>), CodegenError> {
+    ) -> Result<(Vec<Chunk>, HashMap<String, usize>), CompileError> {
         // First pass: register names
         for (i, func) in functions.iter().enumerate() {
             self.functions.insert(func.name.clone(), i);
@@ -162,30 +145,30 @@ impl<'a> Codegen<'a> {
     // Expression codegen
     // -----------------------------------------------------------------------
 
-    fn gen_expr(&mut self, expr: &Expr, span: &Span) -> Result<(), CodegenError> {
+    fn gen_expr(&mut self, expr: &Expr, span: &Span) -> Result<(), CompileError> {
         match expr {
             Expr::Int(n) => {
                 if *n >= i16::MIN as i64 && *n <= i16::MAX as i64 {
                     self.emit(Op::LoadSmallInt(*n as i16), span);
                 } else {
-                    let idx = self.chunk.add_constant(Value::Int(*n));
+                    let idx = self.chunk.add_constant(NValue::int(*n));
                     self.emit(Op::LoadConst(idx), span);
                 }
             }
             Expr::Float(f) => {
-                let idx = self.chunk.add_constant(Value::Float(*f));
+                let idx = self.chunk.add_constant(NValue::float(*f));
                 self.emit(Op::LoadConst(idx), span);
             }
             Expr::String(s) => {
-                let idx = self.chunk.add_constant(Value::String(s.as_str().into()));
+                let idx = self.chunk.add_constant(NValue::string(s.as_str().into()));
                 self.emit(Op::LoadConst(idx), span);
             }
             Expr::Bool(b) => {
-                let idx = self.chunk.add_constant(Value::Bool(*b));
+                let idx = self.chunk.add_constant(NValue::bool(*b));
                 self.emit(Op::LoadConst(idx), span);
             }
             Expr::Unit => {
-                let idx = self.chunk.add_constant(Value::Unit);
+                let idx = self.chunk.add_constant(NValue::unit());
                 self.emit(Op::LoadConst(idx), span);
             }
 
@@ -223,18 +206,18 @@ impl<'a> Codegen<'a> {
 
             Expr::MakeEnum { tag, payload, .. } => {
                 self.gen_expr(payload, span)?;
-                let tag_idx = self.chunk.add_constant(Value::String(tag.as_str().into()));
+                let tag_idx = self.chunk.add_constant(NValue::string(tag.as_str().into()));
                 self.emit(Op::MakeEnum(tag_idx), span);
             }
             Expr::MakeStruct { name, fields, .. } => {
                 for (key, val) in fields {
-                    let key_idx = self.chunk.add_constant(Value::String(key.as_str().into()));
+                    let key_idx = self.chunk.add_constant(NValue::string(key.as_str().into()));
                     self.emit(Op::LoadConst(key_idx), span);
                     self.gen_expr(val, span)?;
                 }
                 let count = Self::checked_u16(fields.len(), "struct fields", span)?;
                 self.emit(Op::MakeRecord(count), span);
-                let tag_idx = self.chunk.add_constant(Value::String(name.as_str().into()));
+                let tag_idx = self.chunk.add_constant(NValue::string(name.as_str().into()));
                 self.emit(Op::MakeStruct(tag_idx), span);
             }
 
@@ -247,7 +230,7 @@ impl<'a> Codegen<'a> {
             }
             Expr::MakeRecord(fields, _) => {
                 for (key, val) in fields {
-                    let key_idx = self.chunk.add_constant(Value::String(key.as_str().into()));
+                    let key_idx = self.chunk.add_constant(NValue::string(key.as_str().into()));
                     self.emit(Op::LoadConst(key_idx), span);
                     self.gen_expr(val, span)?;
                 }
@@ -269,7 +252,7 @@ impl<'a> Codegen<'a> {
             Expr::UpdateRecord { base, updates, .. } => {
                 self.gen_expr(base, span)?;
                 for (key, val) in updates {
-                    let key_idx = self.chunk.add_constant(Value::String(key.as_str().into()));
+                    let key_idx = self.chunk.add_constant(NValue::string(key.as_str().into()));
                     self.emit(Op::LoadConst(key_idx), span);
                     self.gen_expr(val, span)?;
                 }
@@ -281,7 +264,7 @@ impl<'a> Codegen<'a> {
                 self.gen_expr(object, span)?;
                 let name_idx = self
                     .chunk
-                    .add_constant(Value::String(field.as_str().into()));
+                    .add_constant(NValue::string(field.as_str().into()));
                 self.emit(Op::GetField(name_idx), span);
             }
 
@@ -329,14 +312,14 @@ impl<'a> Codegen<'a> {
                 self.gen_expr(rhs, span)?;
                 let end_idx = self.emit(Op::Jump(0), span);
                 self.chunk.patch_jump(jump_idx);
-                let false_const = self.chunk.add_constant(Value::Bool(false));
+                let false_const = self.chunk.add_constant(NValue::bool(false));
                 self.emit(Op::LoadConst(false_const), span);
                 self.chunk.patch_jump(end_idx);
             }
             Expr::Or(lhs, rhs) => {
                 self.gen_expr(lhs, span)?;
                 let jump_idx = self.emit(Op::JumpIfFalse(0), span);
-                let true_const = self.chunk.add_constant(Value::Bool(true));
+                let true_const = self.chunk.add_constant(NValue::bool(true));
                 self.emit(Op::LoadConst(true_const), span);
                 let end_jump = self.emit(Op::Jump(0), span);
                 self.chunk.patch_jump(jump_idx);
@@ -362,7 +345,7 @@ impl<'a> Codegen<'a> {
                 } else {
                     let else_jump = self.emit(Op::Jump(0), span);
                     self.chunk.patch_jump(then_jump);
-                    let idx = self.chunk.add_constant(Value::Unit);
+                    let idx = self.chunk.add_constant(NValue::unit());
                     self.emit(Op::LoadConst(idx), span);
                     self.chunk.patch_jump(else_jump);
                 }
@@ -382,7 +365,7 @@ impl<'a> Codegen<'a> {
 
             Expr::Hole => {
                 let msg = "Typed hole (??) encountered at runtime";
-                let idx = self.chunk.add_constant(Value::String(msg.into()));
+                let idx = self.chunk.add_constant(NValue::string(msg.into()));
                 self.emit(Op::Halt(idx), span);
             }
 
@@ -403,7 +386,7 @@ impl<'a> Codegen<'a> {
             // The bytecode codegen path uses Lambda directly (not lifted), so these
             // should never appear. If they do, it's a compiler bug.
             Expr::MakeClosure { .. } | Expr::GetClosureVar(_) => {
-                return Err(CodegenError {
+                return Err(CompileError {
                     message: "MakeClosure/GetClosureVar in bytecode codegen (should only appear in JIT path)".into(),
                     line: span.line,
                     col: span.col,
@@ -446,7 +429,7 @@ impl<'a> Codegen<'a> {
     // Variables
     // -----------------------------------------------------------------------
 
-    fn gen_var(&mut self, name: &str, span: &Span) -> Result<(), CodegenError> {
+    fn gen_var(&mut self, name: &str, span: &Span) -> Result<(), CompileError> {
         // Search locals
         for (i, local) in self.locals.iter().enumerate().rev() {
             if local.name == name {
@@ -469,11 +452,11 @@ impl<'a> Codegen<'a> {
         }
         // Global function
         if let Some(&chunk_idx) = self.functions.get(name) {
-            let idx = self.chunk.add_constant(Value::Function(chunk_idx));
+            let idx = self.chunk.add_constant(NValue::function(chunk_idx));
             self.emit(Op::LoadConst(idx), span);
             return Ok(());
         }
-        Err(CodegenError {
+        Err(CompileError {
             message: format!("Undefined variable: {}", name),
             line: span.line,
             col: span.col,
@@ -539,7 +522,7 @@ impl<'a> Codegen<'a> {
         name: &str,
         args: &[Expr],
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         if let Some(&chunk_idx) = self.functions.get(name) {
             // Emit args first, then CallDirect — no function value pushed
             for arg in args {
@@ -567,7 +550,7 @@ impl<'a> Codegen<'a> {
         method: &str,
         args: &[Expr],
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         let qualified = format!("{}.{}", module, method);
         if let Some(fn_id) = self.natives.lookup(&qualified) {
             for arg in args {
@@ -577,7 +560,7 @@ impl<'a> Codegen<'a> {
             self.emit(Op::CallNative(fn_id, argc), span);
             Ok(())
         } else {
-            Err(CodegenError {
+            Err(CompileError {
                 message: format!("Unknown native function: {}", qualified),
                 line: span.line,
                 col: span.col,
@@ -594,7 +577,7 @@ impl<'a> Codegen<'a> {
         subject: &Expr,
         arms: &[MatchArm],
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         self.gen_expr(subject, span)?;
         self.declare_local("__match_subject");
         let subject_slot = (self.locals.len() - 1) as u16;
@@ -630,7 +613,7 @@ impl<'a> Codegen<'a> {
                     // Check tag matches
                     self.emit(Op::GetLocal(subject_slot), span);
                     self.emit(Op::EnumTag, span);
-                    let tag_const = self.chunk.add_constant(Value::String(tag.as_str().into()));
+                    let tag_const = self.chunk.add_constant(NValue::string(tag.as_str().into()));
                     self.emit(Op::LoadConst(tag_const), span);
                     self.emit(Op::Eq, span);
                     let skip_jump = self.emit(Op::JumpIfFalse(0), span);
@@ -688,7 +671,7 @@ impl<'a> Codegen<'a> {
         }
 
         // Default: push Unit
-        let idx = self.chunk.add_constant(Value::Unit);
+        let idx = self.chunk.add_constant(NValue::unit());
         self.emit(Op::LoadConst(idx), span);
 
         for jump in &end_jumps {
@@ -712,12 +695,12 @@ impl<'a> Codegen<'a> {
         iterable: &Expr,
         body: &Expr,
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         self.gen_expr(iterable, span)?;
         self.declare_local("__for_list");
         let list_slot = (self.locals.len() - 1) as u16;
 
-        let zero = self.chunk.add_constant(Value::Int(0));
+        let zero = self.chunk.add_constant(NValue::int(0));
         self.emit(Op::LoadConst(zero), span);
         self.declare_local("__for_idx");
         let idx_slot = (self.locals.len() - 1) as u16;
@@ -744,7 +727,7 @@ impl<'a> Codegen<'a> {
 
         // Increment index
         self.emit(Op::GetLocal(idx_slot), span);
-        let one = self.chunk.add_constant(Value::Int(1));
+        let one = self.chunk.add_constant(NValue::int(1));
         self.emit(Op::LoadConst(one), span);
         self.emit(Op::Add, span);
         self.emit(Op::SetLocal(idx_slot), span);
@@ -761,7 +744,7 @@ impl<'a> Codegen<'a> {
         self.locals.pop(); // __for_list
         self.emit(Op::PopN(2), span);
 
-        let unit = self.chunk.add_constant(Value::Unit);
+        let unit = self.chunk.add_constant(NValue::unit());
         self.emit(Op::LoadConst(unit), span);
 
         Ok(())
@@ -771,7 +754,7 @@ impl<'a> Codegen<'a> {
     // Let binding
     // -----------------------------------------------------------------------
 
-    fn gen_let_pattern(&mut self, pattern: &Pattern, span: &Span) -> Result<(), CodegenError> {
+    fn gen_let_pattern(&mut self, pattern: &Pattern, span: &Span) -> Result<(), CompileError> {
         match pattern {
             Pattern::Var(name) => {
                 self.declare_local(name);
@@ -801,9 +784,9 @@ impl<'a> Codegen<'a> {
     // Block
     // -----------------------------------------------------------------------
 
-    fn gen_block(&mut self, exprs: &[Expr], span: &Span) -> Result<(), CodegenError> {
+    fn gen_block(&mut self, exprs: &[Expr], span: &Span) -> Result<(), CompileError> {
         if exprs.is_empty() {
-            let idx = self.chunk.add_constant(Value::Unit);
+            let idx = self.chunk.add_constant(NValue::unit());
             self.emit(Op::LoadConst(idx), span);
             return Ok(());
         }
@@ -821,7 +804,7 @@ impl<'a> Codegen<'a> {
         }
 
         if !last_was_expr {
-            let idx = self.chunk.add_constant(Value::Unit);
+            let idx = self.chunk.add_constant(NValue::unit());
             self.emit(Op::LoadConst(idx), span);
         }
 
@@ -838,7 +821,7 @@ impl<'a> Codegen<'a> {
         params: &[String],
         body: &Expr,
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         self.enter_function();
 
         for param in params {
@@ -852,7 +835,7 @@ impl<'a> Codegen<'a> {
         self.compiled_chunks.push(func_chunk);
 
         if captured.is_empty() {
-            let const_idx = self.chunk.add_constant(Value::Function(chunk_idx));
+            let const_idx = self.chunk.add_constant(NValue::function(chunk_idx));
             self.emit(Op::LoadConst(const_idx), span);
         } else {
             for uv in &captured {
@@ -874,7 +857,7 @@ impl<'a> Codegen<'a> {
     // Try expression
     // -----------------------------------------------------------------------
 
-    fn gen_try(&mut self, expr: &Expr, span: &Span) -> Result<(), CodegenError> {
+    fn gen_try(&mut self, expr: &Expr, span: &Span) -> Result<(), CompileError> {
         self.gen_expr(expr, span)?;
 
         self.declare_local("__try_val");
@@ -883,7 +866,7 @@ impl<'a> Codegen<'a> {
         // Check Err
         self.emit(Op::GetLocal(val_slot), span);
         self.emit(Op::EnumTag, span);
-        let err_tag = self.chunk.add_constant(Value::String("Err".into()));
+        let err_tag = self.chunk.add_constant(NValue::string("Err".into()));
         self.emit(Op::LoadConst(err_tag), span);
         self.emit(Op::Eq, span);
         let not_err = self.emit(Op::JumpIfFalse(0), span);
@@ -894,7 +877,7 @@ impl<'a> Codegen<'a> {
         // Check None
         self.emit(Op::GetLocal(val_slot), span);
         self.emit(Op::EnumTag, span);
-        let none_tag = self.chunk.add_constant(Value::String("None".into()));
+        let none_tag = self.chunk.add_constant(NValue::string("None".into()));
         self.emit(Op::LoadConst(none_tag), span);
         self.emit(Op::Eq, span);
         let not_none = self.emit(Op::JumpIfFalse(0), span);
@@ -916,9 +899,9 @@ impl<'a> Codegen<'a> {
     // String concatenation
     // -----------------------------------------------------------------------
 
-    fn gen_concat(&mut self, parts: &[Expr], span: &Span) -> Result<(), CodegenError> {
+    fn gen_concat(&mut self, parts: &[Expr], span: &Span) -> Result<(), CompileError> {
         if parts.is_empty() {
-            let idx = self.chunk.add_constant(Value::String("".into()));
+            let idx = self.chunk.add_constant(NValue::string("".into()));
             self.emit(Op::LoadConst(idx), span);
             return Ok(());
         }
@@ -936,7 +919,7 @@ impl<'a> Codegen<'a> {
 
         // If single interpolation expression, ensure it's converted to string via Concat
         if segment_count == 1 && has_interpolation {
-            let idx = self.chunk.add_constant(Value::String("".into()));
+            let idx = self.chunk.add_constant(NValue::string("".into()));
             self.emit(Op::LoadConst(idx), span);
             self.emit(Op::Concat, span);
         }
@@ -953,10 +936,10 @@ impl<'a> Codegen<'a> {
         handlers: &[(String, Vec<(String, Expr)>)],
         body: &Expr,
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         // Build outer record: { EffectName: { method: fn, ... }, ... }
         for (effect_name, methods) in handlers {
-            let eff_key = self.chunk.add_constant(Value::String(effect_name.as_str().into()));
+            let eff_key = self.chunk.add_constant(NValue::string(effect_name.as_str().into()));
             self.emit(Op::LoadConst(eff_key), span);
 
             if methods.len() == 1 && methods[0].0 == "__record__" {
@@ -965,7 +948,7 @@ impl<'a> Codegen<'a> {
             } else {
                 // handle form — build inner method record
                 for (method_key, handler_fn) in methods {
-                    let mk = self.chunk.add_constant(Value::String(method_key.as_str().into()));
+                    let mk = self.chunk.add_constant(NValue::string(method_key.as_str().into()));
                     self.emit(Op::LoadConst(mk), span);
                     self.gen_expr(handler_fn, span)?;
                 }
@@ -986,7 +969,7 @@ impl<'a> Codegen<'a> {
         body: &Expr,
         clauses: &[crate::vm::ir::HandlerClause],
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         // Build handler record same as gen_with_handlers:
         // { EffectName: { method: handler_fn, ... }, ... }
         // For non-tail-resumptive handlers, the lambda gets an extra `resume` param.
@@ -1011,13 +994,13 @@ impl<'a> Codegen<'a> {
         for (effect_name, methods) in &grouped {
             let eff_key = self
                 .chunk
-                .add_constant(Value::String(effect_name.as_str().into()));
+                .add_constant(NValue::string(effect_name.as_str().into()));
             self.emit(Op::LoadConst(eff_key), span);
 
             for (method_key, clause) in methods {
                 let mk = self
                     .chunk
-                    .add_constant(Value::String((*method_key).into()));
+                    .add_constant(NValue::string((*method_key).into()));
                 self.emit(Op::LoadConst(mk), span);
 
                 // Compile handler body as a lambda.
@@ -1049,14 +1032,14 @@ impl<'a> Codegen<'a> {
         method: &str,
         args: &[Expr],
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         // Push args onto stack
         for arg in args {
             self.gen_expr(arg, span)?;
         }
         // Emit perform with constant pool key "Effect.method"
         let key = format!("{}.{}", effect, method);
-        let name_idx = self.chunk.add_constant(Value::String(key.into()));
+        let name_idx = self.chunk.add_constant(NValue::string(key.into()));
         let arg_count = Self::checked_u8(args.len(), "perform effect args", span)?;
         self.emit(Op::PerformEffect(name_idx, arg_count), span);
         Ok(())
@@ -1071,7 +1054,7 @@ impl<'a> Codegen<'a> {
         actual: &Expr,
         matcher: &Matcher,
         span: &Span,
-    ) -> Result<(), CodegenError> {
+    ) -> Result<(), CompileError> {
         match matcher {
             Matcher::Equal(expected) => {
                 self.gen_expr(actual, span)?;
@@ -1082,28 +1065,28 @@ impl<'a> Codegen<'a> {
                 // Check if result is Ok variant
                 self.gen_expr(actual, span)?;
                 self.emit(Op::EnumTag, span);
-                let tag = self.chunk.add_constant(Value::String("Ok".into()));
+                let tag = self.chunk.add_constant(NValue::string("Ok".into()));
                 self.emit(Op::LoadConst(tag), span);
                 self.emit(Op::Eq, span);
             }
             Matcher::BeSome => {
                 self.gen_expr(actual, span)?;
                 self.emit(Op::EnumTag, span);
-                let tag = self.chunk.add_constant(Value::String("Some".into()));
+                let tag = self.chunk.add_constant(NValue::string("Some".into()));
                 self.emit(Op::LoadConst(tag), span);
                 self.emit(Op::Eq, span);
             }
             Matcher::BeNone => {
                 self.gen_expr(actual, span)?;
                 self.emit(Op::EnumTag, span);
-                let tag = self.chunk.add_constant(Value::String("None".into()));
+                let tag = self.chunk.add_constant(NValue::string("None".into()));
                 self.emit(Op::LoadConst(tag), span);
                 self.emit(Op::Eq, span);
             }
             Matcher::BeEmpty => {
                 self.gen_expr(actual, span)?;
                 self.emit(Op::ListLen, span);
-                let zero = self.chunk.add_constant(Value::Int(0));
+                let zero = self.chunk.add_constant(NValue::int(0));
                 self.emit(Op::LoadConst(zero), span);
                 self.emit(Op::Eq, span);
             }
@@ -1148,7 +1131,7 @@ impl<'a> Codegen<'a> {
             }
             Matcher::Be(_pattern) => {
                 // TODO: match pattern against actual; for now always true
-                let t = self.chunk.add_constant(Value::Bool(true));
+                let t = self.chunk.add_constant(NValue::bool(true));
                 self.emit(Op::LoadConst(t), span);
             }
         }
@@ -1163,7 +1146,7 @@ impl<'a> Codegen<'a> {
     pub fn generate_test_program(
         mut self,
         module: &IrTestModule,
-    ) -> Result<super::chunk::TestProgram, CodegenError> {
+    ) -> Result<super::chunk::TestProgram, CompileError> {
         let chunk_offset = self.compiled_chunks.len();
 
         // Register all function names
@@ -1191,11 +1174,13 @@ impl<'a> Codegen<'a> {
             self.compiled_chunks[chunk_offset + i] = chunk;
         }
 
-        // Compile each test body into its own chunk
-        let test_chunk_offset = self.compiled_chunks.len();
+        // Compile each test body into its own chunk.
+        // NOTE: We cannot pre-calculate chunk indices because gen_expr may
+        // push additional chunks (e.g. for lambdas). We record the actual
+        // index after pushing each test chunk.
         let mut compiled_tests = Vec::new();
 
-        for (i, test) in module.tests.iter().enumerate() {
+        for test in module.tests.iter() {
             self.chunk = Chunk::new();
             self.locals.clear();
             self.scope_depth = 0;
@@ -1208,12 +1193,13 @@ impl<'a> Codegen<'a> {
             };
             self.gen_expr(&test.body, &default_span)?;
             let chunk = self.finish_chunk();
+            let chunk_idx = self.compiled_chunks.len();
             self.compiled_chunks.push(chunk);
 
             compiled_tests.push(super::chunk::CompiledTest {
                 name: test.name.clone(),
                 function: test.function.clone(),
-                chunk_idx: test_chunk_offset + i,
+                chunk_idx,
                 line: test.line,
                 col: test.col,
                 end_line: test.end_line,
@@ -1301,16 +1287,16 @@ impl<'a> Codegen<'a> {
         self.chunk.emit(op, span.line, span.col)
     }
 
-    fn checked_u16(val: usize, context: &str, span: &Span) -> Result<u16, CodegenError> {
-        u16::try_from(val).map_err(|_| CodegenError {
+    fn checked_u16(val: usize, context: &str, span: &Span) -> Result<u16, CompileError> {
+        u16::try_from(val).map_err(|_| CompileError {
             message: format!("Too many {} (max 65535, got {})", context, val),
             line: span.line,
             col: span.col,
         })
     }
 
-    fn checked_u8(val: usize, context: &str, span: &Span) -> Result<u8, CodegenError> {
-        u8::try_from(val).map_err(|_| CodegenError {
+    fn checked_u8(val: usize, context: &str, span: &Span) -> Result<u8, CompileError> {
+        u8::try_from(val).map_err(|_| CompileError {
             message: format!("Too many {} (max 255, got {})", context, val),
             line: span.line,
             col: span.col,
@@ -1326,6 +1312,7 @@ impl<'a> Codegen<'a> {
 mod tests {
     use super::*;
     use crate::vm::lower::Lowerer;
+    use crate::vm::value::Value;
     use crate::vm::vm::Vm;
 
     fn eval_via_ir(source: &str) -> Value {

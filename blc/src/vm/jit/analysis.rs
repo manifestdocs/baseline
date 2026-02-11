@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::super::ir::{Expr, IrFunction, IrModule, MatchArm};
+use super::super::ir::{Expr, IrFunction, IrModule, MatchArm, Pattern};
 use super::super::natives::NativeRegistry;
 
 /// Check if a function can be JIT-compiled.
@@ -132,7 +132,24 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
 }
 
 fn arm_can_jit(arm: &MatchArm, natives: Option<&NativeRegistry>) -> bool {
-    expr_can_jit(&arm.body, natives)
+    pattern_can_jit(&arm.pattern) && expr_can_jit(&arm.body, natives)
+}
+
+/// Check if a match pattern can be correctly compiled by the JIT.
+/// Tuple patterns with nested literals/constructors are not yet supported
+/// (they would unconditionally match, producing wrong results).
+fn pattern_can_jit(pattern: &Pattern) -> bool {
+    match pattern {
+        Pattern::Wildcard | Pattern::Var(_) | Pattern::Literal(_) => true,
+        Pattern::Constructor(_, sub_patterns) => sub_patterns.iter().all(pattern_can_jit),
+        Pattern::Tuple(sub_patterns) => {
+            // Only allow simple bindings (Var/Wildcard) in tuple patterns.
+            // Nested literals or constructors inside tuples are not yet implemented.
+            sub_patterns
+                .iter()
+                .all(|p| matches!(p, Pattern::Var(_) | Pattern::Wildcard))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -2,7 +2,6 @@
 pub mod async_executor;
 pub mod chunk;
 pub mod codegen;
-pub mod compiler;
 #[cfg(feature = "async-server")]
 pub mod hyper_server;
 #[cfg(all(test, feature = "async-server"))]
@@ -13,9 +12,11 @@ pub mod jit;
 pub mod lower;
 pub mod module_compiler;
 pub mod natives;
-pub mod nvalue;
+pub use baseline_rt::nvalue;
 pub mod optimize_ir;
+pub mod radix;
+pub mod sendable;
 pub mod test_runner;
-pub mod value;
+pub use baseline_rt::value;
 #[allow(clippy::module_inception)]
 pub mod vm;

@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use super::value::Value;
+use super::nvalue::NValue;
+use super::value::RcStr;
 
 // ---------------------------------------------------------------------------
 // Opcodes
@@ -179,21 +180,26 @@ pub enum Op {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 enum ConstKey {
     Int(i64),
-    String(super::value::RcStr),
+    String(RcStr),
     Bool(bool),
     Unit,
     Function(usize),
 }
 
 impl ConstKey {
-    fn from_value(value: &Value) -> Option<Self> {
-        match value {
-            Value::Int(i) => Some(ConstKey::Int(*i)),
-            Value::String(s) => Some(ConstKey::String(s.clone())),
-            Value::Bool(b) => Some(ConstKey::Bool(*b)),
-            Value::Unit => Some(ConstKey::Unit),
-            Value::Function(idx) => Some(ConstKey::Function(*idx)),
-            _ => None, // Float, List, Record, etc. — rare in constant pools
+    fn from_nvalue(value: &NValue) -> Option<Self> {
+        if value.is_int() {
+            Some(ConstKey::Int(value.as_int()))
+        } else if value.is_bool() {
+            Some(ConstKey::Bool(value.as_bool()))
+        } else if value.is_unit() {
+            Some(ConstKey::Unit)
+        } else if value.is_function() {
+            Some(ConstKey::Function(value.as_function()))
+        } else if let Some(s) = value.as_string() {
+            Some(ConstKey::String(s.clone()))
+        } else {
+            None // Float, List, Record, etc. — rare in constant pools
         }
     }
 }
@@ -202,7 +208,7 @@ impl ConstKey {
 #[derive(Debug, Default, Clone)]
 pub struct Chunk {
     pub code: Vec<Op>,
-    pub constants: Vec<Value>,
+    pub constants: Vec<NValue>,
     /// Source locations: (line, col) per opcode index.
     pub source_map: Vec<(usize, usize)>,
     /// Dedup index for O(1) constant pool lookups (common types only).
@@ -217,13 +223,13 @@ impl Chunk {
     /// Reconstruct a chunk from pre-built parts (used by thread-pool server).
     pub fn from_parts(
         code: Vec<Op>,
-        constants: Vec<Value>,
+        constants: Vec<NValue>,
         source_map: Vec<(usize, usize)>,
     ) -> Self {
         // Rebuild the dedup index from constants
         let mut const_index = HashMap::new();
         for (i, v) in constants.iter().enumerate() {
-            if let Some(key) = ConstKey::from_value(v) {
+            if let Some(key) = ConstKey::from_nvalue(v) {
                 const_index.entry(key).or_insert(i as u16);
             }
         }
@@ -246,9 +252,9 @@ impl Chunk {
     /// Add a constant to the pool, returning its index.
     /// Deduplicates: if an equal constant already exists, returns its index.
     /// Uses a HashMap for O(1) lookup of common types (Int, String, Bool, Unit, Function).
-    pub fn add_constant(&mut self, value: Value) -> u16 {
+    pub fn add_constant(&mut self, value: NValue) -> u16 {
         // Fast path: check the hash index for common types
-        if let Some(key) = ConstKey::from_value(&value) {
+        if let Some(key) = ConstKey::from_nvalue(&value) {
             if let Some(&idx) = self.const_index.get(&key) {
                 return idx;
             }
@@ -270,8 +276,8 @@ impl Chunk {
     /// Used when merging imported module chunks into a program.
     pub fn offset_chunk_refs(&mut self, offset: usize) {
         for constant in &mut self.constants {
-            if let Value::Function(idx) = constant {
-                *idx += offset;
+            if constant.is_function() {
+                *constant = NValue::function(constant.as_function() + offset);
             }
         }
         for op in &mut self.code {
@@ -397,7 +403,7 @@ impl Chunk {
                     pushes_found += 1;
                 }
                 Op::LoadConst(ci) => {
-                    if matches!(self.constants.get(ci as usize), Some(Value::Int(_))) {
+                    if self.constants.get(ci as usize).map_or(false, |c| c.is_int()) {
                         has_int = true;
                     }
                     pushes_found += 1;
@@ -746,6 +752,45 @@ impl Chunk {
 }
 
 // ---------------------------------------------------------------------------
+// Compile Error
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone)]
+pub struct CompileError {
+    pub message: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+impl std::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[{}:{}] {}", self.line, self.col, self.message)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Compiled Test
+// ---------------------------------------------------------------------------
+
+/// A test expression compiled to a bytecode chunk.
+pub struct CompiledTest {
+    pub name: String,
+    pub function: Option<String>,
+    pub chunk_idx: usize,
+    pub line: usize,
+    pub col: usize,
+    pub end_line: usize,
+    pub end_col: usize,
+    pub skip: bool,
+}
+
+/// A compiled program with inline test metadata.
+pub struct TestProgram {
+    pub program: Program,
+    pub tests: Vec<CompiledTest>,
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -756,31 +801,31 @@ mod tests {
     #[test]
     fn emit_and_read_back() {
         let mut chunk = Chunk::new();
-        let ci = chunk.add_constant(Value::Int(42));
+        let ci = chunk.add_constant(NValue::int(42));
         chunk.emit(Op::LoadConst(ci), 1, 0);
         chunk.emit(Op::Return, 1, 0);
 
         assert_eq!(chunk.code.len(), 2);
         assert_eq!(chunk.code[0], Op::LoadConst(0));
         assert_eq!(chunk.code[1], Op::Return);
-        assert_eq!(chunk.constants[0], Value::Int(42));
+        assert_eq!(chunk.constants[0], NValue::int(42));
     }
 
     #[test]
     fn add_constant_returns_sequential_indices() {
         let mut chunk = Chunk::new();
-        assert_eq!(chunk.add_constant(Value::Int(1)), 0);
-        assert_eq!(chunk.add_constant(Value::Int(2)), 1);
-        assert_eq!(chunk.add_constant(Value::String("hi".into())), 2);
+        assert_eq!(chunk.add_constant(NValue::int(1)), 0);
+        assert_eq!(chunk.add_constant(NValue::int(2)), 1);
+        assert_eq!(chunk.add_constant(NValue::string("hi".into())), 2);
     }
 
     #[test]
     fn add_constant_deduplicates() {
         let mut chunk = Chunk::new();
-        let a = chunk.add_constant(Value::Int(42));
-        let b = chunk.add_constant(Value::Int(42));
-        let c = chunk.add_constant(Value::String("hello".into()));
-        let d = chunk.add_constant(Value::String("hello".into()));
+        let a = chunk.add_constant(NValue::int(42));
+        let b = chunk.add_constant(NValue::int(42));
+        let c = chunk.add_constant(NValue::string("hello".into()));
+        let d = chunk.add_constant(NValue::string("hello".into()));
         assert_eq!(a, b);
         assert_eq!(c, d);
         assert_eq!(chunk.constants.len(), 2);

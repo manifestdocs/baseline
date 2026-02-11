@@ -6,7 +6,9 @@ use tree_sitter_baseline::LANGUAGE;
 use crate::diagnostics::Location;
 use crate::test_runner::{TestResult, TestStatus, TestSuiteResult, TestSummary};
 
-use super::compiler::Compiler;
+use super::chunk::CompileError;
+use super::codegen::Codegen;
+use super::lower::Lowerer;
 use super::natives::NativeRegistry;
 use super::value::Value;
 use super::vm::Vm;
@@ -76,23 +78,62 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         };
     }
 
-    // Compile with tests
+    // Compile with tests using the IR pipeline
     let natives = NativeRegistry::new();
-    let compiler = Compiler::new(&source, &natives);
-    let test_program = match compiler.compile_program_with_tests(&root) {
-        Ok(tp) => tp,
+    let mut lowerer = Lowerer::new(&source, &natives, None);
+    let ir_test_module = match lowerer.lower_module_with_tests(&root) {
+        Ok(m) => m,
         Err(e) => {
+            let ce = CompileError {
+                message: e.message,
+                line: e.line,
+                col: e.col,
+            };
             return TestSuiteResult {
                 status: "fail".to_string(),
                 tests: vec![TestResult {
                     name: "compilation".to_string(),
                     function: None,
                     status: TestStatus::Fail,
-                    message: Some(format!("Compile error: {}", e)),
+                    message: Some(format!("Compile error: {}", ce)),
                     location: Location {
                         file: file_str,
-                        line: e.line,
-                        col: e.col,
+                        line: ce.line,
+                        col: ce.col,
+                        end_line: None,
+                        end_col: None,
+                    },
+                }],
+                summary: TestSummary {
+                    total: 1,
+                    passed: 0,
+                    failed: 1,
+                    skipped: 0,
+                },
+            };
+        }
+    };
+
+    let codegen = Codegen::new(&natives);
+    let test_program = match codegen.generate_test_program(&ir_test_module) {
+        Ok(tp) => tp,
+        Err(e) => {
+            let ce = CompileError {
+                message: e.message,
+                line: e.line,
+                col: e.col,
+            };
+            return TestSuiteResult {
+                status: "fail".to_string(),
+                tests: vec![TestResult {
+                    name: "compilation".to_string(),
+                    function: None,
+                    status: TestStatus::Fail,
+                    message: Some(format!("Codegen error: {}", ce)),
+                    location: Location {
+                        file: file_str,
+                        line: ce.line,
+                        col: ce.col,
                         end_line: None,
                         end_col: None,
                     },

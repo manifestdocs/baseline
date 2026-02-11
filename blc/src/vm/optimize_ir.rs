@@ -3,7 +3,21 @@ use std::collections::{HashMap, HashSet};
 use super::ir::{BinOp, Expr, HandlerClause, IrFunction, IrModule, Matcher, MatchArm, Pattern, Span, TagRegistry, UnaryOp};
 
 /// Run all IR optimization passes on the module.
+/// Run all IR optimization passes on the module.
+/// When `lift_lambdas_pass` is true, performs lambda lifting (required for JIT).
+/// The bytecode codegen handles lambdas natively, so lambda lifting should be
+/// skipped when targeting bytecode.
 pub fn optimize(module: &mut IrModule) {
+    optimize_inner(module, true);
+}
+
+/// Optimize for bytecode codegen: skip lambda lifting (bytecode handles
+/// `Expr::Lambda` directly via its own closure compilation).
+pub fn optimize_for_bytecode(module: &mut IrModule) {
+    optimize_inner(module, false);
+}
+
+fn optimize_inner(module: &mut IrModule, lift: bool) {
     // Pass 1-2: Constant propagation + folding
     for func in &mut module.functions {
         func.body = propagate_and_fold(func.body.clone());
@@ -21,8 +35,10 @@ pub fn optimize(module: &mut IrModule) {
         func.body = eliminate_dead_lets(func.body.clone());
         func.body = simplify_blocks(func.body.clone());
     }
-    // Lambda lifting: transform Lambda nodes into MakeClosure + lifted functions
-    lift_lambdas(module);
+    if lift {
+        // Lambda lifting: transform Lambda nodes into MakeClosure + lifted functions
+        lift_lambdas(module);
+    }
     // Build tag registry: assign integer IDs to all enum tags
     build_tag_registry(module);
 }

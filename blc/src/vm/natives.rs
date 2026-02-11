@@ -973,16 +973,16 @@ pub(crate) fn nvalue_to_serde(value: &NValue) -> Result<serde_json::Value, Nativ
                 let arr: Result<Vec<_>, _> = items.iter().map(nvalue_to_serde).collect();
                 return Ok(serde_json::Value::Array(arr?));
             }
-            HeapObject::Enum { tag, payload } if &**tag == "Null" && payload.is_unit() => {
+            HeapObject::Enum { tag, payload, .. } if &**tag == "Null" && payload.is_unit() => {
                 return Ok(serde_json::Value::Null);
             }
             HeapObject::Enum { tag, .. } if &**tag == "None" => {
                 return Ok(serde_json::Value::Null);
             }
-            HeapObject::Enum { tag, payload } if &**tag == "Some" => {
+            HeapObject::Enum { tag, payload, .. } if &**tag == "Some" => {
                 return nvalue_to_serde(payload);
             }
-            HeapObject::Enum { tag, payload } if &**tag == "Ok" => {
+            HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
                 return nvalue_to_serde(payload);
             }
             _ => {}

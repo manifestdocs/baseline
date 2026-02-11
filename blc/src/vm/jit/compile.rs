@@ -9,8 +9,7 @@ use cranelift_codegen::ir::condcodes::IntCC;
 use cranelift_codegen::ir::{AbiParam, BlockArg, InstBuilder, StackSlotData, StackSlotKind, types};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, Switch, Variable};
-use cranelift_jit::JITModule;
-use cranelift_module::{FuncId, Module};
+use cranelift_module::{DataId, FuncId, Module};
 
 use super::super::ir::{BinOp, Expr, IrFunction, MatchArm, Pattern, TagRegistry, UnaryOp};
 use super::super::natives::NativeRegistry;
@@ -23,10 +22,10 @@ use crate::analysis::types::Type;
 // Function compile context
 // ---------------------------------------------------------------------------
 
-pub(super) struct FnCompileCtx<'a, 'b> {
+pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     pub(super) builder: &'a mut FunctionBuilder<'b>,
     pub(super) func_ids: &'a [Option<FuncId>],
-    pub(super) module: &'a mut JITModule,
+    pub(super) module: &'a mut M,
     pub(super) vars: HashMap<String, Variable>,
     pub(super) next_var: u32,
     pub(super) func_names: &'a HashMap<String, usize>,
@@ -45,11 +44,14 @@ pub(super) struct FnCompileCtx<'a, 'b> {
     /// SRA: record variables that have been scalar-replaced.
     /// Maps record variable name → (field name → Cranelift Variable).
     pub(super) sra_records: HashMap<String, HashMap<String, Variable>>,
+    /// AOT string constants: maps string content → DataId in the object module.
+    /// When Some, strings are loaded from global data instead of baked as heap pointers.
+    pub(super) aot_strings: Option<&'a HashMap<String, DataId>>,
 }
 
 pub(super) type CValue = cranelift_codegen::ir::Value;
 
-impl<'a, 'b> FnCompileCtx<'a, 'b> {
+impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     fn new_var(&mut self) -> Variable {
         let var = self.builder.declare_var(types::I64);
         self.next_var += 1;
@@ -69,6 +71,22 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
         let bits = nv.raw() as i64;
         self.heap_roots.push(nv);
         self.builder.ins().iconst(types::I64, bits)
+    }
+
+    /// Emit a string NValue: AOT uses global data + jit_make_string, JIT bakes the pointer.
+    fn emit_string_value(&mut self, s: &str) -> Result<CValue, String> {
+        if let Some(aot_strings) = self.aot_strings {
+            let data_id = aot_strings
+                .get(s)
+                .ok_or_else(|| format!("String not in AOT data: {:?}", s))?;
+            let gv = self.module.declare_data_in_func(*data_id, self.builder.func);
+            let addr = self.builder.ins().global_value(self.ptr_type, gv);
+            let len = self.builder.ins().iconst(types::I64, s.len() as i64);
+            Ok(self.call_helper("jit_make_string", &[addr, len]))
+        } else {
+            let nv = NValue::string(s.into());
+            Ok(self.emit_heap_nvalue(nv))
+        }
     }
 
     /// Untag an Int: extract the 48-bit signed payload from NaN-boxed int.
@@ -126,6 +144,20 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
 
     // -- Base-case speculation --
 
+    /// Check if an expression is simple enough to inline for base-case speculation.
+    /// Recognizes scalars, variables, and binary/unary ops over simple operands
+    /// (e.g., `a + b`, `n - 1`).
+    fn is_simple_base_case(e: &Expr) -> bool {
+        match e {
+            Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit => true,
+            Expr::BinOp { lhs, rhs, .. } => {
+                Self::is_simple_base_case(lhs) && Self::is_simple_base_case(rhs)
+            }
+            Expr::UnaryOp { operand, .. } => Self::is_simple_base_case(operand),
+            _ => false,
+        }
+    }
+
     fn try_speculate_call(
         &mut self,
         name: &str,
@@ -150,16 +182,10 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 else_branch,
                 ..
             } => {
-                let is_simple = |e: &Expr| {
-                    matches!(
-                        e,
-                        Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit
-                    )
-                };
-                if is_simple(then_branch) {
+                if Self::is_simple_base_case(then_branch) {
                     (condition.as_ref(), then_branch.as_ref(), true)
                 } else if let Some(else_br) = else_branch
-                    && is_simple(else_br)
+                    && Self::is_simple_base_case(else_br)
                 {
                     (condition.as_ref(), else_br.as_ref(), false)
                 } else {
@@ -577,16 +603,10 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 else_branch,
                 ..
             } => {
-                let is_simple = |e: &Expr| {
-                    matches!(
-                        e,
-                        Expr::Var(_, _) | Expr::Int(_) | Expr::Bool(_) | Expr::Unit
-                    )
-                };
-                if is_simple(then_branch) {
+                if Self::is_simple_base_case(then_branch) {
                     (condition.as_ref(), then_branch.as_ref(), true)
                 } else if let Some(else_br) = else_branch
-                    && is_simple(else_br)
+                    && Self::is_simple_base_case(else_br)
                 {
                     (condition.as_ref(), else_br.as_ref(), false)
                 } else {
@@ -688,10 +708,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
 
             Expr::Unit => Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64)),
 
-            Expr::String(s) => {
-                let nv = NValue::string(s.as_str().into());
-                Ok(self.emit_heap_nvalue(nv))
-            }
+            Expr::String(s) => self.emit_string_value(s),
 
             Expr::Var(name, _) => {
                 if let Some(&var) = self.vars.get(name) {
@@ -1115,8 +1132,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
 
             // -- Phase 3: Constructors --
             Expr::MakeEnum { tag, payload, .. } => {
-                let tag_nv = NValue::string(tag.as_str().into());
-                let tag_val = self.emit_heap_nvalue(tag_nv);
+                let tag_val = self.emit_string_value(tag)?;
                 let payload_val = self.compile_expr(payload)?;
                 if let Some(id) = self.tags.get_id(tag) {
                     let id_val = self.builder.ins().iconst(types::I64, id as i64);
@@ -1127,13 +1143,11 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
             }
 
             Expr::MakeStruct { name, fields, .. } => {
-                let name_nv = NValue::string(name.as_str().into());
-                let name_val = self.emit_heap_nvalue(name_nv);
+                let name_val = self.emit_string_value(name)?;
 
                 let mut pair_vals = Vec::with_capacity(fields.len() * 2);
                 for (fname, fexpr) in fields {
-                    let key_nv = NValue::string(fname.as_str().into());
-                    let key_val = self.emit_heap_nvalue(key_nv);
+                    let key_val = self.emit_string_value(fname)?;
                     let val = self.compile_expr(fexpr)?;
                     pair_vals.push(key_val);
                     pair_vals.push(val);
@@ -1161,8 +1175,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
             Expr::MakeRecord(fields, _) => {
                 let mut pair_vals = Vec::with_capacity(fields.len() * 2);
                 for (fname, fexpr) in fields {
-                    let key_nv = NValue::string(fname.as_str().into());
-                    let key_val = self.emit_heap_nvalue(key_nv);
+                    let key_val = self.emit_string_value(fname)?;
                     let val = self.compile_expr(fexpr)?;
                     pair_vals.push(key_val);
                     pair_vals.push(val);
@@ -1213,8 +1226,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
 
                 let mut pair_vals = Vec::with_capacity(updates.len() * 2);
                 for (fname, fexpr) in updates {
-                    let key_nv = NValue::string(fname.as_str().into());
-                    let key_val = self.emit_heap_nvalue(key_nv);
+                    let key_val = self.emit_string_value(fname)?;
                     let val = self.compile_expr(fexpr)?;
                     pair_vals.push(key_val);
                     pair_vals.push(val);
@@ -1235,8 +1247,7 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                     }
                 }
                 let obj_val = self.compile_expr(object)?;
-                let field_nv = NValue::string(field.as_str().into());
-                let field_val = self.emit_heap_nvalue(field_nv);
+                let field_val = self.emit_string_value(field)?;
                 Ok(self.call_helper("jit_get_field", &[obj_val, field_val]))
             }
 
@@ -1298,6 +1309,20 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 self.builder.switch_to_block(closure_block);
                 self.builder.seal_block(closure_block);
                 let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
+                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
+                let zero_c = self.builder.ins().iconst(types::I64, 0);
+                let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
+                let call_closure_block = self.builder.create_block();
+                let null_closure_block = self.builder.create_block();
+                self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
+
+                self.builder.switch_to_block(null_closure_block);
+                self.builder.seal_block(null_closure_block);
+                let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_c)]);
+
+                self.builder.switch_to_block(call_closure_block);
+                self.builder.seal_block(call_closure_block);
                 let mut cargs = vec![callee_val];
                 cargs.extend(&compiled_args);
                 let closure_sig = self.build_indirect_sig(args.len() + 1);
@@ -1310,6 +1335,20 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 self.builder.switch_to_block(function_block);
                 self.builder.seal_block(function_block);
                 let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
+                let zero_f = self.builder.ins().iconst(types::I64, 0);
+                let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
+                let call_func_block = self.builder.create_block();
+                let null_func_block = self.builder.create_block();
+                self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
+
+                self.builder.switch_to_block(null_func_block);
+                self.builder.seal_block(null_func_block);
+                let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_f)]);
+
+                self.builder.switch_to_block(call_func_block);
+                self.builder.seal_block(call_func_block);
                 let func_sig = self.build_indirect_sig(args.len());
                 let sig_ref_f = self.builder.import_signature(func_sig);
                 let result_f = self.builder.ins().call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
@@ -1342,6 +1381,20 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 self.builder.switch_to_block(closure_block);
                 self.builder.seal_block(closure_block);
                 let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
+                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
+                let zero_c = self.builder.ins().iconst(types::I64, 0);
+                let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
+                let call_closure_block = self.builder.create_block();
+                let null_closure_block = self.builder.create_block();
+                self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
+
+                self.builder.switch_to_block(null_closure_block);
+                self.builder.seal_block(null_closure_block);
+                let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                self.builder.ins().return_(&[unit_c]);
+
+                self.builder.switch_to_block(call_closure_block);
+                self.builder.seal_block(call_closure_block);
                 let mut cargs = vec![callee_val];
                 cargs.extend(&compiled_args);
                 let closure_sig = self.build_indirect_sig(args.len() + 1);
@@ -1352,6 +1405,20 @@ impl<'a, 'b> FnCompileCtx<'a, 'b> {
                 self.builder.switch_to_block(function_block);
                 self.builder.seal_block(function_block);
                 let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
+                let zero_f = self.builder.ins().iconst(types::I64, 0);
+                let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
+                let call_func_block = self.builder.create_block();
+                let null_func_block = self.builder.create_block();
+                self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
+
+                self.builder.switch_to_block(null_func_block);
+                self.builder.seal_block(null_func_block);
+                let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                self.builder.ins().return_(&[unit_f]);
+
+                self.builder.switch_to_block(call_func_block);
+                self.builder.seal_block(call_func_block);
                 let func_sig = self.build_indirect_sig(args.len());
                 let sig_ref_f = self.builder.import_signature(func_sig);
                 self.builder.ins().return_call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);

@@ -69,6 +69,20 @@ enum Commands {
         check: bool,
     },
 
+    /// Compile a Baseline source file to a standalone native executable
+    Build {
+        /// The file to compile
+        file: PathBuf,
+
+        /// Output binary path (default: input filename stem)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Print compilation trace
+        #[arg(long)]
+        trace: bool,
+    },
+
     /// Start the Constrained Generation Protocol (CGP) server
     Cgp {
         /// Port to listen on
@@ -205,6 +219,13 @@ fn main() {
                 });
             }
         }
+        Commands::Build {
+            file,
+            output,
+            trace,
+        } => {
+            build_file_aot(&file, output.as_deref(), trace);
+        }
         Commands::Cgp { port } => {
             blc::cgp::run_server(port);
         }
@@ -243,23 +264,11 @@ fn run_file_vm(file: &PathBuf) {
     let program = if imports.is_empty() {
         // Use the new IR pipeline: CST → lower → codegen → Program
         let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
-        let ir_module = lowerer
-            .lower_module(&root)
-            .map_err(|e| vm::compiler::CompileError {
-                message: e.message,
-                line: e.line,
-                col: e.col,
-            });
+        let ir_module = lowerer.lower_module(&root);
         ir_module.and_then(|mut module| {
-            vm::optimize_ir::optimize(&mut module);
+            vm::optimize_ir::optimize_for_bytecode(&mut module);
             let codegen = vm::codegen::Codegen::new(vm_instance.natives());
-            codegen
-                .generate_program(&module)
-                .map_err(|e| vm::compiler::CompileError {
-                    message: e.message,
-                    line: e.line,
-                    col: e.col,
-                })
+            codegen.generate_program(&module)
         })
     } else {
         vm::module_compiler::compile_with_imports(
@@ -365,6 +374,138 @@ fn run_file_jit(file: &PathBuf) {
 fn run_file_jit(_file: &PathBuf) {
     eprintln!("Error: JIT support requires building with --features jit");
     eprintln!("  cargo build --features jit --release");
+    std::process::exit(1);
+}
+
+/// Find the directory containing libbaseline_rt.a for AOT linking.
+///
+/// Search order:
+/// 1. BASELINE_RT_LIB env var (explicit override)
+/// 2. Cargo target directory relative to the blc binary
+#[cfg(feature = "aot")]
+fn find_baseline_rt_lib() -> Option<PathBuf> {
+    // 1. Explicit env var
+    if let Ok(dir) = std::env::var("BASELINE_RT_LIB") {
+        let path = PathBuf::from(&dir);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+
+    // 2. Cargo target dir: check relative to CARGO_MANIFEST_DIR (build-time)
+    //    or relative to the current executable
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        // During cargo run/test: CARGO_MANIFEST_DIR/target/{debug,release}
+        for profile in &["release", "debug"] {
+            let candidate = PathBuf::from(&manifest_dir)
+                .join("..")
+                .join("target")
+                .join(profile);
+            if candidate.join("libbaseline_rt.a").exists() {
+                return Some(candidate.canonicalize().ok()?);
+            }
+        }
+    }
+
+    // 3. Relative to the blc binary itself
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            if dir.join("libbaseline_rt.a").exists() {
+                return Some(dir.to_path_buf());
+            }
+        }
+    }
+
+    None
+}
+
+#[cfg(feature = "aot")]
+fn build_file_aot(file: &PathBuf, output: Option<&Path>, trace: bool) {
+    use tree_sitter::Parser;
+    use tree_sitter_baseline::LANGUAGE;
+
+    let source = std::fs::read_to_string(file).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {}", file.display(), e);
+        std::process::exit(1);
+    });
+    let file_str = file.display().to_string();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load language");
+    let tree = parser.parse(&source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    // Type-check (exit on errors)
+    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let has_type_errors = type_diags
+        .iter()
+        .any(|d| d.severity == diagnostics::Severity::Error);
+    if has_type_errors {
+        for d in &type_diags {
+            if d.severity == diagnostics::Severity::Error {
+                eprintln!(
+                    "{}:{}:{}: error: {} [{}]",
+                    d.location.file, d.location.line, d.location.col, d.message, d.code
+                );
+            }
+        }
+        std::process::exit(1);
+    }
+
+    // Lower to IR + optimize
+    let vm_instance = vm::vm::Vm::new();
+    let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), Some(type_map));
+    let ir_module = match lowerer.lower_module(&root) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("Compile Error: {}", e.message);
+            std::process::exit(1);
+        }
+    };
+
+    let mut optimized = ir_module;
+    vm::optimize_ir::optimize(&mut optimized);
+
+    // AOT compile
+    let obj_bytes = match vm::jit::aot::compile_to_object(&optimized, trace) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("AOT Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // Determine output path
+    let output_path = match output {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let stem = file.file_stem().unwrap_or_default();
+            PathBuf::from(stem)
+        }
+    };
+
+    // Find libbaseline_rt for linking
+    let rt_lib_dir = find_baseline_rt_lib();
+    if rt_lib_dir.is_none() && trace {
+        eprintln!("AOT: warning: libbaseline_rt not found, linking without runtime");
+    }
+
+    // Link
+    if let Err(e) =
+        vm::jit::aot::link_executable(&obj_bytes, &output_path, rt_lib_dir.as_deref(), trace)
+    {
+        eprintln!("Link Error: {}", e);
+        std::process::exit(1);
+    }
+
+    eprintln!("Built: {}", output_path.display());
+}
+
+#[cfg(not(feature = "aot"))]
+fn build_file_aot(_file: &PathBuf, _output: Option<&Path>, _trace: bool) {
+    eprintln!("Error: AOT compilation requires building with --features aot");
+    eprintln!("  cargo build --features aot --release");
     std::process::exit(1);
 }
 

@@ -5,7 +5,7 @@ use crate::resolver::{ImportKind, ModuleLoader};
 
 use super::chunk::{Chunk, Program};
 use super::codegen::Codegen;
-use super::compiler::CompileError;
+use super::chunk::CompileError;
 use super::lower::Lowerer;
 use super::natives::NativeRegistry;
 
@@ -62,22 +62,9 @@ pub fn compile_with_imports(
 
         // Use IR pipeline for module compilation
         let mut lowerer = Lowerer::new(mod_source, natives, None);
-        let ir_functions = lowerer
-            .lower_module_functions(&mod_root)
-            .map_err(|e| CompileError {
-                message: e.message,
-                line: e.line,
-                col: e.col,
-            })?;
+        let ir_functions = lowerer.lower_module_functions(&mod_root)?;
         let codegen = Codegen::new(natives);
-        let (mut mod_chunks, local_map) =
-            codegen
-                .generate_module(&ir_functions)
-                .map_err(|e| CompileError {
-                    message: e.message,
-                    line: e.line,
-                    col: e.col,
-                })?;
+        let (mut mod_chunks, local_map) = codegen.generate_module(&ir_functions)?;
 
         let offset = merged_chunks.len();
 
@@ -131,18 +118,8 @@ pub fn compile_with_imports(
     // Phase 3: compile the main program with pre-compiled imports using IR pipeline
     let mut lowerer = Lowerer::new(main_source, natives, None);
     lowerer.add_functions(merged_functions.keys().cloned());
-    let ir_module = lowerer.lower_module(main_root).map_err(|e| CompileError {
-        message: e.message,
-        line: e.line,
-        col: e.col,
-    })?;
+    let ir_module = lowerer.lower_module(main_root)?;
     let mut codegen = Codegen::new(natives);
     codegen.set_pre_compiled(merged_chunks, merged_functions);
-    codegen
-        .generate_program(&ir_module)
-        .map_err(|e| CompileError {
-            message: e.message,
-            line: e.line,
-            col: e.col,
-        })
+    codegen.generate_program(&ir_module)
 }
