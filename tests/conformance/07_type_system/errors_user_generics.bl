@@ -1,0 +1,10 @@
+@prelude(core)
+
+// Negative test: user-defined generic type errors
+// Expected errors: TYP_006
+
+// identity<T> returns T, but main declares String return with Int argument
+fn identity<T>(x: T) -> T = x
+
+// TYP_006: return type mismatch — identity(42) infers to Int, not String
+fn bad_return() -> String = identity(42)

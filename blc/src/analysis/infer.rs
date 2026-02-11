@@ -9,6 +9,70 @@ pub struct GenericSchema {
     pub build: fn(&mut InferCtx) -> Type,
 }
 
+/// A generic schema for user-defined functions with named type parameters.
+/// Stores the function type template with `Type::TypeParam` placeholders.
+pub struct UserGenericSchema {
+    pub type_param_names: Vec<String>,
+    pub fn_type: Type,
+}
+
+impl UserGenericSchema {
+    /// Instantiate the schema with fresh type variables for each named type parameter.
+    pub fn instantiate(&self, ctx: &mut InferCtx) -> Type {
+        let mut mapping = HashMap::new();
+        for name in &self.type_param_names {
+            mapping.insert(name.clone(), ctx.fresh_var());
+        }
+        substitute_type_params(&self.fn_type, &mapping)
+    }
+}
+
+/// Replace all `Type::TypeParam(name)` in a type with their mapped types.
+pub fn substitute_type_params(ty: &Type, mapping: &HashMap<String, Type>) -> Type {
+    match ty {
+        Type::TypeParam(name) => mapping.get(name).cloned().unwrap_or(Type::Unknown),
+        Type::Function(params, ret) => {
+            let params = params
+                .iter()
+                .map(|p| substitute_type_params(p, mapping))
+                .collect();
+            let ret = Box::new(substitute_type_params(ret, mapping));
+            Type::Function(params, ret)
+        }
+        Type::List(inner) => Type::List(Box::new(substitute_type_params(inner, mapping))),
+        Type::Tuple(elems) => {
+            Type::Tuple(elems.iter().map(|e| substitute_type_params(e, mapping)).collect())
+        }
+        Type::Enum(name, variants) => {
+            let variants = variants
+                .iter()
+                .map(|(vname, payloads)| {
+                    let payloads = payloads
+                        .iter()
+                        .map(|p| substitute_type_params(p, mapping))
+                        .collect();
+                    (vname.clone(), payloads)
+                })
+                .collect();
+            Type::Enum(name.clone(), variants)
+        }
+        Type::Record(fields, row) => {
+            let fields = fields
+                .iter()
+                .map(|(k, v)| (k.clone(), substitute_type_params(v, mapping)))
+                .collect();
+            Type::Record(fields, *row)
+        }
+        Type::Map(k, v) => Type::Map(
+            Box::new(substitute_type_params(k, mapping)),
+            Box::new(substitute_type_params(v, mapping)),
+        ),
+        Type::Set(inner) => Type::Set(Box::new(substitute_type_params(inner, mapping))),
+        // Concrete types pass through unchanged
+        _ => ty.clone(),
+    }
+}
+
 /// Inference context managing type variables, unification, and substitution.
 pub struct InferCtx {
     next_var: u32,
@@ -101,6 +165,9 @@ impl InferCtx {
                 Ok(())
             }
 
+            // TypeParam — treat like a named variable for unification
+            (Type::TypeParam(na), Type::TypeParam(nb)) if na == nb => Ok(()),
+
             // Concrete mismatch — fail silently (let the type checker report errors)
             _ => Err(format!("Cannot unify {} with {}", a, b)),
         }
@@ -134,6 +201,8 @@ impl InferCtx {
                     .collect();
                 Type::Enum(name.clone(), variants)
             }
+            // TypeParam passes through (only appears in templates before instantiation)
+            Type::TypeParam(_) => ty.clone(),
             // All other types are concrete — return as-is
             _ => ty.clone(),
         }

@@ -1,0 +1,35 @@
+// User-Defined Generic Inference
+// Tests that user-defined generic functions have their type parameters
+// correctly inferred at call sites.
+
+// Implicit type params (single uppercase letters)
+fn identity(x: T) -> T = x
+
+// Explicit type params with angle bracket syntax
+fn apply<A, B>(f: (A) -> B, x: A) -> B = f(x)
+
+fn double_apply(f: (T) -> T, x: T) -> T = f(f(x))
+
+fn compose<A, B, C>(f: (B) -> C, g: (A) -> B, x: A) -> C = f(g(x))
+
+fn const_fn(x: T, _y: U) -> T = x
+
+fn main() -> Int = 0
+
+// --- Identity function ---
+test "identity with Int" = identity(42) == 42
+test "identity with String" = identity("hello") == "hello"
+test "identity with Bool" = identity(true) == true
+
+// --- Apply ---
+test "apply function to Int" = apply(|n| n + 1, 41) == 42
+test "apply to negate" = apply(|b| not b, true) == false
+
+// --- Double apply ---
+test "double apply increment" = double_apply(|n| n + 1, 40) == 42
+
+// --- Compose ---
+test "compose two functions" = compose(|n| n + 1, |n| n * 2, 10) == 21
+
+// --- Const ---
+test "const returns first" = const_fn(42, "ignored") == 42

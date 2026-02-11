@@ -134,9 +134,11 @@ module.exports = grammar({
     refinement_clause: $ => seq('where', $.predicate),
 
     // fn fizzbuzz(n: Int) -> String = body
+    // fn identity<T>(x: T) -> T = x
     function_def: $ => seq(
       optional('export'),
       'fn', field('name', $._name),
+      optional($.type_params),
       '(', optional(field('params', $.param_list)), ')',
       optional(seq('->', optional(field('effects', $.effect_set)), field('return_type', $._type_expr))),
       '=', field('body', $._expression),

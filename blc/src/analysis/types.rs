@@ -1,4 +1,4 @@
-use super::infer::{GenericSchema, InferCtx, builtin_generic_schemas};
+use super::infer::{GenericSchema, InferCtx, UserGenericSchema, builtin_generic_schemas};
 use crate::diagnostics::{Diagnostic, Location, Patch, Severity, Suggestion};
 use crate::prelude::{self, Prelude};
 use crate::resolver::{ImportKind, ModuleLoader};
@@ -33,6 +33,7 @@ pub enum Type {
     Set(Box<Type>),                        // Set<T>
     Module(String),                         // Module/Effect namespace
     Var(u32),                               // Inference type variable
+    TypeParam(String),                      // Named type parameter (e.g., T, A, K)
     Refined(Box<Type>, String),             // Refined type: base type + alias name
     Unknown,
 }
@@ -106,6 +107,7 @@ impl std::fmt::Display for Type {
             Type::Set(inner) => write!(f, "Set<{}>", inner),
             Type::Module(name) => write!(f, "Module({})", name),
             Type::Var(id) => write!(f, "?{}", id),
+            Type::TypeParam(name) => write!(f, "{}", name),
             Type::Refined(_, name) => write!(f, "{}", name),
             Type::Unknown => write!(f, "<unknown>"),
         }
@@ -172,6 +174,7 @@ pub struct SymbolTable {
     types: HashMap<String, Type>, // Registry for named types (structs)
     module_methods: HashMap<String, Type>, // "Module.method" -> Function type
     generic_schemas: HashMap<String, GenericSchema>, // "Module.method" -> generic schema
+    user_generic_schemas: HashMap<String, UserGenericSchema>, // user function -> generic schema
     /// Accumulated type map: CST node start_byte → resolved Type.
     /// Populated during type checking for use by the VM compiler.
     pub type_map: TypeMap,
@@ -184,6 +187,7 @@ impl SymbolTable {
             types: HashMap::new(),
             module_methods: builtin_type_signatures(&prelude),
             generic_schemas: builtin_generic_schemas(),
+            user_generic_schemas: HashMap::new(),
             type_map: TypeMap::new(),
         };
 
@@ -268,6 +272,10 @@ impl SymbolTable {
 
     fn lookup_generic_schema(&self, qualified_name: &str) -> Option<&GenericSchema> {
         self.generic_schemas.get(qualified_name)
+    }
+
+    fn lookup_user_generic_schema(&self, name: &str) -> Option<&UserGenericSchema> {
+        self.user_generic_schemas.get(name)
     }
 
     /// Collect all visible bindings from current scope chain (for typed holes).
@@ -890,6 +898,9 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
     }
     match (a, b) {
         (Type::Var(_), _) | (_, Type::Var(_)) => true,
+        // TypeParam matches itself (same name) or Unknown/Var
+        (Type::TypeParam(na), Type::TypeParam(nb)) => na == nb,
+        (Type::TypeParam(_), _) | (_, Type::TypeParam(_)) => false,
         (Type::Enum(na, va), Type::Enum(nb, vb)) => {
             if na != nb {
                 return false;
@@ -936,7 +947,80 @@ fn types_compatible(a: &Type, b: &Type) -> bool {
     }
 }
 
+/// Extract explicit type parameter names from a function_def's type_params node.
+/// Returns an empty vec if no type_params present.
+fn extract_explicit_type_params(func_node: &Node, source: &str) -> Vec<String> {
+    let mut cursor = func_node.walk();
+    for child in func_node.children(&mut cursor) {
+        if child.kind() == "type_params" {
+            let mut params = Vec::new();
+            let mut inner = child.walk();
+            for tp in child.named_children(&mut inner) {
+                if tp.kind() == "type_identifier" {
+                    params.push(tp.utf8_text(source.as_bytes()).unwrap().to_string());
+                }
+            }
+            return params;
+        }
+    }
+    Vec::new()
+}
+
+/// Detect implicit type parameters: scan a function's param and return types
+/// for single-letter uppercase type identifiers that aren't known types.
+fn detect_implicit_type_params(
+    func_node: &Node,
+    source: &str,
+    symbols: &SymbolTable,
+) -> Vec<String> {
+    let mut type_params = Vec::new();
+    let mut seen = HashSet::new();
+
+    fn scan_for_type_params(
+        node: &Node,
+        source: &str,
+        symbols: &SymbolTable,
+        type_params: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+    ) {
+        if node.kind() == "type_identifier" {
+            let name = node.utf8_text(source.as_bytes()).unwrap();
+            // Implicit type params: single uppercase letter not matching a known type
+            if name.len() == 1
+                && name.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+                && !is_builtin_type_name(name)
+                && symbols.lookup_type(name).is_none()
+                && !seen.contains(name)
+            {
+                seen.insert(name.to_string());
+                type_params.push(name.to_string());
+            }
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            scan_for_type_params(&child, source, symbols, type_params, seen);
+        }
+    }
+
+    if let Some(params) = func_node.child_by_field_name("params") {
+        scan_for_type_params(&params, source, symbols, &mut type_params, &mut seen);
+    }
+    if let Some(ret) = func_node.child_by_field_name("return_type") {
+        scan_for_type_params(&ret, source, symbols, &mut type_params, &mut seen);
+    }
+    type_params
+}
+
+fn is_builtin_type_name(name: &str) -> bool {
+    matches!(
+        name,
+        "Int" | "Float" | "String" | "Bool" | "Unit" | "List" | "Option" | "Result" | "Map"
+            | "Set"
+    )
+}
+
 /// Pre-scan top-level function signatures so forward references resolve.
+/// Also registers UserGenericSchema for functions with type parameters.
 fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -944,8 +1028,29 @@ fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
             "function_def" => {
                 if let Some(name_node) = child.child_by_field_name("name") {
                     let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                    let ty = parse_function_type(&child, source, symbols);
-                    symbols.insert(name, ty);
+
+                    // Detect type parameters: explicit <T, U> or implicit single-letter
+                    let mut type_param_names = extract_explicit_type_params(&child, source);
+                    if type_param_names.is_empty() {
+                        type_param_names = detect_implicit_type_params(&child, source, symbols);
+                    }
+
+                    let type_param_set: HashSet<String> =
+                        type_param_names.iter().cloned().collect();
+                    let ty =
+                        parse_function_type_with_params(&child, source, symbols, &type_param_set);
+                    symbols.insert(name.clone(), ty.clone());
+
+                    // Register user generic schema if the function has type parameters
+                    if !type_param_names.is_empty() {
+                        symbols.user_generic_schemas.insert(
+                            name,
+                            UserGenericSchema {
+                                type_param_names,
+                                fn_type: ty,
+                            },
+                        );
+                    }
                 }
             }
             "module_decl" => collect_signatures(&child, source, symbols),
@@ -954,8 +1059,13 @@ fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
     }
 }
 
-/// Build a Type::Function from a function_def's param_list and return_type fields.
-fn parse_function_type(func_node: &Node, source: &str, symbols: &SymbolTable) -> Type {
+/// Build a Type::Function from a function_def, treating names in `type_params` as TypeParam.
+fn parse_function_type_with_params(
+    func_node: &Node,
+    source: &str,
+    symbols: &SymbolTable,
+    type_params: &HashSet<String>,
+) -> Type {
     let mut arg_types = Vec::new();
     if let Some(params) = func_node.child_by_field_name("params") {
         let mut cursor = params.walk();
@@ -963,12 +1073,12 @@ fn parse_function_type(func_node: &Node, source: &str, symbols: &SymbolTable) ->
             if param.kind() == "param"
                 && let Some(type_node) = param.child_by_field_name("type")
             {
-                arg_types.push(parse_type(&type_node, source, symbols));
+                arg_types.push(parse_type_ext(&type_node, source, symbols, type_params));
             }
         }
     }
     let ret_type = if let Some(ret_node) = func_node.child_by_field_name("return_type") {
-        parse_type(&ret_node, source, symbols)
+        parse_type_ext(&ret_node, source, symbols, type_params)
     } else {
         Type::Unit
     };
@@ -1410,10 +1520,29 @@ fn check_node_inner(
             let name_node = node.child_by_field_name("name").unwrap();
             let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
 
-            // Build function type from param_list and return_type
-            let function_type = parse_function_type(node, source, symbols);
+            // Detect type parameters (explicit or implicit)
+            let mut type_param_names = extract_explicit_type_params(node, source);
+            if type_param_names.is_empty() {
+                type_param_names = detect_implicit_type_params(node, source, symbols);
+            }
+            let type_param_set: HashSet<String> = type_param_names.iter().cloned().collect();
+
+            // Build function type with TypeParam for generic params
+            let function_type =
+                parse_function_type_with_params(node, source, symbols, &type_param_set);
 
             symbols.insert(name.clone(), function_type.clone());
+
+            // Register user generic schema if type params present
+            if !type_param_names.is_empty() {
+                symbols.user_generic_schemas.insert(
+                    name.clone(),
+                    UserGenericSchema {
+                        type_param_names,
+                        fn_type: function_type.clone(),
+                    },
+                );
+            }
 
             if let Type::Function(arg_types, ret_type) = &function_type {
                 symbols.enter_scope();
@@ -1669,11 +1798,25 @@ fn check_node_inner(
                     None
                 }
             });
-            if let Some(ref qname) = schema_name
-                && let Some(schema) = symbols.lookup_generic_schema(qname)
-            {
+            // Try builtin generic schema first, then user-defined generic schema
+            let builtin_schema = schema_name
+                .as_ref()
+                .and_then(|qn| symbols.lookup_generic_schema(qn));
+            let user_schema = if builtin_schema.is_none() {
+                schema_name
+                    .as_ref()
+                    .and_then(|qn| symbols.lookup_user_generic_schema(qn))
+            } else {
+                None
+            };
+
+            if builtin_schema.is_some() || user_schema.is_some() {
                 let mut ctx = InferCtx::new();
-                let instantiated = (schema.build)(&mut ctx);
+                let instantiated = if let Some(schema) = builtin_schema {
+                    (schema.build)(&mut ctx)
+                } else {
+                    user_schema.unwrap().instantiate(&mut ctx)
+                };
                 if let Type::Function(schema_params, schema_ret) = instantiated {
                     // Check arg count
                     if params_provided != schema_params.len() {
@@ -2634,6 +2777,16 @@ fn call_arg_expr<'a>(arg: &Node<'a>) -> Node<'a> {
 }
 
 fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
+    parse_type_ext(node, source, symbols, &HashSet::new())
+}
+
+/// Parse a type expression, treating names in `type_params` as TypeParam.
+fn parse_type_ext(
+    node: &Node,
+    source: &str,
+    symbols: &SymbolTable,
+    type_params: &HashSet<String>,
+) -> Type {
     match node.kind() {
         "type_identifier" => {
             let name = node.utf8_text(source.as_bytes()).unwrap();
@@ -2644,7 +2797,9 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                 "Bool" => Type::Bool,
                 "Unit" => Type::Unit,
                 _ => {
-                    if let Some(ty) = symbols.lookup_type(name) {
+                    if type_params.contains(name) {
+                        Type::TypeParam(name.to_string())
+                    } else if let Some(ty) = symbols.lookup_type(name) {
                         ty.clone()
                     } else {
                         Type::Unknown
@@ -2657,7 +2812,7 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
             // If A is a Tuple, we decompose it into args.
             let left = node.child(0).unwrap();
             let right = node.child(node.child_count() - 1).unwrap();
-            let right_type = parse_type(&right, source, symbols);
+            let right_type = parse_type_ext(&right, source, symbols, type_params);
 
             if left.kind() == "tuple_type" {
                 // Decompose tuple into args
@@ -2668,12 +2823,12 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                 for child in left.children(&mut cursor) {
                     let k = child.kind();
                     if k != "(" && k != "," && k != ")" {
-                        args.push(parse_type(&child, source, symbols));
+                        args.push(parse_type_ext(&child, source, symbols, type_params));
                     }
                 }
                 Type::Function(args, Box::new(right_type))
             } else {
-                let left_type = parse_type(&left, source, symbols);
+                let left_type = parse_type_ext(&left, source, symbols, type_params);
                 Type::Function(vec![left_type], Box::new(right_type))
             }
         }
@@ -2686,11 +2841,11 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                     break;
                 }
                 if child.kind() != "(" && child.kind() != "," && child.kind() != ")" {
-                    args.push(parse_type(&child, source, symbols));
+                    args.push(parse_type_ext(&child, source, symbols, type_params));
                 }
             }
             let ret_node = node.child(node.child_count() - 1).unwrap();
-            let ret = parse_type(&ret_node, source, symbols);
+            let ret = parse_type_ext(&ret_node, source, symbols, type_params);
             Type::Function(args, Box::new(ret))
         }
         "tuple_type" => {
@@ -2699,10 +2854,17 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                 Type::Unit
             } else if count == 1 {
                 // (T) is just parenthesized, not a 1-tuple
-                parse_type(&node.named_child(0).unwrap(), source, symbols)
+                parse_type_ext(&node.named_child(0).unwrap(), source, symbols, type_params)
             } else {
                 let elems: Vec<Type> = (0..count)
-                    .map(|i| parse_type(&node.named_child(i).unwrap(), source, symbols))
+                    .map(|i| {
+                        parse_type_ext(
+                            &node.named_child(i).unwrap(),
+                            source,
+                            symbols,
+                            type_params,
+                        )
+                    })
                     .collect();
                 Type::Tuple(elems)
             }
@@ -2717,7 +2879,7 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                     let type_node = child.child(2).unwrap();
 
                     let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                    let ty = parse_type(&type_node, source, symbols);
+                    let ty = parse_type_ext(&type_node, source, symbols, type_params);
                     fields.insert(name, ty);
                 } else if child.kind() == "row_variable" {
                     // ..r — row variable for open record types
@@ -2737,24 +2899,24 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
             match name {
                 "List" => {
                     let arg = node.named_child(1).unwrap();
-                    let inner = parse_type(&arg, source, symbols);
+                    let inner = parse_type_ext(&arg, source, symbols, type_params);
                     Type::List(Box::new(inner))
                 }
                 "Map" => {
                     let key = node.named_child(1).unwrap();
                     let val = node.named_child(2).unwrap();
                     Type::Map(
-                        Box::new(parse_type(&key, source, symbols)),
-                        Box::new(parse_type(&val, source, symbols)),
+                        Box::new(parse_type_ext(&key, source, symbols, type_params)),
+                        Box::new(parse_type_ext(&val, source, symbols, type_params)),
                     )
                 }
                 "Set" => {
                     let arg = node.named_child(1).unwrap();
-                    Type::Set(Box::new(parse_type(&arg, source, symbols)))
+                    Type::Set(Box::new(parse_type_ext(&arg, source, symbols, type_params)))
                 }
                 "Option" => {
                     let arg = node.named_child(1).unwrap();
-                    let inner = parse_type(&arg, source, symbols);
+                    let inner = parse_type_ext(&arg, source, symbols, type_params);
                     Type::Enum(
                         "Option".to_string(),
                         vec![
@@ -2765,10 +2927,10 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
                 }
                 "Result" => {
                     let ok_node = node.named_child(1).unwrap();
-                    let ok_type = parse_type(&ok_node, source, symbols);
+                    let ok_type = parse_type_ext(&ok_node, source, symbols, type_params);
                     let err_type = node
                         .named_child(2)
-                        .map(|n| parse_type(&n, source, symbols))
+                        .map(|n| parse_type_ext(&n, source, symbols, type_params))
                         .unwrap_or(Type::Unknown);
                     Type::Enum(
                         "Result".to_string(),
@@ -2784,7 +2946,7 @@ fn parse_type(node: &Node, source: &str, symbols: &SymbolTable) -> Type {
         "option_type" => {
             // T? desugars to Option<T>
             let inner_node = node.named_child(0).unwrap();
-            let inner = parse_type(&inner_node, source, symbols);
+            let inner = parse_type_ext(&inner_node, source, symbols, type_params);
             Type::Enum(
                 "Option".to_string(),
                 vec![

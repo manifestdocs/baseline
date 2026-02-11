@@ -1582,9 +1582,13 @@
       }
     },
     "children": {
-      "multiple": false,
+      "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "type_params",
+          "named": true
+        },
         {
           "type": "where_block",
           "named": true
