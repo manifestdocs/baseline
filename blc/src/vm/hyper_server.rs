@@ -22,7 +22,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
 use crate::vm::nvalue::NValue;
-use crate::vm::radix::RadixNode;
+use crate::vm::radix::{ParamCollector, RadixNode, SmallParams};
 use crate::vm::value::RcStr;
 
 // ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ pub struct AsyncRequest {
     /// Request body (Bytes for zero-copy)
     pub body: Bytes,
     /// Route parameters extracted during matching
-    pub params: HashMap<String, String>,
+    pub params: SmallParams,
 }
 
 impl AsyncRequest {
@@ -231,7 +231,7 @@ impl AsyncRequest {
             raw_query,
             headers,
             body,
-            params: HashMap::new(),
+            params: SmallParams::new(),
         })
     }
 
@@ -242,7 +242,7 @@ impl AsyncRequest {
         path: &str,
         query: Option<&str>,
         body: &str,
-        params: HashMap<String, String>,
+        params: SmallParams,
     ) -> Self {
         Self {
             method,
@@ -283,6 +283,7 @@ impl AsyncRequest {
 
         let params: Vec<(RcStr, NValue)> = self
             .params
+            .as_slice()
             .iter()
             .map(|(k, v)| {
                 (
@@ -340,9 +341,10 @@ impl AsyncRequest {
             })
             .collect();
 
-        // Convert params map to vec of (String, SendableValue)
+        // Convert params to vec of (String, SendableValue)
         let params_vec: Vec<(String, SendableValue)> = self
             .params
+            .as_slice()
             .iter()
             .map(|(k, v)| (k.clone(), SendableValue::String(v.clone())))
             .collect();
@@ -370,7 +372,7 @@ impl AsyncRequest {
             ("headers".to_string(), SendableValue::List(headers)),
             (
                 "body".to_string(),
-                SendableValue::String(self.body_str().unwrap_or("").to_string()),
+                SendableValue::Bytes(self.body.clone()),
             ),
             ("params".to_string(), params_sv),
             ("query".to_string(), query_sv),
@@ -508,12 +510,11 @@ impl AsyncResponse {
             let body = fields
                 .iter()
                 .find(|(k, _)| k == "body")
-                .and_then(|(_, v)| {
-                    if let SendableValue::String(s) = v {
-                        Some(Bytes::from(s.clone()))
-                    } else {
-                        None
-                    }
+                .and_then(|(_, v)| match v {
+                    SendableValue::String(s) => Some(Bytes::from(s.clone())),
+                    #[cfg(feature = "async-server")]
+                    SendableValue::Bytes(b) => Some(b.clone()),
+                    _ => None,
                 })
                 .unwrap_or_default();
 
@@ -557,10 +558,11 @@ impl AsyncResponse {
             }
         } else {
             // Fallback: treat as string body
-            let body = if let SendableValue::String(s) = val {
-                Bytes::from(s.clone())
-            } else {
-                Bytes::new()
+            let body = match val {
+                SendableValue::String(s) => Bytes::from(s.clone()),
+                #[cfg(feature = "async-server")]
+                SendableValue::Bytes(b) => b.clone(),
+                _ => Bytes::new(),
             };
             Self::text(200, body)
         }
@@ -575,6 +577,70 @@ impl AsyncResponse {
         }
 
         builder.body(Full::new(self.body)).unwrap()
+    }
+}
+
+/// Build a hyper Response directly from a SendableValue, skipping the
+/// AsyncResponse intermediate allocation. Used for VM handler results.
+pub fn build_hyper_response_from_sendable(
+    val: &crate::vm::sendable::SendableValue,
+) -> Response<Full<Bytes>> {
+    use crate::vm::sendable::SendableValue;
+
+    if let SendableValue::Record(fields) = val {
+        let status = fields
+            .iter()
+            .find(|(k, _)| k == "status")
+            .and_then(|(_, v)| {
+                if let SendableValue::Int(i) = v {
+                    StatusCode::from_u16(*i as u16).ok()
+                } else {
+                    None
+                }
+            })
+            .unwrap_or(StatusCode::OK);
+
+        let body = fields
+            .iter()
+            .find(|(k, _)| k == "body")
+            .map(|(_, v)| match v {
+                SendableValue::Bytes(b) => b.clone(),
+                SendableValue::String(s) => Bytes::from(s.clone()),
+                _ => Bytes::new(),
+            })
+            .unwrap_or_default();
+
+        let mut builder = Response::builder().status(status);
+
+        if let Some((_, SendableValue::List(list))) =
+            fields.iter().find(|(k, _)| k == "headers")
+        {
+            for item in list {
+                if let SendableValue::Tuple(tuple) = item {
+                    if tuple.len() == 2 {
+                        if let (SendableValue::String(k), SendableValue::String(v)) =
+                            (&tuple[0], &tuple[1])
+                        {
+                            builder = builder.header(k.as_str(), v.as_str());
+                        }
+                    }
+                }
+            }
+        }
+
+        builder.body(Full::new(body)).unwrap()
+    } else {
+        // Fallback: treat as string body
+        let body = match val {
+            SendableValue::String(s) => Bytes::from(s.clone()),
+            SendableValue::Bytes(b) => b.clone(),
+            _ => Bytes::new(),
+        };
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "text/plain")
+            .body(Full::new(body))
+            .unwrap()
     }
 }
 
@@ -724,14 +790,14 @@ impl AsyncRouteTree {
         &self,
         method: &str,
         path: &str,
-    ) -> Option<(AsyncHandler, HashMap<String, String>)> {
+    ) -> Option<(AsyncHandler, SmallParams)> {
         let segments: Vec<&str> = path
             .trim_start_matches('/')
             .split('/')
             .filter(|s| !s.is_empty())
             .collect();
 
-        let mut params = HashMap::new();
+        let mut params = SmallParams::new();
         let node = self.find_node(&self.root, &segments, &mut params)?;
 
         let handler = node.handlers.get(method)?;
@@ -742,7 +808,7 @@ impl AsyncRouteTree {
         &self,
         node: &'a AsyncRadixNode,
         segments: &[&str],
-        params: &mut HashMap<String, String>,
+        params: &mut SmallParams,
     ) -> Option<&'a AsyncRadixNode> {
         if segments.is_empty() {
             return Some(node);
@@ -760,11 +826,11 @@ impl AsyncRouteTree {
 
         // Try parameter match
         if let Some((param_name, child)) = &node.param {
-            params.insert(param_name.clone(), segment.to_string());
+            params.push(param_name.clone(), segment.to_string());
             if let Some(found) = self.find_node(child, rest, params) {
                 return Some(found);
             }
-            params.remove(param_name);
+            params.pop();
         }
 
         None
@@ -1054,9 +1120,6 @@ async fn handle_request_with_context(
     ctx: &AsyncServerContext,
     max_body_size: usize,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
-    let method = req.method().to_string();
-    let path = req.uri().path().to_string();
-
     // Parse request with body size enforcement
     let mut async_req = match AsyncRequest::from_hyper(req, max_body_size).await {
         Ok(r) => r,
@@ -1068,8 +1131,8 @@ async fn handle_request_with_context(
         }
     };
 
-    // Find handler
-    match ctx.routes.find(&method, &path) {
+    // Find handler — borrow method/path from async_req to avoid duplicate allocations
+    match ctx.routes.find(async_req.method.as_str(), &async_req.path) {
         Some((handler, params)) => {
             async_req.params = params;
 
@@ -1083,8 +1146,8 @@ async fn handle_request_with_context(
 
                         match executor.execute_handler(vm_handler, request_sv).await {
                             Ok(result_sv) => {
-                                // Convert result from sendable format DIRECTLY
-                                AsyncResponse::from_sendable_val(&result_sv)
+                                // Build hyper response directly, skipping AsyncResponse
+                                return Ok(build_hyper_response_from_sendable(&result_sv));
                             }
                             Err(e) => {
                                 eprintln!("[server] Handler error: {}", e);

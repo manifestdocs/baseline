@@ -33,6 +33,17 @@ impl SmallParams {
         &self.data[..self.len]
     }
 
+    pub fn get(&self, key: &str) -> Option<&str> {
+        self.data[..self.len]
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     pub fn clone_data(&self) -> SmallParams {
         let mut new = SmallParams::new();
         for i in 0..self.len {

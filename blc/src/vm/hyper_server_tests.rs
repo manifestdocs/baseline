@@ -3,13 +3,13 @@
 //! Tests for the async HTTP server implementation including Phase 2-3 features:
 //! connection management, timeouts, body size enforcement, and graceful shutdown.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 // Re-export from hyper_server for testing
 use crate::vm::hyper_server::{
     AsyncRequest, AsyncResponse, AsyncRouteTree, AsyncRouteTreeBuilder, ServerConfig,
 };
+use crate::vm::radix::{ParamCollector, SmallParams};
 
 #[cfg(test)]
 mod tests {
@@ -99,11 +99,11 @@ mod tests {
             .build();
 
         let (_, params) = tree.find("GET", "/users/123").unwrap();
-        assert_eq!(params.get("id"), Some(&"123".to_string()));
+        assert_eq!(params.get("id"), Some("123"));
 
         let (_, params) = tree.find("GET", "/users/456/posts/789").unwrap();
-        assert_eq!(params.get("id"), Some(&"456".to_string()));
-        assert_eq!(params.get("post_id"), Some(&"789".to_string()));
+        assert_eq!(params.get("id"), Some("456"));
+        assert_eq!(params.get("post_id"), Some("789"));
     }
 
     #[test]
@@ -117,7 +117,7 @@ mod tests {
         assert!(params.is_empty());
 
         let (_, params) = tree.find("GET", "/users/123").unwrap();
-        assert_eq!(params.get("id"), Some(&"123".to_string()));
+        assert_eq!(params.get("id"), Some("123"));
     }
 
     #[test]
@@ -188,8 +188,8 @@ mod tests {
 
     #[test]
     fn test_async_request_to_nvalue() {
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), "123".to_string());
+        let mut params = SmallParams::new();
+        params.push("id".to_string(), "123".to_string());
 
         let req = AsyncRequest::test_request(
             Method::GET,
@@ -246,10 +246,10 @@ mod tests {
 
     #[test]
     fn test_async_request_to_sendable() {
-        use crate::vm::async_executor::SendableValue;
+        use crate::vm::sendable::SendableValue;
 
-        let mut params = HashMap::new();
-        params.insert("id".to_string(), "123".to_string());
+        let mut params = SmallParams::new();
+        params.push("id".to_string(), "123".to_string());
         let req = AsyncRequest::test_request(
             Method::GET,
             "/users/123",
@@ -280,14 +280,14 @@ mod tests {
                 }),
                 Some("/users/123")
             );
-            assert_eq!(
-                get_field("body").and_then(|v| if let SendableValue::String(s) = v {
-                    Some(s.as_str())
-                } else {
-                    None
-                }),
-                Some("body content")
-            );
+
+            // Body is now SendableValue::Bytes (zero-copy)
+            let body_str = get_field("body").and_then(|v| match v {
+                SendableValue::Bytes(b) => std::str::from_utf8(b).ok(),
+                SendableValue::String(s) => Some(s.as_str()),
+                _ => None,
+            });
+            assert_eq!(body_str, Some("body content"));
 
             if let Some(SendableValue::Record(params)) = get_field("params") {
                 let id = params.iter().find(|(k, _)| k == "id").map(|(_, v)| v);
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn test_async_response_from_sendable_val() {
-        use crate::vm::async_executor::SendableValue;
+        use crate::vm::sendable::SendableValue;
 
         let sv = SendableValue::Record(vec![
             ("status".to_string(), SendableValue::Int(201)),
@@ -334,6 +334,95 @@ mod tests {
             .headers
             .iter()
             .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+    }
+
+    // -----------------------------------------------------------------------
+    // SmallParams Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_small_params_get() {
+        let mut params = SmallParams::new();
+        assert!(params.is_empty());
+        assert_eq!(params.get("id"), None);
+
+        params.push("id".to_string(), "42".to_string());
+        assert!(!params.is_empty());
+        assert_eq!(params.get("id"), Some("42"));
+        assert_eq!(params.get("name"), None);
+
+        params.push("name".to_string(), "alice".to_string());
+        assert_eq!(params.get("name"), Some("alice"));
+        assert_eq!(params.get("id"), Some("42"));
+    }
+
+    #[test]
+    fn test_small_params_pop() {
+        let mut params = SmallParams::new();
+        params.push("a".to_string(), "1".to_string());
+        params.push("b".to_string(), "2".to_string());
+        assert_eq!(params.as_slice().len(), 2);
+
+        params.pop();
+        assert_eq!(params.as_slice().len(), 1);
+        assert_eq!(params.get("a"), Some("1"));
+        assert_eq!(params.get("b"), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // build_hyper_response_from_sendable Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_build_hyper_response_from_sendable_record() {
+        use crate::vm::sendable::SendableValue;
+        use crate::vm::hyper_server::build_hyper_response_from_sendable;
+
+        let sv = SendableValue::Record(vec![
+            ("status".to_string(), SendableValue::Int(201)),
+            (
+                "body".to_string(),
+                SendableValue::Bytes(Bytes::from("created")),
+            ),
+            (
+                "headers".to_string(),
+                SendableValue::List(vec![SendableValue::Tuple(vec![
+                    SendableValue::String("X-Custom".to_string()),
+                    SendableValue::String("val".to_string()),
+                ])]),
+            ),
+        ]);
+
+        let resp = build_hyper_response_from_sendable(&sv);
+        assert_eq!(resp.status().as_u16(), 201);
+        assert_eq!(resp.headers().get("X-Custom").unwrap(), "val");
+    }
+
+    #[test]
+    fn test_build_hyper_response_from_sendable_string_body() {
+        use crate::vm::sendable::SendableValue;
+        use crate::vm::hyper_server::build_hyper_response_from_sendable;
+
+        let sv = SendableValue::Record(vec![
+            ("status".to_string(), SendableValue::Int(200)),
+            (
+                "body".to_string(),
+                SendableValue::String("hello".to_string()),
+            ),
+        ]);
+
+        let resp = build_hyper_response_from_sendable(&sv);
+        assert_eq!(resp.status().as_u16(), 200);
+    }
+
+    #[test]
+    fn test_build_hyper_response_from_sendable_fallback() {
+        use crate::vm::sendable::SendableValue;
+        use crate::vm::hyper_server::build_hyper_response_from_sendable;
+
+        let sv = SendableValue::String("plain text".to_string());
+        let resp = build_hyper_response_from_sendable(&sv);
+        assert_eq!(resp.status().as_u16(), 200);
     }
 
     // -----------------------------------------------------------------------

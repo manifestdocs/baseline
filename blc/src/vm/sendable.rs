@@ -6,6 +6,9 @@
 use super::nvalue::{HeapObject, NValue};
 use super::value::RcStr;
 
+#[cfg(feature = "async-server")]
+use bytes::Bytes as BytesType;
+
 /// Thread-safe value representation using owned Strings instead of Rc<str>.
 #[derive(Clone)]
 pub enum SendableValue {
@@ -22,6 +25,9 @@ pub enum SendableValue {
         payload: Box<SendableValue>,
     },
     Function(usize),
+    /// Zero-copy body bytes (Bytes::clone is O(1) refcount bump).
+    #[cfg(feature = "async-server")]
+    Bytes(BytesType),
 }
 
 impl SendableValue {
@@ -97,6 +103,11 @@ impl SendableValue {
                 NValue::enum_val(RcStr::from(tag.as_str()), payload.to_nvalue())
             }
             SendableValue::Function(idx) => NValue::function(*idx),
+            #[cfg(feature = "async-server")]
+            SendableValue::Bytes(b) => {
+                let s = std::str::from_utf8(b).unwrap_or("");
+                NValue::string(RcStr::from(s))
+            }
         }
     }
 }

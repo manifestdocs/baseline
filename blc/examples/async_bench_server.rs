@@ -21,7 +21,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .get("/health", |_| AsyncResponse::json(r#"{"status":"ok"}"#))
         // User lookup with params
         .get("/users/:id", |req| {
-            let id = req.params.get("id").map(|s| s.as_str()).unwrap_or("?");
+            let id = req.params.get("id").unwrap_or("?");
             let body = format!(r#"{{"id":"{}","name":"User {}"}}"#, id, id);
             AsyncResponse::json(body)
         })
