@@ -437,6 +437,18 @@ impl AsyncResponse {
 
     /// Create from NValue response record.
     pub fn from_nvalue(val: &NValue) -> Self {
+        // Unwrap Result enum (Ok/Err) — VM handlers return Ok(response)
+        if val.is_heap() {
+            if let super::nvalue::HeapObject::Enum { tag, payload, .. } = val.as_heap_ref() {
+                if &**tag == "Ok" {
+                    return Self::from_nvalue(payload);
+                } else if &**tag == "Err" {
+                    let msg = payload.as_str().unwrap_or("Internal Server Error");
+                    return Self::text(500, msg.to_string());
+                }
+            }
+        }
+
         if let Some(fields) = val.as_record() {
             let status = fields
                 .iter()
@@ -493,6 +505,19 @@ impl AsyncResponse {
     /// Avoids converting back to NValue on the IO thread.
     pub fn from_sendable_val(val: &crate::vm::sendable::SendableValue) -> Self {
         use crate::vm::sendable::SendableValue;
+
+        // Unwrap Result enum (Ok/Err) — VM handlers return Ok(response)
+        if let SendableValue::Enum { tag, payload } = val {
+            if tag == "Ok" {
+                return Self::from_sendable_val(payload);
+            } else if tag == "Err" {
+                let msg = match payload.as_ref() {
+                    SendableValue::String(s) => s.clone(),
+                    _ => "Internal Server Error".to_string(),
+                };
+                return Self::text(500, msg);
+            }
+        }
 
         if let SendableValue::Record(fields) = val {
             let status = fields
@@ -586,6 +611,19 @@ pub fn build_hyper_response_from_sendable(
     val: &crate::vm::sendable::SendableValue,
 ) -> Response<Full<Bytes>> {
     use crate::vm::sendable::SendableValue;
+
+    // Unwrap Result enum (Ok/Err) — VM handlers return Ok(response)
+    if let SendableValue::Enum { tag, payload } = val {
+        if tag == "Ok" {
+            return build_hyper_response_from_sendable(payload);
+        } else if tag == "Err" {
+            let msg = match payload.as_ref() {
+                SendableValue::String(s) => s.clone(),
+                _ => "Internal Server Error".to_string(),
+            };
+            return AsyncResponse::text(500, msg).into_hyper();
+        }
+    }
 
     if let SendableValue::Record(fields) = val {
         let status = fields
