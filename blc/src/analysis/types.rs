@@ -1165,6 +1165,45 @@ pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagn
     (diagnostics, type_map)
 }
 
+/// CGP type-check result: diagnostics, type map, visible bindings, and module methods.
+pub struct CgpTypeInfo {
+    pub diagnostics: Vec<Diagnostic>,
+    pub type_map: TypeMap,
+    pub bindings: Vec<(String, Type)>,
+    pub module_methods: Vec<(String, Type)>,
+}
+
+/// Run the type checker and return everything the CGP needs:
+/// diagnostics, type map, visible bindings, and module methods.
+/// Designed to work on partial/incomplete code (will produce Unknown for error nodes).
+pub fn check_types_for_cgp(root: &Node, source: &str, file: &str) -> CgpTypeInfo {
+    let mut diagnostics = Vec::new();
+
+    let prelude = match prelude::extract_prelude(root, source) {
+        Ok(p) => p,
+        Err(_) => Prelude::Core, // default to Core for partial code
+    };
+
+    let mut symbols = SymbolTable::with_prelude(prelude);
+    collect_signatures(root, source, &mut symbols);
+    check_node(root, source, file, &mut symbols, &mut diagnostics);
+
+    let bindings = symbols.visible_bindings();
+    let module_methods: Vec<(String, Type)> = symbols
+        .module_methods
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    let type_map = symbols.type_map;
+
+    CgpTypeInfo {
+        diagnostics,
+        type_map,
+        bindings,
+        module_methods,
+    }
+}
+
 /// Process import declarations: resolve each import, type-check the imported module,
 /// and register its exports into the current symbol table.
 fn process_imports(
