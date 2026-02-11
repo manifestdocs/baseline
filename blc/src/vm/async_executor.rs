@@ -121,6 +121,7 @@ impl AsyncVmExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::value::RcStr;
 
     #[test]
     fn test_executor_config_defaults() {
