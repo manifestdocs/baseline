@@ -1,9 +1,11 @@
 //! Language Server Protocol implementation for Baseline.
 //!
-//! Provides diagnostics, hover, go-to-definition, and completion
+//! Provides diagnostics, hover, go-to-definition, completion, and
+//! workspace symbol search with cross-file import resolution
 //! using tower-lsp over stdio.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Mutex;
 
 use tower_lsp::jsonrpc::Result;
@@ -12,11 +14,22 @@ use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 use crate::diagnostics;
 use crate::parse;
+use crate::resolver::{ImportKind, ModuleLoader};
+
+/// Info about a resolved import in the current file.
+#[derive(Clone, Debug)]
+struct ResolvedImportInfo {
+    module_name: String,
+    file_path: PathBuf,
+}
 
 /// Per-file state cached after each parse.
 struct FileState {
     source: String,
     symbols: Vec<SymbolInfo>,
+    imports: Vec<ResolvedImportInfo>,
+    /// "Module.func" -> "(a: Int, b: Int) -> Int"
+    module_methods: HashMap<String, String>,
 }
 
 /// A symbol extracted from the CST.
@@ -27,12 +40,21 @@ struct SymbolInfo {
     type_sig: Option<String>,
     range: Range,
     selection_range: Range,
+    /// Cross-file origin URI (set for imported symbols).
+    defined_in: Option<Url>,
+    /// Module name (e.g., "Util") for imported symbols.
+    module_name: Option<String>,
 }
 
 /// The LSP backend holding a client handle and per-file state.
 pub struct BaselineLanguageServer {
     client: Client,
     files: Mutex<HashMap<Url, FileState>>,
+    workspace_root: Mutex<Option<PathBuf>>,
+    /// Reverse dependency map: file_path -> set of URIs that import it.
+    reverse_deps: Mutex<HashMap<PathBuf, HashSet<Url>>>,
+    /// Guard against re-entrant analysis during dependent re-analysis.
+    analyzing: Mutex<HashSet<Url>>,
 }
 
 impl BaselineLanguageServer {
@@ -40,13 +62,57 @@ impl BaselineLanguageServer {
         Self {
             client,
             files: Mutex::new(HashMap::new()),
+            workspace_root: Mutex::new(None),
+            reverse_deps: Mutex::new(HashMap::new()),
+            analyzing: Mutex::new(HashSet::new()),
         }
+    }
+
+    /// Derive base directory for import resolution.
+    fn base_dir_for_uri(&self, uri: &Url) -> Option<PathBuf> {
+        // Prefer workspace root, fall back to file's parent directory
+        let ws = self.workspace_root.lock().unwrap();
+        if let Some(root) = ws.as_ref() {
+            return Some(root.clone());
+        }
+        uri.to_file_path().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
     }
 
     /// Re-parse a file, publish diagnostics, and update cached symbols.
     async fn on_change(&self, uri: Url, text: String) {
-        let file_name = uri.path().to_string();
-        let result = parse::parse_source(&text, &file_name);
+        self.analyze_file(uri.clone(), text).await;
+
+        // Re-analyze dependents (one level only — the analyzing guard prevents cycles)
+        let file_path = uri.to_file_path().ok();
+        if let Some(path) = file_path {
+            let dependents = self.collect_dependents(&path);
+            for (dep_uri, dep_source) in dependents {
+                self.analyze_file(dep_uri, dep_source).await;
+            }
+        }
+    }
+
+    /// Core analysis: parse, resolve imports, publish diagnostics, update state.
+    async fn analyze_file(&self, uri: Url, text: String) {
+        // Guard against re-entrant analysis
+        {
+            let mut analyzing = self.analyzing.lock().unwrap();
+            if analyzing.contains(&uri) {
+                return;
+            }
+            analyzing.insert(uri.clone());
+        }
+
+        let file_path = uri.to_file_path().ok();
+
+        // Run cross-file analysis if we have a file path, otherwise fall back
+        let result = match &file_path {
+            Some(path) => parse::parse_source_with_path(&text, path),
+            None => {
+                let file_name = uri.path().to_string();
+                parse::parse_source(&text, &file_name)
+            }
+        };
 
         let lsp_diagnostics: Vec<tower_lsp::lsp_types::Diagnostic> =
             result.diagnostics.iter().map(convert_diagnostic).collect();
@@ -55,22 +121,181 @@ impl BaselineLanguageServer {
             .publish_diagnostics(uri.clone(), lsp_diagnostics, None)
             .await;
 
-        let symbols = extract_symbols(&text);
+        // Extract local symbols
+        let mut symbols = extract_symbols(&text);
 
-        let mut files = self.files.lock().unwrap();
-        files.insert(
-            uri,
-            FileState {
-                source: text,
-                symbols,
-            },
-        );
+        // Resolve imports and build module_methods map
+        let mut imports = Vec::new();
+        let mut module_methods = HashMap::new();
+
+        if let Some(base_dir) = self.base_dir_for_uri(&uri) {
+            let file_name = uri.path().to_string();
+            let loader = ModuleLoader::with_base_dir(base_dir);
+
+            // Parse and resolve imports from the source
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(&tree_sitter_baseline::LANGUAGE.into())
+                .expect("Failed to load Baseline grammar");
+
+            if let Some(tree) = parser.parse(&text, None) {
+                let root = tree.root_node();
+                let parsed_imports = ModuleLoader::parse_imports(&root, &text);
+
+                for (mut resolved, import_node) in parsed_imports {
+                    match loader.resolve_path(&resolved.module_name, &import_node, &file_name) {
+                        Ok(path) => {
+                            resolved.file_path = path.clone();
+
+                            // Load and extract exports from the resolved module
+                            let mut mod_loader = ModuleLoader::with_base_dir(
+                                path.parent().unwrap_or(&path).to_path_buf(),
+                            );
+                            if let Ok(idx) = mod_loader.load_module(&path, &import_node, &file_name) {
+                                if let Some((mod_root, mod_source, _)) = mod_loader.get_module(idx) {
+                                    let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
+                                    let mod_name = &resolved.module_name;
+
+                                    // Build module_methods entries
+                                    for (func_name, sig) in &exports.functions {
+                                        let key = format!("{}.{}", mod_name, func_name);
+                                        let sig_str = sig.clone().unwrap_or_else(|| "()".to_string());
+                                        module_methods.insert(key, sig_str);
+                                    }
+
+                                    // Add imported symbols based on import kind
+                                    let target_uri = Url::from_file_path(&path).ok();
+                                    match &resolved.kind {
+                                        ImportKind::Selective(names) => {
+                                            for (func_name, sig) in &exports.functions {
+                                                if names.contains(func_name) {
+                                                    symbols.push(SymbolInfo {
+                                                        name: func_name.clone(),
+                                                        kind: SymbolKind::FUNCTION,
+                                                        type_sig: sig.clone(),
+                                                        range: Range::default(),
+                                                        selection_range: Range::default(),
+                                                        defined_in: target_uri.clone(),
+                                                        module_name: Some(mod_name.clone()),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                        ImportKind::Wildcard => {
+                                            for (func_name, sig) in &exports.functions {
+                                                symbols.push(SymbolInfo {
+                                                    name: func_name.clone(),
+                                                    kind: SymbolKind::FUNCTION,
+                                                    type_sig: sig.clone(),
+                                                    range: Range::default(),
+                                                    selection_range: Range::default(),
+                                                    defined_in: target_uri.clone(),
+                                                    module_name: Some(mod_name.clone()),
+                                                });
+                                            }
+                                        }
+                                        ImportKind::Qualified => {
+                                            // Qualified imports are accessed via Module.method
+                                            // No direct symbols injected
+                                        }
+                                    }
+                                }
+                            }
+
+                            imports.push(ResolvedImportInfo {
+                                module_name: resolved.module_name,
+                                file_path: path,
+                            });
+                        }
+                        Err(_) => {
+                            // Import resolution failed — diagnostics already emitted
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update reverse dependency map
+        {
+            let mut rev_deps = self.reverse_deps.lock().unwrap();
+            // Remove old reverse deps for this URI
+            for deps in rev_deps.values_mut() {
+                deps.remove(&uri);
+            }
+            // Add new reverse deps
+            for imp in &imports {
+                rev_deps
+                    .entry(imp.file_path.clone())
+                    .or_default()
+                    .insert(uri.clone());
+            }
+        }
+
+        // Store file state
+        {
+            let mut files = self.files.lock().unwrap();
+            files.insert(
+                uri.clone(),
+                FileState {
+                    source: text,
+                    symbols,
+                    imports,
+                    module_methods,
+                },
+            );
+        }
+
+        // Remove from analyzing set
+        {
+            let mut analyzing = self.analyzing.lock().unwrap();
+            analyzing.remove(&uri);
+        }
+    }
+
+    /// Collect files that import a changed module (for re-analysis).
+    fn collect_dependents(&self, changed_path: &PathBuf) -> Vec<(Url, String)> {
+        let canonical = changed_path
+            .canonicalize()
+            .unwrap_or_else(|_| changed_path.clone());
+
+        let rev_deps = self.reverse_deps.lock().unwrap();
+        let files = self.files.lock().unwrap();
+
+        let mut deps = Vec::new();
+        // Check both canonical and original path
+        for check_path in [&canonical, changed_path] {
+            if let Some(uris) = rev_deps.get(check_path) {
+                for dep_uri in uris {
+                    if let Some(state) = files.get(dep_uri) {
+                        deps.push((dep_uri.clone(), state.source.clone()));
+                    }
+                }
+            }
+        }
+        deps
     }
 }
 
 #[tower_lsp::async_trait]
 impl LanguageServer for BaselineLanguageServer {
-    async fn initialize(&self, _: InitializeParams) -> Result<InitializeResult> {
+    async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+        // Extract workspace root
+        let root = params
+            .root_uri
+            .as_ref()
+            .and_then(|u| u.to_file_path().ok())
+            .or_else(|| {
+                params
+                    .workspace_folders
+                    .as_ref()
+                    .and_then(|folders| folders.first())
+                    .and_then(|f| f.uri.to_file_path().ok())
+            });
+
+        if let Some(root) = root {
+            *self.workspace_root.lock().unwrap() = Some(root);
+        }
+
         Ok(InitializeResult {
             capabilities: ServerCapabilities {
                 text_document_sync: Some(TextDocumentSyncCapability::Kind(
@@ -82,6 +307,7 @@ impl LanguageServer for BaselineLanguageServer {
                     trigger_characters: Some(vec![".".to_string()]),
                     ..Default::default()
                 }),
+                workspace_symbol_provider: Some(OneOf::Left(true)),
                 ..Default::default()
             },
             server_info: Some(ServerInfo {
@@ -121,13 +347,31 @@ impl LanguageServer for BaselineLanguageServer {
             return Ok(None);
         };
 
+        // Check for Module.method pattern
+        if let Some((module, method)) = detect_qualified_access(&state.source, &pos) {
+            let key = format!("{}.{}", module, method);
+            if let Some(sig) = state.module_methods.get(&key) {
+                let contents = format!("**{}.{}**: `{}`\n\n*from module {}*", module, method, sig, module);
+                return Ok(Some(Hover {
+                    contents: HoverContents::Markup(MarkupContent {
+                        kind: MarkupKind::Markdown,
+                        value: contents,
+                    }),
+                    range: None,
+                }));
+            }
+        }
+
         // Find a symbol whose range contains the cursor position
         for sym in &state.symbols {
             if contains_position(&sym.range, &pos) {
-                let contents = match &sym.type_sig {
+                let mut contents = match &sym.type_sig {
                     Some(sig) => format!("**{}**: `{}`", sym.name, sig),
                     None => format!("**{}**", sym.name),
                 };
+                if let Some(mod_name) = &sym.module_name {
+                    contents.push_str(&format!("\n\n*from module {}*", mod_name));
+                }
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,
@@ -153,15 +397,65 @@ impl LanguageServer for BaselineLanguageServer {
             return Ok(None);
         };
 
+        // Check for Module.method pattern
+        if let Some((module, method)) = detect_qualified_access(&state.source, &pos) {
+            // Find the import that matches this module
+            for imp in &state.imports {
+                if imp.module_name == module {
+                    let target_uri = match Url::from_file_path(&imp.file_path) {
+                        Ok(u) => u,
+                        Err(_) => continue,
+                    };
+
+                    // Look up the method in the target file's symbols
+                    if let Some(target_state) = files.get(&target_uri) {
+                        for sym in &target_state.symbols {
+                            if sym.name == method {
+                                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                                    uri: target_uri,
+                                    range: sym.selection_range,
+                                })));
+                            }
+                        }
+                    }
+
+                    // Fallback: jump to the file start
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: target_uri,
+                        range: Range::default(),
+                    })));
+                }
+            }
+        }
+
         // Find the word at cursor position
         let word = word_at_position(&state.source, &pos);
         if word.is_empty() {
             return Ok(None);
         }
 
-        // Find a symbol matching that word
+        // Find a symbol matching that word (check imported symbols with defined_in first)
         for sym in &state.symbols {
             if sym.name == word {
+                if let Some(def_uri) = &sym.defined_in {
+                    // Cross-file: look up definition in target file
+                    if let Some(target_state) = files.get(def_uri) {
+                        for target_sym in &target_state.symbols {
+                            if target_sym.name == word && target_sym.defined_in.is_none() {
+                                return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                                    uri: def_uri.clone(),
+                                    range: target_sym.selection_range,
+                                })));
+                            }
+                        }
+                    }
+                    // Fallback: jump to file start
+                    return Ok(Some(GotoDefinitionResponse::Scalar(Location {
+                        uri: def_uri.clone(),
+                        range: Range::default(),
+                    })));
+                }
+                // Local symbol
                 return Ok(Some(GotoDefinitionResponse::Scalar(Location {
                     uri: uri.clone(),
                     range: sym.selection_range,
@@ -174,12 +468,37 @@ impl LanguageServer for BaselineLanguageServer {
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = params.text_document_position.text_document.uri;
+        let pos = params.text_document_position.position;
 
         let files = self.files.lock().unwrap();
         let Some(state) = files.get(&uri) else {
             return Ok(None);
         };
 
+        // Check for Module. prefix — offer module method completions
+        if let Some(module_prefix) = detect_module_prefix(&state.source, &pos) {
+            let prefix = format!("{}.", module_prefix);
+            let items: Vec<CompletionItem> = state
+                .module_methods
+                .iter()
+                .filter(|(key, _)| key.starts_with(&prefix))
+                .map(|(key, sig)| {
+                    let method_name = key.strip_prefix(&prefix).unwrap_or(key);
+                    CompletionItem {
+                        label: method_name.to_string(),
+                        kind: Some(CompletionItemKind::FUNCTION),
+                        detail: Some(sig.clone()),
+                        ..Default::default()
+                    }
+                })
+                .collect();
+
+            if !items.is_empty() {
+                return Ok(Some(CompletionResponse::Array(items)));
+            }
+        }
+
+        // Fall through to local symbol completions
         let items: Vec<CompletionItem> = state
             .symbols
             .iter()
@@ -197,6 +516,41 @@ impl LanguageServer for BaselineLanguageServer {
             .collect();
 
         Ok(Some(CompletionResponse::Array(items)))
+    }
+
+    async fn symbol(
+        &self,
+        params: WorkspaceSymbolParams,
+    ) -> Result<Option<Vec<SymbolInformation>>> {
+        let query = params.query.to_lowercase();
+        let files = self.files.lock().unwrap();
+
+        let mut results = Vec::new();
+        for (file_uri, state) in files.iter() {
+            for sym in &state.symbols {
+                // Skip imported symbols to avoid duplicates
+                if sym.defined_in.is_some() {
+                    continue;
+                }
+                // Match against query (empty query = show all)
+                if query.is_empty() || sym.name.to_lowercase().contains(&query) {
+                    #[allow(deprecated)]
+                    results.push(SymbolInformation {
+                        name: sym.name.clone(),
+                        kind: sym.kind,
+                        tags: None,
+                        deprecated: None,
+                        location: Location {
+                            uri: file_uri.clone(),
+                            range: sym.selection_range,
+                        },
+                        container_name: None,
+                    });
+                }
+            }
+        }
+
+        Ok(Some(results))
     }
 }
 
@@ -293,6 +647,8 @@ fn extract_symbols(source: &str) -> Vec<SymbolInfo> {
                             start: Position::new(name_start.row as u32, name_start.column as u32),
                             end: Position::new(name_end.row as u32, name_end.column as u32),
                         },
+                        defined_in: None,
+                        module_name: None,
                     });
                 }
             }
@@ -332,6 +688,8 @@ fn extract_symbols(source: &str) -> Vec<SymbolInfo> {
                             start: Position::new(name_start.row as u32, name_start.column as u32),
                             end: Position::new(name_end.row as u32, name_end.column as u32),
                         },
+                        defined_in: None,
+                        module_name: None,
                     });
                 }
             }
@@ -340,6 +698,123 @@ fn extract_symbols(source: &str) -> Vec<SymbolInfo> {
     }
 
     symbols
+}
+
+/// Detect if cursor is at a `Module.method` position. Returns `(module, method)`.
+fn detect_qualified_access(source: &str, pos: &Position) -> Option<(String, String)> {
+    let lines: Vec<&str> = source.lines().collect();
+    let line_idx = pos.line as usize;
+    if line_idx >= lines.len() {
+        return None;
+    }
+    let line = lines[line_idx];
+    let col = pos.character as usize;
+    if col >= line.len() {
+        return None;
+    }
+
+    let bytes = line.as_bytes();
+
+    // Find the word at cursor
+    let mut end = col;
+    while end < bytes.len() && is_ident_char(bytes[end]) {
+        end += 1;
+    }
+    let mut start = col;
+    while start > 0 && is_ident_char(bytes[start - 1]) {
+        start -= 1;
+    }
+
+    // Check if there's a dot before the word
+    if start == 0 {
+        return None;
+    }
+    let before = start - 1;
+    if bytes[before] != b'.' {
+        return None;
+    }
+
+    // Find the module name before the dot
+    let mod_end = before;
+    let mut mod_start = before;
+    while mod_start > 0 && is_ident_char(bytes[mod_start - 1]) {
+        mod_start -= 1;
+    }
+    if mod_start == mod_end {
+        return None;
+    }
+
+    let module = &line[mod_start..mod_end];
+    let method = &line[start..end];
+
+    // Module names start with uppercase
+    if !module.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return None;
+    }
+
+    if method.is_empty() {
+        return None;
+    }
+
+    Some((module.to_string(), method.to_string()))
+}
+
+/// Detect if cursor is right after `Module.` (for completion).
+/// Returns the module name if so.
+fn detect_module_prefix(source: &str, pos: &Position) -> Option<String> {
+    let lines: Vec<&str> = source.lines().collect();
+    let line_idx = pos.line as usize;
+    if line_idx >= lines.len() {
+        return None;
+    }
+    let line = lines[line_idx];
+    let col = pos.character as usize;
+
+    // Cursor might be right after the dot or partway through typing
+    // Look backwards from cursor position
+    if col == 0 {
+        return None;
+    }
+
+    let bytes = line.as_bytes();
+    let check_col = col.min(bytes.len());
+
+    // Walk backwards to find a dot
+    let mut dot_pos = None;
+    let mut i = check_col;
+    // Skip any partial identifier being typed
+    while i > 0 && is_ident_char(bytes[i - 1]) {
+        i -= 1;
+    }
+    // Check if there's a dot
+    if i > 0 && bytes[i - 1] == b'.' {
+        dot_pos = Some(i - 1);
+    }
+    // Also handle cursor right after dot
+    if dot_pos.is_none() && check_col > 0 && bytes[check_col - 1] == b'.' {
+        dot_pos = Some(check_col - 1);
+    }
+
+    let dot_pos = dot_pos?;
+
+    // Find the module name before the dot
+    let mut mod_start = dot_pos;
+    while mod_start > 0 && is_ident_char(bytes[mod_start - 1]) {
+        mod_start -= 1;
+    }
+
+    if mod_start == dot_pos {
+        return None;
+    }
+
+    let module = &line[mod_start..dot_pos];
+
+    // Module names start with uppercase
+    if !module.starts_with(|c: char| c.is_ascii_uppercase()) {
+        return None;
+    }
+
+    Some(module.to_string())
 }
 
 /// Check if a range contains a position.
@@ -466,6 +941,7 @@ fn greet(name: String) -> String = "Hello"
             symbols[0].type_sig.as_deref(),
             Some("(name: String) -> String")
         );
+        assert!(symbols[0].defined_in.is_none());
     }
 
     #[test]
@@ -509,5 +985,54 @@ type Point = { x: Int, y: Int }
         assert!(contains_position(&range, &Position::new(3, 5)));
         assert!(!contains_position(&range, &Position::new(1, 5)));
         assert!(!contains_position(&range, &Position::new(5, 0)));
+    }
+
+    #[test]
+    fn test_detect_qualified_access() {
+        // Cursor on "add" in "Util.add(3, 7)"
+        let source = "  let result = Util.add(3, 7)";
+        let result = detect_qualified_access(source, &Position::new(0, 20));
+        assert_eq!(result, Some(("Util".to_string(), "add".to_string())));
+
+        // Cursor on "println!" in "Console.println!(...)"
+        let source = r#"  Console.println!("hello")"#;
+        let result = detect_qualified_access(source, &Position::new(0, 12));
+        assert_eq!(
+            result,
+            Some(("Console".to_string(), "println!".to_string()))
+        );
+
+        // Not a qualified access (lowercase prefix)
+        let source = "  foo.bar";
+        let result = detect_qualified_access(source, &Position::new(0, 6));
+        assert_eq!(result, None);
+
+        // Just a plain word
+        let source = "  let x = 42";
+        let result = detect_qualified_access(source, &Position::new(0, 6));
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_detect_module_prefix() {
+        // Cursor right after "Util."
+        let source = "  Util.";
+        let result = detect_module_prefix(source, &Position::new(0, 7));
+        assert_eq!(result, Some("Util".to_string()));
+
+        // Cursor partway through typing after dot
+        let source = "  Util.ad";
+        let result = detect_module_prefix(source, &Position::new(0, 9));
+        assert_eq!(result, Some("Util".to_string()));
+
+        // Not a module prefix (lowercase)
+        let source = "  foo.";
+        let result = detect_module_prefix(source, &Position::new(0, 6));
+        assert_eq!(result, None);
+
+        // No dot
+        let source = "  Util";
+        let result = detect_module_prefix(source, &Position::new(0, 6));
+        assert_eq!(result, None);
     }
 }

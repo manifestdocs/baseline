@@ -131,8 +131,61 @@ pub fn parse_int_literal(text: &str) -> Option<i64> {
     }
 }
 
+/// Parse a source string with file path context for cross-file import resolution.
+/// Like `parse_file()` but operates on in-memory source text (used by the LSP).
+pub fn parse_source_with_path(source: &str, file_path: &Path) -> CheckResult {
+    let file_name = file_path.display().to_string();
+
+    let mut parser = Parser::new();
+    parser
+        .set_language(&LANGUAGE.into())
+        .expect("Failed to load Baseline grammar");
+
+    let tree = parser.parse(source, None).expect("Failed to parse");
+    let root = tree.root_node();
+
+    let mut diagnostics = Vec::new();
+
+    collect_errors(root, source, &file_name, &mut diagnostics);
+
+    if diagnostics.is_empty() {
+        let base_dir = file_path.parent().map(|p| p.to_path_buf());
+        let mut loader = match base_dir {
+            Some(dir) => ModuleLoader::with_base_dir(dir),
+            None => ModuleLoader::new(),
+        };
+
+        let root_node = tree.root_node();
+        let type_diagnostics = crate::analysis::check_types_with_loader(
+            &root_node,
+            source,
+            &file_name,
+            Some(&mut loader),
+        );
+        diagnostics.extend(type_diagnostics);
+
+        let effect_diagnostics = crate::analysis::check_effects(&tree, source, &file_name);
+        diagnostics.extend(effect_diagnostics);
+
+        let refinement_diagnostics = crate::analysis::check_refinements(&tree, source, &file_name);
+        diagnostics.extend(refinement_diagnostics);
+    }
+
+    let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
+    let status = if has_errors {
+        "failure".to_string()
+    } else {
+        "success".to_string()
+    };
+
+    let mut result = CheckResult::new(VerificationLevel::Refinements);
+    result.status = status;
+    result.diagnostics = diagnostics;
+    result
+}
+
 /// Recursively collect ERROR and MISSING nodes from the syntax tree.
-fn collect_errors(
+pub(crate) fn collect_errors(
     node: tree_sitter::Node,
     source: &str,
     file: &str,
