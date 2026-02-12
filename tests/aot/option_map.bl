@@ -1,0 +1,14 @@
+@prelude(core)
+
+fn double(x: Int) -> Int = x * 2
+
+fn format_option(opt: Option<Int>) -> String = {
+  match opt
+    Some(x) -> "Some(${x})"
+    None -> "None"
+}
+
+fn main() -> String = {
+  let result = Option.map(Some(21), double)
+  format_option(result)
+}

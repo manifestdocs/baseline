@@ -154,3 +154,41 @@ fn aot_int_convert() {
     let output = compile_and_run("tests/aot/int_convert.bl");
     assert_eq!(output, "12345");
 }
+
+// --- Phase 4: Higher-order function tests ---
+
+#[test]
+fn aot_list_map() {
+    let output = compile_and_run("tests/aot/list_map.bl");
+    assert_eq!(output, "[2, 4, 6]");
+}
+
+#[test]
+fn aot_list_filter() {
+    let output = compile_and_run("tests/aot/list_filter.bl");
+    assert_eq!(output, "[3, 4, 5]");
+}
+
+#[test]
+fn aot_list_fold() {
+    let output = compile_and_run("tests/aot/list_fold.bl");
+    assert_eq!(output, "15");
+}
+
+#[test]
+fn aot_list_find() {
+    let output = compile_and_run("tests/aot/list_find.bl");
+    assert_eq!(output, "Some(2)");
+}
+
+#[test]
+fn aot_option_map() {
+    let output = compile_and_run("tests/aot/option_map.bl");
+    assert_eq!(output, "Some(42)");
+}
+
+#[test]
+fn aot_result_map() {
+    let output = compile_and_run("tests/aot/result_map.bl");
+    assert_eq!(output, "Ok(42)");
+}

@@ -1,0 +1,5 @@
+@prelude(core)
+
+fn double(x: Int) -> Int = x * 2
+
+fn main() -> List<Int> = List.map([1, 2, 3], double)

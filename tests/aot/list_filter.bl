@@ -1,0 +1,5 @@
+@prelude(core)
+
+fn gt2(x: Int) -> Boolean = x > 2
+
+fn main() -> List<Int> = List.filter([1, 2, 3, 4, 5], gt2)

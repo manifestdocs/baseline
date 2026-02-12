@@ -1,0 +1,5 @@
+@prelude(core)
+
+fn add(acc: Int, x: Int) -> Int = acc + x
+
+fn main() -> Int = List.fold([1, 2, 3, 4, 5], 0, add)

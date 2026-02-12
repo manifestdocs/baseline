@@ -570,6 +570,107 @@ pub extern "C" fn jit_print_result(bits: u64) -> u64 {
     NV_UNIT
 }
 
+// ---------------------------------------------------------------------------
+// HOF support helpers (raw / non-NaN-boxed interfaces for inline compilation)
+// ---------------------------------------------------------------------------
+
+/// Get the raw (non-NaN-boxed) length of a list.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_list_length_raw(list_bits: u64) -> i64 {
+    let list = unsafe { NValue::borrow_from_raw(list_bits) };
+    list.as_list().map(|l| l.len() as i64).unwrap_or(0)
+}
+
+/// Get element at raw index from a list (returns NaN-boxed NValue).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_list_get_raw(list_bits: u64, index: i64) -> u64 {
+    let list = unsafe { NValue::borrow_from_raw(list_bits) };
+    match list.as_list() {
+        Some(items) if (index as usize) < items.len() => {
+            let val = items[index as usize].clone();
+            let bits = val.raw();
+            jit_arena_push(val);
+            bits
+        }
+        _ => NV_UNIT,
+    }
+}
+
+/// Allocate a temporary u64 buffer of `count` elements on the heap.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_alloc_buf(count: i64) -> *mut u64 {
+    let n = count.max(0) as usize;
+    let mut buf = Vec::<u64>::with_capacity(n);
+    buf.resize(n, 0);
+    let ptr = buf.as_mut_ptr();
+    std::mem::forget(buf);
+    ptr
+}
+
+/// Build a NaN-boxed list from a u64 buffer, then free the buffer.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_build_list_from_buf(buf: *mut u64, count: i64) -> u64 {
+    let n = count.max(0) as usize;
+    let items: Vec<NValue> = if buf.is_null() || n == 0 {
+        Vec::new()
+    } else {
+        let slice = unsafe { std::slice::from_raw_parts(buf, n) };
+        let v: Vec<NValue> = slice
+            .iter()
+            .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
+            .collect();
+        // Free the buffer
+        unsafe { drop(Vec::from_raw_parts(buf, n, n)) };
+        v
+    };
+    let result = NValue::list(items);
+    let bits = result.raw();
+    jit_arena_push(result);
+    bits
+}
+
+/// Construct Some(payload) enum value (tag_id=1, matching TagRegistry).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_some(payload: u64) -> u64 {
+    let p = unsafe { NValue::borrow_from_raw(payload) };
+    let result = NValue::enum_val_with_id("Some".into(), 1, p);
+    let bits = result.raw();
+    jit_arena_push(result);
+    bits
+}
+
+/// Construct None enum value (tag_id=0, matching TagRegistry).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_none() -> u64 {
+    let result = NValue::enum_val_with_id("None".into(), 0, NValue::unit());
+    let bits = result.raw();
+    jit_arena_push(result);
+    bits
+}
+
+/// Construct Ok(payload) enum value (tag_id=2, matching TagRegistry).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_ok(payload: u64) -> u64 {
+    let p = unsafe { NValue::borrow_from_raw(payload) };
+    let result = NValue::enum_val_with_id("Ok".into(), 2, p);
+    let bits = result.raw();
+    jit_arena_push(result);
+    bits
+}
+
+/// Check if a NaN-boxed value is truthy. Returns raw 1 or 0.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_is_truthy(val_bits: u64) -> u64 {
+    let nv = unsafe { NValue::borrow_from_raw(val_bits) };
+    let truthy = if nv.is_bool() {
+        nv.as_bool()
+    } else {
+        // Non-bool: check bit 0
+        (val_bits & 1) != 0
+    };
+    if truthy { 1 } else { 0 }
+}
+
 /// Drain the JIT arena (free all intermediate heap values).
 /// Must be called AFTER extracting/printing the return value.
 #[unsafe(no_mangle)]

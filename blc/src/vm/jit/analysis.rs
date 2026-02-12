@@ -82,11 +82,20 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
         } => {
             let qualified = format!("{}.{}", module, method);
 
-            // AOT path: check if we have a known symbol for this native
+            // AOT path: check if we have a known symbol or inline HOF for this native
             if natives.is_none() {
                 #[cfg(feature = "aot")]
                 {
-                    if super::aot::aot_native_symbol(&qualified).is_none() {
+                    let is_hof = matches!(
+                        qualified.as_str(),
+                        "List.map"
+                            | "List.filter"
+                            | "List.fold"
+                            | "List.find"
+                            | "Option.map"
+                            | "Result.map"
+                    );
+                    if !is_hof && super::aot::aot_native_symbol(&qualified).is_none() {
                         return false;
                     }
                     return args.iter().all(|a| expr_can_jit(a, natives));
@@ -97,10 +106,23 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
 
             // JIT path: resolve through registry
             let reg = natives.unwrap();
+            // Inline HOFs are always allowed
+            let is_hof = matches!(
+                qualified.as_str(),
+                "List.map"
+                    | "List.filter"
+                    | "List.fold"
+                    | "List.find"
+                    | "Option.map"
+                    | "Result.map"
+            );
+            if is_hof {
+                return args.iter().all(|a| expr_can_jit(a, natives));
+            }
             if reg.lookup(&qualified).is_none() {
                 return false;
             }
-            // HOFs need VM — can't JIT them
+            // Non-inline HOFs still need VM — can't JIT them
             if let Some(id) = reg.lookup(&qualified)
                 && reg.is_hof(id)
             {

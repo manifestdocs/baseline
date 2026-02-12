@@ -171,6 +171,15 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_print_result",
     "jit_drain_arena",
     "jit_init_fn_table",
+    // HOF support helpers
+    "jit_list_length_raw",
+    "jit_list_get_raw",
+    "jit_alloc_buf",
+    "jit_build_list_from_buf",
+    "jit_make_some",
+    "jit_make_none",
+    "jit_make_ok",
+    "jit_is_truthy",
 ];
 
 /// Compiles an IrModule to native code via Cranelift.
@@ -235,6 +244,14 @@ pub fn compile_with_natives(
     builder.symbol("jit_print_result", jit_print_result as *const u8);
     builder.symbol("jit_drain_arena", jit_drain_arena as *const u8);
     builder.symbol("jit_init_fn_table", jit_init_fn_table as *const u8);
+    builder.symbol("jit_list_length_raw", jit_list_length_raw as *const u8);
+    builder.symbol("jit_list_get_raw", jit_list_get_raw as *const u8);
+    builder.symbol("jit_alloc_buf", jit_alloc_buf as *const u8);
+    builder.symbol("jit_build_list_from_buf", jit_build_list_from_buf as *const u8);
+    builder.symbol("jit_make_some", jit_make_some as *const u8);
+    builder.symbol("jit_make_none", jit_make_none as *const u8);
+    builder.symbol("jit_make_ok", jit_make_ok as *const u8);
+    builder.symbol("jit_is_truthy", jit_is_truthy as *const u8);
 
     let mut jit_module = JITModule::new(builder);
     let ptr_type = jit_module.target_config().pointer_type();
@@ -615,6 +632,38 @@ pub(super) fn make_helper_sig<M: Module>(
             // (table_ptr, count) -> u64
             sig.params.push(AbiParam::new(ptr_type));
             sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        // HOF support helpers
+        "jit_list_length_raw" => {
+            // (list_bits) -> i64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_list_get_raw" => {
+            // (list_bits, index: i64) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_alloc_buf" => {
+            // (count: i64) -> ptr
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(ptr_type));
+        }
+        "jit_build_list_from_buf" => {
+            // (buf: ptr, count: i64) -> u64
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_some" | "jit_make_ok" | "jit_is_truthy" => {
+            // (val) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_none" => {
+            // () -> u64
             sig.returns.push(AbiParam::new(types::I64));
         }
         _ => panic!("Unknown helper: {}", name),

@@ -1096,6 +1096,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             } => {
                 let qualified = format!("{}.{}", mod_name, method);
 
+                // HOF path: compile inline (works for both JIT and AOT)
+                if Self::is_inline_hof(&qualified) {
+                    return self.compile_hof(&qualified, args);
+                }
+
                 // AOT path: direct call to extern "C" symbol in libbaseline_rt
                 if let Some(native_ids) = self.aot_native_ids {
                     let func_id = native_ids
@@ -1317,72 +1322,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     .iter()
                     .map(|a| self.compile_expr(a))
                     .collect::<Result<Vec<_>, _>>()?;
-
-                // Check if closure or plain function
-                let is_closure = self.call_helper("jit_is_closure", &[callee_val]);
-                let zero = self.builder.ins().iconst(types::I64, 0);
-                let cmp = self.builder.ins().icmp(IntCC::NotEqual, is_closure, zero);
-
-                let closure_block = self.builder.create_block();
-                let function_block = self.builder.create_block();
-                let merge_block = self.builder.create_block();
-                self.builder.append_block_param(merge_block, types::I64);
-                self.builder.ins().brif(cmp, closure_block, &[], function_block, &[]);
-
-                // Closure path: call_indirect(sig_N+1, fn_ptr, [closure, args...])
-                self.builder.switch_to_block(closure_block);
-                self.builder.seal_block(closure_block);
-                let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
-                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
-                let zero_c = self.builder.ins().iconst(types::I64, 0);
-                let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
-                let call_closure_block = self.builder.create_block();
-                let null_closure_block = self.builder.create_block();
-                self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
-
-                self.builder.switch_to_block(null_closure_block);
-                self.builder.seal_block(null_closure_block);
-                let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_c)]);
-
-                self.builder.switch_to_block(call_closure_block);
-                self.builder.seal_block(call_closure_block);
-                let mut cargs = vec![callee_val];
-                cargs.extend(&compiled_args);
-                let closure_sig = self.build_indirect_sig(args.len() + 1);
-                let sig_ref_c = self.builder.import_signature(closure_sig);
-                let result_c = self.builder.ins().call_indirect(sig_ref_c, fn_ptr_c, &cargs);
-                let ret_c = self.builder.inst_results(result_c)[0];
-                self.builder.ins().jump(merge_block, &[BlockArg::Value(ret_c)]);
-
-                // Function path: call_indirect(sig_N, fn_ptr, [args...])
-                self.builder.switch_to_block(function_block);
-                self.builder.seal_block(function_block);
-                let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
-                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
-                let zero_f = self.builder.ins().iconst(types::I64, 0);
-                let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
-                let call_func_block = self.builder.create_block();
-                let null_func_block = self.builder.create_block();
-                self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
-
-                self.builder.switch_to_block(null_func_block);
-                self.builder.seal_block(null_func_block);
-                let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_f)]);
-
-                self.builder.switch_to_block(call_func_block);
-                self.builder.seal_block(call_func_block);
-                let func_sig = self.build_indirect_sig(args.len());
-                let sig_ref_f = self.builder.import_signature(func_sig);
-                let result_f = self.builder.ins().call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
-                let ret_f = self.builder.inst_results(result_f)[0];
-                self.builder.ins().jump(merge_block, &[BlockArg::Value(ret_f)]);
-
-                // Merge
-                self.builder.switch_to_block(merge_block);
-                self.builder.seal_block(merge_block);
-                Ok(self.builder.block_params(merge_block)[0])
+                self.compile_call_value(callee_val, &compiled_args)
             }
 
             Expr::TailCallIndirect { callee, args, .. } => {
@@ -1468,6 +1408,473 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         }
         sig.returns.push(AbiParam::new(types::I64));
         sig
+    }
+
+    // -- Indirect call dispatch (closure-vs-function) --
+
+    /// Call a value that may be a closure or plain function.
+    /// Handles: is_closure check → branch → closure path / function path → merge.
+    fn compile_call_value(
+        &mut self,
+        callee_val: CValue,
+        args: &[CValue],
+    ) -> Result<CValue, String> {
+        let is_closure = self.call_helper("jit_is_closure", &[callee_val]);
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        let cmp = self.builder.ins().icmp(IntCC::NotEqual, is_closure, zero);
+
+        let closure_block = self.builder.create_block();
+        let function_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+        self.builder
+            .ins()
+            .brif(cmp, closure_block, &[], function_block, &[]);
+
+        // Closure path: call_indirect(sig_N+1, fn_ptr, [closure, args...])
+        self.builder.switch_to_block(closure_block);
+        self.builder.seal_block(closure_block);
+        let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
+        let zero_c = self.builder.ins().iconst(types::I64, 0);
+        let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
+        let call_closure_block = self.builder.create_block();
+        let null_closure_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
+
+        self.builder.switch_to_block(null_closure_block);
+        self.builder.seal_block(null_closure_block);
+        let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(unit_c)]);
+
+        self.builder.switch_to_block(call_closure_block);
+        self.builder.seal_block(call_closure_block);
+        let mut cargs = vec![callee_val];
+        cargs.extend(args);
+        let closure_sig = self.build_indirect_sig(args.len() + 1);
+        let sig_ref_c = self.builder.import_signature(closure_sig);
+        let result_c = self.builder.ins().call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+        let ret_c = self.builder.inst_results(result_c)[0];
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(ret_c)]);
+
+        // Function path: call_indirect(sig_N, fn_ptr, [args...])
+        self.builder.switch_to_block(function_block);
+        self.builder.seal_block(function_block);
+        let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+        let zero_f = self.builder.ins().iconst(types::I64, 0);
+        let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
+        let call_func_block = self.builder.create_block();
+        let null_func_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
+
+        self.builder.switch_to_block(null_func_block);
+        self.builder.seal_block(null_func_block);
+        let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(unit_f)]);
+
+        self.builder.switch_to_block(call_func_block);
+        self.builder.seal_block(call_func_block);
+        let func_sig = self.build_indirect_sig(args.len());
+        let sig_ref_f = self.builder.import_signature(func_sig);
+        let result_f = self
+            .builder
+            .ins()
+            .call_indirect(sig_ref_f, fn_ptr_f, args);
+        let ret_f = self.builder.inst_results(result_f)[0];
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(ret_f)]);
+
+        // Merge
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(self.builder.block_params(merge_block)[0])
+    }
+
+    // -- HOF inline compilation --
+
+    /// Check if a qualified native name is a HOF we compile inline.
+    fn is_inline_hof(qualified: &str) -> bool {
+        matches!(
+            qualified,
+            "List.map"
+                | "List.filter"
+                | "List.fold"
+                | "List.find"
+                | "Option.map"
+                | "Result.map"
+        )
+    }
+
+    /// Compile a HOF call inline (no ABI bridging needed).
+    fn compile_hof(
+        &mut self,
+        qualified: &str,
+        args: &[Expr],
+    ) -> Result<CValue, String> {
+        match qualified {
+            "List.map" => self.compile_hof_list_map(args),
+            "List.filter" => self.compile_hof_list_filter(args),
+            "List.fold" => self.compile_hof_list_fold(args),
+            "List.find" => self.compile_hof_list_find(args),
+            "Option.map" => self.compile_hof_option_map(args),
+            "Result.map" => self.compile_hof_result_map(args),
+            _ => Err(format!("Unknown inline HOF: {}", qualified)),
+        }
+    }
+
+    /// List.map(list, fn) — loop: get item → call fn → store result → build list
+    fn compile_hof_list_map(&mut self, args: &[Expr]) -> Result<CValue, String> {
+        if args.len() != 2 {
+            return Err("List.map requires 2 arguments".into());
+        }
+        let list_val = self.compile_expr(&args[0])?;
+        let fn_val = self.compile_expr(&args[1])?;
+
+        let len = self.call_helper("jit_list_length_raw", &[list_val]);
+        let buf = self.call_helper("jit_alloc_buf", &[len]);
+
+        // Loop: i = 0; while i < len
+        let i_var = self.new_var();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(i_var, zero);
+
+        let header = self.builder.create_block();
+        let body = self.builder.create_block();
+        let done = self.builder.create_block();
+
+        self.builder.ins().jump(header, &[]);
+        self.builder.switch_to_block(header);
+
+        let i = self.builder.use_var(i_var);
+        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
+        self.builder.ins().brif(cmp, body, &[], done, &[]);
+
+        self.builder.switch_to_block(body);
+        self.builder.seal_block(body);
+
+        let i = self.builder.use_var(i_var);
+        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
+        let result = self.compile_call_value(fn_val, &[item])?;
+
+        // Store result at buf[i*8]
+        let i = self.builder.use_var(i_var);
+        let offset = self.builder.ins().imul_imm(i, 8);
+        let addr = self.builder.ins().iadd(buf, offset);
+        self.builder.ins().store(
+            cranelift_codegen::ir::MemFlags::new(),
+            result,
+            addr,
+            0,
+        );
+
+        // i++
+        let i = self.builder.use_var(i_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let next_i = self.builder.ins().iadd(i, one);
+        self.builder.def_var(i_var, next_i);
+        self.builder.ins().jump(header, &[]);
+
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.seal_block(header);
+
+        Ok(self.call_helper("jit_build_list_from_buf", &[buf, len]))
+    }
+
+    /// List.filter(list, fn) — loop: get item → call fn → if truthy, store → build list
+    fn compile_hof_list_filter(&mut self, args: &[Expr]) -> Result<CValue, String> {
+        if args.len() != 2 {
+            return Err("List.filter requires 2 arguments".into());
+        }
+        let list_val = self.compile_expr(&args[0])?;
+        let fn_val = self.compile_expr(&args[1])?;
+
+        let len = self.call_helper("jit_list_length_raw", &[list_val]);
+        let buf = self.call_helper("jit_alloc_buf", &[len]);
+
+        let i_var = self.new_var();
+        let out_var = self.new_var();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(i_var, zero);
+        self.builder.def_var(out_var, zero);
+
+        let header = self.builder.create_block();
+        let body = self.builder.create_block();
+        let store_block = self.builder.create_block();
+        let skip_block = self.builder.create_block();
+        let done = self.builder.create_block();
+
+        self.builder.ins().jump(header, &[]);
+        self.builder.switch_to_block(header);
+
+        let i = self.builder.use_var(i_var);
+        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
+        self.builder.ins().brif(cmp, body, &[], done, &[]);
+
+        self.builder.switch_to_block(body);
+        self.builder.seal_block(body);
+
+        let i = self.builder.use_var(i_var);
+        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
+        let pred_result = self.compile_call_value(fn_val, &[item])?;
+        let is_true = self.call_helper("jit_is_truthy", &[pred_result]);
+        let zero_cmp = self.builder.ins().iconst(types::I64, 0);
+        let truthy = self.builder.ins().icmp(IntCC::NotEqual, is_true, zero_cmp);
+        self.builder
+            .ins()
+            .brif(truthy, store_block, &[], skip_block, &[]);
+
+        // Store path
+        self.builder.switch_to_block(store_block);
+        self.builder.seal_block(store_block);
+        let out_idx = self.builder.use_var(out_var);
+        let offset = self.builder.ins().imul_imm(out_idx, 8);
+        let addr = self.builder.ins().iadd(buf, offset);
+        self.builder.ins().store(
+            cranelift_codegen::ir::MemFlags::new(),
+            item,
+            addr,
+            0,
+        );
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let next_out = self.builder.ins().iadd(out_idx, one);
+        self.builder.def_var(out_var, next_out);
+        self.builder.ins().jump(skip_block, &[]);
+
+        // Skip / continue
+        self.builder.switch_to_block(skip_block);
+        self.builder.seal_block(skip_block);
+        let i = self.builder.use_var(i_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let next_i = self.builder.ins().iadd(i, one);
+        self.builder.def_var(i_var, next_i);
+        self.builder.ins().jump(header, &[]);
+
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.seal_block(header);
+
+        let out_count = self.builder.use_var(out_var);
+        Ok(self.call_helper("jit_build_list_from_buf", &[buf, out_count]))
+    }
+
+    /// List.fold(list, init, fn) — loop: get item → call fn(acc, item) → update acc
+    fn compile_hof_list_fold(&mut self, args: &[Expr]) -> Result<CValue, String> {
+        if args.len() != 3 {
+            return Err("List.fold requires 3 arguments".into());
+        }
+        let list_val = self.compile_expr(&args[0])?;
+        let init_val = self.compile_expr(&args[1])?;
+        let fn_val = self.compile_expr(&args[2])?;
+
+        let len = self.call_helper("jit_list_length_raw", &[list_val]);
+
+        let i_var = self.new_var();
+        let acc_var = self.new_var();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(i_var, zero);
+        self.builder.def_var(acc_var, init_val);
+
+        let header = self.builder.create_block();
+        let body = self.builder.create_block();
+        let done = self.builder.create_block();
+
+        self.builder.ins().jump(header, &[]);
+        self.builder.switch_to_block(header);
+
+        let i = self.builder.use_var(i_var);
+        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
+        self.builder.ins().brif(cmp, body, &[], done, &[]);
+
+        self.builder.switch_to_block(body);
+        self.builder.seal_block(body);
+
+        let i = self.builder.use_var(i_var);
+        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
+        let acc = self.builder.use_var(acc_var);
+        let new_acc = self.compile_call_value(fn_val, &[acc, item])?;
+        self.builder.def_var(acc_var, new_acc);
+
+        let i = self.builder.use_var(i_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let next_i = self.builder.ins().iadd(i, one);
+        self.builder.def_var(i_var, next_i);
+        self.builder.ins().jump(header, &[]);
+
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.seal_block(header);
+
+        Ok(self.builder.use_var(acc_var))
+    }
+
+    /// List.find(list, fn) — loop: get item → call fn → if truthy, return Some(item)
+    fn compile_hof_list_find(&mut self, args: &[Expr]) -> Result<CValue, String> {
+        if args.len() != 2 {
+            return Err("List.find requires 2 arguments".into());
+        }
+        let list_val = self.compile_expr(&args[0])?;
+        let fn_val = self.compile_expr(&args[1])?;
+
+        let len = self.call_helper("jit_list_length_raw", &[list_val]);
+
+        let i_var = self.new_var();
+        let zero = self.builder.ins().iconst(types::I64, 0);
+        self.builder.def_var(i_var, zero);
+
+        let header = self.builder.create_block();
+        let body = self.builder.create_block();
+        let found_block = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.append_block_param(done, types::I64);
+
+        self.builder.ins().jump(header, &[]);
+        self.builder.switch_to_block(header);
+
+        let i = self.builder.use_var(i_var);
+        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
+        // If not found, jump to done with None
+        let none_val = self.call_helper("jit_make_none", &[]);
+        self.builder.ins().brif(
+            cmp,
+            body,
+            &[],
+            done,
+            &[BlockArg::Value(none_val)],
+        );
+
+        self.builder.switch_to_block(body);
+        self.builder.seal_block(body);
+
+        let i = self.builder.use_var(i_var);
+        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
+        let pred_result = self.compile_call_value(fn_val, &[item])?;
+        let is_true = self.call_helper("jit_is_truthy", &[pred_result]);
+        let zero_cmp = self.builder.ins().iconst(types::I64, 0);
+        let truthy = self.builder.ins().icmp(IntCC::NotEqual, is_true, zero_cmp);
+
+        let cont_block = self.builder.create_block();
+        self.builder
+            .ins()
+            .brif(truthy, found_block, &[], cont_block, &[]);
+
+        // Found: return Some(item)
+        self.builder.switch_to_block(found_block);
+        self.builder.seal_block(found_block);
+        let some_val = self.call_helper("jit_make_some", &[item]);
+        self.builder
+            .ins()
+            .jump(done, &[BlockArg::Value(some_val)]);
+
+        // Continue loop
+        self.builder.switch_to_block(cont_block);
+        self.builder.seal_block(cont_block);
+        let i = self.builder.use_var(i_var);
+        let one = self.builder.ins().iconst(types::I64, 1);
+        let next_i = self.builder.ins().iadd(i, one);
+        self.builder.def_var(i_var, next_i);
+        self.builder.ins().jump(header, &[]);
+
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.seal_block(header);
+
+        Ok(self.builder.block_params(done)[0])
+    }
+
+    /// Option.map(opt, fn) — if Some: call fn(payload) → Some(result); else None
+    fn compile_hof_option_map(&mut self, args: &[Expr]) -> Result<CValue, String> {
+        if args.len() != 2 {
+            return Err("Option.map requires 2 arguments".into());
+        }
+        let opt_val = self.compile_expr(&args[0])?;
+        let fn_val = self.compile_expr(&args[1])?;
+
+        let is_none = self.call_helper("jit_is_none", &[opt_val]);
+        let cmp = self.is_truthy(is_none);
+
+        let none_block = self.builder.create_block();
+        let some_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        self.builder
+            .ins()
+            .brif(cmp, none_block, &[], some_block, &[]);
+
+        // None path: pass through
+        self.builder.switch_to_block(none_block);
+        self.builder.seal_block(none_block);
+        let none_result = self.call_helper("jit_make_none", &[]);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(none_result)]);
+
+        // Some path: extract payload, call fn, wrap in Some
+        self.builder.switch_to_block(some_block);
+        self.builder.seal_block(some_block);
+        let payload = self.call_helper("jit_enum_payload", &[opt_val]);
+        let mapped = self.compile_call_value(fn_val, &[payload])?;
+        let some_result = self.call_helper("jit_make_some", &[mapped]);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(some_result)]);
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(self.builder.block_params(merge_block)[0])
+    }
+
+    /// Result.map(res, fn) — if Ok: call fn(payload) → Ok(result); else pass-through
+    fn compile_hof_result_map(&mut self, args: &[Expr]) -> Result<CValue, String> {
+        if args.len() != 2 {
+            return Err("Result.map requires 2 arguments".into());
+        }
+        let res_val = self.compile_expr(&args[0])?;
+        let fn_val = self.compile_expr(&args[1])?;
+
+        let is_err = self.call_helper("jit_is_err", &[res_val]);
+        let cmp = self.is_truthy(is_err);
+
+        let err_block = self.builder.create_block();
+        let ok_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        self.builder
+            .ins()
+            .brif(cmp, err_block, &[], ok_block, &[]);
+
+        // Err path: pass through as-is
+        self.builder.switch_to_block(err_block);
+        self.builder.seal_block(err_block);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(res_val)]);
+
+        // Ok path: extract payload, call fn, wrap in Ok
+        self.builder.switch_to_block(ok_block);
+        self.builder.seal_block(ok_block);
+        let payload = self.call_helper("jit_enum_payload", &[res_val]);
+        let mapped = self.compile_call_value(fn_val, &[payload])?;
+        let ok_result = self.call_helper("jit_make_ok", &[mapped]);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(ok_result)]);
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        Ok(self.builder.block_params(merge_block)[0])
     }
 
     /// Create MemFlags with `readonly` set.

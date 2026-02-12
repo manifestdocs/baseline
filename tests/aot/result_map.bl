@@ -1,0 +1,14 @@
+@prelude(core)
+
+fn double(x: Int) -> Int = x * 2
+
+fn format_result(res: Result<Int, String>) -> String = {
+  match res
+    Ok(x) -> "Ok(${x})"
+    Err(e) -> "Err(${e})"
+}
+
+fn main() -> String = {
+  let result = Result.map(Ok(21), double)
+  format_result(result)
+}
