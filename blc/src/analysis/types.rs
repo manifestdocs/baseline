@@ -370,7 +370,16 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
     if builtin_modules.contains(&"Env") {
         sigs.insert(
             "Env.get!".into(),
-            Type::Function(vec![Type::String], Box::new(Type::String)),
+            Type::Function(
+                vec![Type::String],
+                Box::new(Type::Enum(
+                    "Option".to_string(),
+                    vec![
+                        ("Some".to_string(), vec![Type::String]),
+                        ("None".to_string(), vec![]),
+                    ],
+                )),
+            ),
         );
         sigs.insert(
             "Env.set!".into(),
@@ -439,7 +448,16 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         );
         sigs.insert(
             "Map.get".into(),
-            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+            Type::Function(
+                vec![Type::Unknown, Type::Unknown],
+                Box::new(Type::Enum(
+                    "Option".to_string(),
+                    vec![
+                        ("Some".to_string(), vec![Type::Unknown]),
+                        ("None".to_string(), vec![]),
+                    ],
+                )),
+            ),
         );
         sigs.insert(
             "Map.has".into(),
@@ -471,6 +489,42 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         );
         sigs.insert(
             "Map.from_list".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+    }
+
+    // -- Set native methods (use Unknown for element type) --
+    if native_modules.contains(&"Set") {
+        sigs.insert(
+            "Set.empty".into(),
+            Type::Function(vec![], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Set.insert".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Set.remove".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Set.contains".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "Set.union".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Set.intersection".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Set.len".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "Set.from_list".into(),
             Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
         );
     }
@@ -623,6 +677,13 @@ fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
         sigs.insert(
             "String.char_code".into(),
             Type::Function(vec![Type::String], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "String.replace".into(),
+            Type::Function(
+                vec![Type::String, Type::String, Type::String],
+                Box::new(Type::String),
+            ),
         );
     }
 

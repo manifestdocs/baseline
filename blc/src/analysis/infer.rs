@@ -405,6 +405,27 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
+    // List.get : (List<A>, Int) -> Option<A>
+    schemas.insert(
+        "List.get".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone())), Type::Int],
+                    Box::new(Type::Enum(
+                        "Option".to_string(),
+                        vec![
+                            ("Some".to_string(), vec![a]),
+                            ("None".to_string(), vec![]),
+                        ],
+                    )),
+                )
+            },
+        },
+    );
+
     // Option.unwrap : (Option<A>) -> A
     schemas.insert(
         "Option.unwrap".into(),
@@ -473,6 +494,38 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                         "Option".to_string(),
                         vec![("Some".to_string(), vec![b]), ("None".to_string(), vec![])],
                     )),
+                )
+            },
+        },
+    );
+
+    // Option.flat_map : (Option<A>, (A) -> Option<B>) -> Option<B>
+    schemas.insert(
+        "Option.flat_map".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let b = ctx.fresh_var();
+                let option_b = Type::Enum(
+                    "Option".to_string(),
+                    vec![
+                        ("Some".to_string(), vec![b.clone()]),
+                        ("None".to_string(), vec![]),
+                    ],
+                );
+                Type::Function(
+                    vec![
+                        Type::Enum(
+                            "Option".to_string(),
+                            vec![
+                                ("Some".to_string(), vec![a.clone()]),
+                                ("None".to_string(), vec![]),
+                            ],
+                        ),
+                        Type::Function(vec![a], Box::new(option_b.clone())),
+                    ],
+                    Box::new(option_b),
                 )
             },
         },
@@ -549,6 +602,39 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                         "Result".to_string(),
                         vec![("Ok".to_string(), vec![b]), ("Err".to_string(), vec![e])],
                     )),
+                )
+            },
+        },
+    );
+
+    // Result.and_then : (Result<A,E>, (A) -> Result<B,E>) -> Result<B,E>
+    schemas.insert(
+        "Result.and_then".into(),
+        GenericSchema {
+            type_params: 3,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let b = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                let result_be = Type::Enum(
+                    "Result".to_string(),
+                    vec![
+                        ("Ok".to_string(), vec![b.clone()]),
+                        ("Err".to_string(), vec![e.clone()]),
+                    ],
+                );
+                Type::Function(
+                    vec![
+                        Type::Enum(
+                            "Result".to_string(),
+                            vec![
+                                ("Ok".to_string(), vec![a.clone()]),
+                                ("Err".to_string(), vec![e]),
+                            ],
+                        ),
+                        Type::Function(vec![a], Box::new(result_be.clone())),
+                    ],
+                    Box::new(result_be),
                 )
             },
         },

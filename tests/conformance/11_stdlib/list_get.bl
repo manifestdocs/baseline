@@ -1,0 +1,33 @@
+@prelude(core)
+
+// Conformance: List.get
+
+test "get in bounds" = {
+  match List.get([10, 20, 30], 1)
+    Some(v) -> v == 20
+    None -> false
+}
+
+test "get first" = {
+  match List.get([10, 20, 30], 0)
+    Some(v) -> v == 10
+    None -> false
+}
+
+test "get last" = {
+  match List.get([10, 20, 30], 2)
+    Some(v) -> v == 30
+    None -> false
+}
+
+test "get out of bounds" = {
+  Option.is_none(List.get([10, 20, 30], 5))
+}
+
+test "get negative" = {
+  Option.is_none(List.get([10, 20, 30], 0 - 1))
+}
+
+test "get empty list" = {
+  Option.is_none(List.get([], 0))
+}

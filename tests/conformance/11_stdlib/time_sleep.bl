@@ -1,0 +1,8 @@
+@prelude(script)
+
+// Conformance: Time.sleep!
+
+test "sleep zero completes" = {
+  Time.sleep!(0)
+  true
+}

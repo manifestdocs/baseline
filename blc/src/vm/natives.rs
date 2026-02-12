@@ -78,7 +78,9 @@ impl NativeRegistry {
                         | "List.fold"
                         | "List.find"
                         | "Option.map"
+                        | "Option.flat_map"
                         | "Result.map"
+                        | "Result.and_then"
                 )
             })
             .unwrap_or(false)
@@ -166,6 +168,9 @@ impl NativeRegistry {
         self.register("String.from_char_code", native_string_from_char_code);
         self.register("String.char_code", native_string_char_code);
 
+        // -- String (additional) --
+        self.register("String.replace", native_string_replace);
+
         // -- List (non-HOF) --
         self.register("List.length", native_list_length);
         self.register("List.head", native_list_head);
@@ -174,6 +179,7 @@ impl NativeRegistry {
         self.register("List.sort", native_list_sort);
         self.register("List.concat", native_list_concat);
         self.register("List.contains", native_list_contains);
+        self.register("List.get", native_list_get);
 
         // -- List (HOF) — these are placeholders; actual execution handled by VM --
         self.register("List.map", native_hof_placeholder);
@@ -187,6 +193,7 @@ impl NativeRegistry {
         self.register("Option.is_some", native_option_is_some);
         self.register("Option.is_none", native_option_is_none);
         self.register("Option.map", native_hof_placeholder);
+        self.register("Option.flat_map", native_hof_placeholder);
 
         // -- Result --
         self.register("Result.unwrap", native_result_unwrap);
@@ -194,10 +201,29 @@ impl NativeRegistry {
         self.register("Result.is_ok", native_result_is_ok);
         self.register("Result.is_err", native_result_is_err);
         self.register("Result.map", native_hof_placeholder);
+        self.register("Result.and_then", native_hof_placeholder);
 
         // -- Time --
         self.register("Time.now!", native_time_now);
         self.register("Time.now", native_time_now);
+        self.register("Time.sleep!", native_time_sleep);
+        self.register("Time.sleep", native_time_sleep);
+
+        // -- Random --
+        self.register("Random.int!", native_random_int);
+        self.register("Random.int", native_random_int);
+        self.register("Random.bool!", native_random_bool);
+        self.register("Random.bool", native_random_bool);
+
+        // -- Env --
+        self.register("Env.get!", native_env_get);
+        self.register("Env.get", native_env_get);
+        self.register("Env.set!", native_env_set);
+        self.register("Env.set", native_env_set);
+
+        // -- Console (read) --
+        self.register("Console.read_line!", native_console_read_line);
+        self.register("Console.read_line", native_console_read_line);
 
         // -- Int/String conversion --
         self.register("Int.to_string", native_int_to_string);
@@ -633,6 +659,17 @@ fn native_string_char_code(args: &[NValue]) -> Result<NValue, NativeError> {
     }
 }
 
+fn native_string_replace(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string(), args[2].as_string()) {
+        (Some(s), Some(old), Some(new)) => {
+            Ok(NValue::string(s.replace(&**old, &**new).into()))
+        }
+        _ => Err(NativeError(
+            "String.replace: expected (String, String, String)".into(),
+        )),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // List (non-HOF)
 // ---------------------------------------------------------------------------
@@ -735,6 +772,29 @@ fn native_list_contains(args: &[NValue]) -> Result<NValue, NativeError> {
         Some(items) => Ok(NValue::bool(items.contains(&args[1]))),
         None => Err(NativeError(format!(
             "List.contains: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
+fn native_list_get(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            if !args[1].is_any_int() {
+                return Err(NativeError(format!(
+                    "List.get: expected Int index, got {}",
+                    args[1]
+                )));
+            }
+            let idx = args[1].as_any_int();
+            if idx < 0 || idx as usize >= items.len() {
+                Ok(NValue::enum_val("None".into(), NValue::unit()))
+            } else {
+                Ok(NValue::enum_val("Some".into(), items[idx as usize].clone()))
+            }
+        }
+        None => Err(NativeError(format!(
+            "List.get: expected List, got {}",
             args[0]
         ))),
     }
@@ -867,6 +927,91 @@ fn native_time_now(_args: &[NValue]) -> Result<NValue, NativeError> {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     Ok(NValue::int(ms))
+}
+
+fn native_time_sleep(args: &[NValue]) -> Result<NValue, NativeError> {
+    if !args[0].is_any_int() {
+        return Err(NativeError(format!(
+            "Time.sleep!: expected Int (milliseconds), got {}",
+            args[0]
+        )));
+    }
+    let ms = args[0].as_any_int().max(0) as u64;
+    std::thread::sleep(std::time::Duration::from_millis(ms));
+    Ok(NValue::unit())
+}
+
+// ---------------------------------------------------------------------------
+// Random
+// ---------------------------------------------------------------------------
+
+fn native_random_int(args: &[NValue]) -> Result<NValue, NativeError> {
+    use rand::Rng;
+    if args.len() != 2 || !args[0].is_any_int() || !args[1].is_any_int() {
+        return Err(NativeError(
+            "Random.int!: expected (Int, Int)".into(),
+        ));
+    }
+    let lo = args[0].as_any_int();
+    let hi = args[1].as_any_int();
+    if lo > hi {
+        return Err(NativeError(format!(
+            "Random.int!: min ({}) > max ({})",
+            lo, hi
+        )));
+    }
+    let n = rand::thread_rng().gen_range(lo..=hi);
+    Ok(NValue::int(n))
+}
+
+fn native_random_bool(_args: &[NValue]) -> Result<NValue, NativeError> {
+    use rand::Rng;
+    Ok(NValue::bool(rand::thread_rng().gen_bool(0.5)))
+}
+
+// ---------------------------------------------------------------------------
+// Env
+// ---------------------------------------------------------------------------
+
+fn native_env_get(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(key) => match std::env::var(&**key) {
+            Ok(val) => Ok(NValue::enum_val("Some".into(), NValue::string(val.into()))),
+            Err(_) => Ok(NValue::enum_val("None".into(), NValue::unit())),
+        },
+        None => Err(NativeError(format!(
+            "Env.get!: expected String, got {}",
+            args[0]
+        ))),
+    }
+}
+
+fn native_env_set(args: &[NValue]) -> Result<NValue, NativeError> {
+    match (args[0].as_string(), args[1].as_string()) {
+        (Some(key), Some(val)) => {
+            // SAFETY: We control the single-threaded VM execution context.
+            unsafe { std::env::set_var(&**key, &**val) };
+            Ok(NValue::unit())
+        }
+        _ => Err(NativeError(
+            "Env.set!: expected (String, String)".into(),
+        )),
+    }
+}
+
+fn native_console_read_line(_args: &[NValue]) -> Result<NValue, NativeError> {
+    let mut input = String::new();
+    std::io::stdin()
+        .read_line(&mut input)
+        .map_err(|e| NativeError(format!("Console.read_line!: {}", e)))?;
+    // Trim trailing newline
+    if input.ends_with('\n') {
+        input.pop();
+        if input.ends_with('\r') {
+            input.pop();
+        }
+    }
+    Ok(NValue::string(input.into()))
 }
 
 // ---------------------------------------------------------------------------

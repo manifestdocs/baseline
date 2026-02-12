@@ -1,0 +1,21 @@
+@prelude(core)
+
+// Conformance: Map.get returns Option
+
+test "Map.get existing key returns Some" = {
+  let m = Map.insert(Map.empty(), "key", 42)
+  match Map.get(m, "key")
+    Some(v) -> v == 42
+    None -> false
+}
+
+test "Map.get missing key returns None" = {
+  let m = Map.empty()
+  Option.is_none(Map.get(m, "missing"))
+}
+
+test "Map.get after remove returns None" = {
+  let m = Map.insert(Map.empty(), "a", 1)
+  let m2 = Map.remove(m, "a")
+  Option.is_none(Map.get(m2, "a"))
+}

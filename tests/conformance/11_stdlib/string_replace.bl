@@ -1,0 +1,23 @@
+@prelude(core)
+
+// Conformance: String.replace
+
+test "basic replace" = {
+  String.replace("hello world", "world", "earth") == "hello earth"
+}
+
+test "no match returns original" = {
+  String.replace("hello", "xyz", "abc") == "hello"
+}
+
+test "multiple occurrences" = {
+  String.replace("aabaa", "a", "x") == "xxbxx"
+}
+
+test "replace with empty" = {
+  String.replace("hello", "l", "") == "heo"
+}
+
+test "replace empty pattern" = {
+  String.length(String.replace("hi", "", "-")) > 2
+}

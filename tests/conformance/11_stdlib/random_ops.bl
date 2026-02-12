@@ -1,0 +1,18 @@
+@prelude(script)
+
+// Conformance: Random module operations
+
+test "random int in range" = {
+  let n = Random.int!(1, 10)
+  n >= 1 && n <= 10
+}
+
+test "random int range single" = {
+  let n = Random.int!(5, 5)
+  n == 5
+}
+
+test "random bool is boolean" = {
+  let b = Random.bool!()
+  b == true || b == false
+}

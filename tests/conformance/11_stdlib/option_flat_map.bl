@@ -1,0 +1,24 @@
+@prelude(core)
+
+// Conformance: Option.flat_map
+
+fn safe_div(x: Int, y: Int) -> Option<Int> =
+  if y == 0 then None
+  else Some(x / y)
+
+test "flat_map Some chain" = {
+  let result = Option.flat_map(Some(10), |x| safe_div(x, 2))
+  match result
+    Some(v) -> v == 5
+    None -> false
+}
+
+test "flat_map None short-circuits" = {
+  let result = Option.flat_map(None, |x| Some(x + 1))
+  Option.is_none(result)
+}
+
+test "flat_map returning None" = {
+  let result = Option.flat_map(Some(10), |x| safe_div(x, 0))
+  Option.is_none(result)
+}

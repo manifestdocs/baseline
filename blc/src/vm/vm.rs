@@ -1306,6 +1306,7 @@ impl Vm {
                         });
                     }
 
+                    eprintln!("[DEBUG] Continuation resume: pushing resume_value={:?}, new_ip={}, new_ci={}", resume_value, r_ip, r_ci);
                     self.stack.push(resume_value);
 
                     let new_ip = r_ip as usize;
@@ -1785,6 +1786,7 @@ impl Vm {
                     }
                 };
                 let n = *arg_count as usize;
+                eprintln!("[DEBUG] PerformEffect: key={}, n={}", key, n);
 
                 let (effect_name, method_name) = if let Some(dot) = key.find('.') {
                     (&key[..dot], &key[dot + 1..])
@@ -1820,9 +1822,16 @@ impl Vm {
                     }
                 }
 
+                eprintln!("[DEBUG] PerformEffect: handler_stack.len={}, boundaries.len={}", self.handler_stack.len(), self.handler_boundaries.len());
+                for (i, b) in self.handler_boundaries.iter().enumerate() {
+                    eprintln!("[DEBUG]   boundary[{}]: handler_stack_idx={}", i, b.handler_stack_idx);
+                }
+                eprintln!("[DEBUG]   found_handler={}, found_boundary_idx={:?}", found_handler.is_some(), found_boundary_idx);
+
                 if let Some(handler_fn) = found_handler {
                     if let Some(bi) = found_boundary_idx {
                         // Resumable handler: capture continuation
+                        eprintln!("[DEBUG] PerformEffect: resumable handler found, boundary={bi}");
                         let boundary = &self.handler_boundaries[bi];
                         let bd_stack = boundary.stack_depth;
                         let bd_frame = boundary.frame_depth;
@@ -1888,6 +1897,7 @@ impl Vm {
                         self.stack.push(cont);
 
                         let total_args = n + 1;
+                        eprintln!("[DEBUG] PerformEffect: calling handler with {} total args, stack.len={}", total_args, self.stack.len());
                         if handler_fn.is_function() {
                             let fn_idx = handler_fn.as_function();
                             let new_base = (self.stack.len() - total_args) as u32;
@@ -2253,6 +2263,90 @@ impl Vm {
                     _ => {
                         return Err(self.error(
                             "Result.map: first arg must be Result".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                }
+            }
+            "Option.flat_map" => {
+                if arg_count != 2 {
+                    return Err(self.error(
+                        "Option.flat_map: expected 2 arguments".into(),
+                        line,
+                        col,
+                    ));
+                }
+                let func = self.pop(line, col)?;
+                let opt = self.pop(line, col)?;
+                if !opt.is_heap() {
+                    return Err(self.error(
+                        "Option.flat_map: first arg must be Option".into(),
+                        line,
+                        col,
+                    ));
+                }
+                match opt.as_heap_ref() {
+                    HeapObject::Enum { tag, payload, .. } if &**tag == "Some" => {
+                        let result = self.call_nvalue(
+                            &func,
+                            std::slice::from_ref(payload),
+                            chunks,
+                            line,
+                            col,
+                        )?;
+                        // flat_map: function returns Option directly, no wrapping
+                        self.stack.push(result);
+                    }
+                    HeapObject::Enum { tag, .. } if &**tag == "None" => {
+                        self.stack
+                            .push(NValue::enum_val("None".into(), NValue::unit()));
+                    }
+                    _ => {
+                        return Err(self.error(
+                            "Option.flat_map: first arg must be Option".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                }
+            }
+            "Result.and_then" => {
+                if arg_count != 2 {
+                    return Err(self.error(
+                        "Result.and_then: expected 2 arguments".into(),
+                        line,
+                        col,
+                    ));
+                }
+                let func = self.pop(line, col)?;
+                let res = self.pop(line, col)?;
+                if !res.is_heap() {
+                    return Err(self.error(
+                        "Result.and_then: first arg must be Result".into(),
+                        line,
+                        col,
+                    ));
+                }
+                match res.as_heap_ref() {
+                    HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
+                        let result = self.call_nvalue(
+                            &func,
+                            std::slice::from_ref(payload),
+                            chunks,
+                            line,
+                            col,
+                        )?;
+                        // and_then: function returns Result directly, no wrapping
+                        self.stack.push(result);
+                    }
+                    HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
+                        self.stack
+                            .push(NValue::enum_val("Err".into(), payload.clone()));
+                    }
+                    _ => {
+                        return Err(self.error(
+                            "Result.and_then: first arg must be Result".into(),
                             line,
                             col,
                         ));

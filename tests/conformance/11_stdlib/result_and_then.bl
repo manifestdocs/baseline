@@ -1,0 +1,25 @@
+@prelude(core)
+
+// Conformance: Result.and_then
+
+fn parse_positive(s: String) -> Result<Int, String> =
+  match String.to_int(s)
+    Some(n) -> if n > 0 then Ok(n) else Err("not positive")
+    None -> Err("not a number")
+
+test "and_then Ok chain" = {
+  let result = Result.and_then(Ok(42), |x| Ok(x * 2))
+  match result
+    Ok(v) -> v == 84
+    Err(_) -> false
+}
+
+test "and_then Err short-circuits" = {
+  let result = Result.and_then(Err("bad"), |x| Ok(x + 1))
+  Result.is_err(result)
+}
+
+test "and_then returning Err" = {
+  let result = Result.and_then(Ok("hello"), |s| parse_positive(s))
+  Result.is_err(result)
+}

@@ -1,0 +1,14 @@
+@prelude(script)
+
+// Conformance: Env module operations
+
+test "env set and get roundtrip" = {
+  Env.set!("BL_TEST_VAR", "hello123")
+  match Env.get!("BL_TEST_VAR")
+    Some(v) -> v == "hello123"
+    None -> false
+}
+
+test "env get missing returns None" = {
+  Option.is_none(Env.get!("BL_NONEXISTENT_VAR_12345"))
+}
