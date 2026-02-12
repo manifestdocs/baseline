@@ -17,7 +17,7 @@ use tokio::sync::Semaphore;
 use crate::vm::chunk::{Chunk, CompileError};
 use crate::vm::nvalue::NValue;
 use crate::vm::sendable::{SendableHandler, SendableValue};
-use crate::vm::vm::Vm;
+use crate::vm::exec::Vm;
 
 /// Configuration for the async executor.
 #[derive(Clone)]

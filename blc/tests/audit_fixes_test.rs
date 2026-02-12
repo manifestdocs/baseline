@@ -51,7 +51,7 @@ fn test_check_result_has_verification_level() {
 
 #[test]
 fn test_vm_instruction_limit() {
-    use blc::vm::vm::Vm;
+    use blc::vm::exec::Vm;
 
     // Create VM with limit
     let vm = Vm::with_instruction_limit(1000);

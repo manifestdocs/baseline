@@ -271,7 +271,7 @@ fn run_file_vm(file: &PathBuf) {
         Some(type_map)
     };
 
-    let mut vm_instance = vm::vm::Vm::new();
+    let mut vm_instance = vm::exec::Vm::new();
 
     let program = if imports.is_empty() {
         // Use the new IR pipeline: CST → lower → codegen → Program
@@ -342,7 +342,7 @@ fn run_file_jit(file: &PathBuf) {
         Some(type_map)
     };
 
-    let vm_instance = vm::vm::Vm::new();
+    let vm_instance = vm::exec::Vm::new();
     let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
     let ir_module = match lowerer.lower_module(&root) {
         Ok(m) => m,
@@ -473,7 +473,7 @@ fn build_file_aot(file: &PathBuf, output: Option<&Path>, trace: bool) {
     }
 
     // Lower to IR + optimize
-    let vm_instance = vm::vm::Vm::new();
+    let vm_instance = vm::exec::Vm::new();
     let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), Some(type_map));
     let ir_module = match lowerer.lower_module(&root) {
         Ok(m) => m,

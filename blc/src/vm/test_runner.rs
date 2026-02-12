@@ -11,7 +11,7 @@ use super::codegen::Codegen;
 use super::lower::Lowerer;
 use super::natives::NativeRegistry;
 use super::value::Value;
-use super::vm::Vm;
+use super::exec::Vm;
 
 /// Run inline tests using the bytecode VM.
 pub fn run_test_file(path: &Path) -> TestSuiteResult {

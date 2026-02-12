@@ -50,7 +50,7 @@ fuzz_target!(|data: &[u8]| {
     let root = tree.root_node();
 
     // Create a VM with strict instruction limit for fuzzing
-    let mut vm = blc::vm::vm::Vm::with_instruction_limit(100_000);
+    let mut vm = blc::vm::exec::Vm::with_instruction_limit(100_000);
 
     // Try to compile the source to IR
     let (_type_diags, type_map) = blc::analysis::check_types_with_map(&root, source, "<fuzz>");

@@ -18,5 +18,4 @@ pub mod radix;
 pub mod sendable;
 pub mod test_runner;
 pub use baseline_rt::value;
-#[allow(clippy::module_inception)]
-pub mod vm;
+pub mod exec;

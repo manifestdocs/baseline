@@ -25,7 +25,7 @@ use tokio::sync::Semaphore;
 use crate::vm::nvalue::NValue;
 use crate::vm::radix::{ParamCollector, RadixNode, SmallParams};
 use crate::vm::value::RcStr;
-use crate::vm::vm::Vm;
+use crate::vm::exec::Vm;
 
 // Thread-local VM for inline handler execution on Tokio worker threads.
 thread_local! {

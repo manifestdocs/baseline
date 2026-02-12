@@ -1398,7 +1398,7 @@ mod tests {
     use super::*;
     use crate::vm::lower::Lowerer;
     use crate::vm::value::Value;
-    use crate::vm::vm::Vm;
+    use crate::vm::exec::Vm;
 
     fn eval_via_ir(source: &str) -> Value {
         let mut parser = tree_sitter::Parser::new();
