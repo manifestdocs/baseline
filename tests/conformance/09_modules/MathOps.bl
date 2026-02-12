@@ -1,0 +1,5 @@
+@prelude(core)
+
+import MathHelpers
+
+fn square_plus_one(x: Int) -> Int = MathHelpers.increment(MathHelpers.square(x))

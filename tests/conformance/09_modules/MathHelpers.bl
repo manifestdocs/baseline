@@ -1,0 +1,5 @@
+@prelude(core)
+
+fn square(x: Int) -> Int = x * x
+
+fn increment(x: Int) -> Int = x + 1

@@ -56,7 +56,22 @@ fn discover_files(dir: &Path) -> Vec<PathBuf> {
 
 fn is_helper_file(path: &Path) -> bool {
     let name = path.file_name().unwrap().to_str().unwrap();
-    name == "util.bl"
+    if name == "util.bl" {
+        return true;
+    }
+    // In the modules directory, files without fn main are support modules (not test targets)
+    let parent = path
+        .parent()
+        .and_then(|p| p.file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("");
+    if parent == "09_modules" {
+        let content = std::fs::read_to_string(path).unwrap_or_default();
+        if !content.contains("fn main") {
+            return true;
+        }
+    }
+    false
 }
 
 fn is_negative_test(path: &Path) -> bool {

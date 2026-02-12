@@ -1,0 +1,5 @@
+@prelude(core)
+
+import Base
+
+fn left_op(x: Int) -> Int = Base.triple(x) + 1

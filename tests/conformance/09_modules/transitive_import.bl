@@ -1,0 +1,6 @@
+@prelude(core)
+
+import MathOps
+
+fn main() -> Int = MathOps.square_plus_one(5)
+// expect: 26

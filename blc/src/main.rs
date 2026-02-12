@@ -246,9 +246,22 @@ fn run_file_vm(file: &PathBuf) {
     let tree = parser.parse(&source, None).expect("Failed to parse");
     let root = tree.root_node();
 
+    let imports = resolver::ModuleLoader::parse_imports(&root, &source);
+
     // Run the type checker to build a TypeMap for opcode specialization.
-    // If analysis produces errors, degrade gracefully (compile without TypeMap).
-    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    // For files with imports, use the loader-aware variant for transitive import support.
+    let (type_diags, type_map) = if imports.is_empty() {
+        blc::analysis::check_types_with_map(&root, &source, &file_str)
+    } else {
+        let base_dir = file.parent().expect("Cannot determine base directory");
+        let mut loader = resolver::ModuleLoader::with_base_dir(base_dir.to_path_buf());
+        blc::analysis::check_types_with_loader_and_map(
+            &root,
+            &source,
+            &file_str,
+            Some(&mut loader),
+        )
+    };
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
@@ -260,7 +273,6 @@ fn run_file_vm(file: &PathBuf) {
 
     let mut vm_instance = vm::vm::Vm::new();
 
-    let imports = resolver::ModuleLoader::parse_imports(&root, &source);
     let program = if imports.is_empty() {
         // Use the new IR pipeline: CST → lower → codegen → Program
         let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);

@@ -109,13 +109,17 @@ impl<'a> Codegen<'a> {
     }
 
     /// Generate chunks for a module (no entry point). Returns chunks and name→index map.
+    /// If `set_pre_compiled` was called first, the module's functions are appended after
+    /// existing chunks and can reference pre-compiled functions by name.
     pub fn generate_module(
         mut self,
         functions: &[IrFunction],
     ) -> Result<(Vec<Chunk>, HashMap<String, usize>), CompileError> {
-        // First pass: register names
+        let chunk_offset = self.compiled_chunks.len();
+
+        // First pass: register names (offset by pre-compiled chunks)
         for (i, func) in functions.iter().enumerate() {
-            self.functions.insert(func.name.clone(), i);
+            self.functions.insert(func.name.clone(), chunk_offset + i);
         }
 
         // Pre-allocate
@@ -135,7 +139,7 @@ impl<'a> Codegen<'a> {
 
             self.gen_expr(&func.body, &func.span)?;
             let chunk = self.finish_chunk();
-            self.compiled_chunks[i] = chunk;
+            self.compiled_chunks[chunk_offset + i] = chunk;
         }
 
         Ok((self.compiled_chunks, self.functions))
@@ -1033,6 +1037,7 @@ impl<'a> Codegen<'a> {
             }
         }
 
+        let all_tail_resumptive = clauses.iter().all(|c| c.is_tail_resumptive);
         for (effect_name, methods) in &grouped {
             let eff_key = self
                 .chunk
@@ -1046,26 +1051,64 @@ impl<'a> Codegen<'a> {
                 self.emit(Op::LoadConst(mk), span);
 
                 // Compile handler body as a lambda.
-                // For non-tail-resumptive, add `resume` as the last parameter.
+                // The lambda parameters depend on whether we use PushHandler
+                // (all tail-resumptive) or PushResumableHandler (mixed).
                 let mut lambda_params: Vec<String> = clause.params.clone();
-                if !clause.is_tail_resumptive {
+                if all_tail_resumptive {
+                    // PushHandler path: no continuation arg passed by VM.
+                    // Strip resume(expr) wrapper — just compile the inner expr.
+                    let body = Self::strip_tail_resume(&clause.body);
+                    self.gen_lambda(&lambda_params, body, span)?;
+                } else {
+                    // PushResumableHandler path: VM always passes resume
+                    // continuation as the last arg to ALL handlers.
                     lambda_params.push("resume".to_string());
+                    if clause.is_tail_resumptive {
+                        // Tail-resumptive in mixed block: accept resume param
+                        // but strip the resume() call, just return the inner expr.
+                        let body = Self::strip_tail_resume(&clause.body);
+                        self.gen_lambda(&lambda_params, body, span)?;
+                    } else {
+                        self.gen_lambda(&lambda_params, &clause.body, span)?;
+                    }
                 }
-                self.gen_lambda(&lambda_params, &clause.body, span)?;
             }
             self.emit(Op::MakeRecord(methods.len() as u16), span);
         }
         self.emit(Op::MakeRecord(grouped.len() as u16), span);
-        let handler_idx = self.emit(Op::PushResumableHandler(0), span);
 
-        self.gen_expr(body, span)?;
 
-        self.emit(Op::PopHandler, span);
-        // Patch the skip offset for abort handlers
-        let after_pop = self.chunk.code.len();
-        let skip = (after_pop - handler_idx - 1) as u16;
-        self.chunk.code[handler_idx] = Op::PushResumableHandler(skip);
+        eprintln!("[DEBUG codegen] all_tail_resumptive={}, clauses={}", all_tail_resumptive, clauses.len());
+        if all_tail_resumptive {
+            // All handlers are tail-resumptive: no continuation capture needed.
+            // Use PushHandler/PopHandler (like `with` form).
+            self.emit(Op::PushHandler, span);
+            self.gen_expr(body, span)?;
+            self.emit(Op::PopHandler, span);
+        } else {
+            // At least one handler needs resume: use PushResumableHandler.
+            // The VM will pass a resume continuation to ALL handlers uniformly,
+            // so even tail-resumptive ones need a `resume` param to accept it
+            // (they just won't use it — the caller discards it on return).
+            let handler_idx = self.emit(Op::PushResumableHandler(0), span);
+            self.gen_expr(body, span)?;
+            self.emit(Op::PopHandler, span);
+            // Patch the skip offset for abort handlers
+            let after_pop = self.chunk.code.len();
+            let skip = (after_pop - handler_idx - 1) as u16;
+            self.chunk.code[handler_idx] = Op::PushResumableHandler(skip);
+        }
         Ok(())
+    }
+
+    /// Strip the `resume(expr)` wrapper from a tail-resumptive handler body.
+    /// Returns the inner expression (the argument to resume).
+    fn strip_tail_resume(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::CallIndirect { args, .. } if args.len() == 1 => &args[0],
+            Expr::Block(stmts, _) if stmts.len() == 1 => Self::strip_tail_resume(&stmts[0]),
+            _ => expr,
+        }
     }
 
     fn gen_perform_effect(

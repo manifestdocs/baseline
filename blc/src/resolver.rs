@@ -251,12 +251,8 @@ impl ModuleLoader {
     ) -> Result<usize, Diagnostic> {
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
-        // Check cache
-        if let Some(&idx) = self.loaded.get(&canonical) {
-            return Ok(idx);
-        }
-
-        // Check for circular imports
+        // Check for circular imports BEFORE cache — a cached module that's still
+        // on the resolution stack means we're in a cycle (e.g., A imports B imports A).
         if self.resolution_stack.contains(&canonical) {
             let cycle = self
                 .resolution_stack
@@ -276,6 +272,11 @@ impl ModuleLoader {
                 context: "Modules cannot import each other in a cycle.".to_string(),
                 suggestions: vec![],
             });
+        }
+
+        // Check cache (after cycle check — a cached module not on the stack is safe)
+        if let Some(&idx) = self.loaded.get(&canonical) {
+            return Ok(idx);
         }
 
         // Read source
@@ -315,15 +316,14 @@ impl ModuleLoader {
             });
         }
 
-        // Push to resolution stack for cycle detection during recursive loads
+        // Push to resolution stack for cycle detection during recursive loads.
+        // The caller is responsible for popping via pop_resolution() after
+        // all transitive imports of this module have been resolved.
         self.resolution_stack.push(canonical.clone());
 
         let idx = self.modules.len();
         self.modules.push((canonical.clone(), source, tree));
         self.loaded.insert(canonical.clone(), idx);
-
-        // Pop from resolution stack
-        self.resolution_stack.retain(|p| p != &canonical);
 
         Ok(idx)
     }

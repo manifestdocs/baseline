@@ -15,4 +15,5 @@ pub use smt::check_specs;
 pub use types::check_types;
 pub use types::check_types_with_loader;
 pub use types::check_types_with_map;
+pub use types::check_types_with_loader_and_map;
 pub use types::{Type, TypeMap};

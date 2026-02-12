@@ -1,0 +1,5 @@
+@prelude(core)
+
+import CycleB
+
+fn foo(x: Int) -> Int = CycleB.bar(x)

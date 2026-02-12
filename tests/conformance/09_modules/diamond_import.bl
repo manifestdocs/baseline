@@ -1,0 +1,7 @@
+@prelude(core)
+
+import Left
+import Right
+
+fn main() -> Int = Left.left_op(10) + Right.right_op(10)
+// expect: 63

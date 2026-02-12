@@ -1165,6 +1165,49 @@ pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagn
     (diagnostics, type_map)
 }
 
+/// Run the type checker with import support and return both diagnostics and a TypeMap.
+/// Combines `check_types_with_loader` (import handling) with `check_types_with_map` (TypeMap).
+pub fn check_types_with_loader_and_map(
+    root: &Node,
+    source: &str,
+    file: &str,
+    loader: Option<&mut ModuleLoader>,
+) -> (Vec<Diagnostic>, TypeMap) {
+    let mut diagnostics = Vec::new();
+
+    let prelude = match prelude::extract_prelude(root, source) {
+        Ok(p) => p,
+        Err(msg) => {
+            diagnostics.push(Diagnostic {
+                code: "PRE_001".to_string(),
+                severity: Severity::Error,
+                location: Location {
+                    file: file.to_string(),
+                    line: 1,
+                    col: 1,
+                    end_line: None,
+                    end_col: None,
+                },
+                message: msg,
+                context: "Valid prelude variants are: core, script.".to_string(),
+                suggestions: vec![],
+            });
+            return (diagnostics, TypeMap::new());
+        }
+    };
+
+    let mut symbols = SymbolTable::with_prelude(prelude);
+
+    if let Some(loader) = loader {
+        process_imports(root, source, file, loader, &mut symbols, &mut diagnostics);
+    }
+
+    collect_signatures(root, source, &mut symbols);
+    check_node(root, source, file, &mut symbols, &mut diagnostics);
+    let type_map = symbols.type_map;
+    (diagnostics, type_map)
+}
+
 /// CGP type-check result: diagnostics, type map, visible bindings, and module methods.
 pub struct CgpTypeInfo {
     pub diagnostics: Vec<Diagnostic>,
@@ -1261,6 +1304,8 @@ fn process_imports(
                 &mod_file_owned,
                 Some(loader),
             );
+            // Pop the resolution stack now that this module's transitive imports are resolved
+            loader.pop_resolution(&file_path);
             let has_errors = mod_diagnostics
                 .iter()
                 .any(|d| d.severity == Severity::Error);

@@ -519,3 +519,39 @@ fn vm_run_conformance_wildcard_import() {
     assert_eq!(out.stdout, "11\n", "VM wildcard_import: stdout mismatch");
 }
 
+#[test]
+fn vm_run_transitive_import() {
+    let out = blc_run_conformance("09_modules/transitive_import.bl");
+    assert_eq!(
+        out.exit_code, 0,
+        "VM transitive_import: exit {}.\nstderr: {}",
+        out.exit_code, out.stderr
+    );
+    assert_eq!(out.stdout, "26\n", "VM transitive_import: stdout mismatch");
+}
+
+#[test]
+fn vm_run_diamond_import() {
+    let out = blc_run_conformance("09_modules/diamond_import.bl");
+    assert_eq!(
+        out.exit_code, 0,
+        "VM diamond_import: exit {}.\nstderr: {}",
+        out.exit_code, out.stderr
+    );
+    assert_eq!(out.stdout, "63\n", "VM diamond_import: stdout mismatch");
+}
+
+#[test]
+fn vm_run_circular_import_detected() {
+    let out = blc_run_conformance("09_modules/CycleA.bl");
+    assert_ne!(
+        out.exit_code, 0,
+        "VM circular import should fail but exited 0"
+    );
+    assert!(
+        out.stderr.contains("Circular import detected"),
+        "VM circular import stderr should mention cycle:\n{}",
+        out.stderr
+    );
+}
+
