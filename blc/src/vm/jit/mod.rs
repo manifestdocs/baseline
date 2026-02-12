@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use cranelift_codegen::ir::{AbiParam, InstBuilder, types};
 use cranelift_codegen::isa::CallConv;
 use cranelift_codegen::settings::{self, Configurable};
-use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext, Variable};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{FuncId, Linkage, Module};
 
@@ -52,6 +52,8 @@ pub struct JitProgram {
     /// Entry wrapper pointer (platform-default CC, safe to call via transmute).
     /// All language functions use Tail CC; this wrapper bridges to the host ABI.
     entry_wrapper: *const u8,
+    /// Whether RC codegen is enabled (scope-based incref/decref).
+    rc_enabled: bool,
 }
 
 // SAFETY: JitProgram is Send because:
@@ -92,16 +94,29 @@ impl JitProgram {
             .collect();
         helpers::set_fn_table(fn_table);
 
+        // Enable RC mode if this program was compiled with RC.
+        // In RC mode, allocation helpers use mem::forget instead of arena push.
+        if self.rc_enabled {
+            helpers::jit_set_rc_mode(true);
+        }
+
         // RAII guard: ensures fn_table and arena are cleaned up on panic.
         // On the normal path, we drop it explicitly after extracting the return value.
-        struct CleanupGuard;
+        let rc_enabled = self.rc_enabled;
+        struct CleanupGuard {
+            rc_enabled: bool,
+        }
         impl Drop for CleanupGuard {
             fn drop(&mut self) {
                 helpers::clear_fn_table();
-                drop(helpers::jit_arena_drain());
+                if self.rc_enabled {
+                    helpers::jit_set_rc_mode(false);
+                } else {
+                    drop(helpers::jit_arena_drain());
+                }
             }
         }
-        let guard = CleanupGuard;
+        let guard = CleanupGuard { rc_enabled };
 
         let raw = func();
 
@@ -116,6 +131,14 @@ impl JitProgram {
             // borrow_from_raw clones the value, bumping Arc refcount.
             unsafe { NValue::borrow_from_raw(raw) }
         };
+
+        // RC mode: release the JIT code's ownership of the return value.
+        // borrow_from_raw bumped the refcount, so we now have two refs:
+        // one from jit_own (mem::forget) and one from borrow_from_raw.
+        // Decref releases the JIT ownership; `result` keeps the Rust ownership.
+        if self.rc_enabled && !self.entry_unboxed {
+            jit_rc_decref(raw);
+        }
 
         // Drop guard: clears fn_table and drains arena (frees intermediate heap values).
         // The return value survives because we already cloned it above.
@@ -180,11 +203,21 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_make_none",
     "jit_make_ok",
     "jit_is_truthy",
+    // Reference counting helpers
+    "jit_rc_incref",
+    "jit_rc_decref",
 ];
 
 /// Compiles an IrModule to native code via Cranelift.
 pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
-    compile_with_natives(module, trace, None)
+    compile_inner(module, trace, None, false)
+}
+
+/// Compiles an IrModule with RC-enabled codegen.
+/// Allocation helpers use mem::forget (caller owns refcount via raw bits).
+/// Codegen emits jit_rc_incref/jit_rc_decref at scope boundaries.
+pub fn compile_rc(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
+    compile_inner(module, trace, None, true)
 }
 
 /// Compiles an IrModule to native code, optionally with a NativeRegistry
@@ -193,6 +226,15 @@ pub fn compile_with_natives(
     module: &IrModule,
     trace: bool,
     natives: Option<&NativeRegistry>,
+) -> Result<JitProgram, String> {
+    compile_inner(module, trace, natives, false)
+}
+
+fn compile_inner(
+    module: &IrModule,
+    trace: bool,
+    natives: Option<&NativeRegistry>,
+    rc_enabled: bool,
 ) -> Result<JitProgram, String> {
     let mut flag_builder = settings::builder();
     flag_builder
@@ -252,6 +294,8 @@ pub fn compile_with_natives(
     builder.symbol("jit_make_none", jit_make_none as *const u8);
     builder.symbol("jit_make_ok", jit_make_ok as *const u8);
     builder.symbol("jit_is_truthy", jit_is_truthy as *const u8);
+    builder.symbol("jit_rc_incref", jit_rc_incref as *const u8);
+    builder.symbol("jit_rc_decref", jit_rc_decref as *const u8);
 
     let mut jit_module = JITModule::new(builder);
     let ptr_type = jit_module.target_config().pointer_type();
@@ -379,7 +423,18 @@ pub fn compile_with_natives(
                 sra_records: HashMap::new(),
                 aot_strings: None,
                 aot_native_ids: None,
+                rc_enabled,
+                rc_scope_stack: Vec::new(),
             };
+
+            // RC: push function-level scope with parameter variables
+            if rc_enabled && !is_unboxed {
+                ctx.push_rc_scope();
+                let pvars: Vec<Variable> = ctx.param_vars.clone();
+                for pv in pvars {
+                    ctx.rc_track_var(pv);
+                }
+            }
 
             let result = if is_unboxed {
                 // Unboxed fast path: compile with raw i64 internally.
@@ -388,6 +443,25 @@ pub fn compile_with_natives(
             } else {
                 ctx.compile_expr(&func.body)
             };
+
+            // RC: pop function-level scope, decref params except return value
+            let result = if rc_enabled && !is_unboxed {
+                match result {
+                    Ok(ret_val) => {
+                        let ret_var = ctx.new_var();
+                        ctx.builder.def_var(ret_var, ret_val);
+                        ctx.pop_rc_scope(Some(ret_var));
+                        Ok(ctx.builder.use_var(ret_var))
+                    }
+                    err => {
+                        ctx.pop_rc_scope(None);
+                        err
+                    }
+                }
+            } else {
+                result
+            };
+
             let saved_loop_header = ctx.loop_header;
             drop(ctx);
 
@@ -507,6 +581,7 @@ pub fn compile_with_natives(
         entry_unboxed: unboxed_flags.get(module.entry).copied().unwrap_or(false),
         _heap_roots: heap_roots,
         entry_wrapper: entry_wrapper_ptr,
+        rc_enabled,
     })
 }
 // ---------------------------------------------------------------------------
@@ -665,6 +740,15 @@ pub(super) fn make_helper_sig<M: Module>(
         "jit_make_none" => {
             // () -> u64
             sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_rc_incref" => {
+            // (bits: i64) -> i64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_rc_decref" => {
+            // (bits: i64) -> void
+            sig.params.push(AbiParam::new(types::I64));
         }
         _ => panic!("Unknown helper: {}", name),
     }

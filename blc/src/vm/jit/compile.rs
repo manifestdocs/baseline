@@ -50,15 +50,73 @@ pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     /// AOT native function IDs: maps qualified name → FuncId for direct calls.
     /// When Some, CallNative emits direct calls instead of going through NativeRegistry.
     pub(super) aot_native_ids: Option<&'a HashMap<String, FuncId>>,
+    /// Whether RC codegen is enabled (scope-based incref/decref).
+    pub(super) rc_enabled: bool,
+    /// Stack of scope frames tracking owned variables for RC cleanup.
+    /// Each frame is a list of Variables whose values should be decref'd on scope exit.
+    pub(super) rc_scope_stack: Vec<Vec<Variable>>,
 }
 
 pub(super) type CValue = cranelift_codegen::ir::Value;
 
 impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
-    fn new_var(&mut self) -> Variable {
+    pub(super) fn new_var(&mut self) -> Variable {
         let var = self.builder.declare_var(types::I64);
         self.next_var += 1;
         var
+    }
+
+    // -- RC scope helpers --
+
+    /// Push a new RC scope frame. Variables tracked in this frame will be
+    /// decref'd when the scope is popped.
+    pub(super) fn push_rc_scope(&mut self) {
+        if self.rc_enabled {
+            self.rc_scope_stack.push(Vec::new());
+        }
+    }
+
+    /// Track a variable as owned in the current RC scope.
+    pub(super) fn rc_track_var(&mut self, var: Variable) {
+        if self.rc_enabled {
+            if let Some(frame) = self.rc_scope_stack.last_mut() {
+                frame.push(var);
+            }
+        }
+    }
+
+    /// Pop an RC scope frame, emitting decref for all tracked variables
+    /// except `keep` (the return value variable, if any).
+    pub(super) fn pop_rc_scope(&mut self, keep: Option<Variable>) {
+        if !self.rc_enabled {
+            return;
+        }
+        if let Some(frame) = self.rc_scope_stack.pop() {
+            for var in &frame {
+                if keep == Some(*var) {
+                    continue;
+                }
+                let val = self.builder.use_var(*var);
+                self.emit_decref(val);
+            }
+        }
+    }
+
+    /// Emit an incref call. Returns the same value (for chaining).
+    fn emit_incref(&mut self, val: CValue) -> CValue {
+        self.call_helper("jit_rc_incref", &[val])
+    }
+
+    /// Emit a decref call.
+    fn emit_decref(&mut self, val: CValue) {
+        self.call_helper_void("jit_rc_decref", &[val]);
+    }
+
+    /// Call a runtime helper that returns no useful value.
+    fn call_helper_void(&mut self, name: &str, args: &[CValue]) {
+        let func_id = self.helper_ids[name];
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        self.builder.ins().call(func_ref, args);
     }
 
     // -- NaN-boxing helpers --
@@ -73,7 +131,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     fn emit_heap_nvalue(&mut self, nv: NValue) -> CValue {
         let bits = nv.raw() as i64;
         self.heap_roots.push(nv);
-        self.builder.ins().iconst(types::I64, bits)
+        let val = self.builder.ins().iconst(types::I64, bits);
+        // RC: heap_roots owns one ref; incref so the function gets its own.
+        if self.rc_enabled {
+            self.emit_incref(val)
+        } else {
+            val
+        }
     }
 
     /// Emit a string NValue: AOT uses global data + jit_make_string, JIT bakes the pointer.
@@ -715,7 +779,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::Var(name, _) => {
                 if let Some(&var) = self.vars.get(name) {
-                    Ok(self.builder.use_var(var))
+                    let val = self.builder.use_var(var);
+                    // RC: incref on read — scope still owns the original
+                    if self.rc_enabled {
+                        Ok(self.emit_incref(val))
+                    } else {
+                        Ok(val)
+                    }
                 } else if let Some(&func_idx) = self.func_names.get(name) {
                     // Function reference as NaN-boxed Function value
                     Ok(self.emit_nvalue(NValue::function(func_idx)))
@@ -896,7 +966,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::Let { pattern, value, .. } => {
                 let val = self.compile_expr(value)?;
-                self.bind_pattern(pattern, val)?;
+                self.bind_pattern_rc(pattern, val)?;
                 Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
             }
 
@@ -906,8 +976,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let sra_names: std::collections::HashSet<&str> =
                     sra_candidates.iter().map(|(n, _)| n.as_str()).collect();
 
+                self.push_rc_scope();
                 let mut result = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                for e in exprs {
+                for (idx, e) in exprs.iter().enumerate() {
+                    let is_last = idx == exprs.len() - 1;
                     // SRA: intercept Let bindings to MakeRecord for candidates
                     if let Expr::Let { pattern, value, .. } = e {
                         if let Pattern::Var(name) = pattern.as_ref() {
@@ -931,6 +1003,19 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         }
                     }
                     result = self.compile_expr(e)?;
+                    // RC: decref intermediate results (not the last expression)
+                    if self.rc_enabled && !is_last && !matches!(e, Expr::Let { .. }) {
+                        self.emit_decref(result);
+                    }
+                }
+                // RC: store result in a variable so pop_rc_scope can exclude it
+                if self.rc_enabled {
+                    let result_var = self.new_var();
+                    self.builder.def_var(result_var, result);
+                    self.pop_rc_scope(Some(result_var));
+                    result = self.builder.use_var(result_var);
+                } else {
+                    self.pop_rc_scope(None);
                 }
                 Ok(result)
             }
@@ -985,6 +1070,15 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         .iter()
                         .map(|a| self.compile_expr(a))
                         .collect::<Result<Vec<_>, _>>()?;
+
+                    // RC: decref old parameter values before overwriting
+                    if self.rc_enabled {
+                        let pvars: Vec<Variable> = self.param_vars.clone();
+                        for pv in &pvars {
+                            let old_val = self.builder.use_var(*pv);
+                            self.emit_decref(old_val);
+                        }
+                    }
 
                     for (var, val) in self.param_vars.iter().zip(arg_vals.iter()) {
                         self.builder.def_var(*var, *val);
@@ -2240,6 +2334,60 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         Ok(())
     }
 
+    /// Bind a let-pattern with RC tracking: tracks bound variables in the
+    /// current RC scope and decrefs wildcard/unused values.
+    fn bind_pattern_rc(&mut self, pattern: &Pattern, val: CValue) -> Result<(), String> {
+        if !self.rc_enabled {
+            return self.bind_pattern(pattern, val);
+        }
+        match pattern {
+            Pattern::Var(name) => {
+                let var = self.new_var();
+                self.builder.def_var(var, val);
+                self.vars.insert(name.clone(), var);
+                self.rc_track_var(var);
+            }
+            Pattern::Wildcard => {
+                // Value is unused — decref it
+                self.emit_decref(val);
+            }
+            Pattern::Tuple(sub_patterns) => {
+                for (i, sub) in sub_patterns.iter().enumerate() {
+                    let idx = self.builder.ins().iconst(types::I64, i as i64);
+                    let elem = self.call_helper("jit_tuple_get", &[val, idx]);
+                    // jit_tuple_get increfs the element, so we own it
+                    self.bind_pattern_rc(sub, elem)?;
+                }
+                // Decref the tuple container after extracting elements
+                self.emit_decref(val);
+            }
+            Pattern::Constructor(_, sub_patterns) => {
+                if sub_patterns.is_empty() {
+                    // Enum with no payload — decref it
+                    self.emit_decref(val);
+                } else {
+                    let payload = self.call_helper("jit_enum_payload", &[val]);
+                    // jit_enum_payload increfs the payload
+                    if sub_patterns.len() == 1 {
+                        self.bind_pattern_rc(&sub_patterns[0], payload)?;
+                    } else {
+                        for (i, sub) in sub_patterns.iter().enumerate() {
+                            let idx = self.builder.ins().iconst(types::I64, i as i64);
+                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
+                            self.bind_pattern_rc(sub, elem)?;
+                        }
+                        // Decref the payload tuple after extracting elements
+                        self.emit_decref(payload);
+                    }
+                    // Decref the enum container
+                    self.emit_decref(val);
+                }
+            }
+            _ => return Err("Unsupported pattern in let binding".into()),
+        }
+        Ok(())
+    }
+
     // -- For loop compilation --
 
     fn compile_for(
@@ -2263,6 +2411,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let zero = self.builder.ins().iconst(types::I64, 0);
         self.builder.def_var(idx_var, zero);
 
+        // RC: initialize binding var to NV_UNIT in preheader (for decref on first iteration)
+        let bind_var = self.new_var();
+        let unit_val = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+        self.builder.def_var(bind_var, unit_val);
+        self.vars.insert(binding.to_string(), bind_var);
+
         // Loop header
         let loop_head = self.builder.create_block();
         let loop_body = self.builder.create_block();
@@ -2280,17 +2434,26 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.switch_to_block(loop_body);
         self.builder.seal_block(loop_body);
 
+        // RC: decref previous iteration's binding value
+        if self.rc_enabled {
+            let old_bind = self.builder.use_var(bind_var);
+            self.emit_decref(old_bind);
+        }
+
         let list = self.builder.use_var(list_var);
         let idx_tagged = self.tag_int(idx);
         let elem = self.call_helper("jit_list_get", &[list, idx_tagged]);
 
-        // Bind loop variable
-        let bind_var = self.new_var();
+        // Update binding variable with new element
         self.builder.def_var(bind_var, elem);
-        self.vars.insert(binding.to_string(), bind_var);
 
         // Compile body (result is discarded)
-        let _body_val = self.compile_expr(body)?;
+        let body_val = self.compile_expr(body)?;
+
+        // RC: decref discarded body result
+        if self.rc_enabled {
+            self.emit_decref(body_val);
+        }
 
         // Increment index
         let cur_idx = self.builder.use_var(idx_var);
@@ -2306,6 +2469,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         // Exit
         self.builder.switch_to_block(loop_exit);
         self.builder.seal_block(loop_exit);
+
+        // RC: decref the last iteration's binding and the list itself
+        if self.rc_enabled {
+            let last_bind = self.builder.use_var(bind_var);
+            self.emit_decref(last_bind);
+            let list_final = self.builder.use_var(list_var);
+            self.emit_decref(list_final);
+        }
 
         Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
     }

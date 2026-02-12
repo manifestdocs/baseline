@@ -444,6 +444,8 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
                 sra_records: HashMap::new(),
                 aot_strings: Some(&aot_strings),
                 aot_native_ids: if aot_native_ids.is_empty() { None } else { Some(&aot_native_ids) },
+                rc_enabled: false, // AOT RC will be enabled separately
+                rc_scope_stack: Vec::new(),
             };
 
             let result = if is_unboxed {

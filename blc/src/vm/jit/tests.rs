@@ -1434,3 +1434,344 @@ use crate::vm::nvalue::{HeapObject, NValue};
             new_allocs, new_frees
         );
     }
+
+    // -- RC (Reference Counting) verification tests --
+    //
+    // These tests compile with compile_rc() instead of compile(), verifying
+    // that scope-based incref/decref properly manages heap lifetimes without
+    // relying on the arena. They use alloc_stats to assert zero leaks.
+    //
+    //   cargo test --features jit -p blc -- jit_rc --test-threads=1
+    //
+    // Marked #[ignore] to avoid flaky failures in parallel test runs.
+
+    /// Compile with RC enabled, run, return result.
+    fn compile_and_run_rc_nvalue(module: &IrModule) -> NValue {
+        let program = compile_rc(module, false).expect("RC compilation failed");
+        program
+            .run_entry_nvalue()
+            .expect("Entry function not compiled")
+    }
+
+    #[test]
+    #[ignore] // requires --test-threads=1 (global alloc_stats)
+    fn jit_rc_no_leak_string() {
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::String("hello_rc".into()),
+                ty: Some(Type::String),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            assert_eq!(result.as_string().unwrap().as_ref(), "hello_rc");
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC string leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_list() {
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::MakeList(
+                    vec![Expr::String("a".into()), Expr::String("b".into())],
+                    None,
+                ),
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            let items = result.as_list().expect("Expected List");
+            assert_eq!(items.len(), 2);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC list leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_enum() {
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::MakeEnum {
+                    tag: "Some".into(),
+                    payload: Box::new(Expr::String("payload".into())),
+                    ty: None,
+                },
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            let (tag, _) = result.as_enum().unwrap();
+            assert_eq!(tag.as_ref(), "Some");
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC enum leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_record() {
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::MakeRecord(
+                    vec![
+                        ("name".into(), Expr::String("Alice".into())),
+                        ("age".into(), make_int(30)),
+                    ],
+                    None,
+                ),
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            let fields = result.as_record().unwrap();
+            assert_eq!(fields.len(), 2);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC record leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_intermediate_block() {
+        // Block creates intermediate heap values that are discarded.
+        // Only an int is returned — all intermediates should be decref'd.
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::Block(
+                    vec![
+                        Expr::Let {
+                            pattern: Box::new(Pattern::Var("s".into())),
+                            value: Box::new(Expr::String("temporary".into())),
+                            ty: None,
+                        },
+                        Expr::Let {
+                            pattern: Box::new(Pattern::Var("xs".into())),
+                            value: Box::new(Expr::MakeList(
+                                vec![make_int(1), make_int(2)],
+                                None,
+                            )),
+                            ty: None,
+                        },
+                        make_int(42),
+                    ],
+                    Some(Type::Int),
+                ),
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            assert_eq!(result.as_int(), 42);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC intermediate block leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_function_call_heap_return() {
+        // Call a function that takes an Int and returns a List (heap value).
+        // Tests that cross-function RC ownership is properly balanced.
+        // Uses MakeList in the body to prevent is_scalar_only from marking
+        // the callee as unboxed (known bug: Expr::Var treated as scalar).
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![
+                IrFunction {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Expr::CallDirect {
+                        name: "wrap".into(),
+                        args: vec![make_int(42)],
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+                IrFunction {
+                    name: "wrap".into(),
+                    params: vec!["n".into()],
+                    body: Expr::MakeList(
+                        vec![Expr::Var("n".into(), Some(Type::Int))],
+                        None,
+                    ),
+                    ty: None,
+                    span: dummy_span(),
+                },
+            ],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            let items = result.as_list().expect("Expected List");
+            assert_eq!(items.len(), 1);
+            assert_eq!(items[0].as_int(), 42);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC function call heap return leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_nested_heap_values() {
+        // Create nested heap structure: list of enums wrapping strings.
+        // Verifies transitive cleanup.
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::MakeList(
+                    vec![
+                        Expr::MakeEnum {
+                            tag: "Some".into(),
+                            payload: Box::new(Expr::String("first".into())),
+                            ty: None,
+                        },
+                        Expr::MakeEnum {
+                            tag: "Some".into(),
+                            payload: Box::new(Expr::String("second".into())),
+                            ty: None,
+                        },
+                    ],
+                    None,
+                ),
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            let items = result.as_list().expect("Expected List");
+            assert_eq!(items.len(), 2);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC nested heap values leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_int_only_no_overhead() {
+        // Pure integer computation — RC should be a no-op (no allocs).
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: make_binop(BinOp::Add, make_int(10), make_int(32)),
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            assert_eq!(result.as_int(), 42);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        assert_eq!(
+            new_allocs, 0,
+            "RC int-only should have zero heap allocs, got {}",
+            new_allocs
+        );
+    }

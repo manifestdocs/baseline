@@ -30,11 +30,7 @@ pub(super) extern "C" fn jit_call_native(
         .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
         .collect();
     match registry.call(id as u16, &nvalues) {
-        Ok(result) => {
-            let bits = result.raw();
-            jit_arena_push(result);
-            bits
-        }
+        Ok(result) => jit_own(result),
         Err(e) => {
             jit_set_error(format!("Native function error: {}", e.0));
             NV_UNIT

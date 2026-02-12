@@ -97,6 +97,11 @@ pub fn reset_alloc_stats() {
     ALLOC_STATS.frees.store(0, Ordering::Relaxed);
 }
 
+/// Record a free in alloc_stats. Used by jit_rc_decref which bypasses NValue::drop.
+pub fn record_free() {
+    ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // HeapObject — heap-allocated value variants
 // ---------------------------------------------------------------------------
