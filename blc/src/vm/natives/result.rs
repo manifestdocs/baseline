@@ -1,0 +1,46 @@
+use super::{NValue, NativeError};
+
+pub(super) fn native_result_unwrap(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, payload)) if &**tag == "Ok" => Ok(payload.clone()),
+        Some((tag, payload)) if &**tag == "Err" => Err(NativeError(format!(
+            "Result.unwrap: called on Err({})",
+            payload
+        ))),
+        _ => Err(NativeError(format!(
+            "Result.unwrap: expected Result, got {}",
+            args[0]
+        ))),
+    }
+}
+
+pub(super) fn native_result_unwrap_or(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, payload)) if &**tag == "Ok" => Ok(payload.clone()),
+        Some((tag, _)) if &**tag == "Err" => Ok(args[1].clone()),
+        _ => Err(NativeError(format!(
+            "Result.unwrap_or: expected Result, got {}",
+            args[0]
+        ))),
+    }
+}
+
+pub(super) fn native_result_is_ok(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, _)) => Ok(NValue::bool(&**tag == "Ok")),
+        None => Err(NativeError(format!(
+            "Result.is_ok: expected Result, got {}",
+            args[0]
+        ))),
+    }
+}
+
+pub(super) fn native_result_is_err(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_enum() {
+        Some((tag, _)) => Ok(NValue::bool(&**tag == "Err")),
+        None => Err(NativeError(format!(
+            "Result.is_err: expected Result, got {}",
+            args[0]
+        ))),
+    }
+}
