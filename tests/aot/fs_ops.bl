@@ -1,0 +1,9 @@
+@prelude(script)
+
+fn main() -> String = {
+  let path = "/tmp/bl_aot_test_fs.txt"
+  Fs.write_file!(path, "hello from aot fs")
+  let content = Fs.read_file!(path)
+  let exists = Fs.exists!(path)
+  if exists then content else "not found"
+}

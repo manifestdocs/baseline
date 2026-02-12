@@ -7,7 +7,7 @@
 //! On error, calls `jit_set_error()` and returns NV_UNIT.
 
 use crate::helpers::{jit_arena_push, jit_set_error, NV_UNIT};
-use crate::nvalue::NValue;
+use crate::nvalue::{HeapObject, NValue};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -617,4 +617,303 @@ pub extern "C" fn bl_time_now(_args: *const u64, _count: u64) -> u64 {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     NValue::int(ms).raw()
+}
+
+// ---------------------------------------------------------------------------
+// Fs
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_fs_read_file(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_string() {
+        Some(path) => match std::fs::read_to_string(&**path) {
+            Ok(content) => push_result(NValue::string(content.into())),
+            Err(e) => native_error(format!("Fs.read_file!: failed for \"{}\": {}", path, e)),
+        },
+        None => native_error(format!("Fs.read_file!: expected String, got {}", vals[0])),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_fs_write_file(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match (vals[0].as_string(), vals[1].as_string()) {
+        (Some(path), Some(content)) => match std::fs::write(&**path, &**content) {
+            Ok(()) => NV_UNIT,
+            Err(e) => native_error(format!("Fs.write_file!: failed for \"{}\": {}", path, e)),
+        },
+        _ => native_error("Fs.write_file!: expected (String, String)".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_fs_exists(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_string() {
+        Some(path) => NValue::bool(std::path::Path::new(&**path).exists()).raw(),
+        None => native_error(format!("Fs.exists!: expected String, got {}", vals[0])),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_fs_list_dir(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_string() {
+        Some(path) => match std::fs::read_dir(&**path) {
+            Ok(entries) => {
+                let mut names: Vec<NValue> = Vec::new();
+                for entry in entries {
+                    match entry {
+                        Ok(e) => {
+                            let name = e.file_name().to_string_lossy().to_string();
+                            names.push(NValue::string(name.into()));
+                        }
+                        Err(e) => {
+                            return native_error(format!(
+                                "Fs.list_dir!: error reading entry: {}",
+                                e
+                            ));
+                        }
+                    }
+                }
+                push_result(NValue::list(names))
+            }
+            Err(e) => native_error(format!("Fs.list_dir!: failed for \"{}\": {}", path, e)),
+        },
+        None => native_error(format!("Fs.list_dir!: expected String, got {}", vals[0])),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_empty(_args: *const u64, _count: u64) -> u64 {
+    push_result(NValue::map(Vec::new()))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_insert(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    let key = vals[1].clone();
+    let val = vals[2].clone();
+    match vals[0].as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let mut new_entries: Vec<(NValue, NValue)> =
+                entries.iter().filter(|(k, _)| *k != key).cloned().collect();
+            new_entries.push((key, val));
+            push_result(NValue::map(new_entries))
+        }
+        _ => native_error("Map.insert: expected Map".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_get(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    let key = &vals[1];
+    match vals[0].as_heap_ref() {
+        HeapObject::Map(entries) => {
+            for (k, v) in entries {
+                if k == key {
+                    return push_result(NValue::enum_val("Some".into(), v.clone()));
+                }
+            }
+            push_result(NValue::enum_val("None".into(), NValue::unit()))
+        }
+        _ => native_error("Map.get: expected Map".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_remove(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    let key = &vals[1];
+    match vals[0].as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let new_entries: Vec<_> = entries.iter().filter(|(k, _)| k != key).cloned().collect();
+            push_result(NValue::map(new_entries))
+        }
+        _ => native_error("Map.remove: expected Map".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_contains(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    let key = &vals[1];
+    match vals[0].as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let found = entries.iter().any(|(k, _)| k == key);
+            NValue::bool(found).raw()
+        }
+        _ => native_error("Map.contains: expected Map".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_keys(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let keys: Vec<_> = entries.iter().map(|(k, _)| k.clone()).collect();
+            push_result(NValue::list(keys))
+        }
+        _ => native_error("Map.keys: expected Map".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_values(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_heap_ref() {
+        HeapObject::Map(entries) => {
+            let vals: Vec<_> = entries.iter().map(|(_, v)| v.clone()).collect();
+            push_result(NValue::list(vals))
+        }
+        _ => native_error("Map.values: expected Map".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_len(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_heap_ref() {
+        HeapObject::Map(entries) => NValue::int(entries.len() as i64).raw(),
+        _ => native_error("Map.len: expected Map".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_map_from_list(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_list() {
+        Some(items) => {
+            let mut entries: Vec<(NValue, NValue)> = Vec::new();
+            for item in items {
+                if let Some(tuple) = item.as_tuple() {
+                    if tuple.len() >= 2 {
+                        entries.push((tuple[0].clone(), tuple[1].clone()));
+                    } else {
+                        return native_error(
+                            "Map.from_list: each element must be a (key, value) pair".into(),
+                        );
+                    }
+                } else {
+                    return native_error(
+                        "Map.from_list: each element must be a (key, value) tuple".into(),
+                    );
+                }
+            }
+            push_result(NValue::map(entries))
+        }
+        None => native_error(format!("Map.from_list: expected List, got {}", vals[0])),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Set
+// ---------------------------------------------------------------------------
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_empty(_args: *const u64, _count: u64) -> u64 {
+    push_result(NValue::set(Vec::new()))
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_insert(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    let elem = vals[1].clone();
+    match vals[0].as_heap_ref() {
+        HeapObject::Set(elems) => {
+            if elems.contains(&elem) {
+                push_result(NValue::set(elems.clone()))
+            } else {
+                let mut new_elems = elems.clone();
+                new_elems.push(elem);
+                push_result(NValue::set(new_elems))
+            }
+        }
+        _ => native_error("Set.insert: expected Set".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_remove(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    let elem = &vals[1];
+    match vals[0].as_heap_ref() {
+        HeapObject::Set(elems) => {
+            let new_elems: Vec<_> = elems.iter().filter(|e| *e != elem).cloned().collect();
+            push_result(NValue::set(new_elems))
+        }
+        _ => native_error("Set.remove: expected Set".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_contains(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    let elem = &vals[1];
+    match vals[0].as_heap_ref() {
+        HeapObject::Set(elems) => NValue::bool(elems.contains(elem)).raw(),
+        _ => native_error("Set.contains: expected Set".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_union(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match (vals[0].as_heap_ref(), vals[1].as_heap_ref()) {
+        (HeapObject::Set(a), HeapObject::Set(b)) => {
+            let mut result = a.clone();
+            for elem in b {
+                if !result.contains(elem) {
+                    result.push(elem.clone());
+                }
+            }
+            push_result(NValue::set(result))
+        }
+        _ => native_error("Set.union: expected two Sets".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_intersection(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match (vals[0].as_heap_ref(), vals[1].as_heap_ref()) {
+        (HeapObject::Set(a), HeapObject::Set(b)) => {
+            let result: Vec<_> = a.iter().filter(|e| b.contains(e)).cloned().collect();
+            push_result(NValue::set(result))
+        }
+        _ => native_error("Set.intersection: expected two Sets".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_len(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_heap_ref() {
+        HeapObject::Set(elems) => NValue::int(elems.len() as i64).raw(),
+        _ => native_error("Set.len: expected Set".into()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn bl_set_from_list(args: *const u64, count: u64) -> u64 {
+    let vals = args_from_raw(args, count);
+    match vals[0].as_list() {
+        Some(items) => {
+            let mut result = Vec::new();
+            for item in items {
+                if !result.contains(item) {
+                    result.push(item.clone());
+                }
+            }
+            push_result(NValue::set(result))
+        }
+        None => native_error(format!("Set.from_list: expected List, got {}", vals[0])),
+    }
 }

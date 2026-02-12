@@ -1,0 +1,15 @@
+@prelude(core)
+
+fn main() -> Int = {
+  let s = Set.empty()
+  let s = Set.insert(s, 1)
+  let s = Set.insert(s, 2)
+  let s = Set.insert(s, 3)
+  let s = Set.insert(s, 2)
+  let len = Set.len(s)
+  let has_2 = Set.contains(s, 2)
+  let s2 = Set.remove(s, 1)
+  let len2 = Set.len(s2)
+  // len=3 (2 was deduped), has_2=true(1), len2=2 => 3+1+2=6
+  len + (if has_2 then 1 else 0) + len2
+}

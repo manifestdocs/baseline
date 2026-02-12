@@ -1,0 +1,16 @@
+@prelude(core)
+
+fn main() -> Int = {
+  let m = Map.empty()
+  let m = Map.insert(m, "a", 1)
+  let m = Map.insert(m, "b", 2)
+  let m = Map.insert(m, "c", 3)
+  let len = Map.len(m)
+  let has_b = Map.contains(m, "b")
+  let m2 = Map.remove(m, "a")
+  let len2 = Map.len(m2)
+  let keys = Map.keys(m2)
+  let key_count = List.length(keys)
+  // len=3, has_b=true(1), len2=2, key_count=2 => 3+1+2+2=8
+  len + (if has_b then 1 else 0) + len2 + key_count
+}

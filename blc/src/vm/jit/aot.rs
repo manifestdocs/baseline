@@ -90,6 +90,34 @@ const AOT_NATIVE_SYMBOLS: &[(&str, &str)] = &[
     // Time
     ("Time.now!", "bl_time_now"),
     ("Time.now", "bl_time_now"),
+    // Fs
+    ("Fs.read_file!", "bl_fs_read_file"),
+    ("Fs.read_file", "bl_fs_read_file"),
+    ("Fs.write_file!", "bl_fs_write_file"),
+    ("Fs.write_file", "bl_fs_write_file"),
+    ("Fs.exists!", "bl_fs_exists"),
+    ("Fs.exists", "bl_fs_exists"),
+    ("Fs.list_dir!", "bl_fs_list_dir"),
+    ("Fs.list_dir", "bl_fs_list_dir"),
+    // Map
+    ("Map.empty", "bl_map_empty"),
+    ("Map.insert", "bl_map_insert"),
+    ("Map.get", "bl_map_get"),
+    ("Map.remove", "bl_map_remove"),
+    ("Map.contains", "bl_map_contains"),
+    ("Map.keys", "bl_map_keys"),
+    ("Map.values", "bl_map_values"),
+    ("Map.len", "bl_map_len"),
+    ("Map.from_list", "bl_map_from_list"),
+    // Set
+    ("Set.empty", "bl_set_empty"),
+    ("Set.insert", "bl_set_insert"),
+    ("Set.remove", "bl_set_remove"),
+    ("Set.contains", "bl_set_contains"),
+    ("Set.union", "bl_set_union"),
+    ("Set.intersection", "bl_set_intersection"),
+    ("Set.len", "bl_set_len"),
+    ("Set.from_list", "bl_set_from_list"),
 ];
 
 /// Look up the extern symbol name for a qualified native call.
@@ -521,11 +549,13 @@ pub fn link_executable(
     if let Some(dir) = rt_lib_dir {
         cmd.arg("-L").arg(dir).arg("-lbaseline_rt");
 
-        // Platform-specific system libraries
+        // Platform-specific system libraries and dead code elimination
         if cfg!(target_os = "macos") {
             cmd.arg("-lSystem");
+            cmd.arg("-Wl,-dead_strip");
         } else {
             cmd.args(["-lc", "-ldl", "-lpthread", "-lm"]);
+            cmd.arg("-Wl,--gc-sections");
         }
 
         if trace {

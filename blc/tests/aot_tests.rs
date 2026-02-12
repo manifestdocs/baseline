@@ -192,3 +192,23 @@ fn aot_result_map() {
     let output = compile_and_run("tests/aot/result_map.bl");
     assert_eq!(output, "Ok(42)");
 }
+
+// --- Phase 5: Fs, Map, Set native tests ---
+
+#[test]
+fn aot_fs_ops() {
+    let output = compile_and_run("tests/aot/fs_ops.bl");
+    assert_eq!(output, "hello from aot fs");
+}
+
+#[test]
+fn aot_map_ops() {
+    let output = compile_and_run("tests/aot/map_ops.bl");
+    assert_eq!(output, "8");
+}
+
+#[test]
+fn aot_set_ops() {
+    let output = compile_and_run("tests/aot/set_ops.bl");
+    assert_eq!(output, "6");
+}
