@@ -1,0 +1,187 @@
+{
+  "timestamp": "2026-02-08T21:13:19Z",
+  "system": "arm64 Darwin 26.2",
+  "runs": 3,
+  "results": [
+    {
+      "lang": "c",
+      "bench": "fib",
+      "time_s": 0.047,
+      "mem_kb": 1296
+    },
+    {
+      "lang": "rust",
+      "bench": "fib",
+      "time_s": 0.056,
+      "mem_kb": 1472
+    },
+    {
+      "lang": "go",
+      "bench": "fib",
+      "time_s": 0.048,
+      "mem_kb": 3584
+    },
+    {
+      "lang": "ocaml",
+      "bench": "fib",
+      "time_s": 0.058,
+      "mem_kb": 2128
+    },
+    {
+      "lang": "fsharp",
+      "bench": "fib",
+      "time_s": 1.273,
+      "mem_kb": 287888
+    },
+    {
+      "lang": "node",
+      "bench": "fib",
+      "time_s": 0.154,
+      "mem_kb": 44992
+    },
+    {
+      "lang": "python",
+      "bench": "fib",
+      "time_s": 1.027,
+      "mem_kb": 14480
+    },
+    {
+      "lang": "ruby",
+      "bench": "fib",
+      "time_s": 0.968,
+      "mem_kb": 34304
+    },
+    {
+      "lang": "baseline_vm",
+      "bench": "fib",
+      "time_s": 0.599,
+      "mem_kb": 4320
+    },
+    {
+      "lang": "c",
+      "bench": "tak",
+      "time_s": 0.106,
+      "mem_kb": 1296
+    },
+    {
+      "lang": "rust",
+      "bench": "tak",
+      "time_s": 0.107,
+      "mem_kb": 1472
+    },
+    {
+      "lang": "go",
+      "bench": "tak",
+      "time_s": 0.116,
+      "mem_kb": 3808
+    },
+    {
+      "lang": "ocaml",
+      "bench": "tak",
+      "time_s": 0.129,
+      "mem_kb": 2128
+    },
+    {
+      "lang": "fsharp",
+      "bench": "tak",
+      "time_s": 1.433,
+      "mem_kb": 254912
+    },
+    {
+      "lang": "node",
+      "bench": "tak",
+      "time_s": 0.351,
+      "mem_kb": 45024
+    },
+    {
+      "lang": "python",
+      "bench": "tak",
+      "time_s": 3.567,
+      "mem_kb": 14480
+    },
+    {
+      "lang": "ruby",
+      "bench": "tak",
+      "time_s": 2.707,
+      "mem_kb": 34384
+    },
+    {
+      "lang": "baseline_vm",
+      "bench": "tak",
+      "time_s": 3.551,
+      "mem_kb": 4400
+    },
+    {
+      "lang": "c",
+      "bench": "divsum",
+      "time_s": 0.049,
+      "mem_kb": 1280
+    },
+    {
+      "lang": "rust",
+      "bench": "divsum",
+      "time_s": 0.06,
+      "mem_kb": 1472
+    },
+    {
+      "lang": "go",
+      "bench": "divsum",
+      "time_s": 0.06,
+      "mem_kb": 3936
+    },
+    {
+      "lang": "ocaml",
+      "bench": "divsum",
+      "time_s": 0.08,
+      "mem_kb": 2112
+    },
+    {
+      "lang": "fsharp",
+      "bench": "divsum",
+      "time_s": 1.23,
+      "mem_kb": 236624
+    },
+    {
+      "lang": "node",
+      "bench": "divsum",
+      "time_s": 0.14,
+      "mem_kb": 45712
+    },
+    {
+      "lang": "python",
+      "bench": "divsum",
+      "time_s": 1.588,
+      "mem_kb": 14480
+    },
+    {
+      "lang": "ruby",
+      "bench": "divsum",
+      "time_s": 1.733,
+      "mem_kb": 33920
+    },
+    {
+      "lang": "baseline_vm",
+      "bench": "divsum",
+      "time_s": 2.415,
+      "mem_kb": 4448
+    },
+    {
+      "lang": "baseline_jit",
+      "bench": "fib",
+      "time_s": 0.042,
+      "mem_kb": 6448
+    },
+    {
+      "lang": "baseline_jit",
+      "bench": "tak",
+      "time_s": 0.075,
+      "mem_kb": 6640
+    },
+    {
+      "lang": "baseline_jit",
+      "bench": "divsum",
+      "time_s": 0.076,
+      "mem_kb": 6608
+    }
+  ]
+}

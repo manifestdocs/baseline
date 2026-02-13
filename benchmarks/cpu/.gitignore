@@ -1,0 +1,7 @@
+.build/
+*.cmi
+*.cmx
+*.o
+*_c
+*_go
+*_rs
