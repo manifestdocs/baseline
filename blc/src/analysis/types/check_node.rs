@@ -297,6 +297,10 @@ fn check_node_inner(
                 let body_node = node.child_by_field_name("body").unwrap();
                 let body_type = check_node(&body_node, source, file, symbols, diagnostics);
                 if !types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
+                    let suggestions = crate::diagnostic_render::suggest_type_coercion(
+                        &format!("{}", ret_type),
+                        &format!("{}", body_type),
+                    );
                     diagnostics.push(Diagnostic {
                         code: "TYP_006".to_string(),
                         severity: Severity::Error,
@@ -306,7 +310,7 @@ fn check_node_inner(
                             name, ret_type, body_type
                         ),
                         context: "Function body return type must match signature.".to_string(),
-                        suggestions: vec![],
+                        suggestions,
                     });
                 }
 
@@ -430,6 +434,10 @@ fn check_node_inner(
                     if let Some(type_node) = ann_node.named_child(0) {
                         let declared_type = parse_type(&type_node, source, symbols);
                         if !types_compatible(&expr_type, &declared_type) {
+                            let suggestions = crate::diagnostic_render::suggest_type_coercion(
+                                &format!("{}", declared_type),
+                                &format!("{}", expr_type),
+                            );
                             diagnostics.push(Diagnostic {
                                 code: "TYP_021".to_string(),
                                 severity: Severity::Error,
@@ -440,7 +448,7 @@ fn check_node_inner(
                                 ),
                                 context: "Expression type must match declared type annotation."
                                     .to_string(),
-                                suggestions: vec![],
+                                suggestions,
                             });
                         }
                         bind_pattern(&pattern, declared_type, source, symbols);
@@ -965,13 +973,20 @@ fn check_node_inner(
             if let Some(ty) = symbols.lookup(name) {
                 ty.clone()
             } else {
+                let known_names: Vec<String> = symbols
+                    .visible_bindings()
+                    .iter()
+                    .map(|(n, _)| n.clone())
+                    .collect();
+                let suggestions =
+                    crate::diagnostic_render::suggest_similar_identifier(name, &known_names);
                 diagnostics.push(Diagnostic {
                     code: "TYP_002".to_string(),
                     severity: Severity::Error,
                     location: Location::from_node(file,node),
                     message: format!("Undefined variable `{}`", name),
                     context: "Variable must be defined before use.".to_string(),
-                    suggestions: vec![],
+                    suggestions,
                 });
                 Type::Unknown
             }
@@ -1136,6 +1151,10 @@ fn check_node_inner(
                 let else_type = check_node(&else_branch, source, file, symbols, diagnostics);
 
                 if !types_compatible(&then_type, &else_type) {
+                    let suggestions = crate::diagnostic_render::suggest_type_coercion(
+                        &format!("{}", then_type),
+                        &format!("{}", else_type),
+                    );
                     diagnostics.push(Diagnostic {
                         code: "TYP_004".to_string(),
                         severity: Severity::Error,
@@ -1146,7 +1165,7 @@ fn check_node_inner(
                         ),
                         context: "Both branches of an if expression must return the same type."
                             .to_string(),
-                        suggestions: vec![],
+                        suggestions,
                     });
                     Type::Unknown
                 } else {

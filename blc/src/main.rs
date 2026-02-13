@@ -155,10 +155,13 @@ fn main() {
                 }
             }
 
+            // Read source for source context in diagnostics
+            let source_text = std::fs::read_to_string(&file).unwrap_or_default();
+
             if json {
-                println!("{}", serde_json::to_string_pretty(&result).unwrap());
+                print_json_with_context(&result, &source_text);
             } else {
-                print_human_readable(&result);
+                print_human_readable(&result, &source_text);
             }
 
             if result.status == "failure" {
@@ -553,33 +556,16 @@ fn check_file(path: &Path) -> CheckResult {
     }
 }
 
-fn print_human_readable(result: &CheckResult) {
+fn print_human_readable(result: &CheckResult, source: &str) {
     if result.diagnostics.is_empty() {
         println!("✓ No errors found");
         return;
     }
 
     for diag in &result.diagnostics {
-        let prefix = match diag.severity {
-            diagnostics::Severity::Error => "error",
-            diagnostics::Severity::Warning => "warning",
-            diagnostics::Severity::Info => "info",
-        };
-        eprintln!(
-            "{}:{}:{}: {}: {} [{}]",
-            diag.location.file,
-            diag.location.line,
-            diag.location.col,
-            prefix,
-            diag.message,
-            diag.code
-        );
-        if !diag.context.is_empty() {
-            eprintln!("  {}", diag.context);
-        }
-        for suggestion in &diag.suggestions {
-            eprintln!("  → {}: {}", suggestion.strategy, suggestion.description);
-        }
+        let rendered = blc::diagnostic_render::render_diagnostic(diag, Some(source));
+        eprint!("{}", rendered);
+        eprintln!();
     }
 
     let error_count = result
@@ -594,10 +580,32 @@ fn print_human_readable(result: &CheckResult) {
         .count();
 
     match (error_count, warning_count) {
-        (0, w) => eprintln!("\n{} warning(s)", w),
-        (e, 0) => eprintln!("\n{} error(s)", e),
-        (e, w) => eprintln!("\n{} error(s), {} warning(s)", e, w),
+        (0, w) => eprintln!("{} warning(s)", w),
+        (e, 0) => eprintln!("{} error(s)", e),
+        (e, w) => eprintln!("{} error(s), {} warning(s)", e, w),
     }
+}
+
+/// Print JSON output with optional source_context fields embedded.
+fn print_json_with_context(result: &CheckResult, source: &str) {
+    let mut json_val = serde_json::to_value(result).unwrap();
+
+    if let Some(diags) = json_val.get_mut("diagnostics").and_then(|v| v.as_array_mut()) {
+        for (i, diag_val) in diags.iter_mut().enumerate() {
+            if let Some(diag) = result.diagnostics.get(i) {
+                if let Some(ctx) = blc::diagnostic_render::build_source_context(diag, source) {
+                    if let Some(obj) = diag_val.as_object_mut() {
+                        obj.insert(
+                            "source_context".to_string(),
+                            serde_json::to_value(&ctx).unwrap(),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    println!("{}", serde_json::to_string_pretty(&json_val).unwrap());
 }
 
 fn print_test_results(result: &test_runner::TestSuiteResult) {
