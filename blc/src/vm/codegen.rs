@@ -938,8 +938,7 @@ impl<'a> Codegen<'a> {
             }
 
             // Phase 2: load all parts and concatenate
-            let mut segment_count = 0;
-            for (i, prep) in prepared.iter().enumerate() {
+            for (segment_count, (i, prep)) in prepared.iter().enumerate().enumerate() {
                 match prep {
                     None => self.gen_expr(&parts[i], span)?,
                     Some(name) => self.gen_var(name, span)?,
@@ -947,7 +946,6 @@ impl<'a> Codegen<'a> {
                 if segment_count > 0 {
                     self.emit(Op::Concat, span);
                 }
-                segment_count += 1;
             }
 
             self.end_scope(span);

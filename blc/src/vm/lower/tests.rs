@@ -1,7 +1,6 @@
 #[cfg(test)]
 use super::*;
 
-use crate::vm::ir::*;
 use crate::vm::natives::NativeRegistry;
 
 fn parse(source: &str) -> tree_sitter::Tree {

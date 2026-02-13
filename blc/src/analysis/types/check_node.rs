@@ -9,8 +9,6 @@ use super::super::infer::{InferCtx, UserGenericSchema};
 use std::collections::HashSet;
 use tree_sitter::Node;
 
-/// Build a Location from a tree-sitter Node.
-
 /// Check a single `inline_test` node: the expression must type-check to Bool.
 pub(super) fn check_inline_test(
     test_node: &Node,
@@ -355,10 +353,10 @@ fn check_node_inner(
         "before_each_block" | "after_each_block" => {
             // Hook expressions — type-check body
             let count = node.named_child_count();
-            if count > 0 {
-                if let Some(expr) = node.named_child(count - 1) {
-                    check_node(&expr, source, file, symbols, diagnostics);
-                }
+            if count > 0
+                && let Some(expr) = node.named_child(count - 1)
+            {
+                check_node(&expr, source, file, symbols, diagnostics);
             }
             Type::Unit
         }

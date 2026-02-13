@@ -322,6 +322,7 @@ impl NValue {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn continuation(
         stack_segment: Vec<NValue>,
         frame_segment: Vec<(u32, u32, u32, u32)>,
@@ -402,10 +403,8 @@ impl NValue {
             self.0 & 1 != 0
         } else if self.is_int() {
             self.0 & PAYLOAD_MASK != 0
-        } else if self.is_unit() {
-            false
         } else {
-            true
+            !self.is_unit()
         }
     }
 

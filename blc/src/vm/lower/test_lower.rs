@@ -10,14 +10,14 @@ impl<'a> super::Lowerer<'a> {
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            if let Some(func_node) = self.unwrap_function_def(&child) {
-                if let Some(name_node) = func_node.child_by_field_name("name") {
-                    let name = self.node_text(&name_node);
-                    self.functions.insert(name.clone());
-                    let params = self.extract_param_names(&func_node);
-                    self.fn_params.insert(name.clone(), params);
-                    func_nodes.push((name, i));
-                }
+            if let Some(func_node) = self.unwrap_function_def(&child)
+                && let Some(name_node) = func_node.child_by_field_name("name")
+            {
+                let name = self.node_text(&name_node);
+                self.functions.insert(name.clone());
+                let params = self.extract_param_names(&func_node);
+                self.fn_params.insert(name.clone(), params);
+                func_nodes.push((name, i));
             }
         }
 
@@ -50,10 +50,10 @@ impl<'a> super::Lowerer<'a> {
                         if fc.kind() == "where_block" {
                             let mut wb_cursor = fc.walk();
                             for test_node in fc.children(&mut wb_cursor) {
-                                if test_node.kind() == "inline_test" {
-                                    if let Some(t) = self.lower_inline_test(&test_node, &func_name)? {
-                                        tests.push(t);
-                                    }
+                                if test_node.kind() == "inline_test"
+                                    && let Some(t) = self.lower_inline_test(&test_node, &func_name)?
+                                {
+                                    tests.push(t);
                                 }
                             }
                         }
@@ -147,12 +147,12 @@ impl<'a> super::Lowerer<'a> {
     pub(super) fn has_focused_tests(&self, node: &Node) -> bool {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
-            if child.kind() == "it_block" {
-                if let Some(mod_node) = child.child_by_field_name("modifier") {
-                    let modifier = self.node_text(&mod_node);
-                    if modifier == ".only" {
-                        return true;
-                    }
+            if child.kind() == "it_block"
+                && let Some(mod_node) = child.child_by_field_name("modifier")
+            {
+                let modifier = self.node_text(&mod_node);
+                if modifier == ".only" {
+                    return true;
                 }
             }
             if child.kind() == "describe_block" && self.has_focused_tests(&child) {

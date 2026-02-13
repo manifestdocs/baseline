@@ -388,16 +388,15 @@ impl super::Vm {
 
         // Intercept NativeMwNext: when middleware calls next(req), dispatch
         // to the remaining middleware chain instead of bytecode execution.
-        if func.is_heap() {
-            if let HeapObject::NativeMwNext {
+        if func.is_heap()
+            && let HeapObject::NativeMwNext {
                 handler,
                 remaining_mw,
             } = func.as_heap_ref()
-            {
-                let handler = handler.clone();
-                let remaining_mw = remaining_mw.clone();
-                return self.call_mw_next(&handler, &remaining_mw, args, chunks, line, col);
-            }
+        {
+            let handler = handler.clone();
+            let remaining_mw = remaining_mw.clone();
+            return self.call_mw_next(&handler, &remaining_mw, args, chunks, line, col);
         }
 
         let (ci, uv_idx) = if func.is_function() {

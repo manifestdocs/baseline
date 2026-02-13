@@ -196,10 +196,9 @@ impl ConstKey {
             Some(ConstKey::Unit)
         } else if value.is_function() {
             Some(ConstKey::Function(value.as_function()))
-        } else if let Some(s) = value.as_string() {
-            Some(ConstKey::String(s.clone()))
         } else {
-            None // Float, List, Record, etc. — rare in constant pools
+            value.as_string().map(|s| ConstKey::String(s.clone()))
+            // Float, List, Record, etc. — rare in constant pools
         }
     }
 }
@@ -403,7 +402,7 @@ impl Chunk {
                     pushes_found += 1;
                 }
                 Op::LoadConst(ci) => {
-                    if self.constants.get(ci as usize).map_or(false, |c| c.is_int()) {
+                    if self.constants.get(ci as usize).is_some_and(|c| c.is_int()) {
                         has_int = true;
                     }
                     pushes_found += 1;

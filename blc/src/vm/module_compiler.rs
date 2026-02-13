@@ -91,6 +91,7 @@ pub fn compile_with_imports(
 
 /// Recursively compile a module and all its transitive imports.
 /// Adds the module's chunks to `merged_chunks` and caches in `compiled_cache`.
+#[allow(clippy::too_many_arguments)]
 fn compile_module_recursive(
     module_path: &Path,
     import_node: &tree_sitter::Node,
@@ -192,7 +193,7 @@ fn compile_module_recursive(
             .cloned()
             .collect::<Vec<_>>()
     }).collect();
-    lowerer.add_functions(sub_function_names.into_iter());
+    lowerer.add_functions(sub_function_names);
 
     let ir_functions = lowerer.lower_module_functions(&mod_root)?;
 

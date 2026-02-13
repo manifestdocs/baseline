@@ -47,10 +47,10 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     let mut defined_functions: HashSet<String> = HashSet::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if let Some(func) = extract_function_def(child) {
-            if let Some(name) = find_function_name(func, source) {
-                defined_functions.insert(name.to_string());
-            }
+        if let Some(func) = extract_function_def(child)
+            && let Some(name) = find_function_name(func, source)
+        {
+            defined_functions.insert(name.to_string());
         }
     }
 
@@ -97,21 +97,21 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     // Phase 3: Check transitive effects against declared effects
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if let Some(func) = extract_function_def(child) {
-            if let Some(name) = find_function_name(func, source) {
-                let name_str = name.to_string();
-                check_transitive_effects(
-                    func,
-                    &name_str,
-                    source,
-                    file,
-                    &declared_effects_map,
-                    &transitive_effects,
-                    &call_graph,
-                    &direct_effects_map,
-                    &mut diagnostics,
-                );
-            }
+        if let Some(func) = extract_function_def(child)
+            && let Some(name) = find_function_name(func, source)
+        {
+            let name_str = name.to_string();
+            check_transitive_effects(
+                func,
+                &name_str,
+                source,
+                file,
+                &declared_effects_map,
+                &transitive_effects,
+                &call_graph,
+                &direct_effects_map,
+                &mut diagnostics,
+            );
         }
     }
 

@@ -671,15 +671,14 @@ fn print_json_with_context(result: &CheckResult, source: &str) {
 
     if let Some(diags) = json_val.get_mut("diagnostics").and_then(|v| v.as_array_mut()) {
         for (i, diag_val) in diags.iter_mut().enumerate() {
-            if let Some(diag) = result.diagnostics.get(i) {
-                if let Some(ctx) = blc::diagnostic_render::build_source_context(diag, source) {
-                    if let Some(obj) = diag_val.as_object_mut() {
-                        obj.insert(
-                            "source_context".to_string(),
-                            serde_json::to_value(&ctx).unwrap(),
-                        );
-                    }
-                }
+            if let Some(diag) = result.diagnostics.get(i)
+                && let Some(ctx) = blc::diagnostic_render::build_source_context(diag, source)
+                && let Some(obj) = diag_val.as_object_mut()
+            {
+                obj.insert(
+                    "source_context".to_string(),
+                    serde_json::to_value(&ctx).unwrap(),
+                );
             }
         }
     }

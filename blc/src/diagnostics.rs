@@ -18,23 +18,18 @@ pub enum Severity {
 ///
 /// Per spec §8.5, every compiler response must include the verification level
 /// to enable LLM agents to reason about what has been verified.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VerificationLevel {
     /// Type inference and exhaustiveness only (~ms)
     Types,
     /// Types + refinement constraints (~100ms)
+    #[default]
     Refinements,
     /// Types + refinements + all specs + SMT (~seconds)
     Full,
     /// Types only, specs unchecked (escape hatch)
     Skip,
-}
-
-impl Default for VerificationLevel {
-    fn default() -> Self {
-        VerificationLevel::Refinements
-    }
 }
 
 impl std::fmt::Display for VerificationLevel {

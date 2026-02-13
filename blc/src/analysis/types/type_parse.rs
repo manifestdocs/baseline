@@ -9,10 +9,10 @@ pub(super) fn infer_expected_type(node: &Node, source: &str, symbols: &SymbolTab
         match parent.kind() {
             "let_binding" => {
                 // let x: T = ?? -> look for type annotation
-                if let Some(ann_node) = parent.child_by_field_name("type") {
-                    if let Some(type_node) = ann_node.named_child(0) {
-                        return parse_type(&type_node, source, symbols);
-                    }
+                if let Some(ann_node) = parent.child_by_field_name("type")
+                    && let Some(type_node) = ann_node.named_child(0)
+                {
+                    return parse_type(&type_node, source, symbols);
                 }
             }
             "function_def" => {

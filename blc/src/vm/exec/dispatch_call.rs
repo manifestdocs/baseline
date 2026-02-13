@@ -11,6 +11,7 @@ use super::{DispatchResult, MAX_CALL_DEPTH};
 /// GetUpvalue, MakeClosure, and superinstructions.
 impl super::Vm {
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn dispatch_call(
         &mut self,
         op: &Op,
@@ -74,10 +75,10 @@ impl super::Vm {
                         self.stack.truncate(handler_base);
                     }
 
-                    if handler_frame.upvalue_idx != u32::MAX {
-                        if handler_frame.upvalue_idx as usize == self.upvalue_stack.len() - 1 {
-                            self.upvalue_stack.pop();
-                        }
+                    if handler_frame.upvalue_idx != u32::MAX
+                        && handler_frame.upvalue_idx as usize == self.upvalue_stack.len() - 1
+                    {
+                        self.upvalue_stack.pop();
                     }
 
                     self.stack.extend(ss);
@@ -370,31 +371,30 @@ impl super::Vm {
                                         chunk_idx: fn_idx,
                                         base_slot: start,
                                     });
-                                } else if handler_fn.is_heap() {
-                                    if let HeapObject::Closure {
+                                } else if handler_fn.is_heap()
+                                    && let HeapObject::Closure {
                                         chunk_idx: cidx,
                                         upvalues,
                                     } = handler_fn.as_heap_ref()
-                                    {
-                                        let fn_idx = *cidx;
-                                        let caller = self.frames.last_mut();
-                                        caller.ip = ip as u32;
-                                        caller.chunk_idx = chunk_idx as u32;
-                                        self.upvalue_stack
-                                            .push(Rc::new(upvalues.clone()));
-                                        let uv_idx = self.upvalue_stack.len() - 1;
-                                        self.frames.push(CallFrame {
-                                            chunk_idx: fn_idx as u32,
-                                            ip: 0,
-                                            base_slot: start as u32,
-                                            upvalue_idx: uv_idx as u32,
-                                        });
-                                        return Ok(DispatchResult::Restart {
-                                            ip: 0,
-                                            chunk_idx: fn_idx,
-                                            base_slot: start,
-                                        });
-                                    }
+                                {
+                                    let fn_idx = *cidx;
+                                    let caller = self.frames.last_mut();
+                                    caller.ip = ip as u32;
+                                    caller.chunk_idx = chunk_idx as u32;
+                                    self.upvalue_stack
+                                        .push(Rc::new(upvalues.clone()));
+                                    let uv_idx = self.upvalue_stack.len() - 1;
+                                    self.frames.push(CallFrame {
+                                        chunk_idx: fn_idx as u32,
+                                        ip: 0,
+                                        base_slot: start as u32,
+                                        upvalue_idx: uv_idx as u32,
+                                    });
+                                    return Ok(DispatchResult::Restart {
+                                        ip: 0,
+                                        chunk_idx: fn_idx,
+                                        base_slot: start,
+                                    });
                                 }
                             }
                         }

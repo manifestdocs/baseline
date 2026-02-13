@@ -481,10 +481,8 @@ pub extern "C" fn jit_closure_upvalue(closure_bits: u64, idx: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_is_closure(val_bits: u64) -> u64 {
     let nv = unsafe { NValue::borrow_from_raw(val_bits) };
-    if nv.is_heap() {
-        if matches!(nv.as_heap_ref(), HeapObject::Closure { .. }) {
-            return 1;
-        }
+    if nv.is_heap() && matches!(nv.as_heap_ref(), HeapObject::Closure { .. }) {
+        return 1;
     }
     0
 }
@@ -611,8 +609,7 @@ pub extern "C" fn jit_list_get_raw(list_bits: u64, index: i64) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_alloc_buf(count: i64) -> *mut u64 {
     let n = count.max(0) as usize;
-    let mut buf = Vec::<u64>::with_capacity(n);
-    buf.resize(n, 0);
+    let mut buf = vec![0u64; n];
     let ptr = buf.as_mut_ptr();
     std::mem::forget(buf);
     ptr

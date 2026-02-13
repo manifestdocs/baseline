@@ -136,10 +136,10 @@ fn collect_pattern_names(pattern: &Pattern, names: &mut HashSet<String>) {
 /// Replace occurrences of free variable names with GetClosureVar(index).
 fn replace_free_vars(expr: Expr, fv_map: &HashMap<String, usize>) -> Expr {
     transform_expr(expr, &mut |e| {
-        if let Expr::Var(ref name, _) = e {
-            if let Some(&idx) = fv_map.get(name) {
-                return Expr::GetClosureVar(idx);
-            }
+        if let Expr::Var(ref name, _) = e
+            && let Some(&idx) = fv_map.get(name)
+        {
+            return Expr::GetClosureVar(idx);
         }
         e
     })
@@ -266,14 +266,11 @@ fn collect_tags_from_expr(expr: &Expr, tags: &mut TagRegistry) {
 
 /// Collect enum tag strings from a pattern.
 fn collect_tags_from_pattern(pattern: &Pattern, tags: &mut TagRegistry) {
-    match pattern {
-        Pattern::Constructor(tag, sub_patterns) => {
-            tags.register(tag);
-            for sub in sub_patterns {
-                collect_tags_from_pattern(sub, tags);
-            }
+    if let Pattern::Constructor(tag, sub_patterns) = pattern {
+        tags.register(tag);
+        for sub in sub_patterns {
+            collect_tags_from_pattern(sub, tags);
         }
-        _ => {}
     }
 }
 
@@ -960,27 +957,26 @@ fn inline_expr(
 ) -> Expr {
     // Use transform_expr for the recursive walk, intercept at CallDirect
     transform_expr(expr, &mut |e| {
-        if let Expr::CallDirect { name, args, ty } = &e {
-            if let Some((params, body)) = inlineable.get(name) {
-                if params.len() == args.len() {
-                    // Build let bindings with fresh names
-                    let mut stmts = Vec::new();
-                    let mut rename_map = HashMap::new();
-                    for (param, arg) in params.iter().zip(args.iter()) {
-                        let fresh = format!("__inl_{}_{}", param, *counter);
-                        *counter += 1;
-                        rename_map.insert(param.clone(), fresh.clone());
-                        stmts.push(Expr::Let {
-                            pattern: Box::new(Pattern::Var(fresh)),
-                            value: Box::new(arg.clone()),
-                            ty: None,
-                        });
-                    }
-                    let inlined_body = rename_vars(body.clone(), &rename_map);
-                    stmts.push(inlined_body);
-                    return Expr::Block(stmts, ty.clone());
-                }
+        if let Expr::CallDirect { name, args, ty } = &e
+            && let Some((params, body)) = inlineable.get(name)
+            && params.len() == args.len()
+        {
+            // Build let bindings with fresh names
+            let mut stmts = Vec::new();
+            let mut rename_map = HashMap::new();
+            for (param, arg) in params.iter().zip(args.iter()) {
+                let fresh = format!("__inl_{}_{}", param, *counter);
+                *counter += 1;
+                rename_map.insert(param.clone(), fresh.clone());
+                stmts.push(Expr::Let {
+                    pattern: Box::new(Pattern::Var(fresh)),
+                    value: Box::new(arg.clone()),
+                    ty: None,
+                });
             }
+            let inlined_body = rename_vars(body.clone(), &rename_map);
+            stmts.push(inlined_body);
+            return Expr::Block(stmts, ty.clone());
         }
         e
     })
@@ -1050,13 +1046,12 @@ fn count_var_uses(expr: &Expr, counts: &mut HashMap<String, usize>) {
 /// Remove dead let bindings (literal-valued, zero references).
 fn remove_dead_lets(expr: Expr, counts: &HashMap<String, usize>) -> Expr {
     transform_expr(expr, &mut |e| {
-        if let Expr::Let { ref pattern, ref value, .. } = e {
-            if let Pattern::Var(ref name) = **pattern
-                && is_literal(value)
-                && counts.get(name).copied().unwrap_or(0) == 0
-            {
-                return Expr::Unit;
-            }
+        if let Expr::Let { ref pattern, ref value, .. } = e
+            && let Pattern::Var(ref name) = **pattern
+            && is_literal(value)
+            && counts.get(name).copied().unwrap_or(0) == 0
+        {
+            return Expr::Unit;
         }
         e
     })

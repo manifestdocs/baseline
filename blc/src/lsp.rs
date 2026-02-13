@@ -151,38 +151,25 @@ impl BaselineLanguageServer {
                             let mut mod_loader = ModuleLoader::with_base_dir(
                                 path.parent().unwrap_or(&path).to_path_buf(),
                             );
-                            if let Ok(idx) = mod_loader.load_module(&path, &import_node, &file_name) {
-                                if let Some((mod_root, mod_source, _)) = mod_loader.get_module(idx) {
-                                    let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
-                                    let mod_name = &resolved.module_name;
+                            if let Ok(idx) = mod_loader.load_module(&path, &import_node, &file_name)
+                                && let Some((mod_root, mod_source, _)) = mod_loader.get_module(idx)
+                            {
+                                let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
+                                let mod_name = &resolved.module_name;
 
-                                    // Build module_methods entries
-                                    for (func_name, sig) in &exports.functions {
-                                        let key = format!("{}.{}", mod_name, func_name);
-                                        let sig_str = sig.clone().unwrap_or_else(|| "()".to_string());
-                                        module_methods.insert(key, sig_str);
-                                    }
+                                // Build module_methods entries
+                                for (func_name, sig) in &exports.functions {
+                                    let key = format!("{}.{}", mod_name, func_name);
+                                    let sig_str = sig.clone().unwrap_or_else(|| "()".to_string());
+                                    module_methods.insert(key, sig_str);
+                                }
 
-                                    // Add imported symbols based on import kind
-                                    let target_uri = Url::from_file_path(&path).ok();
-                                    match &resolved.kind {
-                                        ImportKind::Selective(names) => {
-                                            for (func_name, sig) in &exports.functions {
-                                                if names.contains(func_name) {
-                                                    symbols.push(SymbolInfo {
-                                                        name: func_name.clone(),
-                                                        kind: SymbolKind::FUNCTION,
-                                                        type_sig: sig.clone(),
-                                                        range: Range::default(),
-                                                        selection_range: Range::default(),
-                                                        defined_in: target_uri.clone(),
-                                                        module_name: Some(mod_name.clone()),
-                                                    });
-                                                }
-                                            }
-                                        }
-                                        ImportKind::Wildcard => {
-                                            for (func_name, sig) in &exports.functions {
+                                // Add imported symbols based on import kind
+                                let target_uri = Url::from_file_path(&path).ok();
+                                match &resolved.kind {
+                                    ImportKind::Selective(names) => {
+                                        for (func_name, sig) in &exports.functions {
+                                            if names.contains(func_name) {
                                                 symbols.push(SymbolInfo {
                                                     name: func_name.clone(),
                                                     kind: SymbolKind::FUNCTION,
@@ -194,10 +181,23 @@ impl BaselineLanguageServer {
                                                 });
                                             }
                                         }
-                                        ImportKind::Qualified => {
-                                            // Qualified imports are accessed via Module.method
-                                            // No direct symbols injected
+                                    }
+                                    ImportKind::Wildcard => {
+                                        for (func_name, sig) in &exports.functions {
+                                            symbols.push(SymbolInfo {
+                                                name: func_name.clone(),
+                                                kind: SymbolKind::FUNCTION,
+                                                type_sig: sig.clone(),
+                                                range: Range::default(),
+                                                selection_range: Range::default(),
+                                                defined_in: target_uri.clone(),
+                                                module_name: Some(mod_name.clone()),
+                                            });
                                         }
+                                    }
+                                    ImportKind::Qualified => {
+                                        // Qualified imports are accessed via Module.method
+                                        // No direct symbols injected
                                     }
                                 }
                             }

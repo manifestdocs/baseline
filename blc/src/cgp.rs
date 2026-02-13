@@ -239,54 +239,53 @@ fn analyze_cursor_context(root: &tree_sitter::Node, source: &str) -> CursorConte
             "source_file" => break, // fall through to character heuristic
             "function_def" => {
                 // Are we in the body (after `=`) or in parameters/return type?
-                if let Some(body) = node.child_by_field_name("body") {
-                    if cursor_byte >= body.start_byte() {
-                        return CursorContext::Expression;
-                    }
+                if let Some(body) = node.child_by_field_name("body")
+                    && cursor_byte >= body.start_byte()
+                {
+                    return CursorContext::Expression;
                 }
-                if let Some(ret) = node.child_by_field_name("return_type") {
-                    if cursor_byte >= ret.start_byte() {
-                        return CursorContext::TypeAnnotation;
-                    }
+                if let Some(ret) = node.child_by_field_name("return_type")
+                    && cursor_byte >= ret.start_byte()
+                {
+                    return CursorContext::TypeAnnotation;
                 }
-                if let Some(params) = node.child_by_field_name("params") {
-                    if cursor_byte >= params.start_byte()
-                        && cursor_byte <= params.end_byte()
-                    {
-                        return CursorContext::FunctionParams;
-                    }
+                if let Some(params) = node.child_by_field_name("params")
+                    && cursor_byte >= params.start_byte()
+                    && cursor_byte <= params.end_byte()
+                {
+                    return CursorContext::FunctionParams;
                 }
                 return CursorContext::TopLevel;
             }
             "let_binding" => {
                 // After `=` is expression, after `:` is type
-                if let Some(value) = node.child_by_field_name("value") {
-                    if cursor_byte >= value.start_byte() {
-                        return CursorContext::Expression;
-                    }
+                if let Some(value) = node.child_by_field_name("value")
+                    && cursor_byte >= value.start_byte()
+                {
+                    return CursorContext::Expression;
                 }
-                if let Some(ty) = node.child_by_field_name("type") {
-                    if cursor_byte >= ty.start_byte() {
-                        return CursorContext::TypeAnnotation;
-                    }
+                if let Some(ty) = node.child_by_field_name("type")
+                    && cursor_byte >= ty.start_byte()
+                {
+                    return CursorContext::TypeAnnotation;
                 }
                 return CursorContext::Expression;
             }
             "match_expression" => return CursorContext::MatchArm,
             "match_arm" => {
                 // Pattern before `=>`, expression after
-                if let Some(body) = node.child_by_field_name("body") {
-                    if cursor_byte >= body.start_byte() {
-                        return CursorContext::Expression;
-                    }
+                if let Some(body) = node.child_by_field_name("body")
+                    && cursor_byte >= body.start_byte()
+                {
+                    return CursorContext::Expression;
                 }
                 return CursorContext::Pattern;
             }
             "call_expression" => {
-                if let Some(args) = node.child_by_field_name("arguments") {
-                    if cursor_byte >= args.start_byte() {
-                        return CursorContext::FunctionArgs;
-                    }
+                if let Some(args) = node.child_by_field_name("arguments")
+                    && cursor_byte >= args.start_byte()
+                {
+                    return CursorContext::FunctionArgs;
                 }
                 return CursorContext::Expression;
             }
@@ -923,18 +922,18 @@ fn handle_advance(body: &str, sessions: &Mutex<HashMap<String, Session>>) -> (u1
     let new_len = session.source.len();
 
     // Incremental parse: edit the old tree, then reparse with it as reference
-    if old_len != new_len {
-        if let Some(ref mut tree) = session.tree {
-            let edit = InputEdit {
-                start_byte: old_len,
-                old_end_byte: old_len,
-                new_end_byte: new_len,
-                start_position: byte_to_point(&session.source, old_len),
-                old_end_position: byte_to_point(&session.source, old_len),
-                new_end_position: byte_to_point(&session.source, new_len),
-            };
-            tree.edit(&edit);
-        }
+    if old_len != new_len
+        && let Some(ref mut tree) = session.tree
+    {
+        let edit = InputEdit {
+            start_byte: old_len,
+            old_end_byte: old_len,
+            new_end_byte: new_len,
+            start_position: byte_to_point(&session.source, old_len),
+            old_end_position: byte_to_point(&session.source, old_len),
+            new_end_position: byte_to_point(&session.source, new_len),
+        };
+        tree.edit(&edit);
     }
 
     // Parse (incremental if we have an old tree)

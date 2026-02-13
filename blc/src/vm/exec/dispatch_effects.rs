@@ -11,6 +11,7 @@ use super::DispatchResult;
 /// PerformEffect, PopHandler, Halt, Return.
 impl super::Vm {
     #[inline(always)]
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn dispatch_effects(
         &mut self,
         op: &Op,
@@ -291,10 +292,10 @@ impl super::Vm {
                     // Handler was already consumed — nothing to pop.
                 } else {
                     let hs_idx = self.handler_stack.len() - 1;
-                    if let Some(bi) = self.handler_boundaries.last() {
-                        if bi.handler_stack_idx == hs_idx {
-                            self.handler_boundaries.pop();
-                        }
+                    if let Some(bi) = self.handler_boundaries.last()
+                        && bi.handler_stack_idx == hs_idx
+                    {
+                        self.handler_boundaries.pop();
                     }
                     self.handler_stack.pop();
                 }
@@ -313,10 +314,10 @@ impl super::Vm {
                 let result = self.stack.pop().unwrap_or_else(NValue::unit);
                 let frame = self.frames.pop();
 
-                if frame.upvalue_idx != u32::MAX {
-                    if frame.upvalue_idx as usize == self.upvalue_stack.len() - 1 {
-                        self.upvalue_stack.pop();
-                    }
+                if frame.upvalue_idx != u32::MAX
+                    && frame.upvalue_idx as usize == self.upvalue_stack.len() - 1
+                {
+                    self.upvalue_stack.pop();
                 }
 
                 if self.frames.len() <= base_depth {

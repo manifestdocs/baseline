@@ -131,17 +131,16 @@ impl SendableHandler {
         if nv.is_function() {
             return Some(SendableHandler::Function(nv.as_function()));
         }
-        if nv.is_heap() {
-            if let HeapObject::Closure {
+        if nv.is_heap()
+            && let HeapObject::Closure {
                 chunk_idx,
                 upvalues,
             } = nv.as_heap_ref()
-            {
-                return Some(SendableHandler::Closure {
-                    chunk_idx: *chunk_idx,
-                    upvalues: upvalues.iter().map(SendableValue::from_nvalue).collect(),
-                });
-            }
+        {
+            return Some(SendableHandler::Closure {
+                chunk_idx: *chunk_idx,
+                upvalues: upvalues.iter().map(SendableValue::from_nvalue).collect(),
+            });
         }
         None
     }

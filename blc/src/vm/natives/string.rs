@@ -202,7 +202,7 @@ pub(super) fn native_string_char_code(args: &[NValue]) -> Result<NValue, NativeE
 pub(super) fn native_string_replace(args: &[NValue]) -> Result<NValue, NativeError> {
     match (args[0].as_string(), args[1].as_string(), args[2].as_string()) {
         (Some(s), Some(old), Some(new)) => {
-            Ok(NValue::string(s.replace(&**old, &**new).into()))
+            Ok(NValue::string(s.replace(&**old, new).into()))
         }
         _ => Err(NativeError(
             "String.replace: expected (String, String, String)".into(),

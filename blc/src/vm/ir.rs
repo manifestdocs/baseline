@@ -54,6 +54,11 @@ impl TagRegistry {
     pub fn len(&self) -> usize {
         self.id_to_tag.len()
     }
+
+    /// Returns true if no tags are registered.
+    pub fn is_empty(&self) -> bool {
+        self.id_to_tag.is_empty()
+    }
 }
 
 impl Default for TagRegistry {

@@ -35,11 +35,11 @@ pub fn load_manifest(dir: &Path) -> Option<(Manifest, PathBuf)> {
     let mut current = dir.to_path_buf();
     loop {
         let candidate = current.join("baseline.toml");
-        if candidate.is_file() {
-            if let Ok(content) = std::fs::read_to_string(&candidate) {
-                let manifest = parse_manifest(&content);
-                return Some((manifest, current));
-            }
+        if candidate.is_file()
+            && let Ok(content) = std::fs::read_to_string(&candidate)
+        {
+            let manifest = parse_manifest(&content);
+            return Some((manifest, current));
         }
         if !current.pop() {
             break;

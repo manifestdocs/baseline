@@ -92,10 +92,10 @@ impl<'a> super::Lowerer<'a> {
     /// Check if a string node contains interpolation children.
     pub(super) fn has_interpolation(&self, node: &Node) -> bool {
         for i in 0..node.named_child_count() {
-            if let Some(child) = node.named_child(i) {
-                if child.kind() == "interpolation" {
-                    return true;
-                }
+            if let Some(child) = node.named_child(i)
+                && child.kind() == "interpolation"
+            {
+                return true;
             }
         }
         false

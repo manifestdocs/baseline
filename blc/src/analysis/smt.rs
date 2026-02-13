@@ -196,21 +196,21 @@ fn parse_spec_block(node: &Node, source: &str, file: &str) -> Option<FuncSpec> {
             }
             "function_def" => {
                 // If name not set from @spec, get it from function
-                if name.is_empty() {
-                    if let Some(fn_name) = child.child_by_field_name("name") {
-                        name = text(&fn_name, source).to_string();
-                    }
+                if name.is_empty()
+                    && let Some(fn_name) = child.child_by_field_name("name")
+                {
+                    name = text(&fn_name, source).to_string();
                 }
                 // Extract params from function signature if not from @given
-                if params.is_empty() {
-                    if let Some(param_list) = child.child_by_field_name("params") {
-                        let mut cursor = param_list.walk();
-                        for p in param_list.named_children(&mut cursor) {
-                            if p.kind() == "param" {
-                                let pname = text(&p.child_by_field_name("name").unwrap(), source);
-                                let ptype = text(&p.child_by_field_name("type").unwrap(), source);
-                                params.push((pname.to_string(), ptype.to_string()));
-                            }
+                if params.is_empty()
+                    && let Some(param_list) = child.child_by_field_name("params")
+                {
+                    let mut cursor = param_list.walk();
+                    for p in param_list.named_children(&mut cursor) {
+                        if p.kind() == "param" {
+                            let pname = text(&p.child_by_field_name("name").unwrap(), source);
+                            let ptype = text(&p.child_by_field_name("type").unwrap(), source);
+                            params.push((pname.to_string(), ptype.to_string()));
                         }
                     }
                 }
@@ -223,7 +223,7 @@ fn parse_spec_block(node: &Node, source: &str, file: &str) -> Option<FuncSpec> {
         return None;
     }
 
-    let location = Location::from_node(file, &node);
+    let location = Location::from_node(file, node);
 
     Some(FuncSpec {
         name,
@@ -594,8 +594,8 @@ fn format_counter_example(model: &str, spec: &FuncSpec) -> String {
 
 fn normalize_smt_value(val: &str) -> String {
     let val = val.trim();
-    if val.starts_with("(- ") {
-        format!("-{}", val[3..].trim_end_matches(')').trim())
+    if let Some(rest) = val.strip_prefix("(- ") {
+        format!("-{}", rest.trim_end_matches(')').trim())
     } else {
         val.to_string()
     }

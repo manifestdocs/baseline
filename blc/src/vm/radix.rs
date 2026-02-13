@@ -21,12 +21,18 @@ pub struct SmallParams {
     len: usize,
 }
 
-impl SmallParams {
-    pub fn new() -> Self {
+impl Default for SmallParams {
+    fn default() -> Self {
         SmallParams {
             data: std::array::from_fn(|_| (String::new(), String::new())),
             len: 0,
         }
+    }
+}
+
+impl SmallParams {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn as_slice(&self) -> &[(String, String)] {
@@ -113,11 +119,17 @@ pub struct RadixTree<H> {
     pub root: RadixNode<H>,
 }
 
-impl<H: Clone> RadixTree<H> {
-    pub fn new() -> Self {
+impl<H> Default for RadixTree<H> {
+    fn default() -> Self {
         RadixTree {
             root: RadixNode::new(),
         }
+    }
+}
+
+impl<H: Clone> RadixTree<H> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn insert(&mut self, method: &str, path: &str, handler: H) {
@@ -134,7 +146,7 @@ impl<H: Clone> RadixTree<H> {
                 node = node
                     .children
                     .entry(seg.to_string())
-                    .or_insert_with(RadixNode::new);
+                    .or_default();
             }
         }
         node.handlers.entry(method.to_string()).or_insert(handler);
@@ -165,10 +177,10 @@ fn find_in_node<'a, H, P: ParamCollector>(
     let rest = &segments[1..];
 
     // Try exact match first
-    if let Some(child) = node.children.get(seg) {
-        if let result @ Some(_) = find_in_node(child, rest, method, params) {
-            return result;
-        }
+    if let Some(child) = node.children.get(seg)
+        && let result @ Some(_) = find_in_node(child, rest, method, params)
+    {
+        return result;
     }
 
     // Try parameter match

@@ -410,8 +410,8 @@ fn build_signature_from_schema(qualified_name: &str) -> Option<String> {
     let var_names = extract_var_names(qualified_name, schema.type_params);
 
     let func_name = qualified_name
-        .split('.')
-        .last()
+        .rsplit('.')
+        .next()
         .unwrap_or(qualified_name);
 
     match &fn_type {
@@ -498,13 +498,13 @@ fn format_type_with_vars(ty: &Type, var_names: &HashMap<u32, String>) -> String 
         }
         Type::Enum(name, variants) => match name.as_str() {
             "Option" => {
-                if let Some((_, payload)) = variants.first() {
-                    if let Some(inner) = payload.first() {
-                        return format!(
-                            "Option<{}>",
-                            format_type_with_vars(inner, var_names)
-                        );
-                    }
+                if let Some((_, payload)) = variants.first()
+                    && let Some(inner) = payload.first()
+                {
+                    return format!(
+                        "Option<{}>",
+                        format_type_with_vars(inner, var_names)
+                    );
                 }
                 "Option".to_string()
             }

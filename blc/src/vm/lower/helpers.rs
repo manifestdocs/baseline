@@ -33,10 +33,10 @@ impl<'a> super::Lowerer<'a> {
         if let Some(param_list) = func_def.child_by_field_name("params") {
             let mut cursor = param_list.walk();
             for child in param_list.named_children(&mut cursor) {
-                if child.kind() == "param" {
-                    if let Some(name_node) = child.child_by_field_name("name") {
-                        params.push(self.node_text(&name_node));
-                    }
+                if child.kind() == "param"
+                    && let Some(name_node) = child.child_by_field_name("name")
+                {
+                    params.push(self.node_text(&name_node));
                 }
             }
         }

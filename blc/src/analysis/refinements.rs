@@ -60,21 +60,21 @@ impl StringConstraint {
             },
             StringConstraint::Length { min, max } => {
                 let len = value.len();
-                if let Some(min_val) = min {
-                    if len < *min_val {
-                        return Err(format!(
-                            "length {} is less than minimum {}",
-                            len, min_val
-                        ));
-                    }
+                if let Some(min_val) = min
+                    && len < *min_val
+                {
+                    return Err(format!(
+                        "length {} is less than minimum {}",
+                        len, min_val
+                    ));
                 }
-                if let Some(max_val) = max {
-                    if len > *max_val {
-                        return Err(format!(
-                            "length {} exceeds maximum {}",
-                            len, max_val
-                        ));
-                    }
+                if let Some(max_val) = max
+                    && len > *max_val
+                {
+                    return Err(format!(
+                        "length {} exceeds maximum {}",
+                        len, max_val
+                    ));
                 }
                 Ok(())
             }
@@ -180,10 +180,10 @@ pub fn check_refinements(tree: &Tree, source: &str, file: &str) -> Vec<Diagnosti
     let mut refined_types: HashMap<String, Constraint> = HashMap::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() == "type_def" {
-            if let Some((name, constraint)) = parse_refined_type(child, source) {
-                refined_types.insert(name, constraint);
-            }
+        if child.kind() == "type_def"
+            && let Some((name, constraint)) = parse_refined_type(child, source)
+        {
+            refined_types.insert(name, constraint);
         }
     }
 
@@ -634,10 +634,10 @@ fn check_let_binding(
         }
     }
 
-    if let Some(last_child) = node.named_child(node.named_child_count() - 1) {
-        if last_child.kind() != "type_annotation" {
-            value_node = Some(last_child);
-        }
+    if let Some(last_child) = node.named_child(node.named_child_count() - 1)
+        && last_child.kind() != "type_annotation"
+    {
+        value_node = Some(last_child);
     }
 
     let constraint = type_name.as_ref().and_then(|t| refined_types.get(t));
@@ -680,14 +680,13 @@ fn check_let_binding(
                     }
                 }
 
-                if val.kind() == "integer_literal" {
-                    if let Some(int_val) = crate::parse::parse_int_literal(
+                if val.kind() == "integer_literal"
+                    && let Some(int_val) = crate::parse::parse_int_literal(
                         val.utf8_text(source.as_bytes()).unwrap_or("0"),
-                    ) {
-                        if let Some(name) = binding_name {
-                            values.insert(name, int_val);
-                        }
-                    }
+                    )
+                    && let Some(name) = binding_name
+                {
+                    values.insert(name, int_val);
                 }
             }
         }
@@ -722,10 +721,10 @@ fn check_int_refinement(
             resolved_value = crate::parse::parse_int_literal(
                 val.utf8_text(source.as_bytes()).unwrap_or("0"),
             );
-        } else if val.kind() == "identifier" {
-            if let Ok(var_name) = val.utf8_text(source.as_bytes()) {
-                resolved_value = values.lookup(var_name);
-            }
+        } else if val.kind() == "identifier"
+            && let Ok(var_name) = val.utf8_text(source.as_bytes())
+        {
+            resolved_value = values.lookup(var_name);
         }
     }
 
@@ -733,34 +732,34 @@ fn check_int_refinement(
         values.insert(name, val);
     }
 
-    if let Some(int_val) = resolved_value {
-        if !interval.contains(int_val) {
-            let vn = value_node.unwrap();
-            diagnostics.push(Diagnostic {
-                code: "REF_001".to_string(),
-                severity: Severity::Error,
-                location: Location::from_node(file, &vn),
-                message: format!(
-                    "Refinement Violation: Value {} is out of bounds for type {}",
-                    int_val, type_name
-                ),
-                context: format!(
-                    "Type {} requires value in range [{}, {}]",
-                    type_name,
-                    if interval.min == i64::MIN {
-                        "-inf".to_string()
-                    } else {
-                        interval.min.to_string()
-                    },
-                    if interval.max == i64::MAX {
-                        "inf".to_string()
-                    } else {
-                        interval.max.to_string()
-                    }
-                ),
-                suggestions: vec![],
-            });
-        }
+    if let Some(int_val) = resolved_value
+        && !interval.contains(int_val)
+    {
+        let vn = value_node.unwrap();
+        diagnostics.push(Diagnostic {
+            code: "REF_001".to_string(),
+            severity: Severity::Error,
+            location: Location::from_node(file, &vn),
+            message: format!(
+                "Refinement Violation: Value {} is out of bounds for type {}",
+                int_val, type_name
+            ),
+            context: format!(
+                "Type {} requires value in range [{}, {}]",
+                type_name,
+                if interval.min == i64::MIN {
+                    "-inf".to_string()
+                } else {
+                    interval.min.to_string()
+                },
+                if interval.max == i64::MAX {
+                    "inf".to_string()
+                } else {
+                    interval.max.to_string()
+                }
+            ),
+            suggestions: vec![],
+        });
     }
 }
 

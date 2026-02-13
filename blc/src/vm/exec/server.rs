@@ -129,7 +129,7 @@ impl SendableChunks {
                     constants: c
                         .constants
                         .iter()
-                        .map(|v| SendableValue::from_nvalue(v))
+                        .map(SendableValue::from_nvalue)
                         .collect(),
                     source_map: c.source_map.clone(),
                 })
@@ -241,9 +241,9 @@ fn handle_request(
         Some(handler) => {
             let enriched = inject_params_nv(&req_record, params.as_slice());
             let result = if middleware.is_empty() {
-                vm.call_nvalue(&handler, &[enriched], chunks, 0, 0)
+                vm.call_nvalue(handler, &[enriched], chunks, 0, 0)
             } else {
-                vm.apply_mw_chain(middleware, &handler, &enriched, chunks, 0, 0)
+                vm.apply_mw_chain(middleware, handler, &enriched, chunks, 0, 0)
             };
             match result {
                 Ok(val) => extract_response_nv(&val),
@@ -497,7 +497,7 @@ impl super::Vm {
         col: usize,
     ) -> Result<NValue, CompileError> {
         if middleware.is_empty() {
-            return self.call_nvalue(handler, &[request.clone()], chunks, line, col);
+            return self.call_nvalue(handler, std::slice::from_ref(request), chunks, line, col);
         }
 
         // Build the "next" chain inside-out: innermost = handler

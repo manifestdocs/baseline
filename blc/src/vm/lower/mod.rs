@@ -89,14 +89,14 @@ impl<'a> Lowerer<'a> {
             } else {
                 None
             };
-            if let Some(func_node) = func {
-                if let Some(name_node) = func_node.child_by_field_name("name") {
-                    let name = self.node_text(&name_node);
-                    self.functions.insert(name.clone());
-                    let params = self.extract_param_names(&func_node);
-                    self.fn_params.insert(name.clone(), params);
-                    func_nodes.push((name, i));
-                }
+            if let Some(func_node) = func
+                && let Some(name_node) = func_node.child_by_field_name("name")
+            {
+                let name = self.node_text(&name_node);
+                self.functions.insert(name.clone());
+                let params = self.extract_param_names(&func_node);
+                self.fn_params.insert(name.clone(), params);
+                func_nodes.push((name, i));
             }
         }
 
@@ -169,12 +169,12 @@ impl<'a> Lowerer<'a> {
             } else {
                 None
             };
-            if let Some(func_node) = func {
-                if let Some(name_node) = func_node.child_by_field_name("name") {
-                    let name = self.node_text(&name_node);
-                    self.functions.insert(name.clone());
-                    func_nodes.push((name, i));
-                }
+            if let Some(func_node) = func
+                && let Some(name_node) = func_node.child_by_field_name("name")
+            {
+                let name = self.node_text(&name_node);
+                self.functions.insert(name.clone());
+                func_nodes.push((name, i));
             }
         }
 

@@ -67,21 +67,21 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         | (Type::Record(fields_b, _), Type::Record(fields_a, Some(_))) => {
             // The open record's fields must all exist in the other record with compatible types
             fields_a.iter().all(|(k, ta)| {
-                fields_b.get(k).map_or(false, |tb| types_compatible(ta, tb))
+                fields_b.get(k).is_some_and(|tb| types_compatible(ta, tb))
             })
         }
         (Type::Record(fa, None), Type::Record(fb, None)) => {
             // Closed records: exact field match
             fa.len() == fb.len()
                 && fa.iter().all(|(k, ta)| {
-                    fb.get(k).map_or(false, |tb| types_compatible(ta, tb))
+                    fb.get(k).is_some_and(|tb| types_compatible(ta, tb))
                 })
         }
         // Open record with Struct (structs have fixed fields)
         (Type::Record(fields, Some(_)), Type::Struct(_, sfields))
         | (Type::Struct(_, sfields), Type::Record(fields, Some(_))) => {
             fields.iter().all(|(k, ta)| {
-                sfields.get(k).map_or(false, |tb| types_compatible(ta, tb))
+                sfields.get(k).is_some_and(|tb| types_compatible(ta, tb))
             })
         }
         _ => false,
@@ -128,7 +128,7 @@ pub(super) fn detect_implicit_type_params(
             let name = node.utf8_text(source.as_bytes()).unwrap();
             // Implicit type params: single uppercase letter not matching a known type
             if name.len() == 1
-                && name.chars().next().map_or(false, |c| c.is_ascii_uppercase())
+                && name.chars().next().is_some_and(|c| c.is_ascii_uppercase())
                 && !is_builtin_type_name(name)
                 && symbols.lookup_type(name).is_none()
                 && !seen.contains(name)

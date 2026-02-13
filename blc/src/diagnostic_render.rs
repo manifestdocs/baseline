@@ -39,41 +39,41 @@ pub fn render_diagnostic(diag: &Diagnostic, source: Option<&str>) -> String {
         diag.location.file, diag.location.line, diag.location.col
     ));
 
-    if let Some(src) = source {
-        if diag.location.line > 0 {
-            let lines: Vec<&str> = src.lines().collect();
-            let line_idx = diag.location.line - 1;
+    if let Some(src) = source
+        && diag.location.line > 0
+    {
+        let lines: Vec<&str> = src.lines().collect();
+        let line_idx = diag.location.line - 1;
 
-            if line_idx < lines.len() {
-                let source_line = lines[line_idx];
-                let line_num = diag.location.line;
-                let gutter_width = format!("{}", line_num).len().max(2);
+        if line_idx < lines.len() {
+            let source_line = lines[line_idx];
+            let line_num = diag.location.line;
+            let gutter_width = format!("{}", line_num).len().max(2);
 
-                out.push_str(&format!("{:>w$} |\n", "", w = gutter_width));
-                out.push_str(&format!(
-                    "{:>w$} | {}\n",
-                    line_num,
-                    source_line,
-                    w = gutter_width
-                ));
+            out.push_str(&format!("{:>w$} |\n", "", w = gutter_width));
+            out.push_str(&format!(
+                "{:>w$} | {}\n",
+                line_num,
+                source_line,
+                w = gutter_width
+            ));
 
-                let col = diag.location.col.saturating_sub(1);
-                let span_len = compute_span_length(diag, line_idx);
-                let underline = "^".repeat(span_len.max(1));
+            let col = diag.location.col.saturating_sub(1);
+            let span_len = compute_span_length(diag, line_idx);
+            let underline = "^".repeat(span_len.max(1));
 
-                let pad: String = source_line
-                    .chars()
-                    .take(col)
-                    .map(|c| if c == '\t' { '\t' } else { ' ' })
-                    .collect();
-                out.push_str(&format!(
-                    "{:>w$} | {}{}\n",
-                    "",
-                    pad,
-                    underline,
-                    w = gutter_width
-                ));
-            }
+            let pad: String = source_line
+                .chars()
+                .take(col)
+                .map(|c| if c == '\t' { '\t' } else { ' ' })
+                .collect();
+            out.push_str(&format!(
+                "{:>w$} | {}{}\n",
+                "",
+                pad,
+                underline,
+                w = gutter_width
+            ));
         }
     }
 
@@ -175,10 +175,10 @@ pub fn find_similar_name<'a>(name: &str, candidates: &'a [String]) -> Option<(&'
             continue;
         }
         let dist = levenshtein_distance(name, candidate);
-        if dist > 0 && dist <= max_dist {
-            if best.is_none() || dist < best.unwrap().1 {
-                best = Some((candidate.as_str(), dist));
-            }
+        if dist > 0 && dist <= max_dist
+            && (best.is_none() || dist < best.unwrap().1)
+        {
+            best = Some((candidate.as_str(), dist));
         }
     }
     best

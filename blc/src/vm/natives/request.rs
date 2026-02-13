@@ -36,16 +36,13 @@ pub(super) fn native_request_header(args: &[NValue]) -> Result<NValue, NativeErr
 
     if let Some(headers) = headers {
         for item in headers {
-            if item.is_heap() {
-                if let HeapObject::Tuple(pair) = item.as_heap_ref() {
-                    if pair.len() == 2 {
-                        if let Some(k) = pair[0].as_string() {
-                            if k.to_lowercase() == name {
-                                return Ok(NValue::enum_val("Some".into(), pair[1].clone()));
-                            }
-                        }
-                    }
-                }
+            if item.is_heap()
+                && let HeapObject::Tuple(pair) = item.as_heap_ref()
+                && pair.len() == 2
+                && let Some(k) = pair[0].as_string()
+                && k.to_lowercase() == name
+            {
+                return Ok(NValue::enum_val("Some".into(), pair[1].clone()));
             }
         }
     }
@@ -205,7 +202,7 @@ pub(super) fn native_request_state(args: &[NValue]) -> Result<NValue, NativeErro
 
     if let Some(state_fields) = state {
         for (k, v) in state_fields {
-            if &**k == &**key {
+            if **k == **key {
                 return Ok(NValue::enum_val("Some".into(), v.clone()));
             }
         }

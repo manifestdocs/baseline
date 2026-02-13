@@ -95,14 +95,13 @@ pub(crate) fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>
                     items
                         .iter()
                         .filter_map(|item| {
-                            if item.is_heap() {
-                                if let HeapObject::Tuple(pair) = item.as_heap_ref() {
-                                    if pair.len() == 2 {
-                                        let k = pair[0].as_string()?.to_string();
-                                        let v = pair[1].as_string()?.to_string();
-                                        return Some((k, v));
-                                    }
-                                }
+                            if item.is_heap()
+                                && let HeapObject::Tuple(pair) = item.as_heap_ref()
+                                && pair.len() == 2
+                            {
+                                let k = pair[0].as_string()?.to_string();
+                                let v = pair[1].as_string()?.to_string();
+                                return Some((k, v));
                             }
                             None
                         })
