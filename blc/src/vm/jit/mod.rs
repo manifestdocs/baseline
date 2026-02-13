@@ -427,6 +427,7 @@ fn compile_inner(
                 aot_native_ids: None,
                 rc_enabled,
                 rc_scope_stack: Vec::new(),
+                func_call_conv: CallConv::Tail,
             };
 
             // RC: push function-level scope with parameter variables
@@ -446,14 +447,14 @@ fn compile_inner(
                 ctx.compile_expr(&func.body)
             };
 
-            // RC: pop function-level scope, decref params except return value
+            // RC: pop function-level scope, decref all tracked params.
+            // The return value may alias a param, but Var reads emit incref,
+            // so decrementing the param still leaves refcount >= 1 for the return.
             let result = if rc_enabled && !is_unboxed {
                 match result {
                     Ok(ret_val) => {
-                        let ret_var = ctx.new_var();
-                        ctx.builder.def_var(ret_var, ret_val);
-                        ctx.pop_rc_scope(Some(ret_var));
-                        Ok(ctx.builder.use_var(ret_var))
+                        ctx.pop_rc_scope(None);
+                        Ok(ret_val)
                     }
                     err => {
                         ctx.pop_rc_scope(None);

@@ -45,6 +45,13 @@ pub fn jit_set_rc_mode(enabled: bool) {
     JIT_RC_MODE.with(|c| c.set(enabled));
 }
 
+/// Enable or disable RC mode (extern "C" for AOT).
+/// enabled != 0 → RC mode on, enabled == 0 → RC mode off.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_set_rc_mode_raw(enabled: u64) {
+    jit_set_rc_mode(enabled != 0);
+}
+
 /// Transfer ownership of a heap NValue to JIT code.
 /// In RC mode: forgets the Rust NValue (caller owns the refcount via raw bits).
 /// In arena mode: pushes to the arena (arena keeps value alive until drain).

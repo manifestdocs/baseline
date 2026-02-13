@@ -1,0 +1,9 @@
+// AOT loop allocation test: creates heap values (strings) in a loop.
+// With RC, intermediate strings are freed. Without RC, this would leak.
+
+fn loop_alloc(n: Int, acc: Int) -> Int =
+  if n <= 0 then acc
+  else loop_alloc(n - 1, acc + String.length(Int.to_string(n)))
+
+fn main() -> String =
+  Int.to_string(loop_alloc(10000, 0))

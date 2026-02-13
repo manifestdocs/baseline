@@ -55,6 +55,8 @@ pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     /// Stack of scope frames tracking owned variables for RC cleanup.
     /// Each frame is a list of Variables whose values should be decref'd on scope exit.
     pub(super) rc_scope_stack: Vec<Vec<Variable>>,
+    /// Calling convention for Baseline functions (Tail for JIT, Fast for AOT).
+    pub(super) func_call_conv: CallConv,
 }
 
 pub(super) type CValue = cranelift_codegen::ir::Value;
@@ -103,7 +105,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Emit an incref call. Returns the same value (for chaining).
-    fn emit_incref(&mut self, val: CValue) -> CValue {
+    pub(super) fn emit_incref(&mut self, val: CValue) -> CValue {
         self.call_helper("jit_rc_incref", &[val])
     }
 
@@ -1449,6 +1451,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     .map(|a| self.compile_expr(a))
                     .collect::<Result<Vec<_>, _>>()?;
 
+                let use_tail = self.func_call_conv == CallConv::Tail;
+
                 // Check if closure or plain function
                 let is_closure = self.call_helper("jit_is_closure", &[callee_val]);
                 let zero = self.builder.ins().iconst(types::I64, 0);
@@ -1458,61 +1462,126 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let function_block = self.builder.create_block();
                 self.builder.ins().brif(cmp, closure_block, &[], function_block, &[]);
 
-                // Closure path: return_call_indirect(sig_N+1, fn_ptr, [closure, args...])
-                self.builder.switch_to_block(closure_block);
-                self.builder.seal_block(closure_block);
-                let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
-                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
-                let zero_c = self.builder.ins().iconst(types::I64, 0);
-                let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
-                let call_closure_block = self.builder.create_block();
-                let null_closure_block = self.builder.create_block();
-                self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
+                if use_tail {
+                    // Tail CC: use return_call_indirect for proper tail calls
+                    // Closure path
+                    self.builder.switch_to_block(closure_block);
+                    self.builder.seal_block(closure_block);
+                    let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
+                    let zero_c = self.builder.ins().iconst(types::I64, 0);
+                    let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
+                    let call_closure_block = self.builder.create_block();
+                    let null_closure_block = self.builder.create_block();
+                    self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
 
-                self.builder.switch_to_block(null_closure_block);
-                self.builder.seal_block(null_closure_block);
-                let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                self.builder.ins().return_(&[unit_c]);
+                    self.builder.switch_to_block(null_closure_block);
+                    self.builder.seal_block(null_closure_block);
+                    let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                    self.builder.ins().return_(&[unit_c]);
 
-                self.builder.switch_to_block(call_closure_block);
-                self.builder.seal_block(call_closure_block);
-                let mut cargs = vec![callee_val];
-                cargs.extend(&compiled_args);
-                let closure_sig = self.build_indirect_sig(args.len() + 1);
-                let sig_ref_c = self.builder.import_signature(closure_sig);
-                self.builder.ins().return_call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+                    self.builder.switch_to_block(call_closure_block);
+                    self.builder.seal_block(call_closure_block);
+                    let mut cargs = vec![callee_val];
+                    cargs.extend(&compiled_args);
+                    let closure_sig = self.build_indirect_sig(args.len() + 1);
+                    let sig_ref_c = self.builder.import_signature(closure_sig);
+                    self.builder.ins().return_call_indirect(sig_ref_c, fn_ptr_c, &cargs);
 
-                // Function path: return_call_indirect(sig_N, fn_ptr, [args...])
-                self.builder.switch_to_block(function_block);
-                self.builder.seal_block(function_block);
-                let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
-                // RC: function path doesn't pass callee_val as arg; decref it
-                if self.rc_enabled {
-                    self.emit_decref(callee_val);
+                    // Function path
+                    self.builder.switch_to_block(function_block);
+                    self.builder.seal_block(function_block);
+                    let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+                    if self.rc_enabled {
+                        self.emit_decref(callee_val);
+                    }
+                    let zero_f = self.builder.ins().iconst(types::I64, 0);
+                    let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
+                    let call_func_block = self.builder.create_block();
+                    let null_func_block = self.builder.create_block();
+                    self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
+
+                    self.builder.switch_to_block(null_func_block);
+                    self.builder.seal_block(null_func_block);
+                    let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                    self.builder.ins().return_(&[unit_f]);
+
+                    self.builder.switch_to_block(call_func_block);
+                    self.builder.seal_block(call_func_block);
+                    let func_sig = self.build_indirect_sig(args.len());
+                    let sig_ref_f = self.builder.import_signature(func_sig);
+                    self.builder.ins().return_call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
+
+                    let dead_block = self.builder.create_block();
+                    self.builder.switch_to_block(dead_block);
+                    self.builder.seal_block(dead_block);
+                    Ok(self.builder.ins().iconst(types::I64, 0))
+                } else {
+                    // Non-Tail CC (AOT Fast): use call_indirect + return_
+                    let merge_block = self.builder.create_block();
+                    self.builder.append_block_param(merge_block, types::I64);
+
+                    // Closure path
+                    self.builder.switch_to_block(closure_block);
+                    self.builder.seal_block(closure_block);
+                    let fn_ptr_c = self.call_helper("jit_closure_fn_ptr", &[callee_val]);
+                    let zero_c = self.builder.ins().iconst(types::I64, 0);
+                    let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
+                    let call_closure_block = self.builder.create_block();
+                    let null_closure_block = self.builder.create_block();
+                    self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
+
+                    self.builder.switch_to_block(null_closure_block);
+                    self.builder.seal_block(null_closure_block);
+                    let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                    self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_c)]);
+
+                    self.builder.switch_to_block(call_closure_block);
+                    self.builder.seal_block(call_closure_block);
+                    let mut cargs = vec![callee_val];
+                    cargs.extend(&compiled_args);
+                    let closure_sig = self.build_indirect_sig(args.len() + 1);
+                    let sig_ref_c = self.builder.import_signature(closure_sig);
+                    let inst_c = self.builder.ins().call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+                    let result_c = self.builder.inst_results(inst_c)[0];
+                    self.builder.ins().jump(merge_block, &[BlockArg::Value(result_c)]);
+
+                    // Function path
+                    self.builder.switch_to_block(function_block);
+                    self.builder.seal_block(function_block);
+                    let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+                    if self.rc_enabled {
+                        self.emit_decref(callee_val);
+                    }
+                    let zero_f = self.builder.ins().iconst(types::I64, 0);
+                    let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
+                    let call_func_block = self.builder.create_block();
+                    let null_func_block = self.builder.create_block();
+                    self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
+
+                    self.builder.switch_to_block(null_func_block);
+                    self.builder.seal_block(null_func_block);
+                    let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                    self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_f)]);
+
+                    self.builder.switch_to_block(call_func_block);
+                    self.builder.seal_block(call_func_block);
+                    let func_sig = self.build_indirect_sig(args.len());
+                    let sig_ref_f = self.builder.import_signature(func_sig);
+                    let inst_f = self.builder.ins().call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
+                    let result_f = self.builder.inst_results(inst_f)[0];
+                    self.builder.ins().jump(merge_block, &[BlockArg::Value(result_f)]);
+
+                    // Merge
+                    self.builder.switch_to_block(merge_block);
+                    self.builder.seal_block(merge_block);
+                    let result = self.builder.block_params(merge_block)[0];
+                    self.builder.ins().return_(&[result]);
+
+                    let dead_block = self.builder.create_block();
+                    self.builder.switch_to_block(dead_block);
+                    self.builder.seal_block(dead_block);
+                    Ok(self.builder.ins().iconst(types::I64, 0))
                 }
-                // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
-                let zero_f = self.builder.ins().iconst(types::I64, 0);
-                let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
-                let call_func_block = self.builder.create_block();
-                let null_func_block = self.builder.create_block();
-                self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
-
-                self.builder.switch_to_block(null_func_block);
-                self.builder.seal_block(null_func_block);
-                let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                self.builder.ins().return_(&[unit_f]);
-
-                self.builder.switch_to_block(call_func_block);
-                self.builder.seal_block(call_func_block);
-                let func_sig = self.build_indirect_sig(args.len());
-                let sig_ref_f = self.builder.import_signature(func_sig);
-                self.builder.ins().return_call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
-
-                // Dead block (unreachable, but Cranelift needs a current block)
-                let dead_block = self.builder.create_block();
-                self.builder.switch_to_block(dead_block);
-                self.builder.seal_block(dead_block);
-                Ok(self.builder.ins().iconst(types::I64, 0))
             }
 
             // Remaining unsupported constructs
@@ -1523,7 +1592,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     /// Build a Cranelift signature for indirect calls with `n_params` I64 params.
     fn build_indirect_sig(&self, n_params: usize) -> cranelift_codegen::ir::Signature {
         let mut sig = self.module.make_signature();
-        sig.call_conv = CallConv::Tail;
+        sig.call_conv = self.func_call_conv;
         for _ in 0..n_params {
             sig.params.push(AbiParam::new(types::I64));
         }

@@ -212,3 +212,9 @@ fn aot_set_ops() {
     let output = compile_and_run("tests/aot/set_ops.bl");
     assert_eq!(output, "6");
 }
+
+#[test]
+fn aot_loop_alloc() {
+    let output = compile_and_run("tests/aot/loop_alloc.bl");
+    assert_eq!(output, "38894");
+}

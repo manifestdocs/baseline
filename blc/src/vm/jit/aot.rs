@@ -444,15 +444,44 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
                 sra_records: HashMap::new(),
                 aot_strings: Some(&aot_strings),
                 aot_native_ids: if aot_native_ids.is_empty() { None } else { Some(&aot_native_ids) },
-                rc_enabled: false, // AOT RC will be enabled separately
+                rc_enabled: true,
                 rc_scope_stack: Vec::new(),
+                func_call_conv: CallConv::Fast,
             };
+
+            // RC: push function-level scope with parameter variables
+            if !is_unboxed {
+                ctx.push_rc_scope();
+                let pvars: Vec<cranelift_frontend::Variable> = ctx.param_vars.clone();
+                for pv in pvars {
+                    ctx.rc_track_var(pv);
+                }
+            }
 
             let result = if is_unboxed {
                 ctx.compile_expr_unboxed(&func.body)
             } else {
                 ctx.compile_expr(&func.body)
             };
+
+            // RC: pop function-level scope, decref all tracked params.
+            // The return value may alias a param, but Var reads emit incref,
+            // so decrementing the param still leaves refcount >= 1 for the return.
+            let result = if !is_unboxed {
+                match result {
+                    Ok(ret_val) => {
+                        ctx.pop_rc_scope(None);
+                        Ok(ret_val)
+                    }
+                    err => {
+                        ctx.pop_rc_scope(None);
+                        err
+                    }
+                }
+            } else {
+                result
+            };
+
             let saved_loop_header = ctx.loop_header;
             drop(ctx);
 
@@ -584,13 +613,16 @@ pub fn link_executable(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Build a Tail-CC signature for AOT functions.
+/// Build a Fast-CC signature for AOT functions.
+/// Note: Tail CC causes stack corruption on macOS aarch64 (Cranelift 0.128).
+/// Fast CC is reliable and sufficient for AOT where self-tail-calls are
+/// compiled as loops (no actual tail-call instruction needed).
 fn build_aot_signature(
     module: &mut ObjectModule,
     param_count: usize,
 ) -> cranelift_codegen::ir::Signature {
     let mut sig = module.make_signature();
-    sig.call_conv = CallConv::Tail;
+    sig.call_conv = CallConv::Fast;
     for _ in 0..param_count {
         sig.params.push(AbiParam::new(types::I64));
     }
@@ -601,11 +633,12 @@ fn build_aot_signature(
 /// Create the `main` function wrapper.
 ///
 /// 1. Build function table on stack, initialize via jit_init_fn_table
-/// 2. Call entry function → u64 result
-/// 3. If entry is unboxed, NaN-box the raw i64 as Int
-/// 4. Call jit_print_result(bits) to display the result
-/// 5. Call jit_drain_arena() for cleanup
-/// 6. Return 0
+/// 2. Enable RC mode via jit_set_rc_mode_raw(1)
+/// 3. Call entry function → u64 result
+/// 4. If entry is unboxed, NaN-box the raw i64 as Int
+/// 5. Call jit_print_result(bits) to display the result
+/// 6. Decref return value + disable RC + drain arena for cleanup
+/// 7. Return 0
 fn create_main_wrapper(
     obj_module: &mut ObjectModule,
     fb_ctx: &mut FunctionBuilderContext,
@@ -674,7 +707,13 @@ fn create_main_wrapper(
         let init_fn_ref = obj_module.declare_func_in_func(init_fn_id, builder.func);
         builder.ins().call(init_fn_ref, &[table_addr, func_count]);
 
-        // 2. Call entry function
+        // 2. Enable RC mode
+        let rc_mode_fn_id = helper_ids["jit_set_rc_mode_raw"];
+        let rc_mode_ref = obj_module.declare_func_in_func(rc_mode_fn_id, builder.func);
+        let one_val = builder.ins().iconst(types::I64, 1);
+        builder.ins().call(rc_mode_ref, &[one_val]);
+
+        // 3. Call entry function
         let entry_ref = obj_module.declare_func_in_func(entry_func_id, builder.func);
         let call = builder.ins().call(entry_ref, &[]);
         let raw_result = builder.inst_results(call)[0];
@@ -719,12 +758,22 @@ fn create_main_wrapper(
         let one = builder.ins().iconst(types::I64, 1);
         builder.ins().call(write_ref, &[fd_stdout, nl_addr, one]);
 
-        // 6. Drain arena
+        // 6. RC cleanup: decref return value (releases JIT ownership), disable RC
+        if !entry_unboxed {
+            let decref_fn_id = helper_ids["jit_rc_decref"];
+            let decref_ref = obj_module.declare_func_in_func(decref_fn_id, builder.func);
+            builder.ins().call(decref_ref, &[result_bits]);
+        }
+        let rc_mode_ref2 = obj_module.declare_func_in_func(rc_mode_fn_id, builder.func);
+        let zero_rc = builder.ins().iconst(types::I64, 0);
+        builder.ins().call(rc_mode_ref2, &[zero_rc]);
+
+        // 7. Drain arena (safety net for any non-RC allocations like baked constants)
         let drain_fn_id = helper_ids["jit_drain_arena"];
         let drain_ref = obj_module.declare_func_in_func(drain_fn_id, builder.func);
         builder.ins().call(drain_ref, &[]);
 
-        // 7. Return 0
+        // 8. Return 0
         let ret_zero = builder.ins().iconst(types::I32, 0);
         builder.ins().return_(&[ret_zero]);
         builder.finalize();
