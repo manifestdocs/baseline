@@ -25,7 +25,8 @@ jit = [
     "dep:target-lexicon",
 ]
 aot = ["jit", "dep:cranelift-object"]
-async-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "dep:tokio-util"]
+async-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "dep:tokio-util", "dep:flate2"]
+tls = ["async-server", "dep:tokio-rustls", "dep:rustls-pemfile"]
 
 [dependencies]
 baseline-rt = { path = "../baseline-rt" }
@@ -47,6 +48,11 @@ hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server-a
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
 tokio-util = { version = "0.7", optional = true }
+flate2 = { version = "1", optional = true }
+
+# TLS (behind feature flag, requires async-server)
+tokio-rustls = { version = "0.26", optional = true }
+rustls-pemfile = { version = "2", optional = true }
 
 # JIT dependencies (behind feature flag)
 cranelift-codegen = { version = "0.128", optional = true }

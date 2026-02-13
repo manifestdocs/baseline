@@ -613,6 +613,36 @@ fn parse_server_config(val: &NValue) -> crate::vm::hyper_server::ServerConfig {
                     config.rate_limit = Some(parse_rate_limit_config(rl_fields));
                 }
             }
+            "tls_cert" | "tls_cert_path" => {
+                if let Some(s) = v.as_string() {
+                    config.tls_cert_path = Some(s.to_string());
+                }
+            }
+            "tls_key" | "tls_key_path" => {
+                if let Some(s) = v.as_string() {
+                    config.tls_key_path = Some(s.to_string());
+                }
+            }
+            "compression" if v.is_bool() => {
+                config.compression = v.as_bool();
+            }
+            "static_dirs" => {
+                if let Some(list) = v.as_list() {
+                    config.static_dirs = list
+                        .iter()
+                        .filter_map(|item| {
+                            let tuple = item.as_tuple()?;
+                            if tuple.len() == 2 {
+                                let prefix = tuple[0].as_string()?.to_string();
+                                let dir = tuple[1].as_string()?.to_string();
+                                Some((prefix, dir))
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                }
+            }
             _ => {}
         }
     }

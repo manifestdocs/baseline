@@ -69,6 +69,14 @@ pub struct ServerConfig {
     pub cors: Option<CorsConfig>,
     /// Rate limiting configuration (None to disable)
     pub rate_limit: Option<RateLimitConfig>,
+    /// TLS certificate file path (PEM format). Requires `tls` feature.
+    pub tls_cert_path: Option<String>,
+    /// TLS private key file path (PEM format). Requires `tls` feature.
+    pub tls_key_path: Option<String>,
+    /// Enable response compression (gzip for responses >1KB with compressible content types)
+    pub compression: bool,
+    /// Static file directory mappings: (url_prefix, filesystem_path)
+    pub static_dirs: Vec<(String, String)>,
 }
 
 impl Default for ServerConfig {
@@ -91,6 +99,10 @@ impl Default for ServerConfig {
             request_id_header: Some("x-request-id".to_string()),
             cors: None,
             rate_limit: None,
+            tls_cert_path: None,
+            tls_key_path: None,
+            compression: false,
+            static_dirs: Vec::new(),
         }
     }
 }
@@ -374,6 +386,11 @@ impl AsyncRequest {
         std::str::from_utf8(&self.body)
     }
 
+    /// Get cookies from the request (parsed from Cookie header).
+    pub fn cookies(&self) -> HashMap<String, String> {
+        parse_cookies(&self.headers)
+    }
+
     /// Convert to NValue record for VM execution.
     pub fn to_nvalue(&self) -> NValue {
         let headers: Vec<NValue> = self
@@ -415,6 +432,12 @@ impl AsyncRequest {
             })
             .unwrap_or_default();
 
+        let cookies: Vec<(RcStr, NValue)> = self
+            .cookies()
+            .into_iter()
+            .map(|(k, v)| (RcStr::from(k), NValue::string(RcStr::from(v))))
+            .collect();
+
         NValue::record(vec![
             (
                 "method".into(),
@@ -428,6 +451,7 @@ impl AsyncRequest {
             ),
             ("params".into(), NValue::record(params)),
             ("query".into(), NValue::record(query_params)),
+            ("cookies".into(), NValue::record(cookies)),
         ])
     }
 
@@ -479,6 +503,15 @@ impl AsyncRequest {
             ("body".to_string(), SendableValue::Bytes(self.body.clone())),
             ("params".to_string(), params_sv),
             ("query".to_string(), query_sv),
+            (
+                "cookies".to_string(),
+                SendableValue::Record(
+                    self.cookies()
+                        .into_iter()
+                        .map(|(k, v)| (k, SendableValue::String(v)))
+                        .collect(),
+                ),
+            ),
         ])
     }
 }
@@ -1193,7 +1226,31 @@ pub async fn run_server_with_context(
         config.max_connections_per_ip,
     ));
 
-    eprintln!("[server] Listening on http://{}", addr);
+    // Set up TLS acceptor if configured
+    #[cfg(feature = "tls")]
+    let tls_acceptor = match (&config.tls_cert_path, &config.tls_key_path) {
+        (Some(cert), Some(key)) => {
+            let tls_config = load_tls_config(cert, key)?;
+            Some(tokio_rustls::TlsAcceptor::from(tls_config))
+        }
+        _ => None,
+    };
+
+    let scheme = {
+        #[cfg(feature = "tls")]
+        {
+            if tls_acceptor.is_some() {
+                "https"
+            } else {
+                "http"
+            }
+        }
+        #[cfg(not(feature = "tls"))]
+        {
+            "http"
+        }
+    };
+    eprintln!("[server] Listening on {}://{}", scheme, addr);
 
     // Set up graceful shutdown signal
     let shutdown = shutdown_signal();
@@ -1239,17 +1296,40 @@ pub async fn run_server_with_context(
                     }
                 };
 
-                let io = hyper_util::rt::TokioIo::new(stream);
                 let ctx = Arc::clone(&ctx);
                 let active = Arc::clone(&active_connections);
                 let mut shutdown_rx = shutdown_tx.subscribe();
 
                 active.fetch_add(1, Ordering::Relaxed);
 
+                // Optionally wrap with TLS
+                #[cfg(feature = "tls")]
+                let tls_acceptor = tls_acceptor.clone();
+
                 tokio::task::spawn(async move {
                     // guard is moved into this task — dropped when connection closes
                     let _guard = guard;
 
+                    #[cfg(feature = "tls")]
+                    if let Some(acceptor) = tls_acceptor {
+                        match acceptor.accept(stream).await {
+                            Ok(tls_stream) => {
+                                let io = hyper_util::rt::TokioIo::new(tls_stream);
+                                if ctx.config.enable_http2 {
+                                    serve_auto_connection(io, ctx, remote_addr, &mut shutdown_rx).await;
+                                } else {
+                                    serve_http1_connection(io, ctx, remote_addr, &mut shutdown_rx).await;
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("[server] TLS handshake failed: {:?}", e);
+                            }
+                        }
+                        active.fetch_sub(1, Ordering::Relaxed);
+                        return;
+                    }
+
+                    let io = hyper_util::rt::TokioIo::new(stream);
                     if ctx.config.enable_http2 {
                         serve_auto_connection(io, ctx, remote_addr, &mut shutdown_rx).await;
                     } else {
@@ -1285,12 +1365,14 @@ pub async fn run_server_with_context(
 }
 
 /// Serve a connection using HTTP/1.1 only.
-pub(crate) async fn serve_http1_connection(
-    io: hyper_util::rt::TokioIo<tokio::net::TcpStream>,
+pub(crate) async fn serve_http1_connection<I>(
+    io: hyper_util::rt::TokioIo<I>,
     ctx: Arc<AsyncServerContext>,
     remote_addr: SocketAddr,
     shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
-) {
+) where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + 'static,
+{
     let config = Arc::clone(&ctx.config);
     let remote = remote_addr;
 
@@ -1326,12 +1408,14 @@ pub(crate) async fn serve_http1_connection(
 }
 
 /// Serve a connection using HTTP/1.1 or HTTP/2 auto-detection.
-pub(crate) async fn serve_auto_connection(
-    io: hyper_util::rt::TokioIo<tokio::net::TcpStream>,
+pub(crate) async fn serve_auto_connection<I>(
+    io: hyper_util::rt::TokioIo<I>,
     ctx: Arc<AsyncServerContext>,
     remote_addr: SocketAddr,
     shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
-) {
+) where
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
     use hyper_util::server::conn::auto;
 
     let remote = remote_addr;
@@ -1385,6 +1469,9 @@ async fn handle_request_with_context(
 
     let config = &ctx.config;
     let start = std::time::Instant::now();
+
+    // Save Accept-Encoding before body parsing (for compression)
+    let client_accepts_gzip = config.compression && accepts_gzip(req.headers());
 
     // Generate or extract request ID
     let request_id = config.request_id_header.as_ref().map(|header_name| {
@@ -1484,6 +1571,38 @@ async fn handle_request_with_context(
         }
     }
 
+    // Static file serving — check before body parsing (GET only)
+    if req.method() == Method::GET {
+        for (prefix, dir) in &config.static_dirs {
+            let req_path = req.uri().path();
+            if req_path.starts_with(prefix.as_str()) {
+                if let Some(mut file_resp) = serve_static_file(dir, prefix, req_path) {
+                    if let Some(ref id) = request_id {
+                        if let Some(ref hdr) = request_id_hdr {
+                            if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                                file_resp.headers_mut().insert(hdr.clone(), val);
+                            }
+                        }
+                    }
+                    let file_resp = try_compress_response(file_resp, client_accepts_gzip);
+                    if config.access_log {
+                        use hyper::body::Body as _;
+                        eprintln!(
+                            "[access] GET {} {} {}b {:.1}ms {}{}",
+                            req_path,
+                            file_resp.status().as_u16(),
+                            file_resp.body().size_hint().lower(),
+                            start.elapsed().as_secs_f64() * 1000.0,
+                            remote_addr.ip(),
+                            format_request_id(&request_id),
+                        );
+                    }
+                    return Ok(file_resp);
+                }
+            }
+        }
+    }
+
     // Parse request with body size enforcement
     let mut async_req = match AsyncRequest::from_hyper(req, config.max_body_size).await {
         Ok(r) => r,
@@ -1565,6 +1684,9 @@ async fn handle_request_with_context(
     if let Some(ref cors) = config.cors {
         apply_cors_headers(resp.headers_mut(), cors, &hyper::HeaderMap::new());
     }
+
+    // Response compression
+    let resp = try_compress_response(resp, client_accepts_gzip);
 
     // Structured access log
     if config.access_log {
@@ -1673,6 +1795,327 @@ fn apply_cors_headers(
             headers.insert("access-control-max-age", v);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// TLS Support (behind `tls` feature flag)
+// ---------------------------------------------------------------------------
+
+/// Load TLS configuration from PEM certificate and key files.
+#[cfg(feature = "tls")]
+pub fn load_tls_config(
+    cert_path: &str,
+    key_path: &str,
+) -> Result<Arc<tokio_rustls::rustls::ServerConfig>, Box<dyn std::error::Error + Send + Sync>> {
+    use tokio_rustls::rustls;
+
+    let cert_file = std::fs::File::open(cert_path)
+        .map_err(|e| format!("Failed to open TLS cert {}: {}", cert_path, e))?;
+    let key_file = std::fs::File::open(key_path)
+        .map_err(|e| format!("Failed to open TLS key {}: {}", key_path, e))?;
+
+    let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        rustls_pemfile::certs(&mut std::io::BufReader::new(cert_file))
+            .filter_map(|r| r.ok())
+            .collect();
+
+    if certs.is_empty() {
+        return Err("No certificates found in PEM file".into());
+    }
+
+    let key = rustls_pemfile::private_key(&mut std::io::BufReader::new(key_file))
+        .map_err(|e| format!("Failed to parse TLS key: {}", e))?
+        .ok_or("No private key found in PEM file")?;
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(certs, key)
+        .map_err(|e| format!("TLS config error: {}", e))?;
+
+    Ok(Arc::new(config))
+}
+
+// ---------------------------------------------------------------------------
+// Response Compression
+// ---------------------------------------------------------------------------
+
+/// Check if a content type is compressible.
+fn is_compressible_content_type(headers: &hyper::HeaderMap) -> bool {
+    headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| {
+            ct.starts_with("text/")
+                || ct.contains("json")
+                || ct.contains("xml")
+                || ct.contains("javascript")
+                || ct.contains("css")
+                || ct.contains("svg")
+        })
+        .unwrap_or(false)
+}
+
+/// Check if the client accepts gzip encoding.
+fn accepts_gzip(req_headers: &hyper::HeaderMap) -> bool {
+    req_headers
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|ae| ae.contains("gzip"))
+        .unwrap_or(false)
+}
+
+/// Compress raw bytes with gzip. Returns None if compression fails or isn't smaller.
+fn gzip_compress(data: &[u8]) -> Option<Bytes> {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+
+    let mut encoder = GzEncoder::new(Vec::with_capacity(data.len() / 2), Compression::fast());
+    encoder.write_all(data).ok()?;
+    let compressed = encoder.finish().ok()?;
+
+    if compressed.len() < data.len() {
+        Some(Bytes::from(compressed))
+    } else {
+        None
+    }
+}
+
+/// Try to compress a hyper response body with gzip.
+/// Decomposes and rebuilds the response if compression is beneficial.
+fn try_compress_response(
+    resp: Response<Full<Bytes>>,
+    req_accepted_gzip: bool,
+) -> Response<Full<Bytes>> {
+    use hyper::body::Body as _;
+
+    if !req_accepted_gzip {
+        return resp;
+    }
+
+    let body_len = resp.body().size_hint().lower() as usize;
+    if body_len < 1024 {
+        return resp;
+    }
+
+    if !is_compressible_content_type(resp.headers()) {
+        return resp;
+    }
+
+    if resp.headers().contains_key("content-encoding") {
+        return resp;
+    }
+
+    // Decompose response to get at the body bytes
+    let (mut parts, full_body) = resp.into_parts();
+
+    // Synchronously poll the single frame from Full<Bytes>
+    let waker = noop_waker();
+    let mut cx = std::task::Context::from_waker(&waker);
+    let mut body = full_body;
+    let raw_bytes = match std::pin::Pin::new(&mut body).poll_frame(&mut cx) {
+        std::task::Poll::Ready(Some(Ok(frame))) => frame.into_data().unwrap_or_default(),
+        _ => return Response::from_parts(parts, body),
+    };
+
+    match gzip_compress(&raw_bytes) {
+        Some(compressed) => {
+            parts.headers.insert(
+                "content-encoding",
+                hyper::header::HeaderValue::from_static("gzip"),
+            );
+            parts.headers.insert(
+                "vary",
+                hyper::header::HeaderValue::from_static("Accept-Encoding"),
+            );
+            Response::from_parts(parts, Full::new(compressed))
+        }
+        None => Response::from_parts(parts, Full::new(raw_bytes)),
+    }
+}
+
+/// No-op waker for synchronous polling of a single-frame body.
+fn noop_waker() -> std::task::Waker {
+    use std::task::{RawWaker, RawWakerVTable};
+    fn noop(_: *const ()) {}
+    fn clone_fn(p: *const ()) -> RawWaker {
+        RawWaker::new(p, &VTABLE)
+    }
+    const VTABLE: RawWakerVTable = RawWakerVTable::new(clone_fn, noop, noop, noop);
+    unsafe { std::task::Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
+}
+
+// ---------------------------------------------------------------------------
+// Static File Serving
+// ---------------------------------------------------------------------------
+
+/// Serve a static file from the filesystem with security checks.
+fn serve_static_file(
+    base_dir: &str,
+    url_prefix: &str,
+    request_path: &str,
+) -> Option<Response<Full<Bytes>>> {
+    // Strip the URL prefix to get the relative file path
+    let relative = request_path.strip_prefix(url_prefix)?;
+    let relative = relative.trim_start_matches('/');
+
+    if relative.is_empty() {
+        return None;
+    }
+
+    // Path traversal prevention
+    if relative.contains("..") || relative.contains('\0') {
+        return Some(
+            Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Full::new(Bytes::from("Forbidden")))
+                .unwrap(),
+        );
+    }
+
+    let file_path = std::path::Path::new(base_dir).join(relative);
+
+    // Verify the resolved path is within the base directory (symlink-safe)
+    let canonical_base = match std::fs::canonicalize(base_dir) {
+        Ok(p) => p,
+        Err(_) => {
+            return Some(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Full::new(Bytes::from("Not Found")))
+                    .unwrap(),
+            );
+        }
+    };
+    let canonical_file = match std::fs::canonicalize(&file_path) {
+        Ok(p) => p,
+        Err(_) => {
+            return Some(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Full::new(Bytes::from("Not Found")))
+                    .unwrap(),
+            );
+        }
+    };
+    if !canonical_file.starts_with(&canonical_base) {
+        return Some(
+            Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Full::new(Bytes::from("Forbidden")))
+                .unwrap(),
+        );
+    }
+
+    // Read file
+    let content = match std::fs::read(&canonical_file) {
+        Ok(c) => c,
+        Err(_) => {
+            return Some(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body(Full::new(Bytes::from("Not Found")))
+                    .unwrap(),
+            );
+        }
+    };
+
+    let content_type = guess_content_type(&canonical_file);
+
+    // ETag based on file modification time + size
+    let metadata = std::fs::metadata(&canonical_file).ok();
+    let etag = metadata.as_ref().and_then(|m| {
+        let modified = m.modified().ok()?;
+        let duration = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+        Some(format!("\"{:x}-{:x}\"", duration.as_secs(), m.len()))
+    });
+
+    let mut builder = Response::builder()
+        .status(StatusCode::OK)
+        .header("content-type", content_type);
+
+    if let Some(ref tag) = etag {
+        builder = builder.header("etag", tag.as_str());
+        builder = builder.header("cache-control", "public, max-age=3600");
+    }
+
+    Some(builder.body(Full::new(Bytes::from(content))).unwrap())
+}
+
+/// Guess MIME content type from file extension.
+fn guess_content_type(path: &std::path::Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("html") | Some("htm") => "text/html; charset=utf-8",
+        Some("css") => "text/css; charset=utf-8",
+        Some("js") | Some("mjs") => "application/javascript; charset=utf-8",
+        Some("json") => "application/json; charset=utf-8",
+        Some("xml") => "application/xml; charset=utf-8",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("jpg") | Some("jpeg") => "image/jpeg",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("ico") => "image/x-icon",
+        Some("woff") => "font/woff",
+        Some("woff2") => "font/woff2",
+        Some("ttf") => "font/ttf",
+        Some("otf") => "font/otf",
+        Some("pdf") => "application/pdf",
+        Some("txt") => "text/plain; charset=utf-8",
+        Some("md") => "text/markdown; charset=utf-8",
+        Some("wasm") => "application/wasm",
+        Some("map") => "application/json",
+        _ => "application/octet-stream",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cookie Helpers
+// ---------------------------------------------------------------------------
+
+/// Parse cookies from a request's Cookie header.
+pub fn parse_cookies(headers: &hyper::HeaderMap) -> HashMap<String, String> {
+    let mut cookies = HashMap::new();
+    if let Some(cookie_header) = headers.get("cookie").and_then(|v| v.to_str().ok()) {
+        for pair in cookie_header.split(';') {
+            let pair = pair.trim();
+            if let Some(eq_pos) = pair.find('=') {
+                let name = pair[..eq_pos].trim().to_string();
+                let value = pair[eq_pos + 1..].trim().to_string();
+                cookies.insert(name, value);
+            }
+        }
+    }
+    cookies
+}
+
+/// Build a Set-Cookie header value.
+pub fn build_set_cookie(
+    name: &str,
+    value: &str,
+    path: Option<&str>,
+    max_age: Option<u64>,
+    http_only: bool,
+    secure: bool,
+    same_site: Option<&str>,
+) -> String {
+    let mut cookie = format!("{}={}", name, value);
+    if let Some(p) = path {
+        cookie.push_str(&format!("; Path={}", p));
+    }
+    if let Some(age) = max_age {
+        cookie.push_str(&format!("; Max-Age={}", age));
+    }
+    if http_only {
+        cookie.push_str("; HttpOnly");
+    }
+    if secure {
+        cookie.push_str("; Secure");
+    }
+    if let Some(ss) = same_site {
+        cookie.push_str(&format!("; SameSite={}", ss));
+    }
+    cookie
 }
 
 /// Wait for a shutdown signal (SIGTERM or SIGINT).
@@ -1805,5 +2248,211 @@ mod tests {
         }
         // Guard dropped — count should be 0
         assert_eq!(limiter.ip_count(&ip), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // Compression Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_gzip_compress_small_data() {
+        // Small data should still compress if possible
+        let data = b"hello world";
+        // gzip_compress returns None if compressed >= original
+        let _ = gzip_compress(data);
+    }
+
+    #[test]
+    fn test_gzip_compress_large_compressible() {
+        let data = "a".repeat(2000);
+        let result = gzip_compress(data.as_bytes());
+        assert!(result.is_some());
+        assert!(result.unwrap().len() < data.len());
+    }
+
+    #[test]
+    fn test_try_compress_response_skips_small() {
+        let resp = Response::builder()
+            .header("content-type", "text/plain")
+            .body(Full::new(Bytes::from("small")))
+            .unwrap();
+        let result = try_compress_response(resp, true);
+        assert!(!result.headers().contains_key("content-encoding"));
+    }
+
+    #[test]
+    fn test_try_compress_response_skips_binary() {
+        let resp = Response::builder()
+            .header("content-type", "image/png")
+            .body(Full::new(Bytes::from("a".repeat(2000))))
+            .unwrap();
+        let result = try_compress_response(resp, true);
+        assert!(!result.headers().contains_key("content-encoding"));
+    }
+
+    #[test]
+    fn test_try_compress_response_compresses_text() {
+        let resp = Response::builder()
+            .header("content-type", "text/html")
+            .body(Full::new(Bytes::from("a".repeat(2000))))
+            .unwrap();
+        let result = try_compress_response(resp, true);
+        assert_eq!(result.headers().get("content-encoding").unwrap(), "gzip");
+        assert!(result.headers().contains_key("vary"));
+    }
+
+    #[test]
+    fn test_try_compress_response_skips_no_gzip() {
+        let resp = Response::builder()
+            .header("content-type", "text/html")
+            .body(Full::new(Bytes::from("a".repeat(2000))))
+            .unwrap();
+        let result = try_compress_response(resp, false);
+        assert!(!result.headers().contains_key("content-encoding"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Content Type Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_guess_content_type() {
+        use std::path::Path;
+        assert_eq!(
+            guess_content_type(Path::new("file.html")),
+            "text/html; charset=utf-8"
+        );
+        assert_eq!(
+            guess_content_type(Path::new("file.css")),
+            "text/css; charset=utf-8"
+        );
+        assert_eq!(
+            guess_content_type(Path::new("file.js")),
+            "application/javascript; charset=utf-8"
+        );
+        assert_eq!(
+            guess_content_type(Path::new("file.json")),
+            "application/json; charset=utf-8"
+        );
+        assert_eq!(guess_content_type(Path::new("file.png")), "image/png");
+        assert_eq!(
+            guess_content_type(Path::new("file.wasm")),
+            "application/wasm"
+        );
+        assert_eq!(
+            guess_content_type(Path::new("file.xyz")),
+            "application/octet-stream"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Cookie Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_parse_cookies() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "cookie",
+            hyper::header::HeaderValue::from_static("session=abc123; theme=dark; lang=en"),
+        );
+        let cookies = parse_cookies(&headers);
+        assert_eq!(cookies.get("session"), Some(&"abc123".to_string()));
+        assert_eq!(cookies.get("theme"), Some(&"dark".to_string()));
+        assert_eq!(cookies.get("lang"), Some(&"en".to_string()));
+    }
+
+    #[test]
+    fn test_parse_cookies_empty() {
+        let headers = hyper::HeaderMap::new();
+        let cookies = parse_cookies(&headers);
+        assert!(cookies.is_empty());
+    }
+
+    #[test]
+    fn test_build_set_cookie() {
+        let cookie = build_set_cookie(
+            "session",
+            "abc123",
+            Some("/"),
+            Some(3600),
+            true,
+            true,
+            Some("Strict"),
+        );
+        assert_eq!(
+            cookie,
+            "session=abc123; Path=/; Max-Age=3600; HttpOnly; Secure; SameSite=Strict"
+        );
+    }
+
+    #[test]
+    fn test_build_set_cookie_minimal() {
+        let cookie = build_set_cookie("name", "value", None, None, false, false, None);
+        assert_eq!(cookie, "name=value");
+    }
+
+    // -----------------------------------------------------------------------
+    // Static File Serving Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_static_file_path_traversal() {
+        // Should return Forbidden for path traversal
+        let result = serve_static_file("/tmp", "/static", "/static/../etc/passwd");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_static_file_not_found() {
+        let result = serve_static_file("/tmp", "/static", "/static/nonexistent_file_xyz.txt");
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_static_file_empty_relative() {
+        let result = serve_static_file("/tmp", "/static", "/static/");
+        assert!(result.is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Compressible Content Type Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_is_compressible() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "content-type",
+            hyper::header::HeaderValue::from_static("text/html"),
+        );
+        assert!(is_compressible_content_type(&headers));
+
+        headers.insert(
+            "content-type",
+            hyper::header::HeaderValue::from_static("application/json"),
+        );
+        assert!(is_compressible_content_type(&headers));
+
+        headers.insert(
+            "content-type",
+            hyper::header::HeaderValue::from_static("image/png"),
+        );
+        assert!(!is_compressible_content_type(&headers));
+    }
+
+    #[test]
+    fn test_accepts_gzip_check() {
+        let mut headers = hyper::HeaderMap::new();
+        headers.insert(
+            "accept-encoding",
+            hyper::header::HeaderValue::from_static("gzip, deflate, br"),
+        );
+        assert!(accepts_gzip(&headers));
+
+        let empty = hyper::HeaderMap::new();
+        assert!(!accepts_gzip(&empty));
     }
 }
