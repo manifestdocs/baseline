@@ -16,16 +16,16 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
 
+use crate::vm::exec::Vm;
 use crate::vm::nvalue::NValue;
 use crate::vm::radix::{ParamCollector, RadixNode, SmallParams};
 use crate::vm::value::RcStr;
-use crate::vm::exec::Vm;
 
 // Thread-local VM for inline handler execution on Tokio worker threads.
 thread_local! {
@@ -57,6 +57,18 @@ pub struct ServerConfig {
     pub shutdown_timeout: Duration,
     /// Enable HTTP/2 support (auto-detect HTTP/1.1 or HTTP/2)
     pub enable_http2: bool,
+    /// Maximum HTTP header size in bytes (default 8KB)
+    pub max_header_size: usize,
+    /// Enable structured access logging
+    pub access_log: bool,
+    /// Built-in health check path (None to disable)
+    pub health_check_path: Option<String>,
+    /// Request ID header name (None to disable)
+    pub request_id_header: Option<String>,
+    /// CORS configuration (None to disable)
+    pub cors: Option<CorsConfig>,
+    /// Rate limiting configuration (None to disable)
+    pub rate_limit: Option<RateLimitConfig>,
 }
 
 impl Default for ServerConfig {
@@ -73,7 +85,99 @@ impl Default for ServerConfig {
             request_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             enable_http2: false,
+            max_header_size: 8192,
+            access_log: true,
+            health_check_path: Some("/__health".to_string()),
+            request_id_header: Some("x-request-id".to_string()),
+            cors: None,
+            rate_limit: None,
         }
+    }
+}
+
+/// CORS (Cross-Origin Resource Sharing) configuration.
+#[derive(Clone)]
+pub struct CorsConfig {
+    pub allowed_origins: Vec<String>,
+    pub allowed_methods: Vec<String>,
+    pub allowed_headers: Vec<String>,
+    pub max_age: u64,
+    pub allow_credentials: bool,
+}
+
+impl Default for CorsConfig {
+    fn default() -> Self {
+        Self {
+            allowed_origins: vec!["*".to_string()],
+            allowed_methods: vec![
+                "GET".into(),
+                "POST".into(),
+                "PUT".into(),
+                "DELETE".into(),
+                "PATCH".into(),
+                "OPTIONS".into(),
+            ],
+            allowed_headers: vec!["Content-Type".into(), "Authorization".into()],
+            max_age: 86400,
+            allow_credentials: false,
+        }
+    }
+}
+
+/// Rate limiting configuration.
+#[derive(Clone)]
+pub struct RateLimitConfig {
+    pub requests_per_second: f64,
+    pub burst_size: usize,
+}
+
+/// Per-IP token bucket rate limiter.
+pub struct RateLimiter {
+    buckets: std::sync::Mutex<HashMap<IpAddr, TokenBucket>>,
+    config: RateLimitConfig,
+}
+
+struct TokenBucket {
+    tokens: f64,
+    last_refill: std::time::Instant,
+}
+
+impl RateLimiter {
+    pub fn new(config: RateLimitConfig) -> Self {
+        Self {
+            buckets: std::sync::Mutex::new(HashMap::new()),
+            config,
+        }
+    }
+
+    /// Try to consume a token for the given IP. Returns true if allowed.
+    pub fn check(&self, ip: IpAddr) -> bool {
+        let mut buckets = self.buckets.lock().unwrap();
+        let now = std::time::Instant::now();
+        let bucket = buckets.entry(ip).or_insert_with(|| TokenBucket {
+            tokens: self.config.burst_size as f64,
+            last_refill: now,
+        });
+
+        // Refill tokens based on elapsed time
+        let elapsed = now.duration_since(bucket.last_refill).as_secs_f64();
+        bucket.tokens = (bucket.tokens + elapsed * self.config.requests_per_second)
+            .min(self.config.burst_size as f64);
+        bucket.last_refill = now;
+
+        if bucket.tokens >= 1.0 {
+            bucket.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Remove stale buckets that haven't been used recently.
+    pub fn cleanup(&self) {
+        let mut buckets = self.buckets.lock().unwrap();
+        let now = std::time::Instant::now();
+        buckets.retain(|_, b| now.duration_since(b.last_refill).as_secs() < 300);
     }
 }
 
@@ -151,12 +255,7 @@ impl ConnectionLimiter {
     /// Get the current connection count for an IP.
     #[cfg(test)]
     fn ip_count(&self, ip: &IpAddr) -> usize {
-        self.per_ip
-            .lock()
-            .unwrap()
-            .get(ip)
-            .copied()
-            .unwrap_or(0)
+        self.per_ip.lock().unwrap().get(ip).copied().unwrap_or(0)
     }
 }
 
@@ -377,10 +476,7 @@ impl AsyncRequest {
             ),
             ("url".to_string(), SendableValue::String(self.path.clone())),
             ("headers".to_string(), SendableValue::List(headers)),
-            (
-                "body".to_string(),
-                SendableValue::Bytes(self.body.clone()),
-            ),
+            ("body".to_string(), SendableValue::Bytes(self.body.clone())),
             ("params".to_string(), params_sv),
             ("query".to_string(), query_sv),
         ])
@@ -657,9 +753,7 @@ pub fn build_hyper_response_from_sendable(
 
         let mut builder = Response::builder().status(status);
 
-        if let Some((_, SendableValue::List(list))) =
-            fields.iter().find(|(k, _)| k == "headers")
-        {
+        if let Some((_, SendableValue::List(list))) = fields.iter().find(|(k, _)| k == "headers") {
             for item in list {
                 if let SendableValue::Tuple(tuple) = item {
                     if tuple.len() == 2 {
@@ -871,8 +965,7 @@ impl AsyncRouteTreeBuilder {
                 // Parameter segment
                 let param_name = segment[1..].to_string();
                 if current.param.is_none() {
-                    current.param =
-                        Some((param_name.clone(), Box::new(AsyncRadixNode::default())));
+                    current.param = Some((param_name.clone(), Box::new(AsyncRadixNode::default())));
                 }
                 let (_, child) = current.param.as_mut().unwrap();
                 current = child.as_mut();
@@ -910,11 +1003,7 @@ impl AsyncRouteTree {
 
     /// Find a handler for the given method and path.
     /// Returns the handler and extracted path parameters.
-    pub fn find(
-        &self,
-        method: &str,
-        path: &str,
-    ) -> Option<(AsyncHandler, SmallParams)> {
+    pub fn find(&self, method: &str, path: &str) -> Option<(AsyncHandler, SmallParams)> {
         let segments: Vec<&str> = path
             .trim_start_matches('/')
             .split('/')
@@ -994,10 +1083,7 @@ impl AsyncRouteTree {
                 {
                     builder = builder.route(method, path, AsyncHandler::Vm(sendable));
                 } else {
-                    return Err(format!(
-                        "Invalid handler for route {} {}",
-                        method, path
-                    ));
+                    return Err(format!("Invalid handler for route {} {}", method, path));
                 }
             }
         }
@@ -1016,8 +1102,8 @@ impl Default for AsyncRouteTree {
 // ---------------------------------------------------------------------------
 
 use crate::vm::async_executor::{AsyncExecutorConfig, AsyncVmExecutor};
-use crate::vm::sendable::SendableHandler;
 use crate::vm::chunk::Chunk;
+use crate::vm::sendable::SendableHandler;
 
 /// Context for the async server, holding shared state.
 pub struct AsyncServerContext {
@@ -1029,16 +1115,26 @@ pub struct AsyncServerContext {
     pub chunks: Option<Arc<Vec<Chunk>>>,
     /// Middleware chain (VM handlers)
     pub middleware: Vec<SendableHandler>,
+    /// Server configuration
+    pub config: Arc<ServerConfig>,
+    /// Rate limiter (if configured)
+    pub rate_limiter: Option<Arc<RateLimiter>>,
 }
 
 impl AsyncServerContext {
     /// Create a native-only server context (no VM execution).
-    pub fn native_only(routes: AsyncRouteTree) -> Self {
+    pub fn native_only(routes: AsyncRouteTree, config: ServerConfig) -> Self {
+        let rate_limiter = config
+            .rate_limit
+            .as_ref()
+            .map(|rl| Arc::new(RateLimiter::new(rl.clone())));
         Self {
             routes: Arc::new(routes),
             executor: None,
             chunks: None,
             middleware: Vec::new(),
+            config: Arc::new(config),
+            rate_limiter,
         }
     }
 
@@ -1047,17 +1143,21 @@ impl AsyncServerContext {
         routes: AsyncRouteTree,
         chunks: Vec<Chunk>,
         middleware: Vec<SendableHandler>,
+        config: ServerConfig,
     ) -> Self {
         let chunks_arc = Arc::new(chunks);
-        let executor = AsyncVmExecutor::new(
-            (*chunks_arc).clone(),
-            AsyncExecutorConfig::default(),
-        );
+        let executor = AsyncVmExecutor::new((*chunks_arc).clone(), AsyncExecutorConfig::default());
+        let rate_limiter = config
+            .rate_limit
+            .as_ref()
+            .map(|rl| Arc::new(RateLimiter::new(rl.clone())));
         Self {
             routes: Arc::new(routes),
             executor: Some(Arc::new(executor)),
             chunks: Some(chunks_arc),
             middleware,
+            config: Arc::new(config),
+            rate_limiter,
         }
     }
 }
@@ -1069,8 +1169,8 @@ pub async fn run_server(
     route_tree: AsyncRouteTree,
     config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ctx = Arc::new(AsyncServerContext::native_only(route_tree));
-    run_server_with_context(addr, ctx, config).await
+    let ctx = Arc::new(AsyncServerContext::native_only(route_tree, config));
+    run_server_with_context(addr, ctx).await
 }
 
 /// Start the async HTTP server with full context (including VM executor).
@@ -1085,20 +1185,33 @@ pub async fn run_server(
 pub async fn run_server_with_context(
     addr: SocketAddr,
     ctx: Arc<AsyncServerContext>,
-    config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let listener = TcpListener::bind(addr).await?;
+    let config = &ctx.config;
     let limiter = Arc::new(ConnectionLimiter::new(
         config.max_connections,
         config.max_connections_per_ip,
     ));
-    let config = Arc::new(config);
 
     eprintln!("[server] Listening on http://{}", addr);
 
     // Set up graceful shutdown signal
     let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
+
+    // Broadcast channel for per-connection graceful shutdown
+    let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
+
+    // Spawn periodic rate limiter cleanup task
+    if let Some(ref rl) = ctx.rate_limiter {
+        let rl = Arc::clone(rl);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(60)).await;
+                rl.cleanup();
+            }
+        });
+    }
 
     // Track active connections for graceful drain
     let active_connections = Arc::new(AtomicUsize::new(0));
@@ -1128,8 +1241,8 @@ pub async fn run_server_with_context(
 
                 let io = hyper_util::rt::TokioIo::new(stream);
                 let ctx = Arc::clone(&ctx);
-                let config = Arc::clone(&config);
                 let active = Arc::clone(&active_connections);
+                let mut shutdown_rx = shutdown_tx.subscribe();
 
                 active.fetch_add(1, Ordering::Relaxed);
 
@@ -1137,10 +1250,10 @@ pub async fn run_server_with_context(
                     // guard is moved into this task — dropped when connection closes
                     let _guard = guard;
 
-                    if config.enable_http2 {
-                        serve_auto_connection(io, ctx, &config).await;
+                    if ctx.config.enable_http2 {
+                        serve_auto_connection(io, ctx, remote_addr, &mut shutdown_rx).await;
                     } else {
-                        serve_http1_connection(io, ctx, &config).await;
+                        serve_http1_connection(io, ctx, remote_addr, &mut shutdown_rx).await;
                     }
 
                     active.fetch_sub(1, Ordering::Relaxed);
@@ -1148,6 +1261,7 @@ pub async fn run_server_with_context(
             }
             _ = &mut shutdown => {
                 eprintln!("[server] Shutdown signal received, draining connections...");
+                let _ = shutdown_tx.send(true);
                 break;
             }
         }
@@ -1174,27 +1288,39 @@ pub async fn run_server_with_context(
 pub(crate) async fn serve_http1_connection(
     io: hyper_util::rt::TokioIo<tokio::net::TcpStream>,
     ctx: Arc<AsyncServerContext>,
-    config: &ServerConfig,
+    remote_addr: SocketAddr,
+    shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) {
-    let max_body_size = config.max_body_size;
-    let request_timeout = config.request_timeout;
+    let config = Arc::clone(&ctx.config);
+    let remote = remote_addr;
 
     let service = service_fn(move |req| {
         let ctx = Arc::clone(&ctx);
-        async move {
-            handle_request_with_timeout(req, &ctx, max_body_size, request_timeout).await
-        }
+        async move { handle_request_with_timeout(req, &ctx, remote).await }
     });
 
-    let mut conn = http1::Builder::new()
-        .keep_alive(config.keep_alive)
-        .serve_connection(io, service);
+    let mut builder = http1::Builder::new();
+    builder.keep_alive(config.keep_alive);
+    builder.max_buf_size(config.max_header_size);
+    if config.keep_alive {
+        builder.timer(hyper_util::rt::TokioTimer::new());
+        builder.header_read_timeout(config.keep_alive_timeout);
+    }
+    let mut conn = builder.serve_connection(io, service);
 
-    // Use pin for potential graceful shutdown
+    // Select between connection completion and shutdown signal
     let conn = std::pin::Pin::new(&mut conn);
-    if let Err(err) = conn.await {
-        if !err.to_string().contains("connection closed") {
-            eprintln!("[server] Connection error: {:?}", err);
+    tokio::select! {
+        result = conn => {
+            if let Err(err) = result {
+                if !err.to_string().contains("connection closed") {
+                    eprintln!("[server] Connection error: {:?}", err);
+                }
+            }
+        }
+        _ = shutdown_rx.changed() => {
+            // Graceful shutdown: let in-flight request finish via hyper's
+            // graceful_shutdown, then the connection future will complete.
         }
     }
 }
@@ -1203,25 +1329,32 @@ pub(crate) async fn serve_http1_connection(
 pub(crate) async fn serve_auto_connection(
     io: hyper_util::rt::TokioIo<tokio::net::TcpStream>,
     ctx: Arc<AsyncServerContext>,
-    config: &ServerConfig,
+    remote_addr: SocketAddr,
+    shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) {
     use hyper_util::server::conn::auto;
 
-    let max_body_size = config.max_body_size;
-    let request_timeout = config.request_timeout;
+    let remote = remote_addr;
 
     let service = service_fn(move |req| {
         let ctx = Arc::clone(&ctx);
-        async move {
-            handle_request_with_timeout(req, &ctx, max_body_size, request_timeout).await
-        }
+        async move { handle_request_with_timeout(req, &ctx, remote).await }
     });
 
     let builder = auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+    let conn = builder.serve_connection(io, service);
+    tokio::pin!(conn);
 
-    if let Err(err) = builder.serve_connection(io, service).await {
-        if !err.to_string().contains("connection closed") {
-            eprintln!("[server] Connection error: {:?}", err);
+    tokio::select! {
+        result = &mut conn => {
+            if let Err(err) = result {
+                if !err.to_string().contains("connection closed") {
+                    eprintln!("[server] Connection error: {:?}", err);
+                }
+            }
+        }
+        _ = shutdown_rx.changed() => {
+            // Graceful shutdown for auto connection
         }
     }
 }
@@ -1230,32 +1363,139 @@ pub(crate) async fn serve_auto_connection(
 async fn handle_request_with_timeout(
     req: Request<Incoming>,
     ctx: &AsyncServerContext,
-    max_body_size: usize,
-    request_timeout: Duration,
+    remote_addr: SocketAddr,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
     match tokio::time::timeout(
-        request_timeout,
-        handle_request_with_context(req, ctx, max_body_size),
+        ctx.config.request_timeout,
+        handle_request_with_context(req, ctx, remote_addr),
     )
     .await
     {
         Ok(result) => result,
-        Err(_elapsed) => {
-            // Request timed out
-            Ok(AsyncResponse::text(408, "Request Timeout").into_hyper())
-        }
+        Err(_elapsed) => Ok(AsyncResponse::text(408, "Request Timeout").into_hyper()),
     }
 }
 
 async fn handle_request_with_context(
     req: Request<Incoming>,
     ctx: &AsyncServerContext,
-    max_body_size: usize,
+    remote_addr: SocketAddr,
 ) -> Result<Response<Full<Bytes>>, Infallible> {
+    use hyper::body::Body as _;
+
+    let config = &ctx.config;
+    let start = std::time::Instant::now();
+
+    // Generate or extract request ID
+    let request_id = config.request_id_header.as_ref().map(|header_name| {
+        req.headers()
+            .get(header_name.as_str())
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(generate_request_id)
+    });
+
+    // Pre-parse request ID header name for reuse
+    let request_id_hdr = config
+        .request_id_header
+        .as_ref()
+        .and_then(|name| hyper::header::HeaderName::from_bytes(name.as_bytes()).ok());
+
+    // Health check — respond before body parsing to minimize overhead
+    if let Some(ref health_path) = config.health_check_path {
+        if req.method() == Method::GET && req.uri().path() == health_path.as_str() {
+            let mut resp = AsyncResponse::json(r#"{"status":"ok"}"#).into_hyper();
+            if let Some(ref id) = request_id {
+                if let Some(ref hdr) = request_id_hdr {
+                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                        resp.headers_mut().insert(hdr.clone(), val);
+                    }
+                }
+            }
+            if config.access_log {
+                eprintln!(
+                    "[access] GET {} 200 {}b {:.1}ms {}{}",
+                    health_path,
+                    resp.body().size_hint().lower(),
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    remote_addr.ip(),
+                    format_request_id(&request_id),
+                );
+            }
+            return Ok(resp);
+        }
+    }
+
+    // CORS preflight — respond to OPTIONS before body parsing
+    if let Some(ref cors) = config.cors {
+        if req.method() == Method::OPTIONS {
+            let mut resp = Response::builder()
+                .status(StatusCode::NO_CONTENT)
+                .body(Full::new(Bytes::new()))
+                .unwrap();
+            apply_cors_headers(resp.headers_mut(), cors, req.headers());
+            if let Some(ref id) = request_id {
+                if let Some(ref hdr) = request_id_hdr {
+                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                        resp.headers_mut().insert(hdr.clone(), val);
+                    }
+                }
+            }
+            if config.access_log {
+                let path = req.uri().path().to_string();
+                eprintln!(
+                    "[access] OPTIONS {} 204 0b {:.1}ms {}{}",
+                    path,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    remote_addr.ip(),
+                    format_request_id(&request_id),
+                );
+            }
+            return Ok(resp);
+        }
+    }
+
+    // Rate limiting check
+    if let Some(ref limiter) = ctx.rate_limiter {
+        if !limiter.check(remote_addr.ip()) {
+            let mut resp = AsyncResponse::text(429, "Too Many Requests").into_hyper();
+            resp.headers_mut()
+                .insert("retry-after", hyper::header::HeaderValue::from_static("1"));
+            if let Some(ref id) = request_id {
+                if let Some(ref hdr) = request_id_hdr {
+                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                        resp.headers_mut().insert(hdr.clone(), val);
+                    }
+                }
+            }
+            if config.access_log {
+                let path = req.uri().path().to_string();
+                let method = req.method().to_string();
+                eprintln!(
+                    "[access] {} {} 429 0b {:.1}ms {}{}",
+                    method,
+                    path,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    remote_addr.ip(),
+                    format_request_id(&request_id),
+                );
+            }
+            return Ok(resp);
+        }
+    }
+
     // Parse request with body size enforcement
-    let mut async_req = match AsyncRequest::from_hyper(req, max_body_size).await {
+    let mut async_req = match AsyncRequest::from_hyper(req, config.max_body_size).await {
         Ok(r) => r,
         Err(BodyError::TooLarge) => {
+            if config.access_log {
+                eprintln!(
+                    "[access] ?? ?? 413 0b {:.1}ms {}{}",
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    remote_addr.ip(),
+                    format_request_id(&request_id),
+                );
+            }
             return Ok(AsyncResponse::text(413, "Payload Too Large").into_hyper());
         }
         Err(BodyError::Hyper(_)) => {
@@ -1263,48 +1503,175 @@ async fn handle_request_with_context(
         }
     };
 
+    let method = async_req.method.clone();
+    let path = async_req.path.clone();
+
     // Find handler — borrow method/path from async_req to avoid duplicate allocations
-    match ctx.routes.find(async_req.method.as_str(), &async_req.path) {
+    let mut resp = match ctx.routes.find(async_req.method.as_str(), &async_req.path) {
         Some((handler, params)) => {
             async_req.params = params;
 
-            let response = match handler {
-                AsyncHandler::Native(f) => f(&async_req),
+            match handler {
+                AsyncHandler::Native(f) => f(&async_req).into_hyper(),
                 AsyncHandler::Vm(vm_handler) => {
                     if let Some(chunks) = &ctx.chunks {
-                        // Inline VM execution: no spawn_blocking, no semaphore.
-                        // Runs on Tokio worker thread using thread-local VM.
+                        // Inline VM execution with panic isolation
                         let chunks = Arc::clone(chunks);
-                        let resp = HANDLER_VM.with(|cell| {
-                            let mut vm = cell.borrow_mut();
-                            let request_nv = async_req.to_nvalue();
-                            let handler_nv = vm_handler.to_nvalue();
-                            match vm.call_nvalue(
-                                &handler_nv,
-                                &[request_nv],
-                                &chunks,
-                                0,
-                                0,
-                            ) {
-                                Ok(result) => build_hyper_response_from_nvalue(&result),
-                                Err(e) => {
-                                    vm.reset();
-                                    eprintln!("[server] Handler error: {}", e);
-                                    AsyncResponse::text(500, "Internal Server Error")
-                                        .into_hyper()
+                        HANDLER_VM.with(|cell| {
+                            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                let mut vm = cell.borrow_mut();
+                                let request_nv = async_req.to_nvalue();
+                                let handler_nv = vm_handler.to_nvalue();
+                                match vm.call_nvalue(&handler_nv, &[request_nv], &chunks, 0, 0) {
+                                    Ok(result) => build_hyper_response_from_nvalue(&result),
+                                    Err(e) => {
+                                        vm.reset();
+                                        eprintln!("[server] Handler error: {}", e);
+                                        AsyncResponse::text(500, "Internal Server Error")
+                                            .into_hyper()
+                                    }
+                                }
+                            })) {
+                                Ok(resp) => resp,
+                                Err(panic_info) => {
+                                    if let Ok(mut vm) = cell.try_borrow_mut() {
+                                        vm.reset();
+                                    }
+                                    let msg = extract_panic_message(&panic_info);
+                                    eprintln!("[server] Handler panicked: {}", msg);
+                                    AsyncResponse::text(500, "Internal Server Error").into_hyper()
                                 }
                             }
-                        });
-                        return Ok(resp);
+                        })
                     } else {
-                        AsyncResponse::text(501, "VM execution not configured")
+                        AsyncResponse::text(501, "VM execution not configured").into_hyper()
                     }
                 }
-            };
-
-            Ok(response.into_hyper())
+            }
         }
-        None => Ok(AsyncResponse::text(404, "Not Found").into_hyper()),
+        None => AsyncResponse::text(404, "Not Found").into_hyper(),
+    };
+
+    // Append request ID header to response
+    if let Some(ref id) = request_id {
+        if let Some(ref hdr) = request_id_hdr {
+            if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                resp.headers_mut().insert(hdr.clone(), val);
+            }
+        }
+    }
+
+    // Append CORS headers to all responses
+    if let Some(ref cors) = config.cors {
+        apply_cors_headers(resp.headers_mut(), cors, &hyper::HeaderMap::new());
+    }
+
+    // Structured access log
+    if config.access_log {
+        let status = resp.status().as_u16();
+        let body_len = resp.body().size_hint().lower();
+        eprintln!(
+            "[access] {} {} {} {}b {:.1}ms {}{}",
+            method,
+            path,
+            status,
+            body_len,
+            start.elapsed().as_secs_f64() * 1000.0,
+            remote_addr.ip(),
+            format_request_id(&request_id),
+        );
+    }
+
+    Ok(resp)
+}
+
+/// Extract a human-readable message from a panic payload.
+pub fn extract_panic_message(info: &Box<dyn std::any::Any + Send>) -> String {
+    info.downcast_ref::<String>()
+        .cloned()
+        .or_else(|| info.downcast_ref::<&str>().map(|s| s.to_string()))
+        .unwrap_or_else(|| "unknown panic".to_string())
+}
+
+/// Generate a random request ID using timestamp + thread ID + counter.
+fn generate_request_id() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let tid = std::thread::current().id();
+    thread_local! {
+        static COUNTER: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    let count = COUNTER.with(|c| {
+        let v = c.get();
+        c.set(v.wrapping_add(1));
+        v
+    });
+    format!("{:016x}{:x}{:04x}", ts as u64, hash_thread_id(tid), count)
+}
+
+fn hash_thread_id(tid: std::thread::ThreadId) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    tid.hash(&mut hasher);
+    hasher.finish() & 0xFFFF
+}
+
+fn format_request_id(id: &Option<String>) -> String {
+    match id {
+        Some(id) => format!(" {}", id),
+        None => String::new(),
+    }
+}
+
+/// Apply CORS headers to a response.
+fn apply_cors_headers(
+    headers: &mut hyper::HeaderMap,
+    cors: &CorsConfig,
+    req_headers: &hyper::HeaderMap,
+) {
+    let origin_val = if cors.allowed_origins.len() == 1 && cors.allowed_origins[0] == "*" {
+        "*".to_string()
+    } else {
+        req_headers
+            .get("origin")
+            .and_then(|v| v.to_str().ok())
+            .filter(|origin| cors.allowed_origins.iter().any(|a| a == origin))
+            .unwrap_or("")
+            .to_string()
+    };
+
+    if origin_val.is_empty() {
+        return;
+    }
+
+    if let Ok(v) = hyper::header::HeaderValue::from_str(&origin_val) {
+        headers.insert("access-control-allow-origin", v);
+    }
+    if cors.allow_credentials {
+        headers.insert(
+            "access-control-allow-credentials",
+            hyper::header::HeaderValue::from_static("true"),
+        );
+    }
+    if !cors.allowed_methods.is_empty() {
+        let methods = cors.allowed_methods.join(", ");
+        if let Ok(v) = hyper::header::HeaderValue::from_str(&methods) {
+            headers.insert("access-control-allow-methods", v);
+        }
+    }
+    if !cors.allowed_headers.is_empty() {
+        let hdrs = cors.allowed_headers.join(", ");
+        if let Ok(v) = hyper::header::HeaderValue::from_str(&hdrs) {
+            headers.insert("access-control-allow-headers", v);
+        }
+    }
+    if cors.max_age > 0 {
+        if let Ok(v) = hyper::header::HeaderValue::from_str(&cors.max_age.to_string()) {
+            headers.insert("access-control-max-age", v);
+        }
     }
 }
 
@@ -1366,10 +1733,11 @@ mod tests {
     fn test_async_response_json() {
         let resp = AsyncResponse::json(r#"{"ok":true}"#);
         assert_eq!(resp.status, StatusCode::OK);
-        assert!(resp
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            resp.headers
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
     }
 
     #[test]

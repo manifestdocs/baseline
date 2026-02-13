@@ -141,11 +141,7 @@ impl SendableChunks {
         self.chunks
             .iter()
             .map(|sc| {
-                let constants: Vec<NValue> = sc
-                    .constants
-                    .iter()
-                    .map(|sv| sv.to_nvalue())
-                    .collect();
+                let constants: Vec<NValue> = sc.constants.iter().map(|sv| sv.to_nvalue()).collect();
                 Chunk::from_parts(sc.code.clone(), constants, sc.source_map.clone())
             })
             .collect()
@@ -285,10 +281,10 @@ impl super::Vm {
         line: usize,
         col: usize,
     ) -> Result<(), CompileError> {
-        if arg_count != 2 {
+        if arg_count < 2 || arg_count > 3 {
             return Err(self.error(
                 format!(
-                    "Server.listen! expects 2 arguments (router, port), got {}",
+                    "Server.listen! expects 2-3 arguments (router, port[, config]), got {}",
                     arg_count
                 ),
                 line,
@@ -296,6 +292,11 @@ impl super::Vm {
             ));
         }
 
+        let config_val = if arg_count == 3 {
+            Some(self.pop(line, col)?)
+        } else {
+            None
+        };
         let port_val = self.pop(line, col)?;
         let router_val = self.pop(line, col)?;
 
@@ -340,19 +341,23 @@ impl super::Vm {
         let chunks_vec = chunks.to_vec();
 
         let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
+        let config = match config_val {
+            Some(ref cv) => parse_server_config(cv),
+            None => crate::vm::hyper_server::ServerConfig::default(),
+        };
         let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::with_executor(
             route_tree,
             chunks_vec,
             sendable_mw,
+            config,
         ));
-        let config = crate::vm::hyper_server::ServerConfig::default();
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .map_err(|e| self.error(format!("Failed to create runtime: {}", e), line, col))?;
 
-        rt.block_on(crate::vm::hyper_server::run_server_with_context(addr, ctx, config))
+        rt.block_on(crate::vm::hyper_server::run_server_with_context(addr, ctx))
             .map_err(|e| self.error(format!("Server error: {}", e), line, col))?;
 
         self.stack.push(NValue::unit());
@@ -531,4 +536,150 @@ impl super::Vm {
         let request = &args[0];
         self.apply_mw_chain(remaining_mw, handler, request, chunks, line, col)
     }
+}
+
+// ---------------------------------------------------------------------------
+// Server config parsing from Baseline values
+// ---------------------------------------------------------------------------
+
+/// Parse a Baseline record value into a ServerConfig.
+/// Unknown fields are silently ignored.
+#[cfg(feature = "async-server")]
+fn parse_server_config(val: &NValue) -> crate::vm::hyper_server::ServerConfig {
+    use crate::vm::hyper_server::{CorsConfig, ServerConfig};
+    use std::time::Duration;
+
+    let mut config = ServerConfig::default();
+    let fields = match val.as_record() {
+        Some(f) => f,
+        None => return config,
+    };
+
+    for (key, v) in fields.iter() {
+        match &**key {
+            "max_body_size" if v.is_any_int() => {
+                config.max_body_size = v.as_any_int() as usize;
+            }
+            "request_timeout" if v.is_any_int() => {
+                config.request_timeout = Duration::from_secs(v.as_any_int() as u64);
+            }
+            "enable_http2" if v.is_bool() => {
+                config.enable_http2 = v.as_bool();
+            }
+            "keep_alive" if v.is_bool() => {
+                config.keep_alive = v.as_bool();
+            }
+            "keep_alive_timeout" if v.is_any_int() => {
+                config.keep_alive_timeout = Duration::from_secs(v.as_any_int() as u64);
+            }
+            "max_connections" if v.is_any_int() => {
+                config.max_connections = v.as_any_int() as usize;
+            }
+            "max_connections_per_ip" if v.is_any_int() => {
+                config.max_connections_per_ip = v.as_any_int() as usize;
+            }
+            "max_header_size" if v.is_any_int() => {
+                config.max_header_size = v.as_any_int() as usize;
+            }
+            "shutdown_timeout" if v.is_any_int() => {
+                config.shutdown_timeout = Duration::from_secs(v.as_any_int() as u64);
+            }
+            "access_log" if v.is_bool() => {
+                config.access_log = v.as_bool();
+            }
+            "health_check_path" => {
+                if let Some(s) = v.as_string() {
+                    config.health_check_path = Some(s.to_string());
+                } else if v.is_unit() {
+                    config.health_check_path = None;
+                }
+            }
+            "request_id_header" => {
+                if let Some(s) = v.as_string() {
+                    config.request_id_header = Some(s.to_string());
+                } else if v.is_unit() {
+                    config.request_id_header = None;
+                }
+            }
+            "cors" => {
+                if let Some(cors_fields) = v.as_record() {
+                    config.cors = Some(parse_cors_config(cors_fields));
+                } else if v.is_bool() && v.as_bool() {
+                    config.cors = Some(CorsConfig::default());
+                }
+            }
+            "rate_limit" => {
+                if let Some(rl_fields) = v.as_record() {
+                    config.rate_limit = Some(parse_rate_limit_config(rl_fields));
+                }
+            }
+            _ => {}
+        }
+    }
+    config
+}
+
+#[cfg(feature = "async-server")]
+fn parse_cors_config(
+    fields: &[(crate::vm::value::RcStr, NValue)],
+) -> crate::vm::hyper_server::CorsConfig {
+    let mut cors = crate::vm::hyper_server::CorsConfig::default();
+    for (key, v) in fields.iter() {
+        match &**key {
+            "allowed_origins" => {
+                if let Some(list) = v.as_list() {
+                    cors.allowed_origins = list
+                        .iter()
+                        .filter_map(|item| item.as_string().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+            "allowed_methods" => {
+                if let Some(list) = v.as_list() {
+                    cors.allowed_methods = list
+                        .iter()
+                        .filter_map(|item| item.as_string().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+            "allowed_headers" => {
+                if let Some(list) = v.as_list() {
+                    cors.allowed_headers = list
+                        .iter()
+                        .filter_map(|item| item.as_string().map(|s| s.to_string()))
+                        .collect();
+                }
+            }
+            "max_age" if v.is_any_int() => {
+                cors.max_age = v.as_any_int() as u64;
+            }
+            "allow_credentials" if v.is_bool() => {
+                cors.allow_credentials = v.as_bool();
+            }
+            _ => {}
+        }
+    }
+    cors
+}
+
+#[cfg(feature = "async-server")]
+fn parse_rate_limit_config(
+    fields: &[(crate::vm::value::RcStr, NValue)],
+) -> crate::vm::hyper_server::RateLimitConfig {
+    let mut rl = crate::vm::hyper_server::RateLimitConfig {
+        requests_per_second: 100.0,
+        burst_size: 200,
+    };
+    for (key, v) in fields.iter() {
+        match &**key {
+            "requests_per_second" if v.is_any_int() => {
+                rl.requests_per_second = v.as_any_int() as f64;
+            }
+            "burst_size" if v.is_any_int() => {
+                rl.burst_size = v.as_any_int() as usize;
+            }
+            _ => {}
+        }
+    }
+    rl
 }

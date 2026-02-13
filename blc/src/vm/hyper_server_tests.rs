@@ -36,19 +36,21 @@ mod tests {
     #[test]
     fn test_response_text_sets_content_type() {
         let resp = AsyncResponse::text(200, "Hello");
-        assert!(resp
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "text/plain"));
+        assert!(
+            resp.headers
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "text/plain")
+        );
     }
 
     #[test]
     fn test_response_json_sets_content_type() {
         let resp = AsyncResponse::json(r#"{"ok":true}"#);
-        assert!(resp
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            resp.headers
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
     }
 
     #[test]
@@ -162,6 +164,7 @@ mod tests {
             request_timeout: Duration::from_secs(60),
             shutdown_timeout: Duration::from_secs(15),
             enable_http2: true,
+            ..ServerConfig::default()
         };
         assert_eq!(config.workers, 8);
         assert!(!config.keep_alive);
@@ -234,10 +237,11 @@ mod tests {
 
         assert_eq!(resp.status.as_u16(), 201);
         assert_eq!(resp.body, Bytes::from(r#"{"id":1}"#));
-        assert!(resp
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            resp.headers
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -261,8 +265,7 @@ mod tests {
         let sv = req.to_sendable();
 
         if let SendableValue::Record(fields) = sv {
-            let get_field =
-                |name: &str| fields.iter().find(|(k, _)| k == name).map(|(_, v)| v);
+            let get_field = |name: &str| fields.iter().find(|(k, _)| k == name).map(|(_, v)| v);
 
             assert_eq!(
                 get_field("method").and_then(|v| if let SendableValue::String(s) = v {
@@ -330,10 +333,11 @@ mod tests {
 
         assert_eq!(resp.status.as_u16(), 201);
         assert_eq!(resp.body, Bytes::from(r#"{"created":true}"#));
-        assert!(resp
-            .headers
-            .iter()
-            .any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            resp.headers
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -375,8 +379,8 @@ mod tests {
 
     #[test]
     fn test_build_hyper_response_from_sendable_record() {
-        use crate::vm::sendable::SendableValue;
         use crate::vm::hyper_server::build_hyper_response_from_sendable;
+        use crate::vm::sendable::SendableValue;
 
         let sv = SendableValue::Record(vec![
             ("status".to_string(), SendableValue::Int(201)),
@@ -400,8 +404,8 @@ mod tests {
 
     #[test]
     fn test_build_hyper_response_from_sendable_string_body() {
-        use crate::vm::sendable::SendableValue;
         use crate::vm::hyper_server::build_hyper_response_from_sendable;
+        use crate::vm::sendable::SendableValue;
 
         let sv = SendableValue::Record(vec![
             ("status".to_string(), SendableValue::Int(200)),
@@ -417,8 +421,8 @@ mod tests {
 
     #[test]
     fn test_build_hyper_response_from_sendable_fallback() {
-        use crate::vm::sendable::SendableValue;
         use crate::vm::hyper_server::build_hyper_response_from_sendable;
+        use crate::vm::sendable::SendableValue;
 
         let sv = SendableValue::String("plain text".to_string());
         let resp = build_hyper_response_from_sendable(&sv);
@@ -439,26 +443,33 @@ mod tests {
             .post("/echo", |req| AsyncResponse::text(200, req.body.clone()))
             .build();
 
-        let ctx = std::sync::Arc::new(
-            crate::vm::hyper_server::AsyncServerContext::native_only(tree),
-        );
-
         let config = ServerConfig {
             max_body_size: 64,
+            access_log: false,
+            health_check_path: None,
+            request_id_header: None,
             ..ServerConfig::default()
         };
+        let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::native_only(
+            tree, config,
+        ));
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let sc = std::sync::Arc::new(config);
         let server_ctx = std::sync::Arc::clone(&ctx);
-        let server_sc = std::sync::Arc::clone(&sc);
+        let (_shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
         let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
+            let (stream, remote_addr) = listener.accept().await.unwrap();
             let io = hyper_util::rt::TokioIo::new(stream);
-            crate::vm::hyper_server::serve_http1_connection(io, server_ctx, &server_sc).await;
+            crate::vm::hyper_server::serve_http1_connection(
+                io,
+                server_ctx,
+                remote_addr,
+                &mut shutdown_rx,
+            )
+            .await;
         });
 
         // Send a small body via raw TCP
@@ -491,26 +502,33 @@ mod tests {
             .post("/upload", |_| AsyncResponse::text(200, "ok"))
             .build();
 
-        let ctx = std::sync::Arc::new(
-            crate::vm::hyper_server::AsyncServerContext::native_only(tree),
-        );
-
         let config = ServerConfig {
             max_body_size: 8, // Very small limit
+            access_log: false,
+            health_check_path: None,
+            request_id_header: None,
             ..ServerConfig::default()
         };
+        let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::native_only(
+            tree, config,
+        ));
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
 
-        let sc = std::sync::Arc::new(config);
         let server_ctx = std::sync::Arc::clone(&ctx);
-        let server_sc = std::sync::Arc::clone(&sc);
+        let (_shutdown_tx, mut shutdown_rx) = tokio::sync::watch::channel(false);
 
         let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.unwrap();
+            let (stream, remote_addr) = listener.accept().await.unwrap();
             let io = hyper_util::rt::TokioIo::new(stream);
-            crate::vm::hyper_server::serve_http1_connection(io, server_ctx, &server_sc).await;
+            crate::vm::hyper_server::serve_http1_connection(
+                io,
+                server_ctx,
+                remote_addr,
+                &mut shutdown_rx,
+            )
+            .await;
         });
 
         // Send oversized body via raw TCP
@@ -559,10 +577,8 @@ mod tests {
     async fn test_request_timeout_fast_handler_succeeds() {
         let request_timeout = Duration::from_secs(5);
 
-        let result = tokio::time::timeout(request_timeout, async {
-            AsyncResponse::text(200, "fast")
-        })
-        .await;
+        let result =
+            tokio::time::timeout(request_timeout, async { AsyncResponse::text(200, "fast") }).await;
 
         assert!(result.is_ok());
         assert_eq!(result.unwrap().status.as_u16(), 200);

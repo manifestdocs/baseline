@@ -15,9 +15,9 @@ use hyper::Response;
 use tokio::sync::Semaphore;
 
 use crate::vm::chunk::{Chunk, CompileError};
+use crate::vm::exec::Vm;
 use crate::vm::nvalue::NValue;
 use crate::vm::sendable::{SendableHandler, SendableValue};
-use crate::vm::exec::Vm;
 
 /// Configuration for the async executor.
 #[derive(Clone)]
@@ -84,19 +84,33 @@ impl AsyncVmExecutor {
 
         tokio::task::block_in_place(|| {
             WORKER_VM.with(|cell| {
-                let mut vm = cell.borrow_mut();
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut vm = cell.borrow_mut();
+                    let request_nv = request.to_nvalue();
+                    let handler_nv = handler.to_nvalue();
 
-                // Build NValue directly on this thread (skips SendableValue)
-                let request_nv = request.to_nvalue();
-                let handler_nv = handler.to_nvalue();
-
-                match vm.call_nvalue(&handler_nv, &[request_nv], chunks, 0, 0) {
-                    Ok(result) => {
-                        Ok(crate::vm::hyper_server::build_hyper_response_from_nvalue(&result))
+                    match vm.call_nvalue(&handler_nv, &[request_nv], chunks, 0, 0) {
+                        Ok(result) => Ok(
+                            crate::vm::hyper_server::build_hyper_response_from_nvalue(&result),
+                        ),
+                        Err(e) => {
+                            vm.reset();
+                            Err(e)
+                        }
                     }
-                    Err(e) => {
-                        vm.reset();
-                        Err(e)
+                })) {
+                    Ok(result) => result,
+                    Err(panic_info) => {
+                        if let Ok(mut vm) = cell.try_borrow_mut() {
+                            vm.reset();
+                        }
+                        let msg = crate::vm::hyper_server::extract_panic_message(&panic_info);
+                        eprintln!("[server] Handler panicked: {}", msg);
+                        Err(CompileError {
+                            message: format!("Handler panicked: {}", msg),
+                            line: 0,
+                            col: 0,
+                        })
                     }
                 }
             })
@@ -114,15 +128,31 @@ impl AsyncVmExecutor {
 
         tokio::task::spawn_blocking(move || {
             WORKER_VM.with(|cell| {
-                let mut vm = cell.borrow_mut();
-                let handler_nv = handler.to_nvalue();
-                let request_nv = request.to_nvalue();
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut vm = cell.borrow_mut();
+                    let handler_nv = handler.to_nvalue();
+                    let request_nv = request.to_nvalue();
 
-                match vm.call_nvalue(&handler_nv, &[request_nv], &chunks, 0, 0) {
-                    Ok(result) => Ok(SendableValue::from_nvalue(&result)),
-                    Err(e) => {
-                        vm.reset();
-                        Err(e)
+                    match vm.call_nvalue(&handler_nv, &[request_nv], &chunks, 0, 0) {
+                        Ok(result) => Ok(SendableValue::from_nvalue(&result)),
+                        Err(e) => {
+                            vm.reset();
+                            Err(e)
+                        }
+                    }
+                })) {
+                    Ok(result) => result,
+                    Err(panic_info) => {
+                        if let Ok(mut vm) = cell.try_borrow_mut() {
+                            vm.reset();
+                        }
+                        let msg = crate::vm::hyper_server::extract_panic_message(&panic_info);
+                        eprintln!("[server] Handler panicked: {}", msg);
+                        Err(CompileError {
+                            message: format!("Handler panicked: {}", msg),
+                            line: 0,
+                            col: 0,
+                        })
                     }
                 }
             })
@@ -147,17 +177,33 @@ impl AsyncVmExecutor {
 
         tokio::task::spawn_blocking(move || {
             WORKER_VM.with(|cell| {
-                let mut vm = cell.borrow_mut();
-                let handler_nv = handler.to_nvalue();
-                let request_nv = request.to_nvalue();
-                let mw_nvalues: Vec<NValue> =
-                    middleware.iter().map(|h| h.to_nvalue()).collect();
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let mut vm = cell.borrow_mut();
+                    let handler_nv = handler.to_nvalue();
+                    let request_nv = request.to_nvalue();
+                    let mw_nvalues: Vec<NValue> =
+                        middleware.iter().map(|h| h.to_nvalue()).collect();
 
-                match vm.apply_mw_chain(&mw_nvalues, &handler_nv, &request_nv, &chunks, 0, 0) {
-                    Ok(result) => Ok(SendableValue::from_nvalue(&result)),
-                    Err(e) => {
-                        vm.reset();
-                        Err(e)
+                    match vm.apply_mw_chain(&mw_nvalues, &handler_nv, &request_nv, &chunks, 0, 0) {
+                        Ok(result) => Ok(SendableValue::from_nvalue(&result)),
+                        Err(e) => {
+                            vm.reset();
+                            Err(e)
+                        }
+                    }
+                })) {
+                    Ok(result) => result,
+                    Err(panic_info) => {
+                        if let Ok(mut vm) = cell.try_borrow_mut() {
+                            vm.reset();
+                        }
+                        let msg = crate::vm::hyper_server::extract_panic_message(&panic_info);
+                        eprintln!("[server] Handler panicked: {}", msg);
+                        Err(CompileError {
+                            message: format!("Handler panicked: {}", msg),
+                            line: 0,
+                            col: 0,
+                        })
                     }
                 }
             })
