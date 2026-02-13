@@ -2,6 +2,7 @@ pub mod analysis;
 pub mod cgp;
 pub mod diagnostic_render;
 pub mod diagnostics;
+pub mod docs;
 pub mod format;
 pub mod lsp;
 pub mod parse;

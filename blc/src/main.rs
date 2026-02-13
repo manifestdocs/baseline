@@ -93,6 +93,13 @@ enum Commands {
         #[arg(long, default_value = "8765")]
         port: u16,
     },
+
+    /// Generate standard library documentation
+    Docs {
+        /// Output as JSON (default: markdown)
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 fn main() {
@@ -236,6 +243,14 @@ fn main() {
         }
         Commands::Cgp { port } => {
             blc::cgp::run_server(port);
+        }
+        Commands::Docs { json } => {
+            let docs = blc::docs::generate_docs();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&docs).unwrap());
+            } else {
+                print!("{}", blc::docs::render_markdown(&docs));
+            }
         }
     }
 }
