@@ -1,0 +1,12 @@
+// Test: arithmetic and function calls
+// Expected exit code: 42
+
+fn square(x: Int) -> Int = x * x
+
+fn sum_squares(a: Int, b: Int) -> Int = square(a) + square(b)
+
+fn main() -> Int = {
+  let a = sum_squares(3, 4)
+  let b = a + 42 - 25
+  b
+}

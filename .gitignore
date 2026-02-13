@@ -39,3 +39,9 @@ temp/
 *.tmp
 
 .fake
+
+# Self-hosted compiler artifacts
+selfhost/output.c
+selfhost/test_out
+selfhost/.build/
+selfhost/.bootstrap_*

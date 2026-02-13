@@ -1,0 +1,8 @@
+// Test: recursive function
+// Expected exit code: 120
+
+fn factorial(n: Int) -> Int =
+  if n <= 1 then 1
+  else n * factorial(n - 1)
+
+fn main() -> Int = factorial(5)

@@ -1,0 +1,13 @@
+// Test: type definitions (enum + record)
+// Expected exit code: 7
+
+type Color = | Red | Green | Blue
+
+type Point = { x: Int, y: Int }
+
+fn add(a: Int, b: Int) -> Int = a + b
+
+fn main() -> Int = {
+  let a = add(3, 4)
+  a
+}
