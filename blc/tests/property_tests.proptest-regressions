@@ -7,3 +7,4 @@
 cc b402439b3df73aadb8c7c382ea7f2d5baba953ccca82fe32d7e44834bc01631b # shrinks to expr = "0 + 2 * -446 * 67 * -275 * -225 * -6 * -986 * 638 * -661 + 0"
 cc 4936d1a7f52f48d28b4ad03b222b63535ab243dfafafd19e5d6823ef7f080c45 # shrinks to expr = "-6 * -137 * -467 * 682 * -689 * 781 + 0 + 0"
 cc d70bef09b5e678350eba0dbe8f535b068dd225c8842f49ab5d4a4602dfa3cd2c # shrinks to input = "𞹔pלּ⑇🠀\":¥'𛃣K&4{�𫹽כּW$𐝀N$�𛲃\"𒑝E🢻Z𖵄.<𝍰¥??*?Ⱥ?𑍐gH`&𑾰\u{dd6}k𒕀\u{11c38}𑏔Ⱥ𞅎"
+cc 674bcca92294240d7f63c7da0586e62a784d540e32839a1aa4f7b01023f639dc # shrinks to input = "ⵤD�\"\"\u{1da2c}{1FrཤÚJ`Ὑt7e𐁋:⑄🛷ᢦ𐤿j*>{\\N\u{11373}\\&"
