@@ -5,6 +5,7 @@ pub mod diagnostics;
 pub mod docs;
 pub mod format;
 pub mod lsp;
+pub mod manifest;
 pub mod parse;
 pub mod prelude;
 pub mod resolver;

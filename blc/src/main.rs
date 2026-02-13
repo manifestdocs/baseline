@@ -94,6 +94,12 @@ enum Commands {
         port: u16,
     },
 
+    /// Initialize a new Baseline project
+    Init {
+        /// Project name (defaults to directory name)
+        name: Option<String>,
+    },
+
     /// Generate standard library documentation
     Docs {
         /// Output as JSON (default: markdown)
@@ -244,6 +250,9 @@ fn main() {
         Commands::Cgp { port } => {
             blc::cgp::run_server(port);
         }
+        Commands::Init { name } => {
+            init_project(name);
+        }
         Commands::Docs { json } => {
             let docs = blc::docs::generate_docs();
             if json {
@@ -253,6 +262,56 @@ fn main() {
             }
         }
     }
+}
+
+fn init_project(name: Option<String>) {
+    let cwd = std::env::current_dir().unwrap_or_else(|e| {
+        eprintln!("Cannot determine current directory: {}", e);
+        std::process::exit(1);
+    });
+
+    if cwd.join("baseline.toml").exists() {
+        eprintln!("Error: baseline.toml already exists in this directory");
+        std::process::exit(1);
+    }
+
+    let project_name = name.unwrap_or_else(|| {
+        cwd.file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("my-app")
+            .to_string()
+    });
+
+    std::fs::write(
+        cwd.join("baseline.toml"),
+        blc::manifest::create_manifest(&project_name),
+    )
+    .unwrap_or_else(|e| {
+        eprintln!("Failed to write baseline.toml: {}", e);
+        std::process::exit(1);
+    });
+
+    let src_dir = cwd.join("src");
+    if !src_dir.exists() {
+        std::fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
+            eprintln!("Failed to create src/ directory: {}", e);
+            std::process::exit(1);
+        });
+    }
+
+    let main_bl = src_dir.join("main.bl");
+    if !main_bl.exists() {
+        std::fs::write(&main_bl, blc::manifest::hello_world_source()).unwrap_or_else(|e| {
+            eprintln!("Failed to write src/main.bl: {}", e);
+            std::process::exit(1);
+        });
+    }
+
+    println!("Created new Baseline project '{}'", project_name);
+    println!("  baseline.toml");
+    println!("  src/main.bl");
+    println!();
+    println!("Run with: blc run src/main.bl");
 }
 
 fn run_file_vm(file: &PathBuf) {
