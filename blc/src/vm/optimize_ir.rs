@@ -81,7 +81,7 @@ fn free_vars_inner(
             }
             free_vars_inner(body, &inner_bound, top_level, out);
         }
-        Expr::Let { pattern, value, .. } => {
+        Expr::Let { pattern: _, value, .. } => {
             free_vars_inner(value, bound, top_level, out);
             // The pattern binds names for subsequent expressions in the same block,
             // but Let is a single node here — the binding is visible in the block

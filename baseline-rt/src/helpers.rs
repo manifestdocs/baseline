@@ -74,9 +74,9 @@ pub fn jit_own(val: NValue) -> u64 {
 #[inline]
 unsafe fn jit_take_arg(bits: u64) -> NValue {
     if JIT_RC_MODE.with(|c| c.get()) {
-        NValue::from_raw(bits)
+        unsafe { NValue::from_raw(bits) }
     } else {
-        NValue::borrow_from_raw(bits)
+        unsafe { NValue::borrow_from_raw(bits) }
     }
 }
 
