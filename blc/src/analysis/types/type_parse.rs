@@ -177,6 +177,10 @@ pub(super) fn parse_type_ext(
                     let arg = node.named_child(1).unwrap();
                     Type::Set(Box::new(parse_type_ext(&arg, source, symbols, type_params)))
                 }
+                "Weak" => {
+                    let arg = node.named_child(1).unwrap();
+                    Type::Weak(Box::new(parse_type_ext(&arg, source, symbols, type_params)))
+                }
                 "Option" => {
                     let arg = node.named_child(1).unwrap();
                     let inner = parse_type_ext(&arg, source, symbols, type_params);

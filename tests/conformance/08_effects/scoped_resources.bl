@@ -1,0 +1,11 @@
+@prelude(script)
+
+// Conformance: scoped resource blocks (check-pass only)
+// Fs.with_file! opens a file, passes the handle to a closure, guarantees cleanup
+
+fn main!() -> {Fs, Console} () = {
+  let result = Fs.with_file!("CLAUDE.md", |h| {
+    Fs.read!(h)
+  })
+  Console.println!(result)
+}

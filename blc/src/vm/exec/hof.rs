@@ -314,6 +314,50 @@ impl super::Vm {
                     }
                 }
             }
+            "Fs.with_file!" | "Fs.with_file" => {
+                if arg_count != 2 {
+                    return Err(self.error(
+                        "Fs.with_file!: expected 2 arguments".into(),
+                        line,
+                        col,
+                    ));
+                }
+                let func = self.pop(line, col)?;
+                let path_val = self.pop(line, col)?;
+                let path_str = if path_val.is_heap() {
+                    match path_val.as_heap_ref() {
+                        HeapObject::String(s) => s.clone(),
+                        _ => {
+                            return Err(self.error(
+                                "Fs.with_file!: first arg must be String".into(),
+                                line,
+                                col,
+                            ));
+                        }
+                    }
+                } else {
+                    return Err(self.error(
+                        "Fs.with_file!: first arg must be String".into(),
+                        line,
+                        col,
+                    ));
+                };
+
+                // Open file for the duration of the scope
+                let _file = std::fs::File::open(path_str.as_ref()).map_err(|e| {
+                    self.error(
+                        format!("Fs.with_file!: failed to open file: {}", e),
+                        line,
+                        col,
+                    )
+                })?;
+
+                // Call the closure with the path as the scoped handle
+                let result = self.call_nvalue(&func, &[path_val], chunks, line, col)?;
+
+                // File is dropped here (Rust's Drop guarantees cleanup)
+                self.stack.push(result);
+            }
             _ => {
                 return Err(self.error(format!("Unknown HOF: {}", name), line, col));
             }

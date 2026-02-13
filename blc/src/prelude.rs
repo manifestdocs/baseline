@@ -28,14 +28,14 @@ impl Prelude {
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure => &["Option", "Result", "String", "List", "Json"],
             Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Json", "Int"]
+                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int"]
             }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Int", "Http", "Response",
+                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
                 "Request", "Fs",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Int", "Http", "Response",
+                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
                 "Request", "Router", "Fs",
             ],
         }
@@ -60,14 +60,14 @@ impl Prelude {
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Math"],
             Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Int"]
+                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int"]
             }
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Int", "Console",
+                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
                 "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Json", "Math", "Int", "Console",
+                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
                 "Log", "Time", "Env", "Http", "Response", "Request", "Router", "Server", "Db",
                 "Metrics", "Fs",
             ],

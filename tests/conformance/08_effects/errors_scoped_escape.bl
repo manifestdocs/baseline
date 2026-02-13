@@ -1,0 +1,7 @@
+@prelude(script)
+
+// Negative test: scoped resource handle cannot escape closure
+// Expected errors: RES_001
+
+fn leak!() -> {Fs} String =
+  Fs.with_file!("test.txt", |h| h)

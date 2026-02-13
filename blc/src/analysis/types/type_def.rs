@@ -26,10 +26,12 @@ pub enum Type {
     Enum(String, Vec<(String, Vec<Type>)>), // Name, [(VariantName, PayloadTypes)]
     Map(Box<Type>, Box<Type>),             // Map<K, V>
     Set(Box<Type>),                        // Set<T>
+    Weak(Box<Type>),                       // Weak<T> — weak reference
     Module(String),                         // Module/Effect namespace
     Var(u32),                               // Inference type variable
     TypeParam(String),                      // Named type parameter (e.g., T, A, K)
     Refined(Box<Type>, String),             // Refined type: base type + alias name
+    Scoped(Box<Type>),                      // Scoped resource handle (cannot escape closure)
     Unknown,
 }
 
@@ -100,10 +102,12 @@ impl std::fmt::Display for Type {
             }
             Type::Map(k, v) => write!(f, "Map<{}, {}>", k, v),
             Type::Set(inner) => write!(f, "Set<{}>", inner),
+            Type::Weak(inner) => write!(f, "Weak<{}>", inner),
             Type::Module(name) => write!(f, "Module({})", name),
             Type::Var(id) => write!(f, "?{}", id),
             Type::TypeParam(name) => write!(f, "{}", name),
             Type::Refined(_, name) => write!(f, "{}", name),
+            Type::Scoped(inner) => write!(f, "Scoped<{}>", inner),
             Type::Unknown => write!(f, "<unknown>"),
         }
     }

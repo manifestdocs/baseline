@@ -68,6 +68,8 @@ pub fn substitute_type_params(ty: &Type, mapping: &HashMap<String, Type>) -> Typ
             Box::new(substitute_type_params(v, mapping)),
         ),
         Type::Set(inner) => Type::Set(Box::new(substitute_type_params(inner, mapping))),
+        Type::Weak(inner) => Type::Weak(Box::new(substitute_type_params(inner, mapping))),
+        Type::Scoped(inner) => Type::Scoped(Box::new(substitute_type_params(inner, mapping))),
         // Concrete types pass through unchanged
         _ => ty.clone(),
     }
@@ -142,6 +144,7 @@ impl InferCtx {
                 self.unify(ret_a, ret_b)
             }
             (Type::List(inner_a), Type::List(inner_b)) => self.unify(inner_a, inner_b),
+            (Type::Weak(inner_a), Type::Weak(inner_b)) => self.unify(inner_a, inner_b),
             (Type::Tuple(elems_a), Type::Tuple(elems_b)) => {
                 if elems_a.len() != elems_b.len() {
                     return Err(format!(
@@ -155,6 +158,7 @@ impl InferCtx {
                 }
                 Ok(())
             }
+            (Type::Scoped(a), Type::Scoped(b)) => self.unify(a, b),
             (Type::Enum(na, va), Type::Enum(nb, vb)) if na == nb => {
                 // Same-named enums: unify variant payloads pairwise
                 for ((_name_a, payloads_a), (_name_b, payloads_b)) in va.iter().zip(vb.iter()) {
@@ -201,6 +205,8 @@ impl InferCtx {
                     .collect();
                 Type::Enum(name.clone(), variants)
             }
+            Type::Scoped(inner) => Type::Scoped(Box::new(self.apply(inner))),
+            Type::Weak(inner) => Type::Weak(Box::new(self.apply(inner))),
             // TypeParam passes through (only appears in templates before instantiation)
             Type::TypeParam(_) => ty.clone(),
             // All other types are concrete — return as-is
@@ -229,6 +235,8 @@ impl InferCtx {
             Type::Enum(_, variants) => variants
                 .iter()
                 .any(|(_, payloads)| payloads.iter().any(|p| self.occurs_check(var, p))),
+            Type::Scoped(inner) => self.occurs_check(var, inner),
+            Type::Weak(inner) => self.occurs_check(var, inner),
             _ => false,
         }
     }
@@ -949,6 +957,67 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                 Type::Function(
                     vec![Type::List(Box::new(t.clone()))],
                     Box::new(Type::Set(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    // --- Weak references ---
+
+    // Weak.downgrade : (A) -> Weak<A>
+    schemas.insert(
+        "Weak.downgrade".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![a.clone()],
+                    Box::new(Type::Weak(Box::new(a))),
+                )
+            },
+        },
+    );
+
+    // Weak.upgrade : (Weak<A>) -> Option<A>
+    schemas.insert(
+        "Weak.upgrade".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Weak(Box::new(a.clone()))],
+                    Box::new(Type::Enum(
+                        "Option".to_string(),
+                        vec![
+                            ("Some".to_string(), vec![a]),
+                            ("None".to_string(), vec![]),
+                        ],
+                    )),
+                )
+            },
+        },
+    );
+
+    // --- Scoped resource HOFs ---
+
+    // Fs.with_file! : (String, (Scoped<String>) -> T) -> T
+    schemas.insert(
+        "Fs.with_file!".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::String,
+                        Type::Function(
+                            vec![Type::Scoped(Box::new(Type::String))],
+                            Box::new(t.clone()),
+                        ),
+                    ],
+                    Box::new(t),
                 )
             },
         },

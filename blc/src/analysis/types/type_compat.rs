@@ -21,6 +21,21 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
     if *a == Type::Unknown || *b == Type::Unknown {
         return true;
     }
+    // Unwrap Scoped<T> to T for compatibility (scoped handles can be consumed as T)
+    let a = match a {
+        Type::Scoped(inner) => inner.as_ref(),
+        other => other,
+    };
+    let b = match b {
+        Type::Scoped(inner) => inner.as_ref(),
+        other => other,
+    };
+    if a == b {
+        return true;
+    }
+    if *a == Type::Unknown || *b == Type::Unknown {
+        return true;
+    }
     match (a, b) {
         (Type::Var(_), _) | (_, Type::Var(_)) => true,
         // TypeParam matches itself (same name) or Unknown/Var
@@ -45,6 +60,7 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             types_compatible(ka, kb) && types_compatible(va, vb)
         }
         (Type::Set(ia), Type::Set(ib)) => types_compatible(ia, ib),
+        (Type::Weak(ia), Type::Weak(ib)) => types_compatible(ia, ib),
         // Row polymorphism: open record { a: T, ..r } is compatible with any record
         // that has at least those fields with compatible types
         (Type::Record(fields_a, Some(_)), Type::Record(fields_b, _))
@@ -140,6 +156,6 @@ pub(super) fn is_builtin_type_name(name: &str) -> bool {
     matches!(
         name,
         "Int" | "Float" | "String" | "Bool" | "Unit" | "List" | "Option" | "Result" | "Map"
-            | "Set"
+            | "Set" | "Weak"
     )
 }

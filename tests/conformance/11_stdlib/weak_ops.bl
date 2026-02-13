@@ -1,0 +1,32 @@
+@prelude(core)
+
+fn test_weak_downgrade_upgrade() -> Bool = {
+  let xs = [1, 2, 3]
+  let w = Weak.downgrade(xs)
+  match Weak.upgrade(w)
+    Some(v) -> List.length(v) == 3
+    None -> false
+}
+
+fn test_weak_type_annotation() -> Bool = {
+  let xs = [10, 20]
+  let w: Weak<List<Int>> = Weak.downgrade(xs)
+  match Weak.upgrade(w)
+    Some(v) -> List.length(v) == 2
+    None -> false
+}
+
+fn test_weak_upgrade_returns_some() -> Bool = {
+  let s = "hello"
+  let w = Weak.downgrade(s)
+  match Weak.upgrade(w)
+    Some(_) -> true
+    None -> false
+}
+
+fn main() -> String =
+  "Weak tests passed"
+  where
+    test "Weak.downgrade + upgrade" = test_weak_downgrade_upgrade()
+    test "Weak<List<Int>> annotation" = test_weak_type_annotation()
+    test "Weak.upgrade returns Some" = test_weak_upgrade_returns_some()

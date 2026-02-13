@@ -130,6 +130,8 @@ pub enum HeapObject {
     Map(Vec<(NValue, NValue)>),
     /// Set: unique elements.
     Set(Vec<NValue>),
+    /// Weak reference to a heap object (does not prevent deallocation).
+    WeakRef(Box<std::sync::Weak<HeapObject>>),
     /// Integers that don't fit in 48-bit signed range.
     BigInt(i64),
     /// One-shot delimited continuation captured at an effect perform site.
@@ -170,6 +172,7 @@ impl PartialEq for HeapObject {
              HeapObject::Closure { chunk_idx: c2, upvalues: u2 }) => c1 == c2 && u1 == u2,
             (HeapObject::Map(a), HeapObject::Map(b)) => a == b,
             (HeapObject::Set(a), HeapObject::Set(b)) => a == b,
+            (HeapObject::WeakRef(a), HeapObject::WeakRef(b)) => std::sync::Weak::ptr_eq(a, b),
             (HeapObject::BigInt(a), HeapObject::BigInt(b)) => a == b,
             _ => false,
         }
@@ -336,6 +339,10 @@ impl NValue {
 
     pub fn set(elems: Vec<NValue>) -> Self {
         Self::from_heap(HeapObject::Set(elems))
+    }
+
+    pub fn weak_ref(w: std::sync::Weak<HeapObject>) -> Self {
+        Self::from_heap(HeapObject::WeakRef(Box::new(w)))
     }
 
     pub fn closure(chunk_idx: usize, upvalues: Vec<NValue>) -> Self {
@@ -597,6 +604,23 @@ impl NValue {
         matches!(self.as_heap_ref(), HeapObject::Continuation { .. })
     }
 
+    /// Reconstruct the Arc<HeapObject> from a heap NValue (increments strong count).
+    /// Returns None for non-heap values.
+    #[inline]
+    pub fn as_arc(&self) -> Option<Arc<HeapObject>> {
+        if !self.is_heap() {
+            return None;
+        }
+        let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
+        // SAFETY: is_heap() guarantees ptr is a valid Arc pointer.
+        // We increment the strong count then reconstruct, so the caller
+        // gets a new owned Arc without invalidating ours.
+        unsafe {
+            Arc::increment_strong_count(ptr);
+            Some(Arc::from_raw(ptr))
+        }
+    }
+
     /// Extract tuple items reference from a heap Tuple.
     #[inline]
     pub fn as_tuple(&self) -> Option<&Vec<NValue>> {
@@ -766,6 +790,7 @@ impl fmt::Display for NValue {
                     let s: Vec<String> = elems.iter().map(|v| v.to_string()).collect();
                     write!(f, "Set({})", s.join(", "))
                 }
+                HeapObject::WeakRef(_) => write!(f, "<weak>"),
                 HeapObject::BigInt(i) => write!(f, "{}", i),
                 HeapObject::Continuation { .. } => write!(f, "<continuation>"),
             }
@@ -832,6 +857,7 @@ impl NValue {
                 upvalues: Arc::new(upvalues.iter().map(|v| v.to_value()).collect()),
             },
             HeapObject::NativeMwNext { .. } => Value::Unit,
+            HeapObject::WeakRef(_) => Value::Unit,
             HeapObject::Continuation { .. } => Value::Unit,
             HeapObject::BigInt(i) => Value::Int(*i),
             HeapObject::Map(entries) => Value::Map(Arc::new(

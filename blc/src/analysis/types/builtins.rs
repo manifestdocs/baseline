@@ -237,6 +237,18 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
+    // -- Weak native methods (generic — use Unknown for type params) --
+    if native_modules.contains(&"Weak") {
+        sigs.insert(
+            "Weak.downgrade".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Weak.upgrade".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+    }
+
     // -- Http natives (effect: Http) — returns Response records --
     if native_modules.contains(&"Http") {
         // Http.get!(url) -> Response, Http.post!(url, body) -> Response, etc.
