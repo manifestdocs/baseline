@@ -937,6 +937,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 self.builder.append_block_param(merge_block, types::I64);
 
                 let cmp = self.is_truthy(cond_val);
+                // RC: is_truthy borrows cond_val; decref the owned value now
+                if self.rc_enabled {
+                    self.emit_decref(cond_val);
+                }
                 self.builder
                     .ins()
                     .brif(cmp, then_block, &[], else_block, &[]);
@@ -1139,6 +1143,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let a_val = self.compile_expr(a)?;
                 let false_val = self.builder.ins().iconst(types::I64, NV_FALSE as i64);
                 let cmp = self.is_truthy(a_val);
+                // RC: is_truthy borrows a_val; decref the owned value now
+                if self.rc_enabled {
+                    self.emit_decref(a_val);
+                }
 
                 let eval_b = self.builder.create_block();
                 let merge = self.builder.create_block();
@@ -1162,6 +1170,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let a_val = self.compile_expr(a)?;
                 let true_val = self.builder.ins().iconst(types::I64, NV_TRUE as i64);
                 let cmp = self.is_truthy(a_val);
+                // RC: is_truthy borrows a_val; decref the owned value now
+                if self.rc_enabled {
+                    self.emit_decref(a_val);
+                }
 
                 let eval_b = self.builder.create_block();
                 let merge = self.builder.create_block();
@@ -1371,7 +1383,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
                 let obj_val = self.compile_expr(object)?;
                 let field_val = self.emit_string_value(field)?;
-                Ok(self.call_helper("jit_get_field", &[obj_val, field_val]))
+                let result = self.call_helper("jit_get_field", &[obj_val, field_val]);
+                // RC: jit_get_field borrows both args; decref them
+                if self.rc_enabled {
+                    self.emit_decref(obj_val);
+                    self.emit_decref(field_val);
+                }
+                Ok(result)
             }
 
             // -- Phase 4: Match --
@@ -1416,7 +1434,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     .iter()
                     .map(|a| self.compile_expr(a))
                     .collect::<Result<Vec<_>, _>>()?;
-                self.compile_call_value(callee_val, &compiled_args)
+                let result = self.compile_call_value(callee_val, &compiled_args)?;
+                // RC: decref the callee value after the call completes
+                if self.rc_enabled {
+                    self.emit_decref(callee_val);
+                }
+                Ok(result)
             }
 
             Expr::TailCallIndirect { callee, args, .. } => {
@@ -1463,6 +1486,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 self.builder.switch_to_block(function_block);
                 self.builder.seal_block(function_block);
                 let fn_ptr_f = self.call_helper("jit_function_fn_ptr", &[callee_val]);
+                // RC: function path doesn't pass callee_val as arg; decref it
+                if self.rc_enabled {
+                    self.emit_decref(callee_val);
+                }
                 // Guard: if fn_ptr is null (no JIT code), return Unit instead of segfaulting
                 let zero_f = self.builder.ins().iconst(types::I64, 0);
                 let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
@@ -1682,7 +1709,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.seal_block(done);
         self.builder.seal_block(header);
 
-        Ok(self.call_helper("jit_build_list_from_buf", &[buf, len]))
+        let result = self.call_helper("jit_build_list_from_buf", &[buf, len]);
+        // RC: decref input list and function after building result
+        if self.rc_enabled {
+            self.emit_decref(list_val);
+            self.emit_decref(fn_val);
+        }
+        Ok(result)
     }
 
     /// List.filter(list, fn) — loop: get item → call fn → if truthy, store → build list
@@ -1759,7 +1792,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.seal_block(header);
 
         let out_count = self.builder.use_var(out_var);
-        Ok(self.call_helper("jit_build_list_from_buf", &[buf, out_count]))
+        let result = self.call_helper("jit_build_list_from_buf", &[buf, out_count]);
+        // RC: decref input list and function after building result
+        if self.rc_enabled {
+            self.emit_decref(list_val);
+            self.emit_decref(fn_val);
+        }
+        Ok(result)
     }
 
     /// List.fold(list, init, fn) — loop: get item → call fn(acc, item) → update acc
@@ -1809,6 +1848,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.seal_block(done);
         self.builder.seal_block(header);
 
+        // RC: decref input list and function after fold completes
+        if self.rc_enabled {
+            self.emit_decref(list_val);
+            self.emit_decref(fn_val);
+        }
         Ok(self.builder.use_var(acc_var))
     }
 
@@ -1883,6 +1927,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.seal_block(done);
         self.builder.seal_block(header);
 
+        // RC: decref input list and function after find completes
+        if self.rc_enabled {
+            self.emit_decref(list_val);
+            self.emit_decref(fn_val);
+        }
         Ok(self.builder.block_params(done)[0])
     }
 
@@ -1926,6 +1975,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
+        // RC: decref input option and function after map completes
+        if self.rc_enabled {
+            self.emit_decref(opt_val);
+            self.emit_decref(fn_val);
+        }
         Ok(self.builder.block_params(merge_block)[0])
     }
 
@@ -1968,6 +2022,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
+        // RC: decref input result and function after map completes
+        if self.rc_enabled {
+            self.emit_decref(res_val);
+            self.emit_decref(fn_val);
+        }
         Ok(self.builder.block_params(merge_block)[0])
     }
 
@@ -2079,11 +2138,24 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             self.builder.switch_to_block(*block);
             self.builder.seal_block(*block);
             let subj_again = self.builder.use_var(subj_var);
-            self.bind_pattern_vars(&arms[*arm_idx].pattern, subj_again)?;
-            let body_val = self.compile_expr(&arms[*arm_idx].body)?;
-            self.builder
-                .ins()
-                .jump(merge_block, &[BlockArg::Value(body_val)]);
+            if self.rc_enabled {
+                self.push_rc_scope();
+                self.bind_pattern_vars_rc(&arms[*arm_idx].pattern, subj_again)?;
+                let mut body_val = self.compile_expr(&arms[*arm_idx].body)?;
+                let ret_var = self.new_var();
+                self.builder.def_var(ret_var, body_val);
+                self.pop_rc_scope(Some(ret_var));
+                body_val = self.builder.use_var(ret_var);
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(body_val)]);
+            } else {
+                self.bind_pattern_vars(&arms[*arm_idx].pattern, subj_again)?;
+                let body_val = self.compile_expr(&arms[*arm_idx].body)?;
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(body_val)]);
+            }
         }
 
         // Compile default arm
@@ -2091,11 +2163,24 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.seal_block(default_block);
         if let Some(idx) = default_arm {
             let subj_again = self.builder.use_var(subj_var);
-            self.bind_pattern_vars(&arms[idx].pattern, subj_again)?;
-            let body_val = self.compile_expr(&arms[idx].body)?;
-            self.builder
-                .ins()
-                .jump(merge_block, &[BlockArg::Value(body_val)]);
+            if self.rc_enabled {
+                self.push_rc_scope();
+                self.bind_pattern_vars_rc(&arms[idx].pattern, subj_again)?;
+                let mut body_val = self.compile_expr(&arms[idx].body)?;
+                let ret_var = self.new_var();
+                self.builder.def_var(ret_var, body_val);
+                self.pop_rc_scope(Some(ret_var));
+                body_val = self.builder.use_var(ret_var);
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(body_val)]);
+            } else {
+                self.bind_pattern_vars(&arms[idx].pattern, subj_again)?;
+                let body_val = self.compile_expr(&arms[idx].body)?;
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(body_val)]);
+            }
         } else {
             let unit_val = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
             self.builder
@@ -2105,6 +2190,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
+        // RC: decref the subject after all arms have merged
+        if self.rc_enabled {
+            let subj = self.builder.use_var(subj_var);
+            self.emit_decref(subj);
+        }
         Ok(self.builder.block_params(merge_block)[0])
     }
 
@@ -2137,11 +2227,24 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             self.builder.switch_to_block(body_block);
             self.builder.seal_block(body_block);
             let subj_again = self.builder.use_var(subj_var);
-            self.bind_pattern_vars(&arm.pattern, subj_again)?;
-            let body_val = self.compile_expr(&arm.body)?;
-            self.builder
-                .ins()
-                .jump(merge_block, &[BlockArg::Value(body_val)]);
+            if self.rc_enabled {
+                self.push_rc_scope();
+                self.bind_pattern_vars_rc(&arm.pattern, subj_again)?;
+                let mut body_val = self.compile_expr(&arm.body)?;
+                let ret_var = self.new_var();
+                self.builder.def_var(ret_var, body_val);
+                self.pop_rc_scope(Some(ret_var));
+                body_val = self.builder.use_var(ret_var);
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(body_val)]);
+            } else {
+                self.bind_pattern_vars(&arm.pattern, subj_again)?;
+                let body_val = self.compile_expr(&arm.body)?;
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(body_val)]);
+            }
 
             if let Some(next) = next_test {
                 self.builder.switch_to_block(next);
@@ -2151,6 +2254,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
+        // RC: decref the subject after all arms have merged
+        if self.rc_enabled {
+            let subj = self.builder.use_var(subj_var);
+            self.emit_decref(subj);
+        }
         Ok(self.builder.block_params(merge_block)[0])
     }
 
@@ -2291,6 +2399,49 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let idx = self.builder.ins().iconst(types::I64, i as i64);
                     let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
                     self.bind_pattern_vars(sub, elem)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Bind match-pattern variables with RC tracking.
+    /// Like bind_pattern_vars but tracks bound variables in the current RC scope.
+    /// Does NOT decref the subject — that's handled separately in the merge block.
+    fn bind_pattern_vars_rc(&mut self, pattern: &Pattern, subject: CValue) -> Result<(), String> {
+        if !self.rc_enabled {
+            return self.bind_pattern_vars(pattern, subject);
+        }
+        match pattern {
+            Pattern::Wildcard => {}
+            Pattern::Var(name) => {
+                let var = self.new_var();
+                self.builder.def_var(var, subject);
+                self.vars.insert(name.clone(), var);
+                self.rc_track_var(var);
+            }
+            Pattern::Literal(_) => {}
+            Pattern::Constructor(_, sub_patterns) => {
+                if !sub_patterns.is_empty() {
+                    let payload = self.call_helper("jit_enum_payload", &[subject]);
+                    if sub_patterns.len() == 1 {
+                        self.bind_pattern_vars_rc(&sub_patterns[0], payload)?;
+                    } else {
+                        for (i, sub) in sub_patterns.iter().enumerate() {
+                            let idx = self.builder.ins().iconst(types::I64, i as i64);
+                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
+                            self.bind_pattern_vars_rc(sub, elem)?;
+                        }
+                        // Decref the payload tuple after extracting elements
+                        self.emit_decref(payload);
+                    }
+                }
+            }
+            Pattern::Tuple(sub_patterns) => {
+                for (i, sub) in sub_patterns.iter().enumerate() {
+                    let idx = self.builder.ins().iconst(types::I64, i as i64);
+                    let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
+                    self.bind_pattern_vars_rc(sub, elem)?;
                 }
             }
         }
@@ -2517,6 +2668,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.switch_to_block(unwrap_block);
         self.builder.seal_block(unwrap_block);
         let payload = self.call_helper("jit_enum_payload", &[val]);
+        // RC: jit_enum_payload borrows val and returns owned payload;
+        // decref the container now that we've extracted the payload
+        if self.rc_enabled {
+            self.emit_decref(val);
+        }
         Ok(payload)
     }
 

@@ -1775,3 +1775,240 @@ use crate::vm::nvalue::{HeapObject, NValue};
             new_allocs
         );
     }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_if_heap_condition() {
+        // If with a heap-producing condition — condition value must be decrefd.
+        // Uses Eq comparison on two strings, which produces a boolean but the
+        // string operands create heap allocations that must be cleaned up.
+        // The condition expression (BinOp Eq on strings) is compiled by compile_expr,
+        // which compiles both string sub-exprs (heap allocs) and produces a bool.
+        // The If decref covers the result. The block scope covers intermediates.
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::Block(
+                    vec![
+                        // Create a string, then discard it via if condition
+                        Expr::Let {
+                            pattern: Box::new(Pattern::Var("s".into())),
+                            value: Box::new(Expr::String("hello".into())),
+                            ty: None,
+                        },
+                        Expr::If {
+                            condition: Box::new(Expr::Bool(true)),
+                            then_branch: Box::new(make_int(1)),
+                            else_branch: Some(Box::new(make_int(0))),
+                            ty: Some(Type::Int),
+                        },
+                    ],
+                    Some(Type::Int),
+                ),
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            assert_eq!(result.as_int(), 1);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC if heap condition leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_match_subject() {
+        // Match on an enum — subject must be decrefd after all arms merge.
+        use crate::vm::nvalue::alloc_stats;
+
+        let mut tags = TagRegistry::new();
+        tags.register("Some");
+        tags.register("None");
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::Match {
+                    subject: Box::new(Expr::MakeEnum {
+                        tag: "Some".into(),
+                        payload: Box::new(Expr::String("val".into())),
+                        ty: None,
+                    }),
+                    arms: vec![
+                        MatchArm {
+                            pattern: Pattern::Constructor("Some".into(), vec![Pattern::Var("x".into())]),
+                            body: make_int(1),
+                        },
+                        MatchArm {
+                            pattern: Pattern::Constructor("None".into(), vec![]),
+                            body: make_int(0),
+                        },
+                    ],
+                    ty: Some(Type::Int),
+                },
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags,
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            assert_eq!(result.as_int(), 1);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC match subject leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_and_or() {
+        // And/Or with heap operands — first operand must be decrefd.
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        // "hello" and true → true (string condition decrefd)
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::And(
+                    Box::new(Expr::String("hello".into())),
+                    Box::new(Expr::Bool(true)),
+                ),
+                ty: Some(Type::Bool),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let _result = compile_and_run_rc_nvalue(&module);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC and/or leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_get_field() {
+        // Record field access — record and field string must be decrefd.
+        use crate::vm::nvalue::alloc_stats;
+
+        let before = alloc_stats();
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::Block(
+                    vec![
+                        Expr::Let {
+                            pattern: Box::new(Pattern::Var("r".into())),
+                            value: Box::new(Expr::MakeRecord(
+                                vec![
+                                    ("x".into(), make_int(10)),
+                                    ("y".into(), make_int(20)),
+                                ],
+                                None,
+                            )),
+                            ty: None,
+                        },
+                        Expr::GetField {
+                            object: Box::new(Expr::Var("r".into(), None)),
+                            field: "x".into(),
+                            ty: Some(Type::Int),
+                        },
+                    ],
+                    Some(Type::Int),
+                ),
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            assert_eq!(result.as_int(), 10);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC get_field leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn jit_rc_no_leak_try_unwrap() {
+        // Try on Ok value — container must be decrefd after payload extraction.
+        use crate::vm::nvalue::alloc_stats;
+
+        let mut tags = TagRegistry::new();
+        tags.register("Ok");
+        tags.register("Err");
+
+        let before = alloc_stats();
+        // fn main() -> try { Ok(42) }  → should return 42, and Ok container freed
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::Try {
+                    expr: Box::new(Expr::MakeEnum {
+                        tag: "Ok".into(),
+                        payload: Box::new(make_int(42)),
+                        ty: None,
+                    }),
+                    ty: Some(Type::Int),
+                },
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags,
+        };
+        {
+            let result = compile_and_run_rc_nvalue(&module);
+            assert_eq!(result.as_int(), 42);
+        }
+        let after = alloc_stats();
+        let new_allocs = after.allocs - before.allocs;
+        let new_frees = after.frees - before.frees;
+        assert_eq!(
+            new_allocs, new_frees,
+            "RC try unwrap leak: allocs={} frees={}",
+            new_allocs, new_frees
+        );
+    }

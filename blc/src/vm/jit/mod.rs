@@ -206,14 +206,15 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     // Reference counting helpers
     "jit_rc_incref",
     "jit_rc_decref",
+    "jit_set_rc_mode_raw",
 ];
 
-/// Compiles an IrModule to native code via Cranelift.
+/// Compiles an IrModule to native code via Cranelift (RC enabled by default).
 pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
-    compile_inner(module, trace, None, false)
+    compile_inner(module, trace, None, true)
 }
 
-/// Compiles an IrModule with RC-enabled codegen.
+/// Compiles an IrModule with RC-enabled codegen (alias for compile).
 /// Allocation helpers use mem::forget (caller owns refcount via raw bits).
 /// Codegen emits jit_rc_incref/jit_rc_decref at scope boundaries.
 pub fn compile_rc(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
@@ -221,13 +222,13 @@ pub fn compile_rc(module: &IrModule, trace: bool) -> Result<JitProgram, String> 
 }
 
 /// Compiles an IrModule to native code, optionally with a NativeRegistry
-/// for CallNative support.
+/// for CallNative support (RC enabled by default).
 pub fn compile_with_natives(
     module: &IrModule,
     trace: bool,
     natives: Option<&NativeRegistry>,
 ) -> Result<JitProgram, String> {
-    compile_inner(module, trace, natives, false)
+    compile_inner(module, trace, natives, true)
 }
 
 fn compile_inner(
@@ -296,6 +297,7 @@ fn compile_inner(
     builder.symbol("jit_is_truthy", jit_is_truthy as *const u8);
     builder.symbol("jit_rc_incref", jit_rc_incref as *const u8);
     builder.symbol("jit_rc_decref", jit_rc_decref as *const u8);
+    builder.symbol("jit_set_rc_mode_raw", jit_set_rc_mode_raw as *const u8);
 
     let mut jit_module = JITModule::new(builder);
     let ptr_type = jit_module.target_config().pointer_type();
@@ -748,6 +750,10 @@ pub(super) fn make_helper_sig<M: Module>(
         }
         "jit_rc_decref" => {
             // (bits: i64) -> void
+            sig.params.push(AbiParam::new(types::I64));
+        }
+        "jit_set_rc_mode_raw" => {
+            // (enabled: i64) -> void
             sig.params.push(AbiParam::new(types::I64));
         }
         _ => panic!("Unknown helper: {}", name),
