@@ -93,6 +93,10 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Env.set!".into(),
             Type::Function(vec![Type::String, Type::String], Box::new(Type::Unit)),
         );
+        sigs.insert(
+            "Env.args!".into(),
+            Type::Function(vec![], Box::new(Type::List(Box::new(Type::String)))),
+        );
     }
 
     // -- Fs builtins (effect: Fs) --

@@ -1,4 +1,35 @@
+use std::cell::RefCell;
+
 use super::{NValue, NativeError};
+
+// ---------------------------------------------------------------------------
+// Program arguments -- set from CLI before VM execution
+// ---------------------------------------------------------------------------
+
+thread_local! {
+    static PROGRAM_ARGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Set the program arguments that `Env.args!` will return.
+/// Call this from the CLI before launching the VM.
+pub fn set_program_args(args: Vec<String>) {
+    PROGRAM_ARGS.with(|cell| {
+        *cell.borrow_mut() = args;
+    });
+}
+
+/// Native: `Env.args!() -> List<String>`
+///
+/// Returns the command-line arguments passed after `--` to `blc run`.
+pub(super) fn native_env_args(_args: &[NValue]) -> Result<NValue, NativeError> {
+    let items = PROGRAM_ARGS.with(|cell| {
+        cell.borrow()
+            .iter()
+            .map(|s| NValue::string(s.clone().into()))
+            .collect::<Vec<_>>()
+    });
+    Ok(NValue::list(items))
+}
 
 pub(super) fn native_env_get(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_string() {

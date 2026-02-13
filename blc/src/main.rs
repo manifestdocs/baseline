@@ -46,6 +46,10 @@ enum Commands {
         /// Print heap allocation statistics after execution
         #[arg(long)]
         mem_stats: bool,
+
+        /// Arguments to pass to the Baseline program (after --)
+        #[arg(last = true)]
+        program_args: Vec<String>,
     },
 
     /// Run inline tests in a Baseline source file
@@ -172,8 +176,9 @@ fn main() {
             file,
             jit,
             mem_stats,
-            ..
+            program_args,
         } => {
+            vm::natives::set_program_args(program_args);
             if jit {
                 run_file_jit(&file);
             } else {

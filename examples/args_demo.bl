@@ -1,0 +1,8 @@
+@prelude(script)
+
+fn main() -> () = {
+    let args = Env.args!()
+    match List.head(args)
+        Some(first) -> Console.println!(first)
+        None -> Console.println!("no arguments")
+}

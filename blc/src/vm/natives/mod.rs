@@ -1,5 +1,6 @@
 mod console;
 mod env;
+pub use env::set_program_args;
 mod fs;
 mod int_conv;
 pub(crate) mod json;
@@ -258,6 +259,8 @@ impl NativeRegistry {
         self.register("Env.get", native_env_get);
         self.register("Env.set!", native_env_set);
         self.register("Env.set", native_env_set);
+        self.register("Env.args!", native_env_args);
+        self.register("Env.args", native_env_args);
 
         // -- Console (read) --
         self.register("Console.read_line!", native_console_read_line);
