@@ -1,0 +1,17 @@
+// Simple Baseline program for parser testing
+
+type Color = | Red | Green | Blue
+
+type Point = { x: Int, y: Int }
+
+fn add(a: Int, b: Int) -> Int = a + b
+
+fn factorial(n: Int) -> Int =
+  if n <= 1 then 1
+  else n * factorial(n - 1)
+
+fn main() -> Int = {
+  let x = add(1, 2)
+  let y = factorial(5)
+  x + y
+}

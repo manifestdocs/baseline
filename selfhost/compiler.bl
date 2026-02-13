@@ -1,0 +1,1239 @@
+@prelude(script)
+
+// ============================================================================
+// Self-Hosted Baseline Compiler — Written in Baseline, targeting C99
+// ============================================================================
+
+// ============================================================================
+// TOKEN TYPES
+// ============================================================================
+
+// Tokens use grouped variants to keep the sum type small.
+// TKeyword covers: fn, let, if, then, else, match, for, in, do, type, import,
+//                  true, false, not, prelude
+// TOp covers:      +, -, *, /, %, ==, !=, <, >, <=, >=, &&, ||, ->, |>, ++, |, =
+// TPunct covers:   (, ), {, }, [, ], :, ,, ., @, !, _, #
+
+type Token =
+  | TInt(Int)
+  | TStr(String)
+  | TIdent(String)
+  | TUpper(String)
+  | TKeyword(String)
+  | TOp(String)
+  | TPunct(String)
+  | TNewline
+  | TEOF
+
+// ============================================================================
+// AST TYPES
+// ============================================================================
+
+type Param = { name: String, type_ann: String }
+
+type Variant = { name: String, payload: List<String> }
+type FieldDef = { name: String, type_name: String }
+type RecordField = { name: String, value: Expr }
+
+type PConNode = { name: String, bindings: List<String> }
+
+type Pattern =
+  | PWild
+  | PVar(String)
+  | PCon(PConNode)
+  | PInt(Int)
+  | PStr(String)
+  | PBool(Bool)
+
+type EBinOpNode = { left: Expr, op: String, right: Expr }
+type ECallNode = { callee: Expr, args: List<Expr> }
+type EFieldNode = { obj: Expr, name: String }
+type EIfNode = { cond: Expr, then_expr: Expr, else_expr: Expr }
+type EMatchNode = { subject: Expr, arms: List<MatchArm> }
+type ELambdaNode = { params: List<String>, body: Expr }
+type MatchArm = { pat: Pattern, body: Expr }
+
+type EUnaryNode = { inner: Expr }
+
+type Expr =
+  | EInt(Int)
+  | EStr(String)
+  | EBool(Bool)
+  | EVar(String)
+  | EBinOp(EBinOpNode)
+  | EUnaryNeg(EUnaryNode)
+  | EUnaryNot(EUnaryNode)
+  | ECall(ECallNode)
+  | EField(EFieldNode)
+  | EIf(EIfNode)
+  | EMatch(EMatchNode)
+  | ELambda(ELambdaNode)
+  | EBlock(List<Stmt>)
+  | EList(List<Expr>)
+  | ERecord(List<RecordField>)
+
+type SLetNode = { name: String, value: Expr }
+type SForNode = { var_name: String, iter: Expr, body: Expr }
+
+type Stmt =
+  | SLet(SLetNode)
+  | SExpr(Expr)
+  | SFor(SForNode)
+
+type TypeDef =
+  | TDSum(List<Variant>)
+  | TDRecord(List<FieldDef>)
+
+type DFuncNode = {
+  name: String,
+  params: List<Param>,
+  ret_type: String,
+  body: Expr,
+}
+
+type DTypeNode = { name: String, def: TypeDef }
+
+type Decl =
+  | DFunc(DFuncNode)
+  | DType(DTypeNode)
+  | DImport(String)
+
+// ============================================================================
+// LEXER — Character Helpers
+// ============================================================================
+
+fn is_digit(ch: String) -> Bool = {
+  let c = String.char_code(ch)
+  c >= 48 && c <= 57
+}
+
+fn is_alpha(ch: String) -> Bool = {
+  let c = String.char_code(ch)
+  if c >= 65 && c <= 90 then true
+  else if c >= 97 && c <= 122 then true
+  else c == 95
+}
+
+fn is_alnum(ch: String) -> Bool = is_digit(ch) || is_alpha(ch)
+
+fn is_upper(ch: String) -> Bool = {
+  let c = String.char_code(ch)
+  c >= 65 && c <= 90
+}
+
+fn char_at(source: String, pos: Int) -> String = {
+  match String.char_at(source, pos)
+    Some(c) -> c
+    None -> ""
+}
+
+fn is_keyword(word: String) -> Bool = {
+  if word == "fn" then true
+  else if word == "let" then true
+  else if word == "if" then true
+  else if word == "then" then true
+  else if word == "else" then true
+  else if word == "match" then true
+  else if word == "for" then true
+  else if word == "in" then true
+  else if word == "do" then true
+  else if word == "type" then true
+  else if word == "import" then true
+  else if word == "true" then true
+  else if word == "false" then true
+  else if word == "not" then true
+  else if word == "prelude" then true
+  else if word == "test" then true
+  else if word == "where" then true
+  else false
+}
+
+fn classify_word(word: String) -> Token = {
+  if is_keyword(word) then TKeyword(word)
+  else if is_upper(String.slice(word, 0, 1)) then TUpper(word)
+  else TIdent(word)
+}
+
+// ============================================================================
+// LEXER — Scanning Helpers
+// ============================================================================
+
+type LexPair = { token: Token, end_pos: Int }
+
+fn skip_digits(source: String, pos: Int, len: Int) -> Int = {
+  if pos >= len then pos
+  else if is_digit(char_at(source, pos)) then skip_digits(source, pos + 1, len)
+  else pos
+}
+
+fn skip_ident(source: String, pos: Int, len: Int) -> Int = {
+  if pos >= len then pos
+  else {
+    let ch = char_at(source, pos)
+    if is_alnum(ch) || ch == "!" then skip_ident(source, pos + 1, len)
+    else pos
+  }
+}
+
+fn skip_to_newline(source: String, pos: Int, len: Int) -> Int = {
+  if pos >= len then pos
+  else if char_at(source, pos) == "\n" then pos
+  else skip_to_newline(source, pos + 1, len)
+}
+
+fn make_lex_pair(tok: Token, p: Int) -> LexPair = LexPair { token: tok, end_pos: p }
+
+fn lex_string_body(source: String, pos: Int, len: Int) -> LexPair = {
+  if pos >= len then make_lex_pair(TStr(""), pos)
+  else {
+    let ch = char_at(source, pos)
+    if ch == "\"" then make_lex_pair(TStr(""), pos + 1)
+    else if ch == "\\" then {
+      let rest = lex_string_body(source, pos + 2, len)
+      let esc_ch = char_at(source, pos + 1)
+      let actual = if esc_ch == "n" then "\n"
+                   else if esc_ch == "t" then "\t"
+                   else if esc_ch == "\\" then "\\"
+                   else if esc_ch == "\"" then "\""
+                   else esc_ch
+      match rest.token
+        TStr(s) -> make_lex_pair(TStr(String.join([actual, s], "")), rest.end_pos)
+        _ -> rest
+    } else {
+      let rest = lex_string_body(source, pos + 1, len)
+      match rest.token
+        TStr(s) -> make_lex_pair(TStr(String.join([ch, s], "")), rest.end_pos)
+        _ -> rest
+    }
+  }
+}
+
+// ============================================================================
+// LEXER — Operator/Punctuation matching
+// ============================================================================
+
+fn lex_op_or_punct(source: String, pos: Int, len: Int) -> LexPair = {
+  let ch = char_at(source, pos)
+  let next = if pos + 1 < len then char_at(source, pos + 1) else ""
+  let p1 = pos + 1
+  let p2 = pos + 2
+  if ch == "=" && next == "=" then make_lex_pair(TOp("=="), p2)
+  else if ch == "!" && next == "=" then make_lex_pair(TOp("!="), p2)
+  else if ch == "<" && next == "=" then make_lex_pair(TOp("<="), p2)
+  else if ch == ">" && next == "=" then make_lex_pair(TOp(">="), p2)
+  else if ch == "-" && next == ">" then make_lex_pair(TOp("->"), p2)
+  else if ch == "&" && next == "&" then make_lex_pair(TOp("&&"), p2)
+  else if ch == "|" && next == ">" then make_lex_pair(TOp("|>"), p2)
+  else if ch == "|" && next == "|" then make_lex_pair(TOp("||"), p2)
+  else if ch == "+" && next == "+" then make_lex_pair(TOp("++"), p2)
+  else if ch == "." && next == "." then make_lex_pair(TOp(".."), p2)
+  else if ch == "+" then make_lex_pair(TOp("+"), p1)
+  else if ch == "-" then make_lex_pair(TOp("-"), p1)
+  else if ch == "*" then make_lex_pair(TOp("*"), p1)
+  else if ch == "/" then make_lex_pair(TOp("/"), p1)
+  else if ch == "%" then make_lex_pair(TOp("%"), p1)
+  else if ch == "<" then make_lex_pair(TOp("<"), p1)
+  else if ch == ">" then make_lex_pair(TOp(">"), p1)
+  else if ch == "=" then make_lex_pair(TOp("="), p1)
+  else if ch == "|" then make_lex_pair(TOp("|"), p1)
+  else if ch == "(" then make_lex_pair(TPunct("("), p1)
+  else if ch == ")" then make_lex_pair(TPunct(")"), p1)
+  else if ch == "{" then make_lex_pair(TPunct("{"), p1)
+  else if ch == "}" then make_lex_pair(TPunct("}"), p1)
+  else if ch == "[" then make_lex_pair(TPunct("["), p1)
+  else if ch == "]" then make_lex_pair(TPunct("]"), p1)
+  else if ch == ":" then make_lex_pair(TPunct(":"), p1)
+  else if ch == "," then make_lex_pair(TPunct(","), p1)
+  else if ch == "." then make_lex_pair(TPunct("."), p1)
+  else if ch == "@" then make_lex_pair(TPunct("@"), p1)
+  else if ch == "!" then make_lex_pair(TPunct("!"), p1)
+  else if ch == "_" then make_lex_pair(TPunct("_"), p1)
+  else if ch == "#" then make_lex_pair(TPunct("#"), p1)
+  else make_lex_pair(TIdent(ch), p1)
+}
+
+// ============================================================================
+// LEXER — Main tokenize loop
+// ============================================================================
+
+fn lex_loop(source: String, pos: Int, len: Int, acc: List<Token>) -> List<Token> = {
+  if pos >= len then acc ++ [TEOF]
+  else {
+    let ch = char_at(source, pos)
+    let next_pos = pos + 1
+
+    if ch == " " then lex_loop(source, next_pos, len, acc)
+    else if ch == "\t" then lex_loop(source, next_pos, len, acc)
+    else if ch == "\r" then lex_loop(source, next_pos, len, acc)
+    else if ch == "\n" then lex_loop(source, next_pos, len, acc ++ [TNewline])
+    else if ch == "/" && char_at(source, pos + 1) == "/" then {
+      let ep = skip_to_newline(source, pos + 2, len)
+      lex_loop(source, ep, len, acc)
+    }
+    else if is_digit(ch) then {
+      let ep = skip_digits(source, pos, len)
+      let num_str = String.slice(source, pos, ep - pos)
+      match Int.parse(num_str)
+        Ok(n) -> lex_loop(source, ep, len, acc ++ [TInt(n)])
+        Err(_) -> lex_loop(source, ep, len, acc ++ [TInt(0)])
+    }
+    else if is_alpha(ch) then {
+      let ep = skip_ident(source, pos, len)
+      let word = String.slice(source, pos, ep - pos)
+      let tok = classify_word(word)
+      lex_loop(source, ep, len, acc ++ [tok])
+    }
+    else if ch == "\"" then {
+      let result = lex_string_body(source, next_pos, len)
+      lex_loop(source, result.end_pos, len, acc ++ [result.token])
+    }
+    else {
+      let result = lex_op_or_punct(source, pos, len)
+      lex_loop(source, result.end_pos, len, acc ++ [result.token])
+    }
+  }
+}
+
+fn tokenize(source: String) -> List<Token> =
+  lex_loop(source, 0, String.length(source), [])
+
+// ============================================================================
+// TOKEN DISPLAY (for debugging)
+// ============================================================================
+
+fn token_to_string(tok: Token) -> String = {
+  match tok
+    TInt(n) -> String.join(["TInt(", Int.to_string(n), ")"], "")
+    TStr(s) -> String.join(["TStr(\"", s, "\")"], "")
+    TIdent(s) -> String.join(["TIdent(", s, ")"], "")
+    TUpper(s) -> String.join(["TUpper(", s, ")"], "")
+    TKeyword(s) -> String.join(["TKeyword(", s, ")"], "")
+    TOp(s) -> String.join(["TOp(", s, ")"], "")
+    TPunct(s) -> String.join(["TPunct(", s, ")"], "")
+    TNewline -> "TNewline"
+    TEOF -> "TEOF"
+}
+
+// ============================================================================
+// LEXER TESTS
+// ============================================================================
+
+fn tokens_str(tokens: List<Token>) -> String =
+  String.join(List.map(tokens, |t| token_to_string(t)), " ")
+
+test "lex integer" = tokens_str(tokenize("42")) == "TInt(42) TEOF"
+
+test "lex identifier" = tokens_str(tokenize("hello")) == "TIdent(hello) TEOF"
+
+test "lex type ident" = tokens_str(tokenize("Int")) == "TUpper(Int) TEOF"
+
+test "lex keyword fn" = tokens_str(tokenize("fn")) == "TKeyword(fn) TEOF"
+
+test "lex keyword let" = tokens_str(tokenize("let")) == "TKeyword(let) TEOF"
+
+test "lex keyword match" = tokens_str(tokenize("match")) == "TKeyword(match) TEOF"
+
+test "lex arrow" = tokens_str(tokenize("->")) == "TOp(->) TEOF"
+
+test "lex equals op" = tokens_str(tokenize("==")) == "TOp(==) TEOF"
+
+test "lex string" = tokens_str(tokenize("\"hello\"")) == "TStr(\"hello\") TEOF"
+
+test "lex parens" = tokens_str(tokenize("()")) == "TPunct(() TPunct()) TEOF"
+
+test "lex simple function" = {
+  tokens_str(tokenize("fn main() -> Int = 42")) == "TKeyword(fn) TIdent(main) TPunct(() TPunct()) TOp(->) TUpper(Int) TOp(=) TInt(42) TEOF"
+}
+
+test "lex skips comments" = tokens_str(tokenize("// comment\n42")) == "TNewline TInt(42) TEOF"
+
+test "lex operators" = tokens_str(tokenize("a + b * c")) == "TIdent(a) TOp(+) TIdent(b) TOp(*) TIdent(c) TEOF"
+
+test "lex comparison" = tokens_str(tokenize("x >= 0")) == "TIdent(x) TOp(>=) TInt(0) TEOF"
+
+test "lex pipe" = tokens_str(tokenize("x |> f")) == "TIdent(x) TOp(|>) TIdent(f) TEOF"
+
+test "lex ends with EOF" = List.length(tokenize("42")) == 2
+
+test "lex empty string" = tokens_str(tokenize("\"\"")) == "TStr(\"\") TEOF"
+
+test "lex braces" = tokens_str(tokenize("{ }")) == "TPunct({) TPunct(}) TEOF"
+
+test "lex type def" = {
+  tokens_str(tokenize("type Color = | Red | Green")) == "TKeyword(type) TUpper(Color) TOp(=) TOp(|) TUpper(Red) TOp(|) TUpper(Green) TEOF"
+}
+
+test "lex effectful" = {
+  tokens_str(tokenize("Console.println!(x)")) == "TUpper(Console) TPunct(.) TIdent(println!) TPunct(() TIdent(x) TPunct()) TEOF"
+}
+
+// ============================================================================
+// PARSER — State Types
+// ============================================================================
+
+type ParseResult = { node: Expr, pos: Int }
+type StmtResult = { stmt: Stmt, pos: Int }
+type DeclResult = { decl: Decl, pos: Int }
+type PatResult = { pat: Pattern, pos: Int }
+type TypeResult = { type_ann: String, pos: Int }
+
+// ============================================================================
+// PARSER — Helpers
+// ============================================================================
+
+fn peek(tokens: List<Token>, pos: Int) -> Token =
+  match List.get(tokens, pos)
+    Some(t) -> t
+    None -> TEOF
+
+fn skip_newlines(tokens: List<Token>, pos: Int) -> Int =
+  match peek(tokens, pos)
+    TNewline -> skip_newlines(tokens, pos + 1)
+    _ -> pos
+
+fn is_tok_op(tok: Token, op: String) -> Bool =
+  match tok
+    TOp(s) -> s == op
+    _ -> false
+
+fn is_tok_punct(tok: Token, p: String) -> Bool =
+  match tok
+    TPunct(s) -> s == p
+    _ -> false
+
+fn is_tok_kw(tok: Token, kw: String) -> Bool =
+  match tok
+    TKeyword(s) -> s == kw
+    _ -> false
+
+fn is_tok_eof(tok: Token) -> Bool =
+  match tok
+    TEOF -> true
+    _ -> false
+
+fn expect_op(tokens: List<Token>, pos: Int, expected: String) -> Result<Int, String> = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_op(peek(tokens, p), expected) then Ok(p + 1)
+  else Err(String.join(["Expected '", expected, "'"], ""))
+}
+
+fn expect_punct(tokens: List<Token>, pos: Int, expected: String) -> Result<Int, String> = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), expected) then Ok(p + 1)
+  else Err(String.join(["Expected '", expected, "'"], ""))
+}
+
+fn expect_kw(tokens: List<Token>, pos: Int, expected: String) -> Result<Int, String> = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_kw(peek(tokens, p), expected) then Ok(p + 1)
+  else Err(String.join(["Expected '", expected, "'"], ""))
+}
+
+// ============================================================================
+// PARSER — Type Annotations
+// ============================================================================
+
+fn parse_generic_close(name: String, inner: String, pos: Int, tokens: List<Token>) -> TypeResult = {
+  if is_tok_op(peek(tokens, pos), ">") then
+    TypeResult { type_ann: String.join([name, "<", inner, ">"], ""), pos: pos + 1 }
+  else TypeResult { type_ann: String.join([name, "<", inner, ">"], ""), pos: pos }
+}
+
+fn parse_generic_params(name: String, tokens: List<Token>, pos: Int) -> TypeResult = {
+  let inner = parse_type(tokens, pos)
+  if is_tok_punct(peek(tokens, inner.pos), ",") then {
+    let inner2 = parse_type(tokens, inner.pos + 1)
+    let combined = String.join([inner.type_ann, ", ", inner2.type_ann], "")
+    parse_generic_close(name, combined, inner2.pos, tokens)
+  } else parse_generic_close(name, inner.type_ann, inner.pos, tokens)
+}
+
+fn parse_type(tokens: List<Token>, pos: Int) -> TypeResult = {
+  let p = skip_newlines(tokens, pos)
+  let tok = peek(tokens, p)
+  match tok
+    TUpper(name) -> {
+      if is_tok_op(peek(tokens, p + 1), "<") then parse_generic_params(name, tokens, p + 2)
+      else TypeResult { type_ann: name, pos: p + 1 }
+    }
+    TIdent(name) -> TypeResult { type_ann: name, pos: p + 1 }
+    TPunct(s) -> {
+      if s == "(" && is_tok_punct(peek(tokens, p + 1), ")") then TypeResult { type_ann: "Unit", pos: p + 2 }
+      else TypeResult { type_ann: "Unknown", pos: p + 1 }
+    }
+    _ -> TypeResult { type_ann: "Unknown", pos: p }
+}
+
+// ============================================================================
+// PARSER — Pattern Parsing
+// ============================================================================
+
+fn get_binding_name(tok: Token) -> String =
+  match tok
+    TIdent(s) -> s
+    _ -> "_"
+
+fn parse_pat_args(tokens: List<Token>, pos: Int, acc: List<String>) -> PatResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), ")") then
+    PatResult { pat: PCon(PConNode { name: "", bindings: acc }), pos: p + 1 }
+  else {
+    let binding = get_binding_name(peek(tokens, p))
+    let next_p = p + 1
+    if is_tok_punct(peek(tokens, next_p), ",") then
+      parse_pat_args(tokens, next_p + 1, acc ++ [binding])
+    else if is_tok_punct(peek(tokens, next_p), ")") then
+      PatResult { pat: PCon(PConNode { name: "", bindings: acc ++ [binding] }), pos: next_p + 1 }
+    else PatResult { pat: PCon(PConNode { name: "", bindings: acc ++ [binding] }), pos: next_p }
+  }
+}
+
+fn parse_pattern(tokens: List<Token>, pos: Int) -> PatResult = {
+  let p = skip_newlines(tokens, pos)
+  let tok = peek(tokens, p)
+  match tok
+    TPunct(s) -> if s == "_" then PatResult { pat: PWild, pos: p + 1 } else PatResult { pat: PWild, pos: p }
+    TInt(n) -> PatResult { pat: PInt(n), pos: p + 1 }
+    TStr(s) -> PatResult { pat: PStr(s), pos: p + 1 }
+    TKeyword(kw) -> {
+      if kw == "true" then PatResult { pat: PBool(true), pos: p + 1 }
+      else if kw == "false" then PatResult { pat: PBool(false), pos: p + 1 }
+      else PatResult { pat: PVar(kw), pos: p + 1 }
+    }
+    TUpper(name) -> {
+      if is_tok_punct(peek(tokens, p + 1), "(") then {
+        let args_result = parse_pat_args(tokens, p + 2, [])
+        match args_result.pat
+          PCon(node) -> PatResult { pat: PCon(PConNode { name: name, bindings: node.bindings }), pos: args_result.pos }
+          _ -> PatResult { pat: PCon(PConNode { name: name, bindings: [] }), pos: args_result.pos }
+      } else PatResult { pat: PCon(PConNode { name: name, bindings: [] }), pos: p + 1 }
+    }
+    TIdent(name) -> PatResult { pat: PVar(name), pos: p + 1 }
+    _ -> PatResult { pat: PWild, pos: p }
+}
+
+// ============================================================================
+// PARSER — Operator Precedence
+// ============================================================================
+
+type BindingPower = { left: Int, right: Int }
+
+fn op_binding_power(op: String) -> Option<BindingPower> = {
+  if op == "||" then Some(BindingPower { left: 1, right: 2 })
+  else if op == "&&" then Some(BindingPower { left: 3, right: 4 })
+  else if op == "==" then Some(BindingPower { left: 5, right: 6 })
+  else if op == "!=" then Some(BindingPower { left: 5, right: 6 })
+  else if op == "<" then Some(BindingPower { left: 7, right: 8 })
+  else if op == ">" then Some(BindingPower { left: 7, right: 8 })
+  else if op == "<=" then Some(BindingPower { left: 7, right: 8 })
+  else if op == ">=" then Some(BindingPower { left: 7, right: 8 })
+  else if op == "++" then Some(BindingPower { left: 9, right: 10 })
+  else if op == "+" then Some(BindingPower { left: 11, right: 12 })
+  else if op == "-" then Some(BindingPower { left: 11, right: 12 })
+  else if op == "*" then Some(BindingPower { left: 13, right: 14 })
+  else if op == "/" then Some(BindingPower { left: 13, right: 14 })
+  else if op == "%" then Some(BindingPower { left: 13, right: 14 })
+  else if op == "|>" then Some(BindingPower { left: 1, right: 2 })
+  else None
+}
+
+// ============================================================================
+// PARSER — Expression Parsing (forward declarations via mutual recursion)
+// ============================================================================
+
+// Parse comma-separated expressions until closing paren
+fn parse_args(tokens: List<Token>, pos: Int, acc: List<Expr>) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), ")") then
+    ParseResult { node: EList(acc), pos: p + 1 }
+  else {
+    let arg = parse_expr(tokens, p)
+    let p2 = skip_newlines(tokens, arg.pos)
+    if is_tok_punct(peek(tokens, p2), ",") then parse_args(tokens, p2 + 1, acc ++ [arg.node])
+    else if is_tok_punct(peek(tokens, p2), ")") then ParseResult { node: EList(acc ++ [arg.node]), pos: p2 + 1 }
+    else ParseResult { node: EList(acc ++ [arg.node]), pos: p2 }
+  }
+}
+
+// Parse comma-separated list elements until ]
+fn parse_list_elems(tokens: List<Token>, pos: Int, acc: List<Expr>) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), "]") then
+    ParseResult { node: EList(acc), pos: p + 1 }
+  else {
+    let elem = parse_expr(tokens, p)
+    let p2 = skip_newlines(tokens, elem.pos)
+    if is_tok_punct(peek(tokens, p2), ",") then parse_list_elems(tokens, p2 + 1, acc ++ [elem.node])
+    else if is_tok_punct(peek(tokens, p2), "]") then ParseResult { node: EList(acc ++ [elem.node]), pos: p2 + 1 }
+    else ParseResult { node: EList(acc ++ [elem.node]), pos: p2 }
+  }
+}
+
+// Parse record fields: { name: expr, ... } or Name { name: expr, ... }
+fn parse_record_fields(tokens: List<Token>, pos: Int, acc: List<RecordField>) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), "}") then
+    ParseResult { node: ERecord(acc), pos: p + 1 }
+  else {
+    let fname = get_ident_or(peek(tokens, p), "")
+    let p2 = skip_newlines(tokens, p + 1)
+    if is_tok_punct(peek(tokens, p2), ":") then {
+      let val = parse_expr(tokens, p2 + 1)
+      let p3 = skip_newlines(tokens, val.pos)
+      let field = RecordField { name: fname, value: val.node }
+      if is_tok_punct(peek(tokens, p3), ",") then parse_record_fields(tokens, p3 + 1, acc ++ [field])
+      else if is_tok_punct(peek(tokens, p3), "}") then ParseResult { node: ERecord(acc ++ [field]), pos: p3 + 1 }
+      else ParseResult { node: ERecord(acc ++ [field]), pos: p3 }
+    } else ParseResult { node: ERecord(acc), pos: p }
+  }
+}
+
+fn is_arm_token(tok: Token) -> Bool =
+  match tok
+    TUpper(_) -> true
+    TIdent(_) -> true
+    TInt(_) -> true
+    TStr(_) -> true
+    TPunct(s) -> s == "_"
+    TKeyword(kw) -> kw == "true" || kw == "false"
+    _ -> false
+
+// Parse match arms
+fn make_arms_result(acc: List<MatchArm>, pos: Int) -> ParseResult =
+  ParseResult { node: EMatch(EMatchNode { subject: EInt(0), arms: acc }), pos: pos }
+
+fn parse_match_arm_body(tokens: List<Token>, pos: Int, acc: List<MatchArm>, pat_r: PatResult) -> ParseResult = {
+  let p2 = skip_newlines(tokens, pat_r.pos)
+  if is_tok_op(peek(tokens, p2), "->") then {
+    let body = parse_expr(tokens, p2 + 1)
+    let arm = MatchArm { pat: pat_r.pat, body: body.node }
+    parse_match_arms(tokens, body.pos, acc ++ [arm])
+  } else make_arms_result(acc, p2)
+}
+
+fn parse_match_arms(tokens: List<Token>, pos: Int, acc: List<MatchArm>) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_arm_token(peek(tokens, p)) then parse_match_arm_body(tokens, p, acc, parse_pattern(tokens, p))
+  else make_arms_result(acc, p)
+}
+
+// Parse block statements until }
+fn parse_block_stmts(tokens: List<Token>, pos: Int, acc: List<Stmt>) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), "}") then {
+    ParseResult { node: EBlock(acc), pos: p + 1 }
+  } else if is_tok_eof(peek(tokens, p)) then {
+    ParseResult { node: EBlock(acc), pos: p }
+  } else {
+    let sr = parse_stmt(tokens, p)
+    parse_block_stmts(tokens, sr.pos, acc ++ [sr.stmt])
+  }
+}
+
+// Parse lambda params: |a, b| body
+fn parse_lambda_params(tokens: List<Token>, pos: Int, acc: List<String>) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  let tok = peek(tokens, p)
+  match tok
+    TIdent(name) -> {
+      let p2 = skip_newlines(tokens, p + 1)
+      if is_tok_punct(peek(tokens, p2), ",") then parse_lambda_params(tokens, p2 + 1, acc ++ [name])
+      else if is_tok_op(peek(tokens, p2), "|") then {
+        let body = parse_expr(tokens, p2 + 1)
+        ParseResult { node: ELambda(ELambdaNode { params: acc ++ [name], body: body.node }), pos: body.pos }
+      } else ParseResult { node: ELambda(ELambdaNode { params: acc ++ [name], body: EInt(0) }), pos: p2 }
+    }
+    TOp("|") -> {
+      // closing |, parse body
+      let body = parse_expr(tokens, p + 1)
+      ParseResult { node: ELambda(ELambdaNode { params: acc, body: body.node }), pos: body.pos }
+    }
+    _ -> ParseResult { node: ELambda(ELambdaNode { params: acc, body: EInt(0) }), pos: p }
+}
+
+fn get_pr_expr(r: ParseResult) -> Expr = r.node
+fn get_pr_pos(r: ParseResult) -> Int = r.pos
+
+fn make_neg_expr(e: Expr) -> Expr = EUnaryNeg(EUnaryNode { inner: e })
+fn make_not_expr(e: Expr) -> Expr = EUnaryNot(EUnaryNode { inner: e })
+
+fn wrap_unary_neg(r: ParseResult) -> ParseResult =
+  ParseResult { node: make_neg_expr(get_pr_expr(r)), pos: get_pr_pos(r) }
+
+fn wrap_unary_not(r: ParseResult) -> ParseResult =
+  ParseResult { node: make_not_expr(get_pr_expr(r)), pos: get_pr_pos(r) }
+
+fn parse_primary_op(tokens: List<Token>, pos: Int, op: String) -> ParseResult = {
+  if op == "-" then wrap_unary_neg(parse_primary(tokens, pos + 1))
+  else if op == "|" then parse_lambda_params(tokens, pos + 1, [])
+  else ParseResult { node: EInt(0), pos: pos }
+}
+
+fn parse_primary_punct(tokens: List<Token>, pos: Int, p: String) -> ParseResult = {
+  if p == "(" then parse_primary_paren(tokens, pos + 1)
+  else if p == "{" then parse_block_stmts(tokens, pos + 1, [])
+  else if p == "[" then parse_primary_list(tokens, pos + 1)
+  else ParseResult { node: EInt(0), pos: pos }
+}
+
+// Primary expressions
+fn parse_primary(tokens: List<Token>, pos: Int) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  let tok = peek(tokens, p)
+  match tok
+    TInt(n) -> ParseResult { node: EInt(n), pos: p + 1 }
+    TStr(s) -> ParseResult { node: EStr(s), pos: p + 1 }
+    TKeyword(kw) -> parse_primary_kw(tokens, p, kw)
+    TIdent(name) -> ParseResult { node: EVar(name), pos: p + 1 }
+    TUpper(name) -> parse_primary_upper(tokens, p, name)
+    TPunct(s) -> parse_primary_punct(tokens, p, s)
+    TOp(s) -> parse_primary_op(tokens, p, s)
+    _ -> ParseResult { node: EInt(0), pos: p }
+}
+
+fn parse_primary_kw(tokens: List<Token>, pos: Int, kw: String) -> ParseResult = {
+  if kw == "true" then ParseResult { node: EBool(true), pos: pos + 1 }
+  else if kw == "false" then ParseResult { node: EBool(false), pos: pos + 1 }
+  else if kw == "not" then wrap_unary_not(parse_primary(tokens, pos + 1))
+  else if kw == "if" then parse_if_expr(tokens, pos + 1)
+  else if kw == "match" then parse_match_expr(tokens, pos + 1)
+  else ParseResult { node: EVar(kw), pos: pos + 1 }
+}
+
+fn parse_primary_upper(tokens: List<Token>, pos: Int, name: String) -> ParseResult = {
+  // Check for Module.func or Constructor { fields } or Constructor(args) or just Constructor
+  let p2 = pos + 1
+  if is_tok_punct(peek(tokens, p2), ".") then {
+    let p3 = p2 + 1
+    let field_tok = peek(tokens, p3)
+    match field_tok
+      TIdent(fname) -> ParseResult { node: EField(EFieldNode { obj: EVar(name), name: fname }), pos: p3 + 1 }
+      _ -> ParseResult { node: EVar(name), pos: p2 }
+  }
+  else if is_tok_punct(peek(tokens, p2), "{") then {
+    // Record constructor: Name { field: val, ... }
+    let fields_r = parse_record_fields(tokens, p2 + 1, [])
+    fields_r
+  }
+  else if is_tok_punct(peek(tokens, p2), "(") then {
+    // Constructor call: Name(args)
+    let args_r = parse_args(tokens, p2 + 1, [])
+    match args_r.node
+      EList(args) -> ParseResult { node: ECall(ECallNode { callee: EVar(name), args: args }), pos: args_r.pos }
+      _ -> ParseResult { node: ECall(ECallNode { callee: EVar(name), args: [] }), pos: args_r.pos }
+  }
+  else ParseResult { node: EVar(name), pos: p2 }
+}
+
+fn parse_primary_paren(tokens: List<Token>, pos: Int) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), ")") then {
+    let unit = EList([])
+    ParseResult { node: unit, pos: p + 1 }
+  } else {
+    let inner = parse_expr(tokens, p)
+    let p2 = skip_newlines(tokens, inner.pos)
+    let end_p = if is_tok_punct(peek(tokens, p2), ")") then p2 + 1 else p2
+    ParseResult { node: inner.node, pos: end_p }
+  }
+}
+
+fn parse_primary_list(tokens: List<Token>, pos: Int) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), "]") then ParseResult { node: EList([]), pos: p + 1 }
+  else parse_list_elems(tokens, p, [])
+}
+
+fn parse_if_expr(tokens: List<Token>, pos: Int) -> ParseResult = {
+  let cond = parse_expr(tokens, pos)
+  let p2 = skip_newlines(tokens, cond.pos)
+  let p3 = if is_tok_kw(peek(tokens, p2), "then") then p2 + 1 else p2
+  let then_e = parse_expr(tokens, p3)
+  let p4 = skip_newlines(tokens, then_e.pos)
+  let p5 = if is_tok_kw(peek(tokens, p4), "else") then p4 + 1 else p4
+  let else_e = parse_expr(tokens, p5)
+  ParseResult { node: EIf(EIfNode { cond: cond.node, then_expr: then_e.node, else_expr: else_e.node }), pos: else_e.pos }
+}
+
+fn parse_match_expr(tokens: List<Token>, pos: Int) -> ParseResult = {
+  let subject = parse_expr(tokens, pos)
+  let arms_r = parse_match_arms(tokens, subject.pos, [])
+  match arms_r.node
+    EMatch(node) -> ParseResult {
+      node: EMatch(EMatchNode { subject: subject.node, arms: node.arms }),
+      pos: arms_r.pos
+    }
+    _ -> ParseResult { node: EMatch(EMatchNode { subject: subject.node, arms: [] }), pos: arms_r.pos }
+}
+
+// Postfix: function calls and field access
+fn parse_postfix(tokens: List<Token>, pos: Int) -> ParseResult = {
+  let primary = parse_primary(tokens, pos)
+  parse_postfix_loop(tokens, primary.pos, primary.node)
+}
+
+fn parse_postfix_loop(tokens: List<Token>, pos: Int, left: Expr) -> ParseResult = {
+  let tok = peek(tokens, pos)
+  if is_tok_punct(tok, "(") then {
+    let args_r = parse_args(tokens, pos + 1, [])
+    match args_r.node
+      EList(args) -> parse_postfix_loop(tokens, args_r.pos, ECall(ECallNode { callee: left, args: args }))
+      _ -> parse_postfix_loop(tokens, args_r.pos, ECall(ECallNode { callee: left, args: [] }))
+  }
+  else if is_tok_punct(tok, ".") then {
+    let field_tok = peek(tokens, pos + 1)
+    match field_tok
+      TIdent(fname) -> parse_postfix_loop(tokens, pos + 2, EField(EFieldNode { obj: left, name: fname }))
+      _ -> ParseResult { node: left, pos: pos }
+  }
+  else ParseResult { node: left, pos: pos }
+}
+
+// Precedence climbing
+fn parse_expr(tokens: List<Token>, pos: Int) -> ParseResult =
+  parse_expr_bp(tokens, pos, 0)
+
+fn parse_expr_bp(tokens: List<Token>, pos: Int, min_bp: Int) -> ParseResult = {
+  let lhs = parse_postfix(tokens, pos)
+  parse_expr_bp_loop(tokens, lhs.pos, lhs.node, min_bp)
+}
+
+fn parse_expr_bp_loop(tokens: List<Token>, pos: Int, left: Expr, min_bp: Int) -> ParseResult = {
+  let p = skip_newlines(tokens, pos)
+  let tok = peek(tokens, p)
+  match tok
+    TOp(op) -> {
+      match op_binding_power(op)
+        Some(bp) -> {
+          if bp.left < min_bp then ParseResult { node: left, pos: p }
+          else {
+            let rhs = parse_expr_bp(tokens, p + 1, bp.right)
+            if op == "|>" then {
+              // Desugar pipe: x |> f becomes f(x)
+              let piped = ECall(ECallNode { callee: rhs.node, args: [left] })
+              parse_expr_bp_loop(tokens, rhs.pos, piped, min_bp)
+            } else {
+              let binop = EBinOp(EBinOpNode { left: left, op: op, right: rhs.node })
+              parse_expr_bp_loop(tokens, rhs.pos, binop, min_bp)
+            }
+          }
+        }
+        None -> ParseResult { node: left, pos: p }
+    }
+    _ -> ParseResult { node: left, pos: p }
+}
+
+// ============================================================================
+// PARSER — Statement Parsing
+// ============================================================================
+
+fn parse_stmt(tokens: List<Token>, pos: Int) -> StmtResult = {
+  let p = skip_newlines(tokens, pos)
+  let tok = peek(tokens, p)
+  if is_tok_kw(tok, "let") then parse_let_stmt(tokens, p + 1)
+  else {
+    let e = parse_expr(tokens, p)
+    StmtResult { stmt: SExpr(e.node), pos: e.pos }
+  }
+}
+
+fn parse_let_stmt(tokens: List<Token>, pos: Int) -> StmtResult = {
+  let p = skip_newlines(tokens, pos)
+  let name = get_ident_or(peek(tokens, p), "_")
+  let p2 = skip_newlines(tokens, p + 1)
+  // expect =
+  if is_tok_op(peek(tokens, p2), "=") then {
+    let val = parse_expr(tokens, p2 + 1)
+    StmtResult { stmt: SLet(SLetNode { name: name, value: val.node }), pos: val.pos }
+  } else {
+    let val = parse_expr(tokens, p2)
+    StmtResult { stmt: SLet(SLetNode { name: name, value: val.node }), pos: val.pos }
+  }
+}
+
+// ============================================================================
+// PARSER — Declaration Parsing
+// ============================================================================
+
+fn parse_params(tokens: List<Token>, pos: Int, acc: List<Param>) -> DeclResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), ")") then
+    DeclResult { decl: DImport(""), pos: p + 1 }
+  else {
+    let name = get_ident_or(peek(tokens, p), "_")
+    let p2 = skip_newlines(tokens, p + 1)
+    if is_tok_punct(peek(tokens, p2), ":") then {
+      let ty = parse_type(tokens, p2 + 1)
+      let param = Param { name: name, type_ann: ty.type_ann }
+      let p3 = skip_newlines(tokens, ty.pos)
+      if is_tok_punct(peek(tokens, p3), ",") then parse_params(tokens, p3 + 1, acc ++ [param])
+      else if is_tok_punct(peek(tokens, p3), ")") then DeclResult { decl: DFunc(DFuncNode { name: "", params: acc ++ [param], ret_type: "", body: EInt(0) }), pos: p3 + 1 }
+      else DeclResult { decl: DFunc(DFuncNode { name: "", params: acc ++ [param], ret_type: "", body: EInt(0) }), pos: p3 }
+    } else {
+      let param = Param { name: name, type_ann: "Unknown" }
+      let p3 = skip_newlines(tokens, p2)
+      if is_tok_punct(peek(tokens, p3), ",") then parse_params(tokens, p3 + 1, acc ++ [param])
+      else if is_tok_punct(peek(tokens, p3), ")") then DeclResult { decl: DFunc(DFuncNode { name: "", params: acc ++ [param], ret_type: "", body: EInt(0) }), pos: p3 + 1 }
+      else DeclResult { decl: DFunc(DFuncNode { name: "", params: acc ++ [param], ret_type: "", body: EInt(0) }), pos: p3 }
+    }
+  }
+}
+
+fn extract_params(dr: DeclResult) -> List<Param> =
+  match dr.decl
+    DFunc(node) -> node.params
+    _ -> []
+
+fn get_ident_or(tok: Token, default: String) -> String =
+  match tok
+    TIdent(s) -> s
+    _ -> default
+
+fn make_empty_func(name: String, pos: Int) -> DeclResult =
+  DeclResult { decl: DFunc(DFuncNode { name: name, params: [], ret_type: "Unknown", body: EInt(0) }), pos: pos }
+
+fn parse_func_params(tokens: List<Token>, pos: Int, name: String) -> DeclResult = {
+  let p4s = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p4s), ")") then {
+    let p5s = skip_newlines(tokens, p4s + 1)
+    parse_func_ret(tokens, p5s, name, [])
+  } else {
+    let params_r = parse_params(tokens, pos, [])
+    let params = extract_params(params_r)
+    let p5s = skip_newlines(tokens, params_r.pos)
+    parse_func_ret(tokens, p5s, name, params)
+  }
+}
+
+fn parse_func(tokens: List<Token>, pos: Int) -> DeclResult = {
+  let p = skip_newlines(tokens, pos)
+  let name = get_ident_or(peek(tokens, p), "unknown")
+  let p2 = p + 1
+  // Check for ! suffix (effectful) — skip it
+  let p3 = if is_tok_punct(peek(tokens, p2), "(") then p2
+           else if is_tok_punct(peek(tokens, p2 + 1), "(") then p2 + 1
+           else p2
+  if is_tok_punct(peek(tokens, p3), "(") then parse_func_params(tokens, p3 + 1, name)
+  else make_empty_func(name, p3)
+}
+
+fn parse_func_ret(tokens: List<Token>, pos: Int, name: String, params: List<Param>) -> DeclResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_op(peek(tokens, p), "->") then {
+    let ty = parse_type(tokens, p + 1)
+    let p2 = skip_newlines(tokens, ty.pos)
+    if is_tok_op(peek(tokens, p2), "=") then {
+      let body = parse_expr(tokens, p2 + 1)
+      DeclResult { decl: DFunc(DFuncNode { name: name, params: params, ret_type: ty.type_ann, body: body.node }), pos: body.pos }
+    } else DeclResult { decl: DFunc(DFuncNode { name: name, params: params, ret_type: ty.type_ann, body: EInt(0) }), pos: p2 }
+  } else if is_tok_op(peek(tokens, p), "=") then {
+    let body = parse_expr(tokens, p + 1)
+    DeclResult { decl: DFunc(DFuncNode { name: name, params: params, ret_type: "Unknown", body: body.node }), pos: body.pos }
+  } else DeclResult { decl: DFunc(DFuncNode { name: name, params: params, ret_type: "Unknown", body: EInt(0) }), pos: p }
+}
+
+// Parse sum type variants
+fn parse_variants(tokens: List<Token>, pos: Int, acc: List<Variant>) -> DeclResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_op(peek(tokens, p), "|") then {
+    let p2 = skip_newlines(tokens, p + 1)
+    let vname = get_upper_or(peek(tokens, p2), "Unknown")
+    let p3 = p2 + 1
+    if is_tok_punct(peek(tokens, p3), "(") then {
+      let payload = parse_variant_payload(tokens, p3 + 1, [])
+      let v = Variant { name: vname, payload: payload.types }
+      parse_variants(tokens, payload.pos, acc ++ [v])
+    } else {
+      let v = Variant { name: vname, payload: [] }
+      parse_variants(tokens, p3, acc ++ [v])
+    }
+  } else DeclResult { decl: DType(DTypeNode { name: "", def: TDSum(acc) }), pos: p }
+}
+
+type PayloadResult = { types: List<String>, pos: Int }
+
+fn parse_variant_payload(tokens: List<Token>, pos: Int, acc: List<String>) -> PayloadResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), ")") then PayloadResult { types: acc, pos: p + 1 }
+  else {
+    let ty = parse_type(tokens, p)
+    let p2 = skip_newlines(tokens, ty.pos)
+    if is_tok_punct(peek(tokens, p2), ",") then parse_variant_payload(tokens, p2 + 1, acc ++ [ty.type_ann])
+    else if is_tok_punct(peek(tokens, p2), ")") then PayloadResult { types: acc ++ [ty.type_ann], pos: p2 + 1 }
+    else PayloadResult { types: acc ++ [ty.type_ann], pos: p2 }
+  }
+}
+
+// Parse record type fields
+fn parse_field_defs(tokens: List<Token>, pos: Int, acc: List<FieldDef>) -> DeclResult = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_punct(peek(tokens, p), "}") then
+    DeclResult { decl: DType(DTypeNode { name: "", def: TDRecord(acc) }), pos: p + 1 }
+  else {
+    let fname = get_ident_or(peek(tokens, p), "_")
+    let p2 = skip_newlines(tokens, p + 1)
+    if is_tok_punct(peek(tokens, p2), ":") then {
+      let ty = parse_type(tokens, p2 + 1)
+      let fd = FieldDef { name: fname, type_name: ty.type_ann }
+      let p3 = skip_newlines(tokens, ty.pos)
+      if is_tok_punct(peek(tokens, p3), ",") then parse_field_defs(tokens, p3 + 1, acc ++ [fd])
+      else parse_field_defs(tokens, p3, acc ++ [fd])
+    } else parse_field_defs(tokens, p2, acc)
+  }
+}
+
+fn get_upper_or(tok: Token, default: String) -> String =
+  match tok
+    TUpper(s) -> s
+    _ -> default
+
+fn make_empty_type(tname: String, pos: Int) -> DeclResult =
+  DeclResult { decl: DType(DTypeNode { name: tname, def: TDSum([]) }), pos: pos }
+
+fn rename_type_decl(tname: String, dr: DeclResult) -> DeclResult =
+  match dr.decl
+    DType(node) -> DeclResult { decl: DType(DTypeNode { name: tname, def: node.def }), pos: dr.pos }
+    _ -> dr
+
+fn parse_type_def_body(tokens: List<Token>, pos: Int, tname: String) -> DeclResult = {
+  let p3 = skip_newlines(tokens, pos)
+  if is_tok_op(peek(tokens, p3), "|") then rename_type_decl(tname, parse_variants(tokens, p3, []))
+  else if is_tok_punct(peek(tokens, p3), "{") then rename_type_decl(tname, parse_field_defs(tokens, p3 + 1, []))
+  else make_empty_type(tname, p3)
+}
+
+fn parse_type_def(tokens: List<Token>, pos: Int) -> DeclResult = {
+  let p = skip_newlines(tokens, pos)
+  let tname = get_upper_or(peek(tokens, p), "Unknown")
+  let p2 = skip_newlines(tokens, p + 1)
+  if is_tok_op(peek(tokens, p2), "=") then parse_type_def_body(tokens, p2 + 1, tname)
+  else make_empty_type(tname, p2)
+}
+
+fn skip_prelude(tokens: List<Token>, pos: Int) -> Int = {
+  let p = skip_newlines(tokens, pos)
+  // @prelude(level)
+  if is_tok_punct(peek(tokens, p), "@") then {
+    let p2 = p + 1
+    if is_tok_kw(peek(tokens, p2), "prelude") then {
+      let p3 = p2 + 1
+      if is_tok_punct(peek(tokens, p3), "(") then {
+        // skip until )
+        let p4 = p3 + 1
+        if is_tok_punct(peek(tokens, p4), ")") then p4 + 1
+        else if is_tok_punct(peek(tokens, p4 + 1), ")") then p4 + 2
+        else p4
+      } else p3
+    } else p
+  } else p
+}
+
+fn get_name_token(tok: Token) -> String =
+  match tok
+    TUpper(s) -> s
+    TIdent(s) -> s
+    _ -> ""
+
+fn is_skip_decl(d: Decl) -> Bool =
+  match d
+    DImport(s) -> s == "__test__" || s == "__skip__"
+    _ -> false
+
+fn filter_decl(d: Decl, acc: List<Decl>) -> List<Decl> =
+  if is_skip_decl(d) then acc else acc ++ [d]
+
+fn parse_decl(tokens: List<Token>, pos: Int) -> DeclResult = {
+  let p = skip_newlines(tokens, pos)
+  let tok = peek(tokens, p)
+  if is_tok_kw(tok, "fn") then parse_func(tokens, p + 1)
+  else if is_tok_kw(tok, "type") then parse_type_def(tokens, p + 1)
+  else if is_tok_kw(tok, "import") then {
+    let p2 = p + 1
+    let iname = get_name_token(peek(tokens, p2))
+    DeclResult { decl: DImport(iname), pos: p2 + 1 }
+  }
+  else if is_tok_kw(tok, "test") then {
+    // Skip test declarations — consume test "name" = expr
+    let p2 = p + 1
+    // skip test name string
+    let p3 = p2 + 1
+    // skip =
+    let p4 = skip_newlines(tokens, p3)
+    let p5 = if is_tok_op(peek(tokens, p4), "=") then p4 + 1 else p4
+    let body = parse_expr(tokens, p5)
+    DeclResult { decl: DImport("__test__"), pos: body.pos }
+  }
+  else {
+    // Skip unknown token
+    DeclResult { decl: DImport("__skip__"), pos: p + 1 }
+  }
+}
+
+fn parse_module_loop(tokens: List<Token>, pos: Int, acc: List<Decl>) -> List<Decl> = {
+  let p = skip_newlines(tokens, pos)
+  if is_tok_eof(peek(tokens, p)) then acc
+  else {
+    let dr = parse_decl(tokens, p)
+    let new_acc = filter_decl(dr.decl, acc)
+    parse_module_loop(tokens, dr.pos, new_acc)
+  }
+}
+
+fn parse_module(tokens: List<Token>) -> Result<List<Decl>, String> = {
+  let p = skip_prelude(tokens, 0)
+  Ok(parse_module_loop(tokens, p, []))
+}
+
+// ============================================================================
+// AST DISPLAY (for testing)
+// ============================================================================
+
+fn expr_to_string(e: Expr) -> String =
+  match e
+    EInt(n) -> Int.to_string(n)
+    EStr(s) -> String.join(["\"", s, "\""], "")
+    EBool(b) -> if b then "true" else "false"
+    EVar(s) -> s
+    EBinOp(node) -> String.join(["(", expr_to_string(node.left), " ", node.op, " ", expr_to_string(node.right), ")"], "")
+    EUnaryNeg(node) -> String.join(["(-", expr_to_string(node.inner), ")"], "")
+    EUnaryNot(node) -> String.join(["(not ", expr_to_string(node.inner), ")"], "")
+    ECall(node) -> String.join([expr_to_string(node.callee), "(", exprs_to_string(node.args), ")"], "")
+    EField(node) -> String.join([expr_to_string(node.obj), ".", node.name], "")
+    EIf(_) -> "if..."
+    EMatch(_) -> "match..."
+    ELambda(_) -> "lambda..."
+    EBlock(_) -> "block..."
+    EList(xs) -> String.join(["[", exprs_to_string(xs), "]"], "")
+    ERecord(_) -> "record..."
+
+fn exprs_to_string(xs: List<Expr>) -> String =
+  String.join(List.map(xs, |e| expr_to_string(e)), ", ")
+
+fn decl_to_string(d: Decl) -> String =
+  match d
+    DFunc(node) -> String.join(["fn ", node.name, "(", params_to_string(node.params), ") -> ", node.ret_type], "")
+    DType(node) -> String.join(["type ", node.name], "")
+    DImport(s) -> String.join(["import ", s], "")
+
+fn params_to_string(ps: List<Param>) -> String =
+  String.join(List.map(ps, |p| String.join([p.name, ": ", p.type_ann], "")), ", ")
+
+fn stmt_to_string(s: Stmt) -> String =
+  match s
+    SLet(node) -> String.join(["let ", node.name, " = ", expr_to_string(node.value)], "")
+    SExpr(e) -> expr_to_string(e)
+    SFor(_) -> "for..."
+
+// ============================================================================
+// PARSER TESTS
+// ============================================================================
+
+fn parse_expr_str(src: String) -> String = {
+  let tokens = tokenize(src)
+  let r = parse_expr(tokens, 0)
+  expr_to_string(r.node)
+}
+
+test "parse int literal" = parse_expr_str("42") == "42"
+
+test "parse string literal" = parse_expr_str("\"hello\"") == "\"hello\""
+
+test "parse variable" = parse_expr_str("x") == "x"
+
+test "parse binary op" = parse_expr_str("1 + 2") == "(1 + 2)"
+
+test "parse precedence mul over add" = parse_expr_str("1 + 2 * 3") == "(1 + (2 * 3))"
+
+test "parse precedence parens" = parse_expr_str("(1 + 2) * 3") == "((1 + 2) * 3)"
+
+test "parse function call" = parse_expr_str("f(x, y)") == "f(x, y)"
+
+test "parse field access" = parse_expr_str("Console.println") == "Console.println"
+
+test "parse qualified call" = parse_expr_str("List.map(xs, f)") == "List.map(xs, f)"
+
+test "parse if expression" = {
+  let tokens = tokenize("if x then 1 else 2")
+  let r = parse_expr(tokens, 0)
+  match r.node
+    EIf(node) -> expr_to_string(node.then_expr) == "1" && expr_to_string(node.else_expr) == "2"
+    _ -> false
+}
+
+test "parse let binding" = {
+  let tokens = tokenize("let x = 42")
+  let r = parse_stmt(tokens, 0)
+  stmt_to_string(r.stmt) == "let x = 42"
+}
+
+test "parse function def" = {
+  let src = "fn add(a: Int, b: Int) -> Int = a + b"
+  let tokens = tokenize(src)
+  let r = parse_func(tokens, 1)
+  match r.decl
+    DFunc(node) -> node.name == "add" && List.length(node.params) == 2 && node.ret_type == "Int"
+    _ -> false
+}
+
+test "parse type def sum" = {
+  let src = "type Color = | Red | Green | Blue"
+  let tokens = tokenize(src)
+  let r = parse_type_def(tokens, 1)
+  match r.decl
+    DType(node) -> node.name == "Color"
+    _ -> false
+}
+
+test "parse match expression" = {
+  let src = "match x\n  Some(v) -> v\n  None -> 0"
+  let tokens = tokenize(src)
+  let r = parse_expr(tokens, 0)
+  match r.node
+    EMatch(node) -> List.length(node.arms) == 2
+    _ -> false
+}
+
+test "parse lambda" = {
+  let s = parse_expr_str("|x| x + 1")
+  s == "lambda..."
+}
+
+test "parse list literal" = parse_expr_str("[1, 2, 3]") == "[1, 2, 3]"
+
+test "parse pipe desugar" = {
+  let tokens = tokenize("x |> f")
+  let r = parse_expr(tokens, 0)
+  match r.node
+    ECall(node) -> expr_to_string(node.callee) == "f"
+    _ -> false
+}
+
+test "parse block" = {
+  let tokens = tokenize("{ let x = 1\n x }")
+  let r = parse_expr(tokens, 0)
+  match r.node
+    EBlock(stmts) -> List.length(stmts) == 2
+    _ -> false
+}
+
+test "parse module" = {
+  let src = "fn main() -> Int = 42\ntype Color = | Red | Blue"
+  let tokens = tokenize(src)
+  match parse_module(tokens)
+    Ok(decls) -> List.length(decls) == 2
+    Err(_) -> false
+}
+
+// ============================================================================
+// MAIN DRIVER
+// ============================================================================
+
+// Main driver — run with: blc run selfhost/compiler.bl
+fn main!() -> {Fs, Console} Unit = {
+  let source = Fs.read_file!("selfhost/test_input.bl")
+  let tokens = tokenize(source)
+  match parse_module(tokens)
+    Ok(decls) -> Console.println!(String.join(["Parsed ", Int.to_string(List.length(decls)), " declarations"], ""))
+    Err(msg) -> Console.println!(String.join(["Parse error: ", msg], ""))
+}
+
