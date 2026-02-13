@@ -1225,6 +1225,295 @@ test "parse module" = {
 }
 
 // ============================================================================
+// C CODEGEN — Type Mapping
+// ============================================================================
+
+fn c_type(type_ann: String) -> String =
+  if type_ann == "Int" then "int64_t"
+  else if type_ann == "String" then "const char*"
+  else if type_ann == "Bool" then "int"
+  else if type_ann == "Unit" then "void"
+  else type_ann
+
+fn infer_let_type(e: Expr) -> String =
+  match e
+    EInt(_) -> "int64_t"
+    EStr(_) -> "const char*"
+    EBool(_) -> "int"
+    _ -> "int64_t"
+
+// ============================================================================
+// C CODEGEN — Expression Emission
+// ============================================================================
+
+fn emit_binop_c(node: EBinOpNode) -> String =
+  String.join(["(", emit_expr_c(node.left), " ", node.op, " ", emit_expr_c(node.right), ")"], "")
+
+fn emit_call_c(node: ECallNode) -> String =
+  String.join([emit_expr_c(node.callee), "(", String.join(List.map(node.args, |a| emit_expr_c(a)), ", "), ")"], "")
+
+fn emit_field_c(node: EFieldNode) -> String =
+  String.join([emit_expr_c(node.obj), ".", node.name], "")
+
+fn emit_if_c(node: EIfNode) -> String =
+  String.join(["(", emit_expr_c(node.cond), " ? (", emit_expr_c(node.then_expr), ") : (", emit_expr_c(node.else_expr), "))"], "")
+
+fn emit_expr_c(e: Expr) -> String =
+  match e
+    EInt(n) -> Int.to_string(n)
+    EStr(s) -> String.join(["\"", s, "\""], "")
+    EBool(b) -> if b then "1" else "0"
+    EVar(name) -> name
+    EBinOp(node) -> emit_binop_c(node)
+    EUnaryNeg(node) -> String.join(["(-", emit_expr_c(node.inner), ")"], "")
+    EUnaryNot(node) -> String.join(["(!", emit_expr_c(node.inner), ")"], "")
+    ECall(node) -> emit_call_c(node)
+    EField(node) -> emit_field_c(node)
+    EIf(node) -> emit_if_c(node)
+    EMatch(_) -> "/* match */"
+    ELambda(_) -> "/* lambda */"
+    EBlock(_) -> "/* block */"
+    EList(_) -> "/* list */"
+    ERecord(_) -> "/* record */"
+
+// ============================================================================
+// C CODEGEN — Statement & Body Emission
+// ============================================================================
+
+fn get_stmt_at(stmts: List<Stmt>, idx: Int) -> Stmt =
+  match List.get(stmts, idx)
+    Some(s) -> s
+    None -> SExpr(EInt(0))
+
+fn emit_let_c(node: SLetNode) -> String =
+  String.join(["    ", infer_let_type(node.value), " ", node.name, " = ", emit_expr_c(node.value), ";\n"], "")
+
+fn emit_expr_stmt_c(e: Expr) -> String =
+  String.join(["    ", emit_expr_c(e), ";\n"], "")
+
+fn emit_return_c(e: Expr) -> String =
+  String.join(["    return ", emit_expr_c(e), ";\n"], "")
+
+fn emit_one_stmt(s: Stmt, is_last: Bool, needs_return: Bool) -> String =
+  match s
+    SLet(node) -> emit_let_c(node)
+    SExpr(e) -> if is_last && needs_return then emit_return_c(e) else emit_expr_stmt_c(e)
+    SFor(_) -> "    /* for */;\n"
+
+fn emit_stmts_c(stmts: List<Stmt>, idx: Int, count: Int, needs_return: Bool) -> String =
+  if idx >= count then ""
+  else {
+    let s = get_stmt_at(stmts, idx)
+    let is_last = idx == count - 1
+    let line = emit_one_stmt(s, is_last, needs_return)
+    String.join([line, emit_stmts_c(stmts, idx + 1, count, needs_return)], "")
+  }
+
+fn emit_body_c(body: Expr, ret_type: String) -> String = {
+  let needs_return = ret_type != "void"
+  match body
+    EBlock(stmts) -> emit_stmts_c(stmts, 0, List.length(stmts), needs_return)
+    _ -> if needs_return then emit_return_c(body) else emit_expr_stmt_c(body)
+}
+
+// ============================================================================
+// C CODEGEN — Type Definition Emission
+// ============================================================================
+
+fn has_any_payload(vs: List<Variant>, idx: Int, count: Int) -> Bool =
+  if idx >= count then false
+  else {
+    match List.get(vs, idx)
+      Some(v) -> if List.length(v.payload) > 0 then true else has_any_payload(vs, idx + 1, count)
+      None -> false
+  }
+
+fn emit_simple_enum(tname: String, vs: List<Variant>) -> String =
+  String.join([
+    "typedef enum { ",
+    String.join(List.map(vs, |v| String.join([tname, "_", v.name], "")), ", "),
+    " } ", tname, ";\n\n"
+  ], "")
+
+fn emit_tag_defines(tname: String, vs: List<Variant>, idx: Int, count: Int) -> String =
+  if idx >= count then ""
+  else {
+    match List.get(vs, idx)
+      Some(v) -> String.join([
+        "#define ", tname, "_", v.name, " ", Int.to_string(idx), "\n",
+        emit_tag_defines(tname, vs, idx + 1, count)
+      ], "")
+      None -> ""
+  }
+
+fn emit_variant_union_field(v: Variant) -> String =
+  if List.length(v.payload) > 0 then
+    match List.get(v.payload, 0)
+      Some(ty) -> String.join(["        ", c_type(ty), " ", v.name, "_0;\n"], "")
+      None -> ""
+  else ""
+
+fn emit_tagged_union(tname: String, vs: List<Variant>) -> String = {
+  let union_fields = String.join(List.map(vs, |v| emit_variant_union_field(v)), "")
+  let defines = emit_tag_defines(tname, vs, 0, List.length(vs))
+  String.join([
+    "typedef struct {\n    int tag;\n    union {\n",
+    union_fields,
+    "    } data;\n} ", tname, ";\n",
+    defines, "\n"
+  ], "")
+}
+
+fn get_field_at(fields: List<FieldDef>, idx: Int) -> FieldDef =
+  match List.get(fields, idx)
+    Some(f) -> f
+    None -> FieldDef { name: "_", type_name: "int" }
+
+fn emit_record_fields(fields: List<FieldDef>, idx: Int, count: Int) -> String =
+  if idx >= count then ""
+  else {
+    let f = get_field_at(fields, idx)
+    let ty = f.type_name
+    let nm = f.name
+    let cty = c_type(ty)
+    let line = String.join(["    ", cty, " ", nm, ";\n"], "")
+    String.join([line, emit_record_fields(fields, idx + 1, count)], "")
+  }
+
+fn emit_record_struct(tname: String, fields: List<FieldDef>) -> String =
+  String.join([
+    "typedef struct {\n",
+    emit_record_fields(fields, 0, List.length(fields)),
+    "} ", tname, ";\n\n"
+  ], "")
+
+fn emit_type_decl_c(node: DTypeNode) -> String =
+  match node.def
+    TDSum(vs) ->
+      if has_any_payload(vs, 0, List.length(vs)) then emit_tagged_union(node.name, vs)
+      else emit_simple_enum(node.name, vs)
+    TDRecord(fields) -> emit_record_struct(node.name, fields)
+
+// ============================================================================
+// C CODEGEN — Function Emission
+// ============================================================================
+
+fn emit_params_c(params: List<Param>) -> String =
+  if List.length(params) == 0 then "void"
+  else String.join(List.map(params, |p| String.join([c_type(p.type_ann), " ", p.name], "")), ", ")
+
+fn emit_func_proto(node: DFuncNode) -> String = {
+  let ret = if node.name == "main" then "int" else c_type(node.ret_type)
+  let pars = if node.name == "main" then "void" else emit_params_c(node.params)
+  String.join([ret, " ", node.name, "(", pars, ")"], "")
+}
+
+fn emit_func_forward(node: DFuncNode) -> String =
+  String.join([emit_func_proto(node), ";\n"], "")
+
+fn emit_func_c(node: DFuncNode) -> String = {
+  let ret_type = if node.name == "main" then "int" else c_type(node.ret_type)
+  String.join([emit_func_proto(node), " {\n", emit_body_c(node.body, ret_type), "}\n\n"], "")
+}
+
+// ============================================================================
+// C CODEGEN — Module-Level Assembly
+// ============================================================================
+
+fn c_preamble() -> String =
+  "#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n#include <string.h>\n\n"
+
+fn emit_decl_header(d: Decl) -> String =
+  match d
+    DType(node) -> emit_type_decl_c(node)
+    DFunc(node) -> emit_func_forward(node)
+    _ -> ""
+
+fn emit_decl_body(d: Decl) -> String =
+  match d
+    DFunc(node) -> emit_func_c(node)
+    _ -> ""
+
+fn codegen(decls: List<Decl>) -> String = {
+  let headers = String.join(List.map(decls, |d| emit_decl_header(d)), "")
+  let bodies = String.join(List.map(decls, |d| emit_decl_body(d)), "")
+  String.join([c_preamble(), headers, "\n", bodies], "")
+}
+
+// ============================================================================
+// C CODEGEN TESTS
+// ============================================================================
+
+test "c_type maps Int" = c_type("Int") == "int64_t"
+
+test "c_type maps String" = c_type("String") == "const char*"
+
+test "c_type maps Bool" = c_type("Bool") == "int"
+
+test "c_type maps Unit" = c_type("Unit") == "void"
+
+test "c_type passes custom" = c_type("Color") == "Color"
+
+test "emit int literal" = emit_expr_c(EInt(42)) == "42"
+
+test "emit string literal" = emit_expr_c(EStr("hello")) == "\"hello\""
+
+test "emit bool true" = emit_expr_c(EBool(true)) == "1"
+
+test "emit binop" = {
+  let e = EBinOp(EBinOpNode { left: EInt(1), op: "+", right: EInt(2) })
+  emit_expr_c(e) == "(1 + 2)"
+}
+
+test "emit call" = {
+  let e = ECall(ECallNode { callee: EVar("add"), args: [EInt(1), EInt(2)] })
+  emit_expr_c(e) == "add(1, 2)"
+}
+
+test "emit if ternary" = {
+  let e = EIf(EIfNode { cond: EVar("x"), then_expr: EInt(1), else_expr: EInt(2) })
+  emit_expr_c(e) == "(x ? (1) : (2))"
+}
+
+test "emit func proto" = {
+  let f = DFuncNode { name: "add", params: [Param { name: "a", type_ann: "Int" }, Param { name: "b", type_ann: "Int" }], ret_type: "Int", body: EInt(0) }
+  emit_func_proto(f) == "int64_t add(int64_t a, int64_t b)"
+}
+
+test "codegen preamble" = c_preamble() == "#include <stdio.h>\n#include <stdlib.h>\n#include <stdint.h>\n#include <string.h>\n\n"
+
+test "emit let stmt" = {
+  let s = SLet(SLetNode { name: "x", value: EInt(42) })
+  emit_one_stmt(s, false, true) == "    int64_t x = 42;\n"
+}
+
+test "emit return stmt" = {
+  let s = SExpr(EVar("x"))
+  emit_one_stmt(s, true, true) == "    return x;\n"
+}
+
+test "emit func body simple" = {
+  let f = DFuncNode { name: "add", params: [Param { name: "a", type_ann: "Int" }, Param { name: "b", type_ann: "Int" }], ret_type: "Int", body: EBinOp(EBinOpNode { left: EVar("a"), op: "+", right: EVar("b") }) }
+  emit_func_c(f) == "int64_t add(int64_t a, int64_t b) {\n    return (a + b);\n}\n\n"
+}
+
+test "emit simple enum" = {
+  let vs = [Variant { name: "Red", payload: [] }, Variant { name: "Green", payload: [] }]
+  emit_simple_enum("Color", vs) == "typedef enum { Color_Red, Color_Green } Color;\n\n"
+}
+
+test "parse and emit add func" = {
+  let source = "fn add(a: Int, b: Int) -> Int = a + b"
+  let tokens = tokenize(source)
+  match parse_module(tokens)
+    Ok(decls) -> {
+      let bodies = String.join(List.map(decls, |d| emit_decl_body(d)), "")
+      String.contains(bodies, "return (a + b)")
+    }
+    Err(_) -> false
+}
+
+// ============================================================================
 // MAIN DRIVER
 // ============================================================================
 
@@ -1233,7 +1522,11 @@ fn main!() -> {Fs, Console} Unit = {
   let source = Fs.read_file!("selfhost/test_input.bl")
   let tokens = tokenize(source)
   match parse_module(tokens)
-    Ok(decls) -> Console.println!(String.join(["Parsed ", Int.to_string(List.length(decls)), " declarations"], ""))
+    Ok(decls) -> {
+      let c_code = codegen(decls)
+      Fs.write_file!("selfhost/output.c", c_code)
+      Console.println!("Generated selfhost/output.c")
+    }
     Err(msg) -> Console.println!(String.join(["Parse error: ", msg], ""))
 }
 
