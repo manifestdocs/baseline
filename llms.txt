@@ -1,26 +1,23 @@
 # Baseline Language Quick Reference
 
-Baseline is a strongly typed, effect-tracked programming language.
-Files use the `.bl` extension. The compiler is `blc`.
+> Baseline: strongly typed, effect-tracked functional language. Extension: `.bl`, compiler: `blc`.
 
-## Syntax Summary
+## Syntax
 
 ### Functions
 ```
-fn name(param: Type) -> ReturnType = body
-fn name(a: Int, b: Int) -> Int = a + b
+fn add(a: Int, b: Int) -> Int = a + b
 fn effectful!(x: Int) -> {Console} () = Console.println!("${x}")
 ```
 
 ### Effects
 Effectful functions end with `!` and declare effects in `{...}`:
 ```
-fn fetch!(url: String) -> {Http, Log} Result = {
+fn fetch!(url: String) -> {Http, Log} Result<String, String> = {
   Log.info!("Fetching ${url}")
   Http.get!(url)
 }
 ```
-
 Pure functions (no `!`) cannot call effectful functions.
 
 ### Types
@@ -29,6 +26,7 @@ type Port = Int where self > 0 && self <= 65535    // Refinement type
 type Status = | Active | Inactive | Error(String)  // Sum type (enum)
 type User = { name: String, age: Int }             // Record type
 type UserId = Int                                  // Type alias
+type HasName = { name: String, ..r }               // Open record (row polymorphism)
 ```
 
 ### Built-in Types
@@ -57,14 +55,10 @@ match status
   Error(msg) -> "error: ${msg}"
 ```
 
-### Pipes
+### Pipes and Lambdas
 ```
-value |> transform |> validate |> process
-```
-
-### Lambdas
-```
-|x| x + 1
+value |> transform |> validate    // |> inserts left as first arg
+|x| x + 1                         // Lambda
 |a, b| a + b
 ```
 
@@ -74,7 +68,6 @@ let nums = [1, 2, 3]
 List.map(nums, |x| x * 2)
 List.filter(nums, |x| x > 1)
 List.fold(nums, 0, |acc, x| acc + x)
-[1, 2] ++ [3, 4]                      // Concatenation: [1, 2, 3, 4]
 ```
 
 ### Records
@@ -82,6 +75,13 @@ List.fold(nums, 0, |acc, x| acc + x)
 let user = User { name: "Alice", age: 30 }
 user.name                              // Field access
 { ..user, age: 31 }                   // Record update
+```
+
+### Row Polymorphism
+```
+fn greet(person: { name: String, ..r }) -> String = person.name
+greet({ name: "Alice", age: 30 })      // OK — extra fields absorbed by ..r
+greet({ name: "Bob" })                 // OK — exact match
 ```
 
 ### String Interpolation
@@ -97,40 +97,24 @@ match get_user(id)
   Ok(u) -> process(u)
   Err(e) -> handle(e)
 
-// Option: Some(value) or None
-let found = List.find(items, |x| x > 10)
-Option.unwrap_or(found, 0)
+// Option: Some(value) or None (sugar: T? means Option<T>)
 ```
 
 ### Inline Tests
 ```
 fn add(a: Int, b: Int) -> Int = a + b
-where
-  test "basic" = add(1, 2) == 3
-  test "zero" = add(0, 5) == 5
+
+@test
+test "basic" = add(1, 2) == 3
+test "zero" = add(0, 5) == 5
 ```
 
-### Integer Literals
+### Modules
 ```
-42          // Decimal
-1_000_000   // Underscores
-0xFF        // Hexadecimal
-0b1010      // Binary
-0o755       // Octal
-```
-
-### Modules and Imports
-```
-@prelude(script)                       // Prelude: script, core, minimal, pure
-
-import Math.{sqrt, pow}               // Selective import
-import Utils.*                         // Wildcard import
-```
-
-### For Loops (effectful only)
-```
-for item in items do
-  Console.println!("${item}")
+@prelude(script)                   // Prelude: core, pure, script, server
+import Math                        // Qualified: Math.sqrt(9)
+import Math { sqrt, pow }          // Selective
+import Math *                      // Wildcard
 ```
 
 ### Logical Operators
@@ -139,70 +123,79 @@ for item in items do
 ## Key Rules
 
 1. Pure functions have NO `!` suffix and CANNOT use effects
-2. Effectful functions end with `!` and declare effects: `-> {Http, Db} Result`
+2. Effectful functions end with `!` and declare effects: `-> {Http, Fs} Result<T, E>`
 3. Effects are called with `!`: `Console.println!("hello")`
-4. Call style is always `Module.method(value, args)` — no `value.method()`
-5. Pattern matching must be exhaustive
-6. `not` is a keyword for logical negation (not `!`)
-7. String interpolation uses `${expr}`
-8. No null/undefined/nil — use `Option<T>` with `Some(v)` / `None`
-9. No exceptions — use `Result<T, E>` with `Ok(v)` / `Err(e)` and `?`
-10. No classes or inheritance — use records + sum types + effects
-11. `++` concatenates lists: `[1] ++ [2] == [1, 2]`
+4. Pattern matching must be exhaustive
+5. `not` is a keyword for logical negation (not `!`)
+6. String interpolation uses `${expr}`
+7. Pipe `|>` inserts left value as first argument to right function
 
 ## NOT Supported
 
-- No `class`, `extends`, `implements`, `interface`
-- No `try`/`catch`/`throw` — use Result with `?`
-- No `null`, `undefined`, `nil` — use Option
+- No `class`/`extends`/`implements` — use records + sum types + effects
+- No `try`/`catch`/`throw` — use `Result<T, E>` with `?`
+- No `null`/`undefined`/`nil` — use `Option<T>`
 - No `async`/`await` — effects handle this
-- No string concatenation with `+` — use interpolation `"${a}${b}"`
+- No `+` for string concat — use `"${a}${b}"`
 - No `!` for boolean negation — use `not`
-- No method syntax `value.method()` — use `Module.method(value)`
+- No `value.method()` — use `Module.method(value)`
+- No mutable variables, no `return` keyword, no semicolons
+- No backward pipe `<|` or composition `>>`, `<<`
 
 ## Common Patterns
 
 ```
-// Pure function with inline test
-fn is_even(n: Int) -> Bool = n % 2 == 0
-where
-  test "even" = is_even(4) == true
-  test "odd" = is_even(3) == false
-
 // Effectful entry point
-fn main!() -> {Console} () = {
+fn main!() -> {Console} () =
   Console.println!("Hello, Baseline!")
-}
 
-// Data transformation with combinators
+// Data transformation
 fn process(items: List<Int>) -> List<Int> = {
   let positive = List.filter(items, |x| x > 0)
   List.map(positive, |x| x * 2)
 }
 
 // Error propagation
-fn safe_divide(a: Int, b: Int) -> Result = {
-  if b == 0 then Err("Division by zero")
-  else Ok(a / b)
-}
+fn safe_divide(a: Int, b: Int) -> Result<Int, String> =
+  if b == 0 then Err("Division by zero") else Ok(a / b)
 
 // Sum type with pattern matching
-type Shape =
-  | Circle(Float)
-  | Rectangle(Float, Float)
+type Shape = | Circle(Float) | Rectangle(Float, Float)
 
-fn area(shape: Shape) -> Float =
-  match shape
+fn area(s: Shape) -> Float =
+  match s
     Circle(r) -> 3.14159 * r * r
     Rectangle(w, h) -> w * h
 ```
 
-## Preludes and Compiler
-
-Preludes: `pure` (no effects), `minimal` (Console), `core` (+Fs), `script` (+Http, Random, Env), `server` (+Db, Log, Metrics)
+## HTTP Server
 
 ```
-blc check file.bl --json    # Type/effect check, JSON output
+@prelude(server)
+
+fn health(req: { method: String }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> =
+  Ok(Response.ok("healthy"))
+
+fn main!() -> {Http} () =
+  Router.new()
+    |> Router.get("/health", health)
+    |> Server.listen!(8080)
+```
+## Preludes
+
+| Level | Use Case | Includes |
+|-------|----------|---------|
+| `core` | Pure computation | Types, Option, Result |
+| `pure` | Data processing | + String, List, Int, Math |
+| `script` | CLI scripting | + Console, Env, Fs |
+| `server` | HTTP services | + Http, Response, Router, Server |
+
+## Compiler
+```
+blc check file.bl           # Type/effect check
+blc check file.bl --json    # JSON diagnostics
 blc run file.bl             # Compile and run (VM)
 blc test file.bl            # Run inline tests
+blc test file.bl --json     # JSON test output
+blc fmt file.bl             # Format source
 ```

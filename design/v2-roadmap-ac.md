@@ -68,18 +68,18 @@ Low-effort grammar and tooling additions. No architectural changes.
 - [ ] Conformance test: `tests/conformance/06_data_types/list_concat.bl`
 - [ ] Works in pipes: `xs |> |l| l ++ [0]`
 
-### 1.4 `llms.txt` Bootstrap File
+### 1.4 `llms.txt` Bootstrap File ✅
 
 **Goal**: Ship an `llms.txt` in the repo root for inclusion in LLM system prompts.
 
-**Current**: None.
+**Status**: Implemented (2026-02-14)
 
 **AC**:
-- [ ] File at `llms.txt` (repo root) with syntax summary, key rules, common patterns
-- [ ] Covers: function syntax, effects, types, pipes, lambdas, match, let, records, sum types, error handling, inline tests
-- [ ] Includes "NOT supported" section (no classes, no null, no exceptions, no string concat with `+`)
-- [ ] Under 200 lines (fits in a system prompt without dominating context)
-- [ ] All examples in the file pass `blc check`
+- [x] File at `llms.txt` (repo root) with syntax summary, key rules, common patterns
+- [x] Covers: function syntax, effects, types, pipes, lambdas, match, let, records, sum types, error handling, inline tests
+- [x] Includes "NOT supported" section (no classes, no null, no exceptions, no string concat with `+`)
+- [x] Under 200 lines (exactly 200 lines)
+- [x] All examples in the file pass `blc check`
 
 ### 1.5 Raw Strings
 
