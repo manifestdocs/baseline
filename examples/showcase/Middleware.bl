@@ -1,0 +1,33 @@
+@prelude(server)
+
+// Middleware functions for the Todo API.
+// Note: Router.use(middleware) has a known runtime issue with the
+// `next` callback in the server dispatcher. These functions are
+// ready to wire in once that's resolved.
+
+// Middleware: log request method + path + response status
+
+fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+  let res = next(req)?
+  Log.info!("${req.method} ${req.url} -> ${res.status}")
+  Ok(res)
+}
+
+// Middleware: add CORS headers for cross-origin requests
+
+fn cors(req: Unknown, next: Unknown) -> {Http} Result<Unknown, String> = {
+  let res = next(req)?
+  Ok(res
+    |> Response.with_header("Access-Control-Allow-Origin", "*")
+    |> Response.with_header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+    |> Response.with_header("Access-Control-Allow-Headers", "Content-Type"))
+}
+
+// Middleware: measure and report response time
+
+fn timer(req: Unknown, next: Unknown) -> {Http, Time} Result<Unknown, String> = {
+  let start = Time.now!()
+  let res = next(req)?
+  let elapsed = Time.now!() - start
+  Ok(res |> Response.with_header("X-Response-Time-Ms", Int.to_string(elapsed)))
+}

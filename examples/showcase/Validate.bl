@@ -1,0 +1,45 @@
+@prelude(server)
+
+// Validate a todo title: must be non-empty and <= 100 characters.
+// Returns Ok(trimmed_title) or Err(reason).
+
+fn title(raw: String) -> Result<String, String> = {
+  let trimmed = String.trim(raw)
+  let len = String.length(trimmed)
+  if len == 0 then
+    Err("Title must not be empty")
+  else if len > 100 then
+    Err("Title must be 100 characters or fewer")
+  else
+    Ok(trimmed)
+}
+
+// Validate a todo status string.
+// Must be "pending", "in_progress", or "done".
+
+fn status(s: String) -> Result<String, String> =
+  match s
+    "pending" -> Ok("pending")
+    "in_progress" -> Ok("in_progress")
+    "done" -> Ok("done")
+    _ -> Err("Status must be pending, in_progress, or done")
+
+@test
+test "empty title rejected" =
+  match title("")
+    Err(msg) -> String.contains(msg, "empty")
+    _ -> false
+
+test "long title rejected" =
+  match title(String.join(List.map(1..110, |_| "x"), ""))
+    Err(msg) -> String.contains(msg, "100")
+    _ -> false
+
+test "valid title trimmed" = title("  Buy milk  ") == Ok("Buy milk")
+
+test "valid status accepted" = status("done") == Ok("done")
+
+test "invalid status rejected" =
+  match status("bogus")
+    Err(_) -> true
+    _ -> false

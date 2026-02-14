@@ -1,0 +1,88 @@
+@prelude(server)
+
+import Validate
+
+// Sample todo data — in a real app this would come from a database
+
+fn sample_todos() -> Unknown = [
+  { id: 1, title: "Learn Baseline",    status: "done" },
+  { id: 2, title: "Build a REST API",  status: "in_progress" },
+  { id: 3, title: "Write tests",       status: "pending" },
+  { id: 4, title: "Deploy to prod",    status: "pending" }
+]
+
+// --- Helpers ---
+
+// Parse a URL param as Int, or return an error response
+fn parse_id(raw: String) -> Result<Int, String> =
+  match String.to_int(raw)
+    Some(id) -> Ok(id)
+    None -> Err("Invalid todo ID: must be an integer")
+
+// Find a todo by ID, or return an error message
+fn find_todo(id: Int) -> Result<Unknown, String> =
+  match List.find(sample_todos(), |t| t.id == id)
+    Some(todo) -> Ok(todo)
+    None -> Err("Todo not found")
+
+// --- Handlers ---
+
+// GET /health — service health check
+
+fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json({ status: "ok", version: "0.1.0" }))
+
+// GET /todos — list all todos
+
+fn list_todos(req: Unknown) -> {Http} Result<Unknown, String> =
+  Ok(Response.json(sample_todos()))
+
+// GET /todos/:id — get a single todo by ID
+
+fn get_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let id = parse_id(req.params.id)?
+  let todo = find_todo(id)?
+  Ok(Response.json(todo))
+}
+
+// POST /todos — create a new todo from JSON body
+
+fn create_todo(req: Unknown) -> {Http, Random} Result<Unknown, String> = {
+  let data = Request.body_json(req)?
+  let title = Validate.title(data.title)?
+  let todo = {
+    id: Random.int!(1, 99999),
+    title: title,
+    status: "pending"
+  }
+  Ok(Response.created(Json.to_string(todo))
+    |> Response.with_header("Content-Type", "application/json"))
+}
+
+// PUT /todos/:id — update an existing todo
+
+fn update_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let id = parse_id(req.params.id)?
+  let _ = find_todo(id)?
+  let data = Request.body_json(req)?
+  let title = Validate.title(data.title)?
+  let status = Validate.status(data.status)?
+  Ok(Response.json({ id: id, title: title, status: status }))
+}
+
+// DELETE /todos/:id — delete a todo
+
+fn delete_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
+  let id = parse_id(req.params.id)?
+  let _ = find_todo(id)?
+  Ok(Response.no_content())
+}
+
+// Build the /todos sub-router with all CRUD routes
+
+fn todo_routes() -> Unknown = Router.new()
+  |> Router.get("/", list_todos)
+  |> Router.get("/:id", get_todo)
+  |> Router.post("/", create_todo)
+  |> Router.put("/:id", update_todo)
+  |> Router.delete("/:id", delete_todo)
