@@ -81,20 +81,36 @@ impl fmt::Display for AllocSnapshot {
 }
 
 /// Returns a snapshot of current heap allocation statistics.
+/// In release builds, always returns zeros (tracking is disabled for performance).
 pub fn alloc_stats() -> AllocSnapshot {
-    let allocs = ALLOC_STATS.allocs.load(Ordering::Relaxed);
-    let frees = ALLOC_STATS.frees.load(Ordering::Relaxed);
-    AllocSnapshot {
-        allocs,
-        frees,
-        live: allocs.saturating_sub(frees),
+    #[cfg(debug_assertions)]
+    {
+        let allocs = ALLOC_STATS.allocs.load(Ordering::Relaxed);
+        let frees = ALLOC_STATS.frees.load(Ordering::Relaxed);
+        AllocSnapshot {
+            allocs,
+            frees,
+            live: allocs.saturating_sub(frees),
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        AllocSnapshot {
+            allocs: 0,
+            frees: 0,
+            live: 0,
+        }
     }
 }
 
 /// Reset allocation counters to zero. Useful for test isolation.
+/// No-op in release builds.
 pub fn reset_alloc_stats() {
-    ALLOC_STATS.allocs.store(0, Ordering::Relaxed);
-    ALLOC_STATS.frees.store(0, Ordering::Relaxed);
+    #[cfg(debug_assertions)]
+    {
+        ALLOC_STATS.allocs.store(0, Ordering::Relaxed);
+        ALLOC_STATS.frees.store(0, Ordering::Relaxed);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -383,6 +399,7 @@ impl NValue {
         let rc = Arc::new(obj);
         let ptr = Arc::into_raw(rc) as u64;
         debug_assert!(ptr & TAG_MASK == 0, "heap pointer exceeds 48 bits");
+        #[cfg(debug_assertions)]
         ALLOC_STATS.allocs.fetch_add(1, Ordering::Relaxed);
         NValue(TAG_HEAP | ptr)
     }
@@ -682,17 +699,20 @@ impl Drop for NValue {
     fn drop(&mut self) {
         if self.is_heap() {
             let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
-            // Check if this drop will actually deallocate the object.
-            // SAFETY: We reconstruct the Arc only to read strong_count,
-            // then forget it so we don't double-drop.
-            let is_last = unsafe {
-                let arc = Arc::from_raw(ptr);
-                let count = Arc::strong_count(&arc);
-                std::mem::forget(arc);
-                count == 1
-            };
-            if is_last {
-                ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
+            // In debug builds, track free count for leak detection.
+            #[cfg(debug_assertions)]
+            {
+                // SAFETY: We reconstruct the Arc only to read strong_count,
+                // then forget it so we don't double-drop.
+                let is_last = unsafe {
+                    let arc = Arc::from_raw(ptr);
+                    let count = Arc::strong_count(&arc);
+                    std::mem::forget(arc);
+                    count == 1
+                };
+                if is_last {
+                    ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
+                }
             }
             // SAFETY: is_heap() guarantees ptr is a valid Arc pointer.
             // This NValue owns exactly one strong count, which we're releasing.
@@ -1044,4 +1064,13 @@ mod tests {
         let new_frees = after.frees - before.frees;
         assert!(new_allocs > new_frees, "forgotten value should not be freed");
     }
+
+    // Compile-time assertion: NValue must be Send+Sync
+    // for cross-fiber sharing in the structured concurrency runtime.
+    const _: () = {
+        fn assert_send_sync<T: Send + Sync>() {}
+        fn check() {
+            assert_send_sync::<super::NValue>();
+        }
+    };
 }
