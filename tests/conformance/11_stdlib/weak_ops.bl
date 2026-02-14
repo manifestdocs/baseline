@@ -24,9 +24,10 @@ fn test_weak_upgrade_returns_some() -> Bool = {
     None -> false
 }
 
+@test
+test "Weak.downgrade + upgrade" = test_weak_downgrade_upgrade()
+test "Weak<List<Int>> annotation" = test_weak_type_annotation()
+test "Weak.upgrade returns Some" = test_weak_upgrade_returns_some()
+
 fn main() -> String =
   "Weak tests passed"
-  where
-    test "Weak.downgrade + upgrade" = test_weak_downgrade_upgrade()
-    test "Weak<List<Int>> annotation" = test_weak_type_annotation()
-    test "Weak.upgrade returns Some" = test_weak_upgrade_returns_some()

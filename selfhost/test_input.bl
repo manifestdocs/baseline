@@ -1,17 +1,13 @@
-// Simple Baseline program for parser testing
+// Test: nested function calls and conditionals
+// Expected exit code: 10
 
-type Color = | Red | Green | Blue
+fn max(a: Int, b: Int) -> Int =
+  if a > b then a else b
 
-type Point = { x: Int, y: Int }
-
-fn add(a: Int, b: Int) -> Int = a + b
-
-fn factorial(n: Int) -> Int =
-  if n <= 1 then 1
-  else n * factorial(n - 1)
+fn min(a: Int, b: Int) -> Int =
+  if a < b then a else b
 
 fn main() -> Int = {
-  let x = add(1, 2)
-  let y = factorial(5)
-  x + y
+  let a = max(0, min(100, 10))
+  a
 }

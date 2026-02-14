@@ -3,20 +3,19 @@
 
 // Empty map literal
 fn empty_map() -> Map<String, Int> = #{}
-  where
-    test "empty map has length 0" = Map.len(empty_map()) == 0
 
 // Map literal with entries
 fn my_map() -> Map<String, Int> = #{ "a": 1, "b": 2, "c": 3 }
-  where
-    test "map literal has 3 entries" = Map.len(my_map()) == 3
-    test "map literal get a" = Map.get(my_map(), "a") == Some(1)
-    test "map literal get b" = Map.get(my_map(), "b") == Some(2)
-    test "map literal get c" = Map.get(my_map(), "c") == Some(3)
-    test "map literal get missing" = Map.get(my_map(), "d") == None
 
 // Map literal with integer keys
 fn int_map() -> Map<Int, String> = #{ 1: "one", 2: "two" }
-  where
-    test "int key map get 1" = Map.get(int_map(), 1) == Some("one")
-    test "int key map get 2" = Map.get(int_map(), 2) == Some("two")
+
+@test
+test "empty map has length 0" = Map.len(empty_map()) == 0
+test "map literal has 3 entries" = Map.len(my_map()) == 3
+test "map literal get a" = Map.get(my_map(), "a") == Some(1)
+test "map literal get b" = Map.get(my_map(), "b") == Some(2)
+test "map literal get c" = Map.get(my_map(), "c") == Some(3)
+test "map literal get missing" = Map.get(my_map(), "d") == None
+test "int key map get 1" = Map.get(int_map(), 1) == Some("one")
+test "int key map get 2" = Map.get(int_map(), 2) == Some("two")

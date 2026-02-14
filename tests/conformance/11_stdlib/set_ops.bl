@@ -39,12 +39,13 @@ fn test_set_from_list() -> Bool = {
   Set.len(s) == 3
 }
 
+@test
+test "Set.empty" = test_set_empty()
+test "Set.insert" = test_set_insert()
+test "Set.remove" = test_set_remove()
+test "Set.union" = test_set_union()
+test "Set.intersection" = test_set_intersection()
+test "Set.from_list" = test_set_from_list()
+
 fn main() -> String =
   "Set tests passed"
-  where
-    test "Set.empty" = test_set_empty()
-    test "Set.insert" = test_set_insert()
-    test "Set.remove" = test_set_remove()
-    test "Set.union" = test_set_union()
-    test "Set.intersection" = test_set_intersection()
-    test "Set.from_list" = test_set_from_list()
