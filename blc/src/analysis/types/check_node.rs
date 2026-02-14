@@ -609,8 +609,55 @@ fn check_node_inner(
                         .map(|p| p.kind() == "pipe_expression")
                         .unwrap_or(false);
                     if params_provided < arg_types.len() && in_pipe {
-                        // Partial application: return function for remaining params
-                        let remaining = arg_types[params_provided..].to_vec();
+                        // Pipe partial application: pipe inserts at position 0,
+                        // so provided args fill positions 1..N.
+                        // Type-check provided args against offset positions.
+                        let offset = arg_types.len() - params_provided;
+                        for (i, expected_arg_type) in arg_types
+                            .iter()
+                            .skip(offset)
+                            .enumerate()
+                        {
+                            let raw_arg = node.named_child(i + 1).unwrap();
+                            let arg_expr = call_arg_expr(&raw_arg);
+
+                            let arg_type = if arg_expr.kind() == "lambda" {
+                                if let Type::Function(ref expected_params, ref expected_ret) =
+                                    *expected_arg_type
+                                {
+                                    check_lambda_with_expected(
+                                        &arg_expr,
+                                        expected_params,
+                                        expected_ret,
+                                        source,
+                                        file,
+                                        symbols,
+                                        diagnostics,
+                                    )
+                                } else {
+                                    check_node(&arg_expr, source, file, symbols, diagnostics)
+                                }
+                            } else {
+                                check_node(&arg_expr, source, file, symbols, diagnostics)
+                            };
+
+                            if !types_compatible(&arg_type, expected_arg_type) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_008".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &arg_expr),
+                                    message: format!(
+                                        "Argument {} mismatch: expected {}, found {}",
+                                        i + offset + 1,
+                                        expected_arg_type,
+                                        arg_type
+                                    ),
+                                    context: "Argument type must match function signature.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        }
+                        let remaining = arg_types[..offset].to_vec();
                         return Type::Function(remaining, ret_type);
                     }
                     diagnostics.push(Diagnostic {
