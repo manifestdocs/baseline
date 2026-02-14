@@ -121,33 +121,32 @@ Baseline has built-in test support. Create `math.bl`:
 ```baseline
 @prelude(core)
 
-test "basic arithmetic" = 1 + 1 == 2
-
 fn add(a: Int, b: Int) -> Int = a + b
-  where
-    test "adds positive numbers" = add(1, 2) == 3
-    test "handles zero" = add(0, 5) == 5
 
 fn double(x: Int) -> Int = x * 2
-  where
-    test "doubles positive" = double(3) == 6
-    test "doubles zero" = double(0) == 0
+
+@test
+test "basic arithmetic" = 1 + 1 == 2
+test "adds positive numbers" = add(1, 2) == 3
+test "handles zero" = add(0, 5) == 5
+test "doubles positive" = double(3) == 6
+test "doubles zero" = double(0) == 0
 ```
 
 Run the tests:
 
 ```bash
 blc test math.bl
-# PASS  basic arithmetic (line 3)
-# PASS  adds positive numbers (add, line 6)
-# PASS  handles zero (add, line 7)
-# PASS  doubles positive (double, line 10)
-# PASS  doubles zero (double, line 11)
+# PASS  basic arithmetic (line 9)
+# PASS  adds positive numbers (line 10)
+# PASS  handles zero (line 11)
+# PASS  doubles positive (line 12)
+# PASS  doubles zero (line 13)
 #
 # 5 tests: 5 passed, 0 failed
 ```
 
-Tests live next to the code they verify using `where` blocks. Top-level tests work too.
+Tests go in `@test` sections, conventionally at the bottom of the file. Top-level `test` declarations outside `@test` sections also work.
 
 ## Editor Support
 
@@ -376,4 +375,4 @@ apply(|n| n + 1, 41)  // A = Int, B = Int
 
 - Browse the `examples/` directory for more programs
 - Read the [Language Specification](../design/baseline-language-specification.md) for full details
-- Try writing tests alongside your functions using `where` blocks
+- Try writing tests alongside your functions using `@test` sections

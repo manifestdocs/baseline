@@ -1133,21 +1133,26 @@ export Int.hours : Int -> Duration
 ```baseline
 module Baseline.Concurrent
 
-// Lightweight cells ("cells interlinked")
-export spawn! : (() -> {e} T) -> {e, Async} Cell<T>
+// Strict structured concurrency — spawn requires a scope
+export scope! : (Scope -> {e, Async} T) -> {e, Async} T
+export Scope.spawn! : (Scope, () -> {e} T) -> {e, Async} Cell<T>
 export Cell.await! : Cell<T> -> {Async} T
 export Cell.cancel! : Cell<T> -> {Async} ()
 
-// Parallel operations
+// Combinators (built on scope! — cannot leak tasks)
 export parallel! : List<() -> {e} T> -> {e, Async} List<T>
 export race! : List<() -> {e} T> -> {e, Async} T
+export scatter_gather! : (List<() -> {e} T>, List<T> -> R) -> {e, Async} R
 
-// Channels
+// Bounded channels only (no unbounded)
 export type Channel<T>
-export Channel.new : Int -> Channel<T>  // buffered
+export Channel.bounded : Int -> (Channel<T>, Channel<T>)
 export Channel.send! : (Channel<T>, T) -> {Async} ()
-export Channel.recv! : Channel<T> -> {Async} T?
+export Channel.recv! : Channel<T> -> {Async} Option<T>
 export Channel.close! : Channel<T> -> ()
+
+// Supervision
+export supervise! : (SupervisionStrategy, Scope -> {e, Async} T) -> {e, Async} T
 
 // Example
 process_all! : List<Url> -> {Http, Async} List<Response>
@@ -1186,74 +1191,62 @@ Baseline modules export a standard interface:
 
 ## 9. Concurrency Model
 
-Baseline provides structured concurrency with lightweight cells, channels, and a work-stealing scheduler.
+Baseline uses **strict structured concurrency** paired with algebraic effects. All concurrency is scoped — fire-and-forget tasks are illegal. This is not a stylistic preference; it is a deliberate design decision that enables zero-cost memory regions across fiber boundaries, capability-based sandboxing, and SMT verification of concurrent code.
 
-### 9.1 Cells
+**Why not Go-style goroutines?** Go's `go func()` is unstructured concurrency — essentially a `goto` for control flow. Unstructured spawns can outlive their callers, forcing data into the heap with ARC and destroying region optimizations. LLMs are also notoriously bad at non-local temporal reasoning: they forget cancellation contexts, channel closures, and WaitGroups, leading to silent memory leaks and deadlocks. SMT solvers cannot verify properties about unbound, dynamic execution graphs.
 
-Cells are lightweight cooperative threads (initial stack: 2KB, growable):
+**Why not Erlang/Scala actors?** Erlang relies on untyped mailboxes and runtime "let it crash" supervisors — fundamentally incompatible with compile-time SMT verification. Making actors type-safe (Akka Typed) requires massive state-machine hierarchies that bloat the LLM context window. Actors also encourage stateful, object-oriented-adjacent architectures that conflict with FBIP (Section 1.9). Baseline achieves Erlang's isolation and resilience through structured scopes, channels, and effect handlers — without a separate actor runtime.
 
-```baseline
-// Spawn a cell
-let cell = spawn!(|| expensive_computation())
+### 9.1 Cells and Scopes
 
-// Wait for result
-let result = Cell.await!(cell)
-
-// Cancel a cell
-Cell.cancel!(cell)
-```
-
-### 9.2 Structured Concurrency
-
-Cells are scoped—parent tasks wait for children:
+Cells are lightweight cooperative threads (initial stack: 2KB, growable). **Cells can only be spawned inside a `scope!` block.** The scope guarantees all children complete (or are cancelled) before execution continues past the scope boundary.
 
 ```baseline
-process! : List<Item> -> {Async} List<r>
+process! : List<Item> -> {Async} List<Result>
 process! = |items|
   scope! |s|
     for item in items do
       s.spawn!(|| process_item!(item))
-    // Implicit: wait for all spawned cells
+    // Implicit: scope waits for all spawned cells
     // If any cell panics, others are cancelled
 ```
 
-This prevents:
-- Fire-and-forget tasks that leak
-- Orphaned tasks nobody awaits
-- Resource cleanup nightmares
-
-### 9.3 Channels
-
-Bounded channels with backpressure:
+There is no top-level `spawn!`. This is intentional:
 
 ```baseline
-let (tx, rx) = Channel.bounded<Int>(100)
+// ILLEGAL — compile error: spawn! requires a scope
+let cell = spawn!(|| background_task!())
 
-// Producer
-spawn! ||
-  for i in 1..1000 do
-    Channel.send!(tx, i)   // Blocks if buffer full
-  Channel.close!(tx)
-
-// Consumer
-spawn! ||
-  while let Some(n) = Channel.recv!(rx) do
-    process!(n)
+// LEGAL — all concurrency is scoped
+scope! |s|
+  let cell = s.spawn!(|| background_task!())
+  Cell.await!(cell)
 ```
 
-### 9.4 Select
+### 9.2 Scopes as Zero-Cost Memory Regions
 
-Wait on multiple channels:
+Structured concurrency maps the temporal lifetime of a fiber to a spatial AST node. Because the compiler statically knows that all fibers die before the `scope!` exits, fibers can safely borrow region-allocated data **without ARC or lifetime annotations**.
 
 ```baseline
-select!
-  recv!(rx1) as msg -> handle_a!(msg)
-  recv!(rx2) as msg -> handle_b!(msg)
-  send!(tx, value)  -> continue
-  after 5.seconds   -> timeout!()
+handle_request! : Request -> {Http, Async} Response
+handle_request! = |req|
+  // Region allocated for this request scope
+  let user_data = parse_body(req)
+
+  scope! |s|
+    // Both fibers can safely read user_data — the compiler proves
+    // they will die before the scope exits and user_data is freed.
+    let auth = s.spawn!(|| validate_auth!(user_data.token))
+    let enriched = s.spawn!(|| enrich_profile!(user_data.id))
+    build_response(auth.await!(), enriched.await!())
+  // Region freed in O(1) here — no per-object deallocation
 ```
 
-### 9.5 Parallel Combinators
+This is a **massive competitive advantage** over `Arc<Mutex<T>>`. The compiler proves safety at compile time; the runtime pays zero synchronization cost.
+
+### 9.3 Parallel Combinators
+
+For the common case, combinators eliminate manual scope/spawn/await boilerplate. LLMs write map-reduce pipelines reliably — these should be the primary concurrency API.
 
 ```baseline
 // Run multiple tasks, collect all results
@@ -1268,27 +1261,110 @@ let fastest = race!([
   || fetch_from_primary!(),
   || fetch_from_replica!(),
 ])
+
+// Scatter-gather: fan out, aggregate results
+let consensus = scatter_gather!(
+  [|| ask_claude!(q), || ask_gpt!(q), || ask_llama!(q)],
+  |results| majority_vote(results)
+)
 ```
 
-### 9.6 Async as an Effect
+All combinators are implemented in terms of `scope!` — they cannot leak tasks.
 
-Async is an effect, not function coloring:
+### 9.4 Channels
+
+Bounded channels with backpressure. **Only bounded channels exist** — unbounded channels are a memory leak waiting to happen.
 
 ```baseline
-// Declare async capability
-fetch_all! : List<Url> -> {Http, Async} List<Response>
-fetch_all! = |urls|
-  urls
-  |> List.map(|url| spawn!(|| Http.get!(url)))
-  |> List.map(Cell.await!)
+scope! |s|
+  let (tx, rx) = Channel.bounded<Int>(100)
 
-// Provide at the edge
-main! =
-  let runtime = Async.runtime({ threads: num_cpus() })
-  fetch_all!(urls) with { runtime, ... }
+  // Producer
+  s.spawn! ||
+    for i in 1..1000 do
+      Channel.send!(tx, i)   // Blocks if buffer full
+    Channel.close!(tx)
+
+  // Consumer
+  s.spawn! ||
+    while let Some(n) = Channel.recv!(rx) do
+      process!(n)
 ```
 
-### 9.7 Runtime Configuration
+### 9.5 FBIP Agents: Erlang Isolation at Native Speed
+
+Baseline does not need a dedicated Actor primitive. Stateful concurrent entities are just **tail-recursive loops processing a channel**, using FBIP for zero-allocation in-place mutation.
+
+```baseline
+type AgentMsg =
+  | Ask(String, Channel<String>)
+  | UpdateContext(String)
+
+// @fip guarantees this compiles to a zero-allocation, in-place mutable loop.
+@fip
+fn run_agent!(context: List<String>, inbox: Channel<AgentMsg>) -> {Async, Llm} () =
+  match Channel.recv!(inbox)
+    Some(Ask(q, reply_tx)) ->
+      Channel.send!(reply_tx, Llm.infer!(context, q))
+      run_agent!(context, inbox)           // Tail-call optimized
+
+    Some(UpdateContext(info)) ->
+      let next = List.append(context, info) // FBIP: mutates in-place!
+      run_agent!(next, inbox)
+
+    None -> ()                              // Channel closed, agent stops
+```
+
+This gives you all the benefits of Erlang actors — isolated state, message passing, graceful shutdown — but it is 100% statically typed, SMT-verifiable, uses standard pattern matching, and runs at native C speeds with no per-message allocation.
+
+### 9.6 Supervision via Effect Handlers
+
+Erlang's true superpower is supervision trees and resilience. In an era where AI agents rely on flaky external APIs, code will fail constantly. Baseline achieves fault tolerance through **effect handlers that wrap scopes**, not a separate supervisor runtime.
+
+```baseline
+fetch_consensus! : Query -> {Http, Async} Result<Answer, Error>
+fetch_consensus! = |query|
+  // Erlang's resilience, 100% statically typed and direct-style
+  supervise!(strategy: Restarts(max: 3, delay: 1.second)) |s|
+    let claude = s.spawn!(|| ask_claude!(query))
+    let gpt = s.spawn!(|| ask_gpt!(query))
+
+    Ok(compare_answers(claude.await!(), gpt.await!()))
+```
+
+`supervise!` is an effect handler that catches panics from child fibers and restarts the scope according to the strategy. Because it composes with the effect system, you can nest supervisors, combine them with other effects, and verify their behavior with SMT.
+
+### 9.7 Capability-Based Agent Sandboxing
+
+Because `Async` is an effect and all effects are capabilities, structured concurrency enables **compile-time sandboxing of untrusted code**. If an orchestrator spawns a fiber to execute LLM-generated code, the type system mathematically restricts that fiber's capabilities.
+
+```baseline
+scope! |s|
+  // Worker can compute concurrently, but is mathematically proven
+  // to CANNOT touch {Db}, {Fs}, or {Http}.
+  let result = s.spawn!(|| execute_untrusted_prompt(input)) with { Async, Pure }
+  Cell.await!(result)
+```
+
+Neither Go nor Erlang can do this natively. By treating concurrency and I/O as explicit capabilities, Baseline provides the strongest safety guarantees of any language for autonomous AI code execution.
+
+### 9.8 Async as an Effect
+
+Async is an effect, not function coloring. There are no `async`/`await` keywords — asynchronous I/O, generators, and exceptions are all just effects:
+
+```baseline
+fetch_all! : List<Url> -> {Http, Async} List<Response>
+fetch_all! = |urls|
+  parallel!(List.map(urls, |url| || Http.get!(url)))
+
+// Provide runtime at the edge
+fn main!() -> {Console} () =
+  let runtime = Async.runtime({ threads: num_cpus() })
+  let results = fetch_all!(urls) with { runtime }
+  Console.println!(results)
+```
+
+### 9.9 Runtime Configuration
 
 ```baseline
 Async.runtime({
@@ -1299,7 +1375,7 @@ Async.runtime({
 })
 ```
 
-### 9.8 WebAssembly Considerations
+### 9.10 WebAssembly Considerations
 
 | Environment | Concurrency Model |
 |-------------|-------------------|
@@ -1308,7 +1384,7 @@ Async.runtime({
 | Browser Wasm | Single-threaded event loop |
 | Edge (Workers) | Single-threaded, async I/O |
 
-Code is identical—the runtime adapts:
+Code is identical — the runtime adapts:
 
 ```baseline
 @runtime(wasm_threads: auto)  // Use threads if available

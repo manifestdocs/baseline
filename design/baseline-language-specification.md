@@ -862,11 +862,11 @@ type Tree<T> =
 
 ### 3.4 Refinement Types
 
-Refinement types add constraints to base types. Integer interval refinements are [IMPLEMENTED]; string and collection refinements are [PLANNED]:
+Refinement types add constraints to base types. Integer interval refinements and string refinements are [IMPLEMENTED]; collection and float refinements are [PLANNED]:
 
 ```baseline
 type Port = Int where 1 <= self <= 65535                     // [IMPLEMENTED]
-type Email = String where String.matches(self, r".+@.+\..+") // [PLANNED] regex refinements
+type Email = String where String.matches(self, r".+@.+\..+") // [IMPLEMENTED]
 type NonEmpty<T> = List<T> where List.length(self) > 0       // [PLANNED] collection refinements
 type Positive = Int where self > 0                           // [IMPLEMENTED]
 type Percentage = Float where 0.0 <= self <= 100.0           // [PLANNED] float refinements
@@ -1235,8 +1235,8 @@ effect Time {
 
 effect Random {
   int! : (Int, Int) -> Int
-  float! : () -> Float
-  shuffle! : List<T> -> List<T>
+  bool! : () -> Bool
+  uuid! : () -> String
 }
 ```
 
@@ -1314,7 +1314,7 @@ fn bad(x: Int) -> Int =
 | `Net` | TCP/UDP sockets | [PLANNED] |
 | `Db` | Database access | [PARTIAL — namespace registered, no methods] |
 | `Time` | Current time, delays | [IMPLEMENTED] |
-| `Random` | Random number generation | [PARTIAL — type signatures exist, no VM runtime] |
+| `Random` | Random number generation | [IMPLEMENTED] |
 | `Env` | Environment variables | [IMPLEMENTED] |
 | `Process` | Spawn processes | [PLANNED] |
 | `Log` | Structured logging | [IMPLEMENTED] |
@@ -1330,7 +1330,7 @@ module MyScript
 fn main!() =
   Console.print!("Hello!")
   let data = Http.get!("https://api.example.com/data")?
-  Fs.write_text!("output.txt", data.body)
+  Fs.write!("output.txt", data.body)
 ```
 
 | Prelude | Pure Modules | Effectful Modules | Use Case |
@@ -1684,13 +1684,18 @@ The control flow is formally verified. The data transformation is type-checked a
 
 ### 9.2 Inline Tests (Unit Tests) [IMPLEMENTED]
 
+Tests are placed in `@test` sections, conventionally at the bottom of the file after production code. Everything below `@test` until end-of-file is test code, stripped from production builds.
+
 ```baseline
 fn add(a: Int, b: Int) -> Int = a + b
-where
-  test "adds positive numbers" = add(1, 2) == 3
-  test "handles negatives" = add(-1, 1) == 0
-  test "zero identity" = add(0, 5) == 5
+
+@test
+test "adds positive numbers" = add(1, 2) == 3
+test "handles negatives" = add(-1, 1) == 0
+test "zero identity" = add(0, 5) == 5
 ```
+
+A file may contain multiple `@test` sections. Each section can contain `test` assertions and `describe` blocks.
 
 ### 9.3 BDD Specifications [IMPLEMENTED]
 
@@ -1894,12 +1899,12 @@ describe "PasswordService" {
       expect validate_password("short") to_be Err(TooShort { min: 8, actual: 5 })
     }
 
-    it "requires uppercase" {
-      expect validate_password("alllowercase1!") to_be Err(MissingUppercase)
+    it "requires lowercase" {
+      expect validate_password("ALLUPPER1!") to_be Err(MissingLowercase)
     }
 
-    it "requires number" {
-      expect validate_password("NoNumbersHere!") to_be Err(MissingNumber)
+    it "requires uppercase" {
+      expect validate_password("alllowercase1!") to_be Err(MissingUppercase)
     }
   }
 }
@@ -1908,10 +1913,10 @@ describe "PasswordService" {
 fn validate_password(password: String) -> Result<(), PasswordError> =
   if String.length(password) < 8 then
     Err(TooShort { min: 8, actual: String.length(password) })
-  else if not String.any(password, Char.is_uppercase) then
+  else if String.to_upper(password) == password then
+    Err(MissingLowercase)
+  else if String.to_lower(password) == password then
     Err(MissingUppercase)
-  else if not String.any(password, Char.is_digit) then
-    Err(MissingNumber)
   else
     Ok(())
 ```
@@ -2270,12 +2275,13 @@ fn summarize(todos: List<Todo>) -> { total: Int, completed: Int, pending: Int } 
   let total = List.length(todos)
   let completed = todos |> List.filter(|t| t.completed) |> List.length
   { total: total, completed: completed, pending: total - completed }
-where
-  test "empty list" = summarize([]) == { total: 0, completed: 0, pending: 0 }
-  test "mixed" = summarize([
-    { id: 1, title: "A", completed: true },
-    { id: 2, title: "B", completed: false },
-  ]) == { total: 2, completed: 1, pending: 1 }
+
+@test
+test "empty list" = summarize([]) == { total: 0, completed: 0, pending: 0 }
+test "mixed" = summarize([
+  { id: 1, title: "A", completed: true },
+  { id: 2, title: "B", completed: false },
+]) == { total: 2, completed: 1, pending: 1 }
 ```
 
 ### 12.3 Training Corpus Strategy
@@ -2385,7 +2391,7 @@ export fn String.trim(s: String) -> String                         // [IMPLEMENT
 export fn String.starts_with(s: String, prefix: String) -> Bool    // [IMPLEMENTED]
 export fn String.ends_with(s: String, suffix: String) -> Bool      // [IMPLEMENTED]
 export fn String.contains(s: String, sub: String) -> Bool          // [IMPLEMENTED]
-export fn String.replace(s: String, from: String, to: String) -> String  // [PLANNED]
+export fn String.replace(s: String, from: String, to: String) -> String  // [IMPLEMENTED]
 export fn String.to_upper(s: String) -> String                     // [IMPLEMENTED]
 export fn String.to_lower(s: String) -> String                     // [IMPLEMENTED]
 export fn String.matches(s: String, re: Regex) -> Bool             // [PLANNED]
@@ -2601,14 +2607,9 @@ pattern = '_'
 
 field_pattern = lower_ident (':' pattern)?
 
-(* Where clauses *)
-where_clause = 'where' where_item+
-where_item = 'test' string_lit '=' expression
-           | 'property' string_lit '=' expression
-           | 'contract' string_lit '=' contract_body
-           | 'fuzz' string_lit '=' expression
-
-contract_body = 'given' expression 'when' expression 'then' expression
+(* Test sections *)
+test_section = '@test' (inline_test | test_decl)+
+inline_test = 'test' string_lit '=' expression
 
 (* Testing — BDD syntax *)
 test_decl = 'describe' string_lit '{' test_item* '}'
@@ -2627,18 +2628,13 @@ with_clause = 'with' '{' record_init (',' record_init)* '}'
 expect_expr = 'expect' expression matcher
 matcher = 'to_equal' expression
         | 'to_be' pattern
-        | 'to_be_greater_than' expression
-        | 'to_be_between' expression 'and' expression
         | 'to_contain' expression
         | 'to_have_length' expression
         | 'to_be_empty'
         | 'to_start_with' expression
-        | 'to_match' expression
         | 'to_be_ok'
-        | 'to_be_err'
         | 'to_be_some'
         | 'to_be_none'
-        | 'to_be_type' upper_ident
         | 'to_satisfy' lambda_expr
 
 (* Literals *)
@@ -2749,12 +2745,21 @@ This appendix documents the empirical research that informed v0.2 design decisio
 
 ### C.2 Test Syntax Change
 
+**BDD assertions (v0.1 → v0.2):**
 **v0.1**: `given [3, 1, 4] / when List.sort / expect [1, 1, 3, 4, 5]`
 **v0.2**: `expect List.sort([3, 1, 4, 1, 5]) to_equal [1, 1, 3, 4, 5]`
 
 **Evidence**: The v0.1 `when` clause created ambiguity about whether the identifier is being called or is a label. This is exactly the kind of ambiguity that type-constrained decoding cannot resolve (it's semantic, not syntactic). Explicit function application is unambiguous in both directions — the LLM knows it's generating a function call, and the human reader knows they're reading one.
 
 **Human impact**: Slightly more verbose, but BDD structure (`describe`/`context`/`it`) provides the narrative scaffolding. The actual assertion line is clearer.
+
+**Inline test placement (where → @test):**
+**Before**: `fn add(...) = ... where test "name" = expr`
+**After**: `@test` section at file level, separate from function definitions
+
+**Evidence**: The `where` keyword was overloaded for both refinement types (`type Port = Int where self > 0`) and inline tests. This created parsing ambiguity and violated the principle of unambiguous syntax. Separating test code into `@test` sections provides clear boundaries between production and test code, simplifies the grammar, and makes test stripping trivial for production builds.
+
+**Human impact**: Tests are no longer coupled to individual function definitions, which is more flexible — a single `@test` section can test multiple functions. The visual separation also makes files easier to scan.
 
 ### C.3 Bounded Row Polymorphism
 

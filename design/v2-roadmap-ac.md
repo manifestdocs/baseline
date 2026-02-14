@@ -195,7 +195,7 @@ Language-level changes that deepen the type system, module system, or runtime.
 
 ### 3.2 BDD Testing Framework (`describe`/`it`/`expect`)
 
-**Goal**: Structured test blocks as a complement to inline `where test` blocks.
+**Goal**: Structured test blocks as a complement to inline `@test` sections.
 
 **AC**:
 - [ ] Grammar: `describe "name" { ... }`, `it "name" { ... }`, `context "name" { ... }`

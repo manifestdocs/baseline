@@ -14,7 +14,7 @@ Syntax highlighting and language support for the [Baseline programming language]
   - `it` / `it.only` / `it.skip` blocks
   - `before_each` / `after_each` hooks
   - `expect` expressions with all matchers (`to_equal`, `to_be`, `to_contain`, `to_have_length`, `to_be_empty`, `to_start_with`, `to_satisfy`, `to_be_ok`, `to_be_some`, `to_be_none`)
-  - `test` inline tests (including in `where` blocks)
+  - `test` inline tests and `@test` sections
 - **Spec/Contract attributes**
   - `@spec`, `@given`, `@returns`, `@requires`, `@ensures`, `@assume`
   - `@pure`, `@total`
