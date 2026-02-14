@@ -13,7 +13,7 @@ The server starts on `http://localhost:8080`.
 ## Test
 
 ```bash
-blc test examples/showcase/Validate.bl
+blc test examples/showcase/Todo.bl
 ```
 
 ## Endpoints
@@ -40,21 +40,22 @@ curl -X DELETE http://localhost:8080/todos/1
 
 ## Language Features Demonstrated
 
-- **Multiple modules** — `main.bl` imports from `Handlers.bl` and `Validate.bl` via selective imports
+- **Entity module** — `Todo.bl` encapsulates data, constructors, and parsing ("parse, don't validate")
+- **Multiple modules** — `main.bl` imports from `Handlers.bl`, which imports `Todo.bl`
 - **Effect tracking** — `main!` declares `{Http, Log, Random}`, handlers declare `{Http}` or `{Http, Random}`
-- **Pattern matching** — nested `match` on `Option`/`Result` for request parsing and error handling
-- **Input validation** — `Validate.title` and `Validate.status` return `Result<String, String>`
+- **? error propagation** — handlers compose Result-returning parsers with `?`, errors carry proper HTTP status codes
+- **Pattern matching** — `match` on `Option`/`Result` for request parsing and domain logic
 - **Pipe composition** — router built with `|>` chains: `Router.new() |> Router.get(...) |> ...`
 - **JSON serialization** — `Response.json(record)` and `Json.to_string(record)` for structured responses
-- **@test sections** — `Validate.bl` has 5 inline tests for the validation functions
+- **@test sections** — `Todo.bl` has inline tests for the parsing functions
 
 ## Project Structure
 
 ```
 examples/showcase/
 ├── main.bl          # Entry point — router setup + Server.listen!
-├── Handlers.bl      # CRUD handlers (imports Validate)
-├── Validate.bl      # Input validation with @test section
+├── Handlers.bl      # HTTP layer — request parsing + route handlers
+├── Todo.bl          # Entity — data, constructors, parsing + @test
 ├── Middleware.bl     # Logger, CORS, timer (reference; see note)
 └── README.md
 ```

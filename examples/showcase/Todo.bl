@@ -1,0 +1,65 @@
+@prelude(core)
+
+// The Todo entity — data, constructors, and parsing.
+
+type Status = | Pending | InProgress | Done
+
+fn status_to_string(s: Status) -> String =
+  match s
+    Pending    -> "pending"
+    InProgress -> "in_progress"
+    Done       -> "done"
+
+fn parse_status(raw: String) -> Result<Status, String> =
+  match raw
+    "pending"     -> Ok(Pending)
+    "in_progress" -> Ok(InProgress)
+    "done"        -> Ok(Done)
+    _ -> Err("Status must be pending, in_progress, or done")
+
+fn parse_title(raw: String) -> Result<String, String> = {
+  let trimmed = String.trim(raw)
+  let len = String.length(trimmed)
+  if len == 0 then Err("Title must not be empty")
+  else if len > 100 then Err("Title must be 100 characters or fewer")
+  else Ok(trimmed)
+}
+
+fn new(id: Int, title: String, status: Status) -> Unknown =
+  { id: id, title: title, status: status_to_string(status) }
+
+fn create(id: Int, title: String) -> Unknown = new(id, title, Pending)
+
+fn find(id: Int) -> Option<Unknown> = List.find(all(), |t| t.id == id)
+
+fn all() -> Unknown = [
+  new(1, "Learn Baseline",   Done),
+  new(2, "Build a REST API", InProgress),
+  new(3, "Write tests",      Pending),
+  new(4, "Deploy to prod",   Pending)
+]
+
+@test
+test "empty title rejected" =
+  match parse_title("")
+    Err(msg) -> String.contains(msg, "empty")
+    _ -> false
+
+test "long title rejected" =
+  match parse_title(String.join(List.map(1..110, |_| "x"), ""))
+    Err(msg) -> String.contains(msg, "100")
+    _ -> false
+
+test "valid title parsed and trimmed" = parse_title("  Buy milk  ") == Ok("Buy milk")
+
+test "valid status parsed" = parse_status("done") == Ok(Done)
+
+test "invalid status rejected" =
+  match parse_status("bogus")
+    Err(_) -> true
+    _ -> false
+
+test "new todo serializes status" = {
+  let todo = new(1, "Test", Pending)
+  todo.status == "pending"
+}

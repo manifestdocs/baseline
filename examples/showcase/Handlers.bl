@@ -1,84 +1,84 @@
 @prelude(server)
 
-import Validate
+import Todo
 
-// Sample todo data — in a real app this would come from a database
+// --- Request parsing ---
+// These bridge HTTP to domain: raw request data -> parsed values,
+// with errors mapped to proper HTTP responses.
 
-fn sample_todos() -> Unknown = [
-  { id: 1, title: "Learn Baseline",    status: "done" },
-  { id: 2, title: "Build a REST API",  status: "in_progress" },
-  { id: 3, title: "Write tests",       status: "pending" },
-  { id: 4, title: "Deploy to prod",    status: "pending" }
-]
-
-// --- Helpers ---
-
-// Parse a URL param as Int, or return an error response
-fn parse_id(raw: String) -> Result<Int, String> =
+fn parse_id(raw: String) -> Result<Int, Unknown> =
   match String.to_int(raw)
     Some(id) -> Ok(id)
-    None -> Err("Invalid todo ID: must be an integer")
+    None -> Err(Response.bad_request(
+      Json.to_string({ error: "Invalid ID: must be an integer" })))
 
-// Find a todo by ID, or return an error message
-fn find_todo(id: Int) -> Result<Unknown, String> =
-  match List.find(sample_todos(), |t| t.id == id)
+fn require_todo(id: Int) -> Result<Unknown, Unknown> =
+  match Todo.find(id)
     Some(todo) -> Ok(todo)
-    None -> Err("Todo not found")
+    None -> Err(Response.not_found(
+      Json.to_string({ error: "Todo not found", id: id })))
+
+fn parse_body(req: Unknown) -> Result<Unknown, Unknown> =
+  match Request.body_json(req)
+    Ok(data) -> Ok(data)
+    Err(e) -> Err(Response.bad_request(
+      Json.to_string({ error: "Invalid JSON", details: e })))
+
+// Map a domain parse error to an HTTP 400 response
+fn reject(result: Result<Unknown, String>) -> Result<Unknown, Unknown> =
+  match result
+    Ok(v) -> Ok(v)
+    Err(msg) -> Err(Response.bad_request(Json.to_string({ error: msg })))
 
 // --- Handlers ---
 
-// GET /health — service health check
+// GET /health
 
 fn health(req: Unknown) -> {Http} Result<Unknown, String> =
   Ok(Response.json({ status: "ok", version: "0.1.0" }))
 
-// GET /todos — list all todos
+// GET /todos
 
-fn list_todos(req: Unknown) -> {Http} Result<Unknown, String> =
-  Ok(Response.json(sample_todos()))
+fn list_todos(req: Unknown) -> {Http} Result<Unknown, String> = Ok(Response.json(Todo.all()))
 
-// GET /todos/:id — get a single todo by ID
+// GET /todos/:id
 
 fn get_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
   let id = parse_id(req.params.id)?
-  let todo = find_todo(id)?
+  let todo = require_todo(id)?
   Ok(Response.json(todo))
 }
 
-// POST /todos — create a new todo from JSON body
+// POST /todos
 
 fn create_todo(req: Unknown) -> {Http, Random} Result<Unknown, String> = {
-  let data = Request.body_json(req)?
-  let title = Validate.title(data.title)?
-  let todo = {
-    id: Random.int!(1, 99999),
-    title: title,
-    status: "pending"
-  }
+  let data = parse_body(req)?
+  let title = reject(Todo.parse_title(data.title))?
+  let todo = Todo.create(Random.int!(1, 99999), title)
   Ok(Response.created(Json.to_string(todo))
     |> Response.with_header("Content-Type", "application/json"))
 }
 
-// PUT /todos/:id — update an existing todo
+// PUT /todos/:id
 
 fn update_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
   let id = parse_id(req.params.id)?
-  let _ = find_todo(id)?
-  let data = Request.body_json(req)?
-  let title = Validate.title(data.title)?
-  let status = Validate.status(data.status)?
-  Ok(Response.json({ id: id, title: title, status: status }))
+  let _ = require_todo(id)?
+  let data = parse_body(req)?
+  let title = reject(Todo.parse_title(data.title))?
+  let status = reject(Todo.parse_status(data.status))?
+  Ok(Response.json(Todo.new(id, title, status)))
 }
 
-// DELETE /todos/:id — delete a todo
+// DELETE /todos/:id
 
 fn delete_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
   let id = parse_id(req.params.id)?
-  let _ = find_todo(id)?
+  let _ = require_todo(id)?
   Ok(Response.no_content())
 }
 
-// Build the /todos sub-router with all CRUD routes
+// Sub-router
 
 fn todo_routes() -> Unknown = Router.new()
   |> Router.get("/", list_todos)
