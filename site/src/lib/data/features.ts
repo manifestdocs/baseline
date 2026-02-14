@@ -36,7 +36,7 @@ export const features: Feature[] = [
 	{
 		title: 'Inline Tests',
 		description:
-			'<code>where test "name" = expr</code> keeps tests alongside the code they verify.'
+			'<code>@test</code> sections keep tests alongside the code they verify, with clear separation from production code.'
 	},
 	{
 		title: 'Functions',

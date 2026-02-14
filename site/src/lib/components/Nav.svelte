@@ -6,8 +6,9 @@
 		<li><a href="/#features">Features</a></li>
 		<li><a href="/#start">Install</a></li>
 		<li><a href="/spec">Spec</a></li>
+		<li><a href="/api">API</a></li>
 	</ul>
 	<div class="nav-footer">
-		<a href="https://github.com/baseline-lang">GitHub</a>
+		<a href="https://github.com/manifestdocs/baseline">GitHub</a>
 	</div>
 </nav>

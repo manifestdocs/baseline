@@ -5,8 +5,8 @@
 		Baseline is in active development and accepting contributors.
 	</p>
 	<div class="btn-group">
-		<a href="https://github.com/baseline-lang" class="button button-primary">View on GitHub</a>
-		<a href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md" class="button">Read the Specification</a>
+		<a href="https://github.com/manifestdocs/baseline" class="button button-primary">View on GitHub</a>
+		<a href="https://github.com/manifestdocs/baseline/blob/main/design/baseline-language-specification.md" class="button">Read the Specification</a>
 	</div>
 </section>
 

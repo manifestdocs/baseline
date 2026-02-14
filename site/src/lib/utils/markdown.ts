@@ -146,7 +146,7 @@ export function parseSpec(markdown: string): ParsedSpec {
 				const text = this.parser.parseInline(tokens);
 				// Rewrite relative .md links to GitHub
 				if (href && href.endsWith('.md') && !href.startsWith('http')) {
-					href = `https://github.com/baseline-lang/baseline/blob/main/design/${href}`;
+					href = `https://github.com/manifestdocs/baseline/blob/main/design/${href}`;
 				}
 				const external = href && href.startsWith('http') ? ' target="_blank" rel="noopener"' : '';
 				return `<a href="${href}"${external}>${text}</a>`;

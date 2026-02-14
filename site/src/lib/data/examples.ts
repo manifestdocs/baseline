@@ -49,18 +49,17 @@ export const examples: CodeExample[] = [
 	{
 		title: 'Inline tests',
 		description:
-			'Tests live next to the code they verify, using <code>where</code> blocks. Functions and their tests are always in sync because they share the same file and scope.',
+			'Tests live in <code>@test</code> sections, separate from production code. Functions and their tests share the same file and scope, keeping them always in sync.',
 		code: `<span class="kw">fn</span> <span class="fn">add</span><span class="punct">(</span><span class="fn">a</span><span class="op">:</span> <span class="type">Int</span><span class="punct">,</span> <span class="fn">b</span><span class="op">:</span> <span class="type">Int</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="type">Int</span> <span class="op">=</span> <span class="fn">a</span> <span class="op">+</span> <span class="fn">b</span>
-<span class="kw">where</span>
-  <span class="kw">test</span> <span class="str">"positive"</span>  <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="num">3</span>
-  <span class="kw">test</span> <span class="str">"zero"</span>      <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">0</span><span class="punct">,</span> <span class="num">5</span><span class="punct">)</span> <span class="op">==</span> <span class="num">5</span>
-  <span class="kw">test</span> <span class="str">"negative"</span>  <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="op">-</span><span class="num">1</span><span class="punct">,</span> <span class="num">1</span><span class="punct">)</span> <span class="op">==</span> <span class="num">0</span>
 
 <span class="kw">fn</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="fn">a</span><span class="op">:</span> <span class="type">Int</span><span class="punct">,</span> <span class="fn">b</span><span class="op">:</span> <span class="type">Int</span><span class="punct">)</span> <span class="op">-&gt;</span> <span class="type">Result&lt;Int, String&gt;</span> <span class="op">=</span>
   <span class="kw">if</span> <span class="fn">b</span> <span class="op">==</span> <span class="num">0</span> <span class="kw">then</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Division by zero"</span><span class="punct">)</span>
   <span class="kw">else</span> <span class="type">Ok</span><span class="punct">(</span><span class="fn">a</span> <span class="op">/</span> <span class="fn">b</span><span class="punct">)</span>
-<span class="kw">where</span>
-  <span class="kw">test</span> <span class="str">"divides"</span> <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">10</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Ok</span><span class="punct">(</span><span class="num">5</span><span class="punct">)</span>
-  <span class="kw">test</span> <span class="str">"by zero"</span> <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">0</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Division by zero"</span><span class="punct">)</span>`
+
+<span class="attr">@test</span>
+<span class="kw">test</span> <span class="str">"positive"</span>  <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="num">3</span>
+<span class="kw">test</span> <span class="str">"zero"</span>      <span class="op">=</span> <span class="fn">add</span><span class="punct">(</span><span class="num">0</span><span class="punct">,</span> <span class="num">5</span><span class="punct">)</span> <span class="op">==</span> <span class="num">5</span>
+<span class="kw">test</span> <span class="str">"divides"</span>   <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">10</span><span class="punct">,</span> <span class="num">2</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Ok</span><span class="punct">(</span><span class="num">5</span><span class="punct">)</span>
+<span class="kw">test</span> <span class="str">"by zero"</span>   <span class="op">=</span> <span class="fn">safe_divide</span><span class="punct">(</span><span class="num">1</span><span class="punct">,</span> <span class="num">0</span><span class="punct">)</span> <span class="op">==</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"Division by zero"</span><span class="punct">)</span>`
 	}
 ];

@@ -1,0 +1,1054 @@
+{
+  "modules": [
+    {
+      "name": "Console",
+      "functions": [
+        {
+          "name": "println!",
+          "signature": "fn println(String) -> Unit",
+          "effects": [
+            "Console"
+          ],
+          "prelude_level": "script",
+          "description": "Print a string to stdout followed by a newline."
+        },
+        {
+          "name": "print!",
+          "signature": "fn print(String) -> Unit",
+          "effects": [
+            "Console"
+          ],
+          "prelude_level": "script",
+          "description": "Print a string to stdout without a trailing newline."
+        },
+        {
+          "name": "error!",
+          "signature": "fn error(String) -> Unit",
+          "effects": [
+            "Console"
+          ],
+          "prelude_level": "script",
+          "description": "Print a string to stderr."
+        },
+        {
+          "name": "read_line!",
+          "signature": "fn read_line() -> String",
+          "effects": [
+            "Console"
+          ],
+          "prelude_level": "script",
+          "description": "Read a line of input from stdin."
+        }
+      ]
+    },
+    {
+      "name": "Env",
+      "functions": [
+        {
+          "name": "get!",
+          "signature": "fn get(String) -> Option<String>",
+          "effects": [
+            "Env"
+          ],
+          "prelude_level": "script",
+          "description": "Read an environment variable, returning None if unset."
+        },
+        {
+          "name": "set!",
+          "signature": "fn set(String, String) -> Unit",
+          "effects": [
+            "Env"
+          ],
+          "prelude_level": "script",
+          "description": "Set an environment variable."
+        }
+      ]
+    },
+    {
+      "name": "Fs",
+      "functions": [
+        {
+          "name": "read!",
+          "signature": "fn read(String) -> String",
+          "effects": [
+            "Fs"
+          ],
+          "prelude_level": "script",
+          "description": "Read a file's contents as a string."
+        },
+        {
+          "name": "write!",
+          "signature": "fn write(String, String) -> Unit",
+          "effects": [
+            "Fs"
+          ],
+          "prelude_level": "script",
+          "description": "Write a string to a file, creating or overwriting it."
+        },
+        {
+          "name": "exists!",
+          "signature": "fn exists(String) -> Bool",
+          "effects": [
+            "Fs"
+          ],
+          "prelude_level": "script",
+          "description": "Check if a file path exists."
+        },
+        {
+          "name": "read_file!",
+          "signature": "fn read_file(String) -> String",
+          "effects": [
+            "Fs"
+          ],
+          "prelude_level": "script",
+          "description": "Read a file's contents as a string."
+        },
+        {
+          "name": "write_file!",
+          "signature": "fn write_file(String, String) -> Unit",
+          "effects": [
+            "Fs"
+          ],
+          "prelude_level": "script",
+          "description": "Write a string to a file, creating or overwriting it."
+        },
+        {
+          "name": "list_dir!",
+          "signature": "fn list_dir(String) -> List<String>",
+          "effects": [
+            "Fs"
+          ],
+          "prelude_level": "script",
+          "description": "List the entries in a directory."
+        },
+        {
+          "name": "with_file!",
+          "signature": "fn with_file!(String, (Scoped<String>) -> T) -> T",
+          "effects": [
+            "Fs"
+          ],
+          "prelude_level": "script",
+          "description": "Open a file, pass it to a callback, and close it automatically."
+        }
+      ]
+    },
+    {
+      "name": "Http",
+      "functions": [
+        {
+          "name": "get!",
+          "signature": "fn get(String) -> <unknown>",
+          "effects": [
+            "Http"
+          ],
+          "prelude_level": "script",
+          "description": "Send an HTTP GET request to a URL."
+        },
+        {
+          "name": "post!",
+          "signature": "fn post(String, String) -> <unknown>",
+          "effects": [
+            "Http"
+          ],
+          "prelude_level": "script",
+          "description": "Send an HTTP POST request with a body."
+        },
+        {
+          "name": "put!",
+          "signature": "fn put(String, String) -> <unknown>",
+          "effects": [
+            "Http"
+          ],
+          "prelude_level": "script",
+          "description": "Send an HTTP PUT request with a body."
+        },
+        {
+          "name": "delete!",
+          "signature": "fn delete(String) -> <unknown>",
+          "effects": [
+            "Http"
+          ],
+          "prelude_level": "script",
+          "description": "Send an HTTP DELETE request to a URL."
+        },
+        {
+          "name": "request!",
+          "signature": "fn request(<unknown>) -> <unknown>",
+          "effects": [
+            "Http"
+          ],
+          "prelude_level": "script",
+          "description": "Send a custom HTTP request from a request record."
+        }
+      ]
+    },
+    {
+      "name": "Int",
+      "functions": [
+        {
+          "name": "to_string",
+          "signature": "fn to_string(Int) -> String",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Convert an integer to its string representation."
+        },
+        {
+          "name": "parse",
+          "signature": "fn parse(String) -> Int",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Parse a string as an integer."
+        }
+      ]
+    },
+    {
+      "name": "Json",
+      "functions": [
+        {
+          "name": "parse",
+          "signature": "fn parse(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Parse a JSON string into a value."
+        },
+        {
+          "name": "to_string",
+          "signature": "fn to_string(<unknown>) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Serialize a value to a compact JSON string."
+        },
+        {
+          "name": "to_string_pretty",
+          "signature": "fn to_string_pretty(<unknown>) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Serialize a value to a pretty-printed JSON string."
+        }
+      ]
+    },
+    {
+      "name": "List",
+      "functions": [
+        {
+          "name": "length",
+          "signature": "fn length(<unknown>) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the number of elements in a list."
+        },
+        {
+          "name": "head",
+          "signature": "fn head(List<T>) -> T",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the first element, or None if the list is empty."
+        },
+        {
+          "name": "tail",
+          "signature": "fn tail(List<T>) -> List<T>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return all elements except the first."
+        },
+        {
+          "name": "reverse",
+          "signature": "fn reverse(List<T>) -> List<T>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the list in reverse order."
+        },
+        {
+          "name": "sort",
+          "signature": "fn sort(List<T>) -> List<T>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the list sorted in ascending order."
+        },
+        {
+          "name": "concat",
+          "signature": "fn concat(List<T>, List<T>) -> List<T>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Concatenate two lists."
+        },
+        {
+          "name": "contains",
+          "signature": "fn contains(<unknown>, <unknown>) -> Bool",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Check if a list contains a given element."
+        },
+        {
+          "name": "get",
+          "signature": "fn get(List<T>, Int) -> Option<T>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the element at an index, or None if out of bounds."
+        },
+        {
+          "name": "map",
+          "signature": "fn map(List<T>, (T) -> U) -> List<U>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Apply a function to every element, returning a new list."
+        },
+        {
+          "name": "filter",
+          "signature": "fn filter(List<T>, (T) -> Bool) -> List<T>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return elements that satisfy a predicate."
+        },
+        {
+          "name": "fold",
+          "signature": "fn fold(List<T>, U, (U, T) -> U) -> U",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Reduce a list to a single value using an accumulator function."
+        },
+        {
+          "name": "find",
+          "signature": "fn find(List<T>, (T) -> Bool) -> Option<T>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the first element that satisfies a predicate, or None."
+        }
+      ]
+    },
+    {
+      "name": "Log",
+      "functions": [
+        {
+          "name": "info!",
+          "signature": "fn info(String) -> Unit",
+          "effects": [
+            "Log"
+          ],
+          "prelude_level": "script",
+          "description": "Log a message at info level."
+        },
+        {
+          "name": "warn!",
+          "signature": "fn warn(String) -> Unit",
+          "effects": [
+            "Log"
+          ],
+          "prelude_level": "script",
+          "description": "Log a message at warning level."
+        },
+        {
+          "name": "error!",
+          "signature": "fn error(String) -> Unit",
+          "effects": [
+            "Log"
+          ],
+          "prelude_level": "script",
+          "description": "Log a message at error level."
+        },
+        {
+          "name": "debug!",
+          "signature": "fn debug(String) -> Unit",
+          "effects": [
+            "Log"
+          ],
+          "prelude_level": "script",
+          "description": "Log a message at debug level."
+        }
+      ]
+    },
+    {
+      "name": "Map",
+      "functions": [
+        {
+          "name": "empty",
+          "signature": "fn empty() -> Map<K, V>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Create an empty map."
+        },
+        {
+          "name": "insert",
+          "signature": "fn insert(Map<K, V>, K, V) -> Map<K, V>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Insert a key-value pair, returning a new map."
+        },
+        {
+          "name": "get",
+          "signature": "fn get(Map<K, V>, K) -> Option<V>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Look up a key, returning Some(value) or None."
+        },
+        {
+          "name": "remove",
+          "signature": "fn remove(Map<K, V>, K) -> Map<K, V>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Remove a key, returning a new map."
+        },
+        {
+          "name": "contains",
+          "signature": "fn contains(Map<K, V>, K) -> Bool",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Check if a key exists in the map."
+        },
+        {
+          "name": "keys",
+          "signature": "fn keys(Map<K, V>) -> List<K>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Return all keys as a list."
+        },
+        {
+          "name": "values",
+          "signature": "fn values(Map<K, V>) -> List<V>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Return all values as a list."
+        },
+        {
+          "name": "len",
+          "signature": "fn len(Map<K, V>) -> Int",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Return the number of entries in the map."
+        },
+        {
+          "name": "from_list",
+          "signature": "fn from_list(...)",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Create a map from a list of (key, value) pairs."
+        }
+      ]
+    },
+    {
+      "name": "Math",
+      "functions": [
+        {
+          "name": "abs",
+          "signature": "fn abs(Int) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the absolute value of an integer."
+        },
+        {
+          "name": "min",
+          "signature": "fn min(Int, Int) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the smaller of two integers."
+        },
+        {
+          "name": "max",
+          "signature": "fn max(Int, Int) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the larger of two integers."
+        },
+        {
+          "name": "clamp",
+          "signature": "fn clamp(Int, Int, Int) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Constrain a value between a minimum and maximum."
+        },
+        {
+          "name": "pow",
+          "signature": "fn pow(Int, Int) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Raise a base to an exponent."
+        }
+      ]
+    },
+    {
+      "name": "Option",
+      "functions": [
+        {
+          "name": "unwrap",
+          "signature": "fn unwrap(Option<T>) -> T",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Extract the value from Some, or panic on None."
+        },
+        {
+          "name": "unwrap_or",
+          "signature": "fn unwrap_or(Option<T>, T) -> T",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Extract the value from Some, or return a default."
+        },
+        {
+          "name": "is_some",
+          "signature": "fn is_some(<unknown>) -> Bool",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Return true if the option contains a value."
+        },
+        {
+          "name": "is_none",
+          "signature": "fn is_none(<unknown>) -> Bool",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Return true if the option is None."
+        },
+        {
+          "name": "map",
+          "signature": "fn map(Option<T>, (T) -> U) -> Option<U>",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Apply a function to the contained value, if present."
+        },
+        {
+          "name": "flat_map",
+          "signature": "fn flat_map(Option<T>, (T) -> Option<U>) -> Option<U>",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Apply a function that returns an Option, flattening the result."
+        }
+      ]
+    },
+    {
+      "name": "Random",
+      "functions": [
+        {
+          "name": "int!",
+          "signature": "fn int(Int, Int) -> Int",
+          "effects": [
+            "Random"
+          ],
+          "prelude_level": "script",
+          "description": "Generate a random integer between min and max (inclusive)."
+        },
+        {
+          "name": "bool!",
+          "signature": "fn bool() -> Bool",
+          "effects": [
+            "Random"
+          ],
+          "prelude_level": "script",
+          "description": "Generate a random boolean."
+        },
+        {
+          "name": "uuid!",
+          "signature": "fn uuid() -> String",
+          "effects": [
+            "Random"
+          ],
+          "prelude_level": "script",
+          "description": "Generate a random UUID v4 string."
+        }
+      ]
+    },
+    {
+      "name": "Request",
+      "functions": [
+        {
+          "name": "header",
+          "signature": "fn header(<unknown>, String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Read a header value from the request."
+        },
+        {
+          "name": "method",
+          "signature": "fn method(<unknown>) -> String",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Return the HTTP method of the request."
+        },
+        {
+          "name": "body_json",
+          "signature": "fn body_json(<unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Parse the request body as JSON."
+        },
+        {
+          "name": "with_state",
+          "signature": "fn with_state(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Attach a named state value to the request."
+        },
+        {
+          "name": "state",
+          "signature": "fn state(<unknown>, String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Retrieve a named state value from the request."
+        }
+      ]
+    },
+    {
+      "name": "Response",
+      "functions": [
+        {
+          "name": "ok",
+          "signature": "fn ok(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 200 OK response with a text body."
+        },
+        {
+          "name": "json",
+          "signature": "fn json(<unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 200 OK response with a JSON body."
+        },
+        {
+          "name": "created",
+          "signature": "fn created(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 201 Created response with a text body."
+        },
+        {
+          "name": "no_content",
+          "signature": "fn no_content() -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 204 No Content response."
+        },
+        {
+          "name": "bad_request",
+          "signature": "fn bad_request(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 400 Bad Request response."
+        },
+        {
+          "name": "not_found",
+          "signature": "fn not_found(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 404 Not Found response."
+        },
+        {
+          "name": "error",
+          "signature": "fn error(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 500 Internal Server Error response."
+        },
+        {
+          "name": "status",
+          "signature": "fn status(Int, String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a response with a custom status code and body."
+        },
+        {
+          "name": "with_header",
+          "signature": "fn with_header(<unknown>, String, String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Add a single header to a response."
+        },
+        {
+          "name": "with_headers",
+          "signature": "fn with_headers(<unknown>, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Add multiple headers to a response."
+        },
+        {
+          "name": "redirect",
+          "signature": "fn redirect(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 302 temporary redirect to a URL."
+        },
+        {
+          "name": "redirect_permanent",
+          "signature": "fn redirect_permanent(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 301 permanent redirect to a URL."
+        }
+      ]
+    },
+    {
+      "name": "Result",
+      "functions": [
+        {
+          "name": "unwrap",
+          "signature": "fn unwrap(Result<T, E>) -> T",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Extract the Ok value, or panic on Err."
+        },
+        {
+          "name": "unwrap_or",
+          "signature": "fn unwrap_or(Result<T, E>, T) -> T",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Extract the Ok value, or return a default."
+        },
+        {
+          "name": "is_ok",
+          "signature": "fn is_ok(<unknown>) -> Bool",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Return true if the result is Ok."
+        },
+        {
+          "name": "is_err",
+          "signature": "fn is_err(<unknown>) -> Bool",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Return true if the result is Err."
+        },
+        {
+          "name": "map",
+          "signature": "fn map(Result<T, ?2>, (T) -> E) -> Result<E, ?2>",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Apply a function to the Ok value, if present."
+        },
+        {
+          "name": "and_then",
+          "signature": "fn and_then(Result<T, E>, (T) -> Result<U, E>) -> Result<U, E>",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Chain a function that returns a Result, flattening the result."
+        }
+      ]
+    },
+    {
+      "name": "Router",
+      "functions": [
+        {
+          "name": "new",
+          "signature": "fn new() -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Create a new empty router."
+        },
+        {
+          "name": "routes",
+          "signature": "fn routes(<unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Return the configured route table."
+        },
+        {
+          "name": "get",
+          "signature": "fn get(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for GET requests at a path."
+        },
+        {
+          "name": "post",
+          "signature": "fn post(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for POST requests at a path."
+        },
+        {
+          "name": "put",
+          "signature": "fn put(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for PUT requests at a path."
+        },
+        {
+          "name": "delete",
+          "signature": "fn delete(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for DELETE requests at a path."
+        },
+        {
+          "name": "patch",
+          "signature": "fn patch(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for PATCH requests at a path."
+        },
+        {
+          "name": "options",
+          "signature": "fn options(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for OPTIONS requests at a path."
+        },
+        {
+          "name": "head",
+          "signature": "fn head(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for HEAD requests at a path."
+        },
+        {
+          "name": "any",
+          "signature": "fn any(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Register a handler for all HTTP methods at a path."
+        },
+        {
+          "name": "use",
+          "signature": "fn use(<unknown>, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Add middleware to the router."
+        },
+        {
+          "name": "group",
+          "signature": "fn group(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Group routes under a shared path prefix."
+        }
+      ]
+    },
+    {
+      "name": "Server",
+      "functions": [
+        {
+          "name": "listen!",
+          "signature": "fn listen(<unknown>, Int) -> Unit",
+          "effects": [
+            "Http"
+          ],
+          "prelude_level": "server",
+          "description": "Start the HTTP server on the given port."
+        }
+      ]
+    },
+    {
+      "name": "Set",
+      "functions": [
+        {
+          "name": "empty",
+          "signature": "fn empty() -> Set<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Create an empty set."
+        },
+        {
+          "name": "insert",
+          "signature": "fn insert(Set<T>, T) -> Set<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Add an element, returning a new set."
+        },
+        {
+          "name": "remove",
+          "signature": "fn remove(Set<T>, T) -> Set<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Remove an element, returning a new set."
+        },
+        {
+          "name": "contains",
+          "signature": "fn contains(Set<T>, T) -> Bool",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Check if an element exists in the set."
+        },
+        {
+          "name": "union",
+          "signature": "fn union(Set<T>, Set<T>) -> Set<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Return the union of two sets."
+        },
+        {
+          "name": "intersection",
+          "signature": "fn intersection(Set<T>, Set<T>) -> Set<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Return the intersection of two sets."
+        },
+        {
+          "name": "len",
+          "signature": "fn len(Set<T>) -> Int",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Return the number of elements in the set."
+        },
+        {
+          "name": "from_list",
+          "signature": "fn from_list(List<T>) -> Set<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Create a set from a list of elements."
+        }
+      ]
+    },
+    {
+      "name": "String",
+      "functions": [
+        {
+          "name": "length",
+          "signature": "fn length(String) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the number of characters in a string."
+        },
+        {
+          "name": "to_upper",
+          "signature": "fn to_upper(String) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Convert all characters to uppercase."
+        },
+        {
+          "name": "to_lower",
+          "signature": "fn to_lower(String) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Convert all characters to lowercase."
+        },
+        {
+          "name": "trim",
+          "signature": "fn trim(String) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Remove leading and trailing whitespace."
+        },
+        {
+          "name": "contains",
+          "signature": "fn contains(String, String) -> Bool",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Check if a string contains a substring."
+        },
+        {
+          "name": "starts_with",
+          "signature": "fn starts_with(String, String) -> Bool",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Check if a string starts with a prefix."
+        },
+        {
+          "name": "ends_with",
+          "signature": "fn ends_with(String, String) -> Bool",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Check if a string ends with a suffix."
+        },
+        {
+          "name": "split",
+          "signature": "fn split(String, String) -> List<String>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Split a string by a delimiter into a list of strings."
+        },
+        {
+          "name": "join",
+          "signature": "fn join(List<String>, String) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Join a list of strings with a separator."
+        },
+        {
+          "name": "slice",
+          "signature": "fn slice(String, Int, Int) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Extract a substring by start and end index."
+        },
+        {
+          "name": "chars",
+          "signature": "fn chars(String) -> List<String>",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Split a string into a list of single-character strings."
+        },
+        {
+          "name": "char_at",
+          "signature": "fn char_at(String, Int) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the character at a given index."
+        },
+        {
+          "name": "index_of",
+          "signature": "fn index_of(String, String) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the index of the first occurrence of a substring, or -1."
+        },
+        {
+          "name": "to_int",
+          "signature": "fn to_int(String) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Parse a string as an integer."
+        },
+        {
+          "name": "from_char_code",
+          "signature": "fn from_char_code(Int) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Create a single-character string from a Unicode code point."
+        },
+        {
+          "name": "char_code",
+          "signature": "fn char_code(String) -> Int",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Return the Unicode code point of the first character."
+        },
+        {
+          "name": "replace",
+          "signature": "fn replace(String, String, String) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Replace all occurrences of a pattern with a replacement."
+        }
+      ]
+    },
+    {
+      "name": "Time",
+      "functions": [
+        {
+          "name": "now!",
+          "signature": "fn now() -> Int",
+          "effects": [
+            "Time"
+          ],
+          "prelude_level": "script",
+          "description": "Return the current Unix timestamp in milliseconds."
+        },
+        {
+          "name": "sleep!",
+          "signature": "fn sleep(Int) -> Unit",
+          "effects": [
+            "Time"
+          ],
+          "prelude_level": "script",
+          "description": "Pause execution for the given number of milliseconds."
+        }
+      ]
+    },
+    {
+      "name": "Weak",
+      "functions": [
+        {
+          "name": "downgrade",
+          "signature": "fn downgrade(T) -> Weak<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Create a weak reference from a strong reference."
+        },
+        {
+          "name": "upgrade",
+          "signature": "fn upgrade(Weak<T>) -> Option<T>",
+          "effects": [],
+          "prelude_level": "core",
+          "description": "Attempt to upgrade a weak reference to a strong one, returning an Option."
+        }
+      ]
+    }
+  ]
+}
