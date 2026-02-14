@@ -741,158 +741,18 @@ impl AsyncResponse {
     }
 }
 
-/// Build a hyper Response directly from a SendableValue, skipping the
-/// AsyncResponse intermediate allocation. Used for VM handler results.
+/// Build a hyper Response directly from a SendableValue.
+/// Delegates to `AsyncResponse::from_sendable_val` to avoid code duplication.
 pub fn build_hyper_response_from_sendable(
     val: &crate::vm::sendable::SendableValue,
 ) -> Response<Full<Bytes>> {
-    use crate::vm::sendable::SendableValue;
-
-    // Unwrap Result enum (Ok/Err) — VM handlers return Ok(response)
-    if let SendableValue::Enum { tag, payload } = val {
-        if tag == "Ok" {
-            return build_hyper_response_from_sendable(payload);
-        } else if tag == "Err" {
-            let msg = match payload.as_ref() {
-                SendableValue::String(s) => s.clone(),
-                _ => "Internal Server Error".to_string(),
-            };
-            return AsyncResponse::text(500, msg).into_hyper();
-        }
-    }
-
-    if let SendableValue::Record(fields) = val {
-        let status = fields
-            .iter()
-            .find(|(k, _)| k == "status")
-            .and_then(|(_, v)| {
-                if let SendableValue::Int(i) = v {
-                    StatusCode::from_u16(*i as u16).ok()
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(StatusCode::OK);
-
-        let body = fields
-            .iter()
-            .find(|(k, _)| k == "body")
-            .map(|(_, v)| match v {
-                SendableValue::Bytes(b) => b.clone(),
-                SendableValue::String(s) => Bytes::from(s.clone()),
-                _ => Bytes::new(),
-            })
-            .unwrap_or_default();
-
-        let mut builder = Response::builder().status(status);
-
-        if let Some((_, SendableValue::List(list))) = fields.iter().find(|(k, _)| k == "headers") {
-            for item in list {
-                if let SendableValue::Tuple(tuple) = item {
-                    if tuple.len() == 2 {
-                        if let (SendableValue::String(k), SendableValue::String(v)) =
-                            (&tuple[0], &tuple[1])
-                        {
-                            builder = builder.header(k.as_str(), v.as_str());
-                        }
-                    }
-                }
-            }
-        }
-
-        builder.body(Full::new(body)).unwrap()
-    } else {
-        // Fallback: treat as string body
-        let body = match val {
-            SendableValue::String(s) => Bytes::from(s.clone()),
-            SendableValue::Bytes(b) => b.clone(),
-            _ => Bytes::new(),
-        };
-        Response::builder()
-            .status(StatusCode::OK)
-            .header("Content-Type", "text/plain")
-            .body(Full::new(body))
-            .unwrap()
-    }
+    AsyncResponse::from_sendable_val(val).into_hyper()
 }
 
 /// Build a hyper Response directly from a VM handler's NValue result.
-/// Avoids the intermediate SendableValue conversion for better performance.
+/// Delegates to `AsyncResponse::from_nvalue` to avoid code duplication.
 pub fn build_hyper_response_from_nvalue(val: &NValue) -> Response<Full<Bytes>> {
-    use crate::vm::nvalue::HeapObject;
-
-    // Unwrap Result enum (Ok/Err) — VM handlers return Ok(response)
-    if val.is_heap() {
-        match val.as_heap_ref() {
-            HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
-                return build_hyper_response_from_nvalue(payload);
-            }
-            HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
-                let msg: String = payload
-                    .as_string()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "Internal Server Error".to_string());
-                return AsyncResponse::text(500, msg).into_hyper();
-            }
-            _ => {}
-        }
-    }
-
-    if let Some(fields) = val.as_record() {
-        let status = fields
-            .iter()
-            .find(|(k, _)| &**k == "status")
-            .and_then(|(_, v)| {
-                if v.is_any_int() {
-                    StatusCode::from_u16(v.as_any_int() as u16).ok()
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(StatusCode::OK);
-
-        let body = fields
-            .iter()
-            .find(|(k, _)| &**k == "body")
-            .map(|(_, v)| match v.as_string() {
-                Some(s) => Bytes::from(s.to_string()),
-                None => Bytes::new(),
-            })
-            .unwrap_or_default();
-
-        let mut builder = Response::builder().status(status);
-
-        if let Some((_, headers_val)) = fields.iter().find(|(k, _)| &**k == "headers") {
-            if let Some(items) = headers_val.as_list() {
-                for item in items {
-                    if item.is_heap() {
-                        if let HeapObject::Tuple(pair) = item.as_heap_ref() {
-                            if pair.len() == 2 {
-                                if let (Some(k), Some(v)) =
-                                    (pair[0].as_string(), pair[1].as_string())
-                                {
-                                    builder = builder.header(&**k, &**v);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        return builder.body(Full::new(body)).unwrap();
-    }
-
-    // Fallback: treat as string body
-    let body = val
-        .as_string()
-        .map(|s| Bytes::from(s.to_string()))
-        .unwrap_or_else(|| Bytes::from(format!("{}", val)));
-    Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "text/plain")
-        .body(Full::new(body))
-        .unwrap()
+    AsyncResponse::from_nvalue(val).into_hyper()
 }
 
 // ---------------------------------------------------------------------------
