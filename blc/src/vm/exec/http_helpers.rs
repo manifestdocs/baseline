@@ -57,6 +57,15 @@ pub(crate) fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>
                 return extract_response_nv(payload);
             }
             HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
+                // If the Err payload is a Response record (has status field),
+                // extract it as a proper HTTP response instead of returning 500.
+                // This enables handlers to use ? with Result<T, Response> for
+                // clean error handling with proper HTTP status codes.
+                if let Some(fields) = payload.as_record() {
+                    if fields.iter().any(|(k, _)| &**k == "status") {
+                        return extract_response_nv(payload);
+                    }
+                }
                 return (500, Vec::new(), format!("{}", payload));
             }
             _ => {}
