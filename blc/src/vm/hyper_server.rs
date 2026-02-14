@@ -1679,12 +1679,31 @@ async fn handle_request_with_context(
                     if let Some(chunks) = &ctx.chunks {
                         // Inline VM execution with panic isolation
                         let chunks = Arc::clone(chunks);
+                        let middleware: Vec<_> = ctx.middleware.iter().collect();
                         HANDLER_VM.with(|cell| {
                             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 let mut vm = cell.borrow_mut();
                                 let request_nv = async_req.to_nvalue();
                                 let handler_nv = vm_handler.to_nvalue();
-                                match vm.call_nvalue(&handler_nv, &[request_nv], &chunks, 0, 0) {
+                                let result = if middleware.is_empty() {
+                                    vm.call_nvalue(
+                                        &handler_nv,
+                                        &[request_nv],
+                                        &chunks,
+                                        0, 0,
+                                    )
+                                } else {
+                                    let mw_nvalues: Vec<NValue> =
+                                        middleware.iter().map(|m| m.to_nvalue()).collect();
+                                    vm.apply_mw_chain(
+                                        &mw_nvalues,
+                                        &handler_nv,
+                                        &request_nv,
+                                        &chunks,
+                                        0, 0,
+                                    )
+                                };
+                                match result {
                                     Ok(result) => build_hyper_response_from_nvalue(&result),
                                     Err(e) => {
                                         vm.reset();
