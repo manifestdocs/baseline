@@ -1,9 +1,7 @@
 @prelude(server)
 
 // Middleware functions for the Todo API.
-// Note: Router.use(middleware) has a known runtime issue with the
-// `next` callback in the server dispatcher. These functions are
-// ready to wire in once that's resolved.
+// Each receives (request, next) and calls next(request) to continue the chain.
 
 // Middleware: log request method + path + response status
 
