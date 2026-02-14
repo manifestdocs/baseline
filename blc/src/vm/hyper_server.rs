@@ -57,6 +57,23 @@ pub struct ServerConfig {
     pub shutdown_timeout: Duration,
     /// Enable HTTP/2 support (auto-detect HTTP/1.1 or HTTP/2)
     pub enable_http2: bool,
+    /// HTTP/2 initial stream-level flow-control window size (bytes).
+    /// Default: 65,535 (HTTP/2 spec minimum). Set higher for large responses.
+    pub http2_initial_stream_window_size: Option<u32>,
+    /// HTTP/2 initial connection-level flow-control window size (bytes).
+    /// Default: 65,535. Increase for high-throughput connections with many streams.
+    pub http2_initial_connection_window_size: Option<u32>,
+    /// HTTP/2 maximum concurrent streams per connection.
+    /// Default: 200. Limits how many requests can be multiplexed on one connection.
+    pub http2_max_concurrent_streams: Option<u32>,
+    /// HTTP/2 maximum frame size (bytes). Default: 16,384. Max: 16,777,215.
+    pub http2_max_frame_size: Option<u32>,
+    /// HTTP/2 keep-alive ping interval. None disables pings.
+    pub http2_keep_alive_interval: Option<Duration>,
+    /// HTTP/2 keep-alive ping timeout. Connection closed if no response within this duration.
+    pub http2_keep_alive_timeout: Option<Duration>,
+    /// Enable HTTP/2 adaptive flow control (overrides window size settings).
+    pub http2_adaptive_window: bool,
     /// Maximum HTTP header size in bytes (default 8KB)
     pub max_header_size: usize,
     /// Enable structured access logging
@@ -93,6 +110,13 @@ impl Default for ServerConfig {
             request_timeout: Duration::from_secs(30),
             shutdown_timeout: Duration::from_secs(30),
             enable_http2: false,
+            http2_initial_stream_window_size: None,
+            http2_initial_connection_window_size: None,
+            http2_max_concurrent_streams: None,
+            http2_max_frame_size: None,
+            http2_keep_alive_interval: None,
+            http2_keep_alive_timeout: None,
+            http2_adaptive_window: false,
             max_header_size: 8192,
             access_log: true,
             health_check_path: Some("/__health".to_string()),
@@ -1248,12 +1272,11 @@ pub(crate) async fn serve_http1_connection<I>(
         builder.timer(hyper_util::rt::TokioTimer::new());
         builder.header_read_timeout(config.keep_alive_timeout);
     }
-    let mut conn = builder.serve_connection(io, service);
+    let conn = builder.serve_connection(io, service);
+    tokio::pin!(conn);
 
-    // Select between connection completion and shutdown signal
-    let conn = std::pin::Pin::new(&mut conn);
     tokio::select! {
-        result = conn => {
+        result = &mut conn => {
             if let Err(err) = result {
                 if !err.to_string().contains("connection closed") {
                     eprintln!("[server] Connection error: {:?}", err);
@@ -1261,8 +1284,8 @@ pub(crate) async fn serve_http1_connection<I>(
             }
         }
         _ = shutdown_rx.changed() => {
-            // Graceful shutdown: let in-flight request finish via hyper's
-            // graceful_shutdown, then the connection future will complete.
+            // Signal hyper to stop accepting new requests and drain in-flight ones.
+            conn.as_mut().graceful_shutdown();
         }
     }
 }
@@ -1278,6 +1301,7 @@ pub(crate) async fn serve_auto_connection<I>(
 {
     use hyper_util::server::conn::auto;
 
+    let config = Arc::clone(&ctx.config);
     let remote = remote_addr;
 
     let service = service_fn(move |req| {
@@ -1285,7 +1309,44 @@ pub(crate) async fn serve_auto_connection<I>(
         async move { handle_request_with_timeout(req, &ctx, remote).await }
     });
 
-    let builder = auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+    let mut builder = auto::Builder::new(hyper_util::rt::TokioExecutor::new());
+
+    // HTTP/1.1 settings
+    builder.http1().keep_alive(config.keep_alive);
+    builder.http1().max_buf_size(config.max_header_size);
+    if config.keep_alive {
+        builder
+            .http1()
+            .timer(hyper_util::rt::TokioTimer::new())
+            .header_read_timeout(config.keep_alive_timeout);
+    }
+
+    // HTTP/2 stream configuration
+    if let Some(sz) = config.http2_initial_stream_window_size {
+        builder.http2().initial_stream_window_size(sz);
+    }
+    if let Some(sz) = config.http2_initial_connection_window_size {
+        builder.http2().initial_connection_window_size(sz);
+    }
+    if let Some(max) = config.http2_max_concurrent_streams {
+        builder.http2().max_concurrent_streams(max);
+    }
+    if let Some(sz) = config.http2_max_frame_size {
+        builder.http2().max_frame_size(sz);
+    }
+    if let Some(interval) = config.http2_keep_alive_interval {
+        builder.http2().keep_alive_interval(interval);
+    }
+    if let Some(timeout) = config.http2_keep_alive_timeout {
+        builder.http2().keep_alive_timeout(timeout);
+    }
+    if config.http2_adaptive_window {
+        builder.http2().adaptive_window(true);
+    }
+    builder
+        .http2()
+        .timer(hyper_util::rt::TokioTimer::new());
+
     let conn = builder.serve_connection(io, service);
     tokio::pin!(conn);
 
@@ -1298,7 +1359,9 @@ pub(crate) async fn serve_auto_connection<I>(
             }
         }
         _ = shutdown_rx.changed() => {
-            // Graceful shutdown for auto connection
+            // Signal hyper to stop accepting new requests and drain in-flight ones.
+            // For HTTP/2 this sends a GOAWAY frame.
+            conn.as_mut().graceful_shutdown();
         }
     }
 }
