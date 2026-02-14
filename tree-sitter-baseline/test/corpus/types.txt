@@ -218,3 +218,68 @@ export type User = {
       (record_field_def
         (identifier)
         (type_identifier)))))
+
+================================================================================
+Open record type with row variable
+================================================================================
+
+type HasName = { name: String, ..r }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_def
+    name: (type_identifier)
+    def: (record_type
+      (record_field_def
+        (identifier)
+        (type_identifier))
+      (row_variable
+        (identifier)))))
+
+================================================================================
+Open record with multiple fields and row variable
+================================================================================
+
+type HasNameAge = { name: String, age: Int, ..rest }
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (type_def
+    name: (type_identifier)
+    def: (record_type
+      (record_field_def
+        (identifier)
+        (type_identifier))
+      (record_field_def
+        (identifier)
+        (type_identifier))
+      (row_variable
+        (identifier)))))
+
+================================================================================
+Function with row-polymorphic parameter
+================================================================================
+
+fn greet(person: { name: String, ..r }) -> String =
+  person.name
+
+--------------------------------------------------------------------------------
+
+(source_file
+  (function_def
+    name: (identifier)
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (record_type
+          (record_field_def
+            (identifier)
+            (type_identifier))
+          (row_variable
+            (identifier)))))
+    return_type: (type_identifier)
+    body: (field_expression
+      (identifier)
+      (identifier))))

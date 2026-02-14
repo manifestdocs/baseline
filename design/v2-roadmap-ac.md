@@ -243,16 +243,20 @@ Language-level changes that deepen the type system, module system, or runtime.
 - [ ] `@assume` for external invariants (tracked, reported)
 - [ ] Timeout handling with structured suggestions
 
-### 4.3 Row Polymorphism
+### 4.3 Row Polymorphism ✅
 
 **Goal**: `{ name: String, ..r }` — functions accept any record with at least the specified fields.
 
+**Status**: Implemented (2026-02-14)
+
 **AC**:
-- [ ] Grammar: `..ident` in record type position
-- [ ] Type checker: row variable unification
-- [ ] Bounded at module boundaries (exported functions must have concrete types)
-- [ ] Inference: row variables inferred within module scope
-- [ ] Conformance tests
+- [x] Grammar: `..ident` in record type position
+- [x] Type checker: row variable unification (overlapping fields compatible, non-overlapping absorbed)
+- [ ] Bounded at module boundaries (deferred — no export type-checking enforcement yet)
+- [x] Inference: row variables inferred within module scope
+- [x] Conformance tests (`07_type_system/row_polymorphism.bl`)
+- [x] tree-sitter corpus tests
+
 
 ---
 
