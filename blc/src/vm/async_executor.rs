@@ -9,10 +9,10 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use bytes::Bytes;
-use http_body_util::Full;
 use hyper::Response;
 use tokio::sync::Semaphore;
+
+use crate::vm::hyper_server::ServerBody;
 
 use crate::vm::chunk::{Chunk, CompileError};
 use crate::vm::exec::Vm;
@@ -78,7 +78,7 @@ impl AsyncVmExecutor {
         &self,
         handler: SendableHandler,
         request: crate::vm::hyper_server::AsyncRequest,
-    ) -> Result<Response<Full<Bytes>>, CompileError> {
+    ) -> Result<Response<ServerBody>, CompileError> {
         let _permit = self.semaphore.acquire().await.unwrap();
         let chunks = &self.chunks;
 

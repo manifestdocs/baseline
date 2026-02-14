@@ -7,8 +7,8 @@
 //! request timeouts, body size enforcement, HTTP/2 support.
 
 use bytes::Bytes;
-use http_body_util::Full;
-use hyper::body::Incoming;
+use http_body_util::{BodyExt, Full, StreamBody};
+use hyper::body::{Frame, Incoming};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
@@ -21,6 +21,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
 use tokio::sync::Semaphore;
+
+/// Unified response body type supporting both buffered and streaming responses.
+pub type ServerBody = http_body_util::combinators::BoxBody<Bytes, Infallible>;
 
 use crate::vm::exec::Vm;
 use crate::vm::nvalue::NValue;
@@ -316,6 +319,8 @@ pub enum AsyncHandler {
     Vm(crate::vm::sendable::SendableHandler),
     /// Native fast path for common patterns (JSON response, etc.)
     Native(Arc<dyn Fn(&AsyncRequest) -> AsyncResponse + Send + Sync>),
+    /// SSE handler: receives request + sender channel, runs as a long-lived task.
+    NativeSse(Arc<dyn Fn(AsyncRequest, tokio::sync::mpsc::Sender<SseEvent>) + Send + Sync>),
 }
 
 // ---------------------------------------------------------------------------
@@ -550,8 +555,6 @@ pub enum BodyError {
 
 /// Read request body with a size limit. Returns BodyError::TooLarge if exceeded.
 async fn read_body_limited(body: Incoming, max_size: usize) -> Result<Bytes, BodyError> {
-    use http_body_util::BodyExt;
-
     // Use http_body_util::Limited to cap body collection.
     // When the limit is exceeded, collect() returns an error whose Display
     // contains "length limit" (from LengthLimitError).
@@ -603,6 +606,13 @@ impl AsyncResponse {
                 if &**tag == "Ok" {
                     return Self::from_nvalue(payload);
                 } else if &**tag == "Err" {
+                    // If the Err payload is a Response record (has status field),
+                    // extract it as a proper HTTP response instead of returning 500.
+                    if let Some(fields) = payload.as_record() {
+                        if fields.iter().any(|(k, _)| &**k == "status") {
+                            return Self::from_nvalue(payload);
+                        }
+                    }
                     let msg = payload.as_str().unwrap_or("Internal Server Error");
                     return Self::text(500, msg.to_string());
                 }
@@ -671,6 +681,13 @@ impl AsyncResponse {
             if tag == "Ok" {
                 return Self::from_sendable_val(payload);
             } else if tag == "Err" {
+                // If the Err payload is a Response record (has status field),
+                // extract it as a proper HTTP response instead of returning 500.
+                if let SendableValue::Record(fields) = payload.as_ref() {
+                    if fields.iter().any(|(k, _)| k == "status") {
+                        return Self::from_sendable_val(payload);
+                    }
+                }
                 let msg = match payload.as_ref() {
                     SendableValue::String(s) => s.clone(),
                     _ => "Internal Server Error".to_string(),
@@ -753,15 +770,110 @@ impl AsyncResponse {
         }
     }
 
-    /// Convert to Hyper response.
-    pub fn into_hyper(self) -> Response<Full<Bytes>> {
+    /// Convert to Hyper response with a boxed body.
+    pub fn into_hyper(self) -> Response<ServerBody> {
         let mut builder = Response::builder().status(self.status);
 
         for (name, value) in &self.headers {
             builder = builder.header(name.as_str(), value.as_str());
         }
 
-        builder.body(Full::new(self.body)).unwrap()
+        builder.body(Full::new(self.body).boxed()).unwrap()
+    }
+
+    /// Create an SSE streaming response from an mpsc::Receiver.
+    pub fn sse(rx: tokio::sync::mpsc::Receiver<SseEvent>) -> Response<ServerBody> {
+        use tokio_stream::wrappers::ReceiverStream;
+        use tokio_stream::StreamExt;
+
+        let stream = ReceiverStream::new(rx);
+        let body_stream = stream.map(|event| Ok(Frame::data(event.encode())));
+        let body = StreamBody::new(body_stream);
+
+        Response::builder()
+            .status(200)
+            .header("Content-Type", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .header("Connection", "keep-alive")
+            .body(body.boxed())
+            .unwrap()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// SSE (Server-Sent Events)
+// ---------------------------------------------------------------------------
+
+/// A Server-Sent Event that can be sent over an SSE connection.
+pub struct SseEvent {
+    /// Event type (optional; maps to the `event:` field).
+    pub event: Option<String>,
+    /// Event data payload (maps to the `data:` field).
+    pub data: String,
+    /// Event ID (optional; maps to the `id:` field).
+    pub id: Option<String>,
+    /// Reconnection time in milliseconds (optional; maps to the `retry:` field).
+    pub retry: Option<u32>,
+}
+
+impl SseEvent {
+    /// Create a new SSE event with the given data.
+    pub fn new(data: impl Into<String>) -> Self {
+        Self {
+            event: None,
+            data: data.into(),
+            id: None,
+            retry: None,
+        }
+    }
+
+    /// Set the event type.
+    pub fn with_event(mut self, event: impl Into<String>) -> Self {
+        self.event = Some(event.into());
+        self
+    }
+
+    /// Set the event ID.
+    pub fn with_id(mut self, id: impl Into<String>) -> Self {
+        self.id = Some(id.into());
+        self
+    }
+
+    /// Set the retry interval in milliseconds.
+    pub fn with_retry(mut self, retry: u32) -> Self {
+        self.retry = Some(retry);
+        self
+    }
+
+    /// Encode the event into the SSE wire format.
+    pub fn encode(&self) -> Bytes {
+        let mut buf = String::new();
+        if let Some(ref event) = self.event {
+            buf.push_str("event: ");
+            buf.push_str(event);
+            buf.push('\n');
+        }
+        if let Some(ref id) = self.id {
+            buf.push_str("id: ");
+            buf.push_str(id);
+            buf.push('\n');
+        }
+        if let Some(retry) = self.retry {
+            buf.push_str("retry: ");
+            buf.push_str(&retry.to_string());
+            buf.push('\n');
+        }
+        for line in self.data.lines() {
+            buf.push_str("data: ");
+            buf.push_str(line);
+            buf.push('\n');
+        }
+        // Handle empty data (still need "data: \n")
+        if self.data.is_empty() {
+            buf.push_str("data: \n");
+        }
+        buf.push('\n');
+        Bytes::from(buf)
     }
 }
 
@@ -769,13 +881,13 @@ impl AsyncResponse {
 /// Delegates to `AsyncResponse::from_sendable_val` to avoid code duplication.
 pub fn build_hyper_response_from_sendable(
     val: &crate::vm::sendable::SendableValue,
-) -> Response<Full<Bytes>> {
+) -> Response<ServerBody> {
     AsyncResponse::from_sendable_val(val).into_hyper()
 }
 
 /// Build a hyper Response directly from a VM handler's NValue result.
 /// Delegates to `AsyncResponse::from_nvalue` to avoid code duplication.
-pub fn build_hyper_response_from_nvalue(val: &NValue) -> Response<Full<Bytes>> {
+pub fn build_hyper_response_from_nvalue(val: &NValue) -> Response<ServerBody> {
     AsyncResponse::from_nvalue(val).into_hyper()
 }
 
@@ -865,6 +977,14 @@ impl AsyncRouteTreeBuilder {
         F: Fn(&AsyncRequest) -> AsyncResponse + Send + Sync + 'static,
     {
         self.route("POST", path, AsyncHandler::Native(Arc::new(handler)))
+    }
+
+    /// Add a native SSE (Server-Sent Events) route.
+    pub fn sse<F>(self, path: &str, handler: F) -> Self
+    where
+        F: Fn(AsyncRequest, tokio::sync::mpsc::Sender<SseEvent>) + Send + Sync + 'static,
+    {
+        self.route("GET", path, AsyncHandler::NativeSse(Arc::new(handler)))
     }
 
     /// Build the immutable route tree.
@@ -1371,7 +1491,7 @@ async fn handle_request_with_timeout(
     req: Request<Incoming>,
     ctx: &AsyncServerContext,
     remote_addr: SocketAddr,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<ServerBody>, Infallible> {
     match tokio::time::timeout(
         ctx.config.request_timeout,
         handle_request_with_context(req, ctx, remote_addr),
@@ -1387,7 +1507,7 @@ async fn handle_request_with_context(
     req: Request<Incoming>,
     ctx: &AsyncServerContext,
     remote_addr: SocketAddr,
-) -> Result<Response<Full<Bytes>>, Infallible> {
+) -> Result<Response<ServerBody>, Infallible> {
     use hyper::body::Body as _;
 
     let config = &ctx.config;
@@ -1441,7 +1561,7 @@ async fn handle_request_with_context(
         if req.method() == Method::OPTIONS {
             let mut resp = Response::builder()
                 .status(StatusCode::NO_CONTENT)
-                .body(Full::new(Bytes::new()))
+                .body(Full::new(Bytes::new()).boxed())
                 .unwrap();
             apply_cors_headers(resp.headers_mut(), cors, req.headers());
             if let Some(ref id) = request_id {
@@ -1589,6 +1709,36 @@ async fn handle_request_with_context(
                         AsyncResponse::text(501, "VM execution not configured").into_hyper()
                     }
                 }
+                AsyncHandler::NativeSse(f) => {
+                    let (tx, rx) = tokio::sync::mpsc::channel::<SseEvent>(32);
+                    let handler = Arc::clone(&f);
+                    tokio::spawn(async move {
+                        handler(async_req, tx);
+                    });
+                    let mut resp = AsyncResponse::sse(rx);
+                    // Add request ID and CORS headers to SSE response
+                    if let Some(ref id) = request_id {
+                        if let Some(ref hdr) = request_id_hdr {
+                            if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                                resp.headers_mut().insert(hdr.clone(), val);
+                            }
+                        }
+                    }
+                    if let Some(ref cors) = config.cors {
+                        apply_cors_headers(resp.headers_mut(), cors, &hyper::HeaderMap::new());
+                    }
+                    if config.access_log {
+                        eprintln!(
+                            "[access] {} {} SSE stream started {}{}",
+                            method,
+                            path,
+                            remote_addr.ip(),
+                            format_request_id(&request_id),
+                        );
+                    }
+                    // Return SSE response directly — skip compression and standard logging
+                    return Ok(resp);
+                }
             }
         }
         None => AsyncResponse::text(404, "Not Found").into_hyper(),
@@ -1608,8 +1758,18 @@ async fn handle_request_with_context(
         apply_cors_headers(resp.headers_mut(), cors, &hyper::HeaderMap::new());
     }
 
-    // Response compression
-    let resp = try_compress_response(resp, client_accepts_gzip);
+    // Response compression (skip for streaming/SSE responses)
+    let is_event_stream = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("text/event-stream"))
+        .unwrap_or(false);
+    let resp = if is_event_stream {
+        resp
+    } else {
+        try_compress_response(resp, client_accepts_gzip)
+    };
 
     // Structured access log
     if config.access_log {
@@ -1806,10 +1966,11 @@ fn gzip_compress(data: &[u8]) -> Option<Bytes> {
 
 /// Try to compress a hyper response body with gzip.
 /// Decomposes and rebuilds the response if compression is beneficial.
+/// Only compresses buffered (non-streaming) responses.
 fn try_compress_response(
-    resp: Response<Full<Bytes>>,
+    resp: Response<ServerBody>,
     req_accepted_gzip: bool,
-) -> Response<Full<Bytes>> {
+) -> Response<ServerBody> {
     use hyper::body::Body as _;
 
     if !req_accepted_gzip {
@@ -1830,14 +1991,15 @@ fn try_compress_response(
     }
 
     // Decompose response to get at the body bytes
-    let (mut parts, full_body) = resp.into_parts();
+    let (mut parts, mut body) = resp.into_parts();
 
-    // Synchronously poll the single frame from Full<Bytes>
+    // Synchronously poll the single frame from the boxed body.
+    // This works for Full<Bytes>-backed bodies which resolve in one poll.
     let waker = noop_waker();
     let mut cx = std::task::Context::from_waker(&waker);
-    let mut body = full_body;
     let raw_bytes = match std::pin::Pin::new(&mut body).poll_frame(&mut cx) {
         std::task::Poll::Ready(Some(Ok(frame))) => frame.into_data().unwrap_or_default(),
+        // Streaming body or empty — return as-is
         _ => return Response::from_parts(parts, body),
     };
 
@@ -1851,9 +2013,9 @@ fn try_compress_response(
                 "vary",
                 hyper::header::HeaderValue::from_static("Accept-Encoding"),
             );
-            Response::from_parts(parts, Full::new(compressed))
+            Response::from_parts(parts, Full::new(compressed).boxed())
         }
-        None => Response::from_parts(parts, Full::new(raw_bytes)),
+        None => Response::from_parts(parts, Full::new(raw_bytes).boxed()),
     }
 }
 
@@ -1877,7 +2039,7 @@ fn serve_static_file(
     base_dir: &str,
     url_prefix: &str,
     request_path: &str,
-) -> Option<Response<Full<Bytes>>> {
+) -> Option<Response<ServerBody>> {
     // Strip the URL prefix to get the relative file path
     let relative = request_path.strip_prefix(url_prefix)?;
     let relative = relative.trim_start_matches('/');
@@ -1891,7 +2053,7 @@ fn serve_static_file(
         return Some(
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Full::new(Bytes::from("Forbidden")))
+                .body(Full::new(Bytes::from("Forbidden")).boxed())
                 .unwrap(),
         );
     }
@@ -1905,7 +2067,7 @@ fn serve_static_file(
             return Some(
                 Response::builder()
                     .status(StatusCode::NOT_FOUND)
-                    .body(Full::new(Bytes::from("Not Found")))
+                    .body(Full::new(Bytes::from("Not Found")).boxed())
                     .unwrap(),
             );
         }
@@ -1916,7 +2078,7 @@ fn serve_static_file(
             return Some(
                 Response::builder()
                     .status(StatusCode::NOT_FOUND)
-                    .body(Full::new(Bytes::from("Not Found")))
+                    .body(Full::new(Bytes::from("Not Found")).boxed())
                     .unwrap(),
             );
         }
@@ -1925,7 +2087,7 @@ fn serve_static_file(
         return Some(
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
-                .body(Full::new(Bytes::from("Forbidden")))
+                .body(Full::new(Bytes::from("Forbidden")).boxed())
                 .unwrap(),
         );
     }
@@ -1937,7 +2099,7 @@ fn serve_static_file(
             return Some(
                 Response::builder()
                     .status(StatusCode::NOT_FOUND)
-                    .body(Full::new(Bytes::from("Not Found")))
+                    .body(Full::new(Bytes::from("Not Found")).boxed())
                     .unwrap(),
             );
         }
@@ -1962,7 +2124,11 @@ fn serve_static_file(
         builder = builder.header("cache-control", "public, max-age=3600");
     }
 
-    Some(builder.body(Full::new(Bytes::from(content))).unwrap())
+    Some(
+        builder
+            .body(Full::new(Bytes::from(content)).boxed())
+            .unwrap(),
+    )
 }
 
 /// Guess MIME content type from file extension.
@@ -2197,7 +2363,7 @@ mod tests {
     fn test_try_compress_response_skips_small() {
         let resp = Response::builder()
             .header("content-type", "text/plain")
-            .body(Full::new(Bytes::from("small")))
+            .body(Full::new(Bytes::from("small")).boxed())
             .unwrap();
         let result = try_compress_response(resp, true);
         assert!(!result.headers().contains_key("content-encoding"));
@@ -2207,7 +2373,7 @@ mod tests {
     fn test_try_compress_response_skips_binary() {
         let resp = Response::builder()
             .header("content-type", "image/png")
-            .body(Full::new(Bytes::from("a".repeat(2000))))
+            .body(Full::new(Bytes::from("a".repeat(2000))).boxed())
             .unwrap();
         let result = try_compress_response(resp, true);
         assert!(!result.headers().contains_key("content-encoding"));
@@ -2217,7 +2383,7 @@ mod tests {
     fn test_try_compress_response_compresses_text() {
         let resp = Response::builder()
             .header("content-type", "text/html")
-            .body(Full::new(Bytes::from("a".repeat(2000))))
+            .body(Full::new(Bytes::from("a".repeat(2000))).boxed())
             .unwrap();
         let result = try_compress_response(resp, true);
         assert_eq!(result.headers().get("content-encoding").unwrap(), "gzip");
@@ -2228,7 +2394,7 @@ mod tests {
     fn test_try_compress_response_skips_no_gzip() {
         let resp = Response::builder()
             .header("content-type", "text/html")
-            .body(Full::new(Bytes::from("a".repeat(2000))))
+            .body(Full::new(Bytes::from("a".repeat(2000))).boxed())
             .unwrap();
         let result = try_compress_response(resp, false);
         assert!(!result.headers().contains_key("content-encoding"));
@@ -2377,5 +2543,83 @@ mod tests {
 
         let empty = hyper::HeaderMap::new();
         assert!(!accepts_gzip(&empty));
+    }
+
+    // -----------------------------------------------------------------------
+    // SSE Tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_sse_event_encode_data_only() {
+        let event = SseEvent::new("hello");
+        assert_eq!(event.encode(), Bytes::from("data: hello\n\n"));
+    }
+
+    #[test]
+    fn test_sse_event_encode_with_event_type() {
+        let event = SseEvent::new("world").with_event("greeting");
+        assert_eq!(
+            event.encode(),
+            Bytes::from("event: greeting\ndata: world\n\n")
+        );
+    }
+
+    #[test]
+    fn test_sse_event_encode_with_id() {
+        let event = SseEvent::new("data").with_id("42");
+        assert_eq!(event.encode(), Bytes::from("id: 42\ndata: data\n\n"));
+    }
+
+    #[test]
+    fn test_sse_event_encode_with_retry() {
+        let event = SseEvent::new("data").with_retry(5000);
+        assert_eq!(
+            event.encode(),
+            Bytes::from("retry: 5000\ndata: data\n\n")
+        );
+    }
+
+    #[test]
+    fn test_sse_event_encode_full() {
+        let event = SseEvent::new("payload")
+            .with_event("update")
+            .with_id("7")
+            .with_retry(3000);
+        assert_eq!(
+            event.encode(),
+            Bytes::from("event: update\nid: 7\nretry: 3000\ndata: payload\n\n")
+        );
+    }
+
+    #[test]
+    fn test_sse_event_encode_multiline() {
+        let event = SseEvent::new("line1\nline2\nline3");
+        assert_eq!(
+            event.encode(),
+            Bytes::from("data: line1\ndata: line2\ndata: line3\n\n")
+        );
+    }
+
+    #[test]
+    fn test_sse_event_encode_empty_data() {
+        let event = SseEvent::new("");
+        assert_eq!(event.encode(), Bytes::from("data: \n\n"));
+    }
+
+    #[test]
+    fn test_sse_route_builder() {
+        let tree = AsyncRouteTree::builder()
+            .sse("/events", |_req, _tx| {
+                // Handler body not called in this test
+            })
+            .build();
+
+        let result = tree.find("GET", "/events");
+        assert!(result.is_some());
+        let (handler, _params) = result.unwrap();
+        assert!(matches!(handler, AsyncHandler::NativeSse(_)));
+
+        // SSE routes should not match other methods
+        assert!(tree.find("POST", "/events").is_none());
     }
 }
