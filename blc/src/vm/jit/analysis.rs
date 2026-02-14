@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 
+use crate::analysis::types::Type;
 use super::super::ir::{Expr, IrFunction, IrModule, MatchArm, Pattern};
 use super::super::natives::NativeRegistry;
 
@@ -195,11 +196,19 @@ pub(super) fn is_scalar_only(func: &IrFunction) -> bool {
     expr_is_scalar(&func.body)
 }
 
+fn type_is_scalar(ty: Option<&Type>) -> bool {
+    match ty {
+        None => true, // No type info — optimistic (other exprs will catch heap usage)
+        Some(Type::Int | Type::Float | Type::Bool | Type::Unit) => true,
+        Some(_) => false, // String, List, Record, Enum, etc. → heap
+    }
+}
+
 fn expr_is_scalar(expr: &Expr) -> bool {
     match expr {
         Expr::Int(_) | Expr::Bool(_) | Expr::Unit | Expr::Float(_) => true,
         Expr::Hole => false,
-        Expr::Var(_, _) => true,
+        Expr::Var(_, ty) => type_is_scalar(ty.as_ref()),
         Expr::BinOp { lhs, rhs, .. } => expr_is_scalar(lhs) && expr_is_scalar(rhs),
         Expr::UnaryOp { operand, .. } => expr_is_scalar(operand),
         Expr::If {
