@@ -8,6 +8,7 @@ pub mod lsp;
 pub mod manifest;
 pub mod parse;
 pub mod prelude;
+pub mod repl;
 pub mod resolver;
 pub mod test_runner;
 pub mod vm;

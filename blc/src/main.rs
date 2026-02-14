@@ -104,6 +104,9 @@ enum Commands {
         name: Option<String>,
     },
 
+    /// Start an interactive REPL session
+    Repl,
+
     /// Generate standard library documentation
     Docs {
         /// Output as JSON (default: markdown)
@@ -258,6 +261,9 @@ fn main() {
         }
         Commands::Init { name } => {
             init_project(name);
+        }
+        Commands::Repl => {
+            blc::repl::run();
         }
         Commands::Docs { json } => {
             let docs = blc::docs::generate_docs();
