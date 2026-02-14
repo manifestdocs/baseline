@@ -19,6 +19,7 @@ mod router;
 mod set;
 mod string;
 mod time;
+mod weak;
 
 use std::collections::HashMap;
 
@@ -354,6 +355,10 @@ impl NativeRegistry {
         self.register("Set.intersection", native_set_intersection);
         self.register("Set.len", native_set_len);
         self.register("Set.from_list", native_set_from_list);
+
+        // -- Weak --
+        self.register("Weak.downgrade", weak::native_weak_downgrade);
+        self.register("Weak.upgrade", weak::native_weak_upgrade);
 
         // -- Fs (VM-side) --
         self.register("Fs.read_file!", native_fs_read_file);
