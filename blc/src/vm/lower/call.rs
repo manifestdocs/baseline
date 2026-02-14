@@ -41,7 +41,7 @@ impl<'a> super::Lowerer<'a> {
 
         // TCO: self-recursive tail call
         if self.tail_position
-            && callee.kind() == "identifier"
+            && (callee.kind() == "identifier" || callee.kind() == "effect_identifier")
             && let Some(ref fn_name) = self.current_fn_name
         {
             let callee_name = self.node_text(callee);
@@ -113,8 +113,29 @@ impl<'a> super::Lowerer<'a> {
             }
         }
 
-        // Named function call
-        if callee.kind() == "identifier" {
+        // Standalone native call (e.g. scope!)
+        if callee.kind() == "effect_identifier" || callee.kind() == "identifier" {
+            let callee_name = self.node_text(callee);
+            if self.natives.lookup(&callee_name).is_some()
+                && !self.handled_effects.contains(&callee_name)
+            {
+                let mut args = Vec::new();
+                for arg in arg_nodes {
+                    args.push(self.lower_expression(arg)?);
+                }
+                self.tail_position = was_tail;
+                // Standalone natives have no module prefix
+                return Ok(Expr::CallNative {
+                    module: String::new(),
+                    method: callee_name,
+                    args,
+                    ty: None,
+                });
+            }
+        }
+
+        // Named function call (identifier or effect_identifier like scope!)
+        if callee.kind() == "identifier" || callee.kind() == "effect_identifier" {
             let callee_name = self.node_text(callee);
             if self.functions.contains(&callee_name) {
                 let args = self.resolve_named_call_args(&callee_name.clone(), arg_nodes)?;

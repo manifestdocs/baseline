@@ -774,7 +774,6 @@ impl std::fmt::Display for CompileError {
 /// A test expression compiled to a bytecode chunk.
 pub struct CompiledTest {
     pub name: String,
-    pub function: Option<String>,
     pub chunk_idx: usize,
     pub line: usize,
     pub col: usize,
@@ -1192,4 +1191,14 @@ mod tests {
             std::mem::size_of::<Op>()
         );
     }
+
+    // Compile-time assertions: Program and Chunk must be Send+Sync
+    // for cross-fiber sharing in the structured concurrency runtime.
+    const _: () = {
+        fn assert_send_sync<T: Send + Sync>() {}
+        fn check() {
+            assert_send_sync::<super::Program>();
+            assert_send_sync::<super::Chunk>();
+        }
+    };
 }

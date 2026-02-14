@@ -12,6 +12,7 @@ mod tests;
 
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use super::chunk::{Chunk, CompileError, Op, Program};
 use super::natives::NativeRegistry;
@@ -78,6 +79,10 @@ pub(crate) struct HandlerBoundary {
     pub(crate) return_ip: usize,
 }
 
+/// The VM execution engine. Each fiber gets its own `Vm` instance.
+///
+/// Intentionally !Send due to `Rc` in upvalue_stack — fibers share the
+/// `Program` (which IS Send+Sync) but each runs its own Vm on a single thread.
 pub struct Vm {
     pub(crate) stack: Vec<NValue>,
     pub(crate) frames: FrameStack,
@@ -91,6 +96,8 @@ pub struct Vm {
     instruction_limit: u64,
     /// Current instruction count
     instruction_count: u64,
+    /// Shared program reference for fiber spawning (set via `execute_program_arc`).
+    pub(crate) program: Option<Arc<Program>>,
 }
 
 impl Default for Vm {
@@ -129,6 +136,7 @@ impl Vm {
             handler_boundaries: Vec::new(),
             instruction_limit: MAX_INSTRUCTIONS,
             instruction_count: 0,
+            program: None,
         }
     }
 
@@ -174,6 +182,13 @@ impl Vm {
         });
         let result = self.run(std::slice::from_ref(chunk))?;
         Ok(result.to_value())
+    }
+
+    /// Execute a multi-chunk program starting at the entry point,
+    /// storing an `Arc<Program>` for fiber spawning.
+    pub fn execute_program_arc(&mut self, program: Arc<Program>) -> Result<Value, CompileError> {
+        self.program = Some(program.clone());
+        self.execute_program(&program)
     }
 
     /// Execute a multi-chunk program starting at the entry point.

@@ -2,6 +2,8 @@ mod console;
 mod env;
 pub use env::set_program_args;
 mod fs;
+pub(crate) mod fs_sandbox;
+pub use fs_sandbox::set_fs_sandbox;
 mod int_conv;
 pub(crate) mod json;
 mod list;
@@ -111,6 +113,22 @@ impl NativeRegistry {
         self.entries
             .get(id as usize)
             .map(|e| matches!(e.name, "Server.listen!" | "Server.listen" | "Server.listen_async!" | "Server.listen_async"))
+            .unwrap_or(false)
+    }
+
+    /// Check if a function is an async fiber primitive (scope!, spawn!, await!, cancel!).
+    pub fn is_async(&self, id: u16) -> bool {
+        self.entries
+            .get(id as usize)
+            .map(|e| {
+                matches!(
+                    e.name,
+                    "scope!" | "scope"
+                        | "Scope.spawn!" | "Scope.spawn"
+                        | "Cell.await!" | "Cell.await"
+                        | "Cell.cancel!" | "Cell.cancel"
+                )
+            })
             .unwrap_or(false)
     }
 
@@ -253,6 +271,8 @@ impl NativeRegistry {
         self.register("Random.int", native_random_int);
         self.register("Random.bool!", native_random_bool);
         self.register("Random.bool", native_random_bool);
+        self.register("Random.uuid!", native_random_uuid);
+        self.register("Random.uuid", native_random_uuid);
 
         // -- Env --
         self.register("Env.get!", native_env_get);
@@ -358,6 +378,16 @@ impl NativeRegistry {
         self.register("Server.listen", native_server_listen_placeholder);
         self.register("Server.listen_async!", native_server_listen_placeholder);
         self.register("Server.listen_async", native_server_listen_placeholder);
+
+        // -- Async fiber primitives (dispatched specially in vm.rs) --
+        self.register("scope!", native_async_placeholder);
+        self.register("scope", native_async_placeholder);
+        self.register("Scope.spawn!", native_async_placeholder);
+        self.register("Scope.spawn", native_async_placeholder);
+        self.register("Cell.await!", native_async_placeholder);
+        self.register("Cell.await", native_async_placeholder);
+        self.register("Cell.cancel!", native_async_placeholder);
+        self.register("Cell.cancel", native_async_placeholder);
     }
 }
 
@@ -374,6 +404,12 @@ fn native_hof_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
 fn native_server_listen_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
     Err(NativeError(
         "Server.listen! must be executed by VM, not called directly".into(),
+    ))
+}
+
+fn native_async_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
+    Err(NativeError(
+        "Async primitives must be executed by VM, not called directly".into(),
     ))
 }
 
@@ -530,4 +566,13 @@ mod tests {
         let result = native_test_contains(&[list, NValue::int(99)]).unwrap();
         assert!(!result.as_bool());
     }
+
+    // Compile-time assertion: NativeRegistry must be Send+Sync
+    // for cross-fiber sharing in the structured concurrency runtime.
+    const _: () = {
+        fn assert_send_sync<T: Send + Sync>() {}
+        fn check() {
+            assert_send_sync::<super::NativeRegistry>();
+        }
+    };
 }

@@ -19,3 +19,4 @@ pub mod sendable;
 pub mod test_runner;
 pub use baseline_rt::value;
 pub mod exec;
+pub mod fiber;

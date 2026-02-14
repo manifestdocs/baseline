@@ -1,0 +1,10 @@
+// Test: Missing Async effect should produce CAP_001 errors
+// Expected errors: CAP_001
+@prelude(script)
+
+fn bad_scope() -> Int = {
+  scope!(|s| {
+    let cell = Scope.spawn!(s, || 42)
+    Cell.await!(cell)
+  })
+}

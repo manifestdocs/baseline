@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::vm::chunk::{Chunk, CompileError, Op};
+use crate::vm::fiber;
 use crate::vm::nvalue::{HeapObject, NValue};
 
 use super::frame::{CallFrame, FRAME_HAS_FUNC};
@@ -109,7 +110,6 @@ impl super::Vm {
                         });
                     }
 
-                    eprintln!("[DEBUG] Continuation resume: pushing resume_value={:?}, new_ip={}, new_ci={}", resume_value, r_ip, r_ci);
                     self.stack.push(resume_value);
 
                     let new_ip = r_ip as usize;
@@ -421,6 +421,12 @@ impl super::Vm {
                     {
                         self.dispatch_server_listen(n, chunks, line, col)?;
                     }
+                } else if self.natives.is_async(*fn_id) {
+                    let caller = self.frames.last_mut();
+                    caller.ip = ip as u32;
+                    caller.chunk_idx = chunk_idx as u32;
+                    let (line, col) = chunk.source_map[ip - 1];
+                    self.dispatch_async(*fn_id, n, chunks, line, col)?;
                 } else {
                     let start = self.stack.len() - n;
                     let result = self.natives.call(*fn_id, &self.stack[start..]);
@@ -508,5 +514,75 @@ impl super::Vm {
             _ => unreachable!("dispatch_call called with non-call op"),
         }
         Ok(DispatchResult::Continue)
+    }
+
+    /// Dispatch async fiber primitives: scope!, Scope.spawn!, Cell.await!, Cell.cancel!
+    fn dispatch_async(
+        &mut self,
+        fn_id: u16,
+        n: usize,
+        chunks: &[Chunk],
+        line: usize,
+        col: usize,
+    ) -> Result<(), CompileError> {
+        let name = self.natives.name(fn_id);
+        let start = self.stack.len() - n;
+        let args: Vec<NValue> = self.stack[start..].to_vec();
+        self.stack.truncate(start);
+
+        let result = match name {
+            "scope!" | "scope" => {
+                // scope!(body_closure)
+                if args.is_empty() {
+                    return Err(self.error("scope! requires a closure argument".into(), line, col));
+                }
+                fiber::exec_scope(self, args[0].clone(), chunks, line, col)?
+            }
+            "Scope.spawn!" | "Scope.spawn" => {
+                // Scope.spawn!(scope_handle, body_closure)
+                if args.len() < 2 {
+                    return Err(self.error(
+                        "Scope.spawn! requires scope handle and closure arguments".into(),
+                        line,
+                        col,
+                    ));
+                }
+                let program = self
+                    .program
+                    .as_ref()
+                    .ok_or_else(|| {
+                        self.error(
+                            "Scope.spawn! requires a program context (use execute_program_arc)"
+                                .into(),
+                            line,
+                            col,
+                        )
+                    })?
+                    .clone();
+                fiber::exec_spawn(&args[0], args[1].clone(), program, line, col)?
+            }
+            "Cell.await!" | "Cell.await" => {
+                // Cell.await!(cell)
+                if args.is_empty() {
+                    return Err(self.error("Cell.await! requires a Cell argument".into(), line, col));
+                }
+                fiber::exec_cell_await(&args[0], line, col)?
+            }
+            "Cell.cancel!" | "Cell.cancel" => {
+                // Cell.cancel!(cell)
+                if args.is_empty() {
+                    return Err(
+                        self.error("Cell.cancel! requires a Cell argument".into(), line, col)
+                    );
+                }
+                fiber::exec_cell_cancel(&args[0], line, col)?
+            }
+            _ => {
+                return Err(self.error(format!("Unknown async primitive: {}", name), line, col));
+            }
+        };
+
+        self.stack.push(result);
+        Ok(())
     }
 }

@@ -72,6 +72,10 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Random.bool!".into(),
             Type::Function(vec![], Box::new(Type::Bool)),
         );
+        sigs.insert(
+            "Random.uuid!".into(),
+            Type::Function(vec![], Box::new(Type::String)),
+        );
     }
 
     // -- Env builtins (effect: Env) --
@@ -649,6 +653,35 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         sigs.insert(
             "Request.state".into(),
             Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+        );
+    }
+
+    // -- Async builtins (effect: Async) --
+    // scope! is a standalone effectful call (like println!) that takes a closure.
+    if builtin_modules.contains(&"Async") {
+        sigs.insert(
+            "scope!".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+    }
+
+    // -- Scope native methods (effect: Async) --
+    if native_modules.contains(&"Scope") {
+        sigs.insert(
+            "Scope.spawn!".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+        );
+    }
+
+    // -- Cell native methods (effect: Async) --
+    if native_modules.contains(&"Cell") {
+        sigs.insert(
+            "Cell.await!".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Cell.cancel!".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unit)),
         );
     }
 

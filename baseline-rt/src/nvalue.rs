@@ -139,6 +139,13 @@ pub enum HeapObject {
     WeakRef(Box<std::sync::Weak<HeapObject>>),
     /// Integers that don't fit in 48-bit signed range.
     BigInt(i64),
+    /// Opaque native object — used for Scope handles, Cell handles, and other
+    /// runtime-internal values that don't need to be inspectable from Baseline code.
+    /// The `&'static str` tag identifies the type for runtime dispatch.
+    NativeObject {
+        tag: &'static str,
+        data: Arc<dyn std::any::Any + Send + Sync>,
+    },
     /// One-shot delimited continuation captured at an effect perform site.
     /// Stores the stack/frame/handler segment between handler boundary and perform.
     /// One-shot semantics enforced at the VM level (continuation is consumed on call).
@@ -179,6 +186,8 @@ impl PartialEq for HeapObject {
             (HeapObject::Set(a), HeapObject::Set(b)) => a == b,
             (HeapObject::WeakRef(a), HeapObject::WeakRef(b)) => std::sync::Weak::ptr_eq(a, b),
             (HeapObject::BigInt(a), HeapObject::BigInt(b)) => a == b,
+            (HeapObject::NativeObject { tag: t1, data: d1 },
+             HeapObject::NativeObject { tag: t2, data: d2 }) => t1 == t2 && Arc::ptr_eq(d1, d2),
             _ => false,
         }
     }
@@ -343,6 +352,11 @@ impl NValue {
             resume_ip,
             resume_chunk_idx,
         })
+    }
+
+    /// Create a native object NValue (Scope handle, Cell handle, etc.).
+    pub fn native_object(tag: &'static str, data: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+        Self::from_heap(HeapObject::NativeObject { tag, data })
     }
 
     /// Public constructor for HeapObject variants (used by middleware chain builder).
@@ -693,6 +707,7 @@ impl fmt::Display for NValue {
                 HeapObject::WeakRef(_) => write!(f, "<weak>"),
                 HeapObject::BigInt(i) => write!(f, "{}", i),
                 HeapObject::Continuation { .. } => write!(f, "<continuation>"),
+                HeapObject::NativeObject { tag, .. } => write!(f, "<{}>", tag),
             }
         }
     }
@@ -769,6 +784,7 @@ impl NValue {
             HeapObject::Set(elems) => {
                 Value::Set(Arc::new(elems.iter().map(|v| v.to_value()).collect()))
             }
+            HeapObject::NativeObject { .. } => Value::Unit,
         }
     }
 }

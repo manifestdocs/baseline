@@ -1,0 +1,14 @@
+// Test: Async effect checking for scope!/Scope.spawn!/Cell.await!/Cell.cancel!
+// Verifies that the type checker correctly requires {Async} for concurrency primitives.
+@prelude(script)
+
+fn run_scoped() -> {Async} Int = {
+  let result = scope!(|s| {
+    let cell = Scope.spawn!(s, || 42)
+    Cell.await!(cell)
+  })
+  result
+}
+
+fn main() -> {Console, Async} () =
+  Console.println!("async effect check passed")

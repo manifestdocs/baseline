@@ -613,6 +613,7 @@ fn infer_required_effect(call_name: &str) -> String {
         // Server.listen! requires the Http effect (starting a server is an Http capability)
         return match module {
             "Server" => "Http".to_string(),
+            "Scope" | "Cell" => "Async".to_string(),
             _ => module.to_string(),
         };
     }
@@ -627,6 +628,7 @@ fn infer_required_effect(call_name: &str) -> String {
         "random" | "uuid" => return "Random".to_string(),
         "read_top_secrets" => return "Fs".to_string(), // Example for testing
         "log" | "info" | "warn" | "error" => return "Log".to_string(),
+        "scope" => return "Async".to_string(),
         _ => {}
     }
 

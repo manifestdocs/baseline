@@ -32,11 +32,11 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "Fs",
+                "Request", "Fs", "Cell", "Scope",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "Router", "Fs",
+                "Request", "Router", "Fs", "Cell", "Scope",
             ],
         }
     }
@@ -46,9 +46,9 @@ impl Prelude {
         match self {
             Prelude::None | Prelude::Minimal => &[],
             Prelude::Pure | Prelude::Core => &["Math"],
-            Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs"],
+            Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Async"],
             Prelude::Server => &[
-                "Math", "Console", "Log", "Time", "Env", "Server", "Db", "Metrics",
+                "Math", "Console", "Log", "Time", "Env", "Server", "Db", "Metrics", "Async",
             ],
         }
     }
@@ -64,12 +64,12 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request",
+                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "Cell", "Scope",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
                 "Log", "Time", "Env", "Http", "Response", "Request", "Router", "Server", "Db",
-                "Metrics", "Fs",
+                "Metrics", "Fs", "Cell", "Scope",
             ],
         }
     }

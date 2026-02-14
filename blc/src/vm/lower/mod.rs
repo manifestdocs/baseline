@@ -281,7 +281,7 @@ impl<'a> Lowerer<'a> {
             "tuple_expression" => self.lower_tuple(node),
             "unary_expression" => self.lower_unary(node),
             "binary_expression" => self.lower_binary(node),
-            "identifier" => self.lower_identifier(node),
+            "identifier" | "effect_identifier" => self.lower_identifier(node),
             "for_expression" => self.lower_for(node),
             "hole_expression" => Ok(Expr::Hole),
             "named_argument" => {
