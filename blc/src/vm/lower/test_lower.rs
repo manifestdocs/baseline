@@ -41,32 +41,31 @@ impl<'a> super::Lowerer<'a> {
             };
 
             match effective.kind() {
-                "function_def" => {
-                    let func_name = effective
-                        .child_by_field_name("name")
-                        .map(|n| self.node_text(&n));
-                    let mut child_cursor = effective.walk();
-                    for fc in effective.children(&mut child_cursor) {
-                        if fc.kind() == "where_block" {
-                            let mut wb_cursor = fc.walk();
-                            for test_node in fc.children(&mut wb_cursor) {
-                                if test_node.kind() == "inline_test"
-                                    && let Some(t) = self.lower_inline_test(&test_node, &func_name)?
-                                {
-                                    tests.push(t);
-                                }
-                            }
-                        }
-                    }
-                }
                 "inline_test" => {
-                    if let Some(t) = self.lower_inline_test(&effective, &None)? {
+                    if let Some(t) = self.lower_inline_test(&effective)? {
                         tests.push(t);
                     }
                 }
                 "describe_block" => {
                     let has_only = self.has_focused_tests(&effective);
                     self.collect_describe_tests(&effective, "", has_only, &[], &[], &mut tests)?;
+                }
+                "test_section" => {
+                    let mut section_cursor = effective.walk();
+                    for section_child in effective.named_children(&mut section_cursor) {
+                        match section_child.kind() {
+                            "inline_test" => {
+                                if let Some(t) = self.lower_inline_test(&section_child)? {
+                                    tests.push(t);
+                                }
+                            }
+                            "describe_block" => {
+                                let has_only = self.has_focused_tests(&section_child);
+                                self.collect_describe_tests(&section_child, "", has_only, &[], &[], &mut tests)?;
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 _ => {}
             }
@@ -108,7 +107,6 @@ impl<'a> super::Lowerer<'a> {
     pub(super) fn lower_inline_test(
         &mut self,
         node: &Node,
-        function: &Option<String>,
     ) -> Result<Option<IrTest>, CompileError> {
         let count = node.named_child_count();
         if count < 2 {
@@ -133,7 +131,6 @@ impl<'a> super::Lowerer<'a> {
 
         Ok(Some(IrTest {
             name,
-            function: function.clone(),
             body,
             line: start.row + 1,
             col: start.column + 1,
@@ -222,7 +219,7 @@ impl<'a> super::Lowerer<'a> {
                     }
                 }
                 "inline_test" => {
-                    if let Some(mut t) = self.lower_inline_test(&child, &None)? {
+                    if let Some(mut t) = self.lower_inline_test(&child)? {
                         t.name = format!("{} > {}", full_name, t.name);
                         out.push(t);
                     }
@@ -316,7 +313,6 @@ impl<'a> super::Lowerer<'a> {
 
         Ok(Some(IrTest {
             name: full_name,
-            function: None,
             body,
             line: start.row + 1,
             col: start.column + 1,

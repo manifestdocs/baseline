@@ -51,7 +51,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             status: "fail".to_string(),
             tests: vec![TestResult {
                 name: "analysis".to_string(),
-                function: None,
                 status: TestStatus::Fail,
                 message: Some(format!(
                     "File has {} analysis error(s)",
@@ -93,8 +92,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 status: "fail".to_string(),
                 tests: vec![TestResult {
                     name: "compilation".to_string(),
-                    function: None,
-                    status: TestStatus::Fail,
+                        status: TestStatus::Fail,
                     message: Some(format!("Compile error: {}", ce)),
                     location: Location {
                         file: file_str,
@@ -127,8 +125,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 status: "fail".to_string(),
                 tests: vec![TestResult {
                     name: "compilation".to_string(),
-                    function: None,
-                    status: TestStatus::Fail,
+                        status: TestStatus::Fail,
                     message: Some(format!("Codegen error: {}", ce)),
                     location: Location {
                         file: file_str,
@@ -180,7 +177,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         if test.skip {
             results.push(TestResult {
                 name: test.name.clone(),
-                function: test.function.clone(),
                 status: TestStatus::Skip,
                 message: None,
                 location,
@@ -193,7 +189,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             Ok(Value::Bool(true)) => {
                 results.push(TestResult {
                     name: test.name.clone(),
-                    function: test.function.clone(),
                     status: TestStatus::Pass,
                     message: None,
                     location,
@@ -202,7 +197,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             Ok(Value::Bool(false)) => {
                 results.push(TestResult {
                     name: test.name.clone(),
-                    function: test.function.clone(),
                     status: TestStatus::Fail,
                     message: Some("Expected true, got false".to_string()),
                     location,
@@ -211,7 +205,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             Ok(other) => {
                 results.push(TestResult {
                     name: test.name.clone(),
-                    function: test.function.clone(),
                     status: TestStatus::Fail,
                     message: Some(format!("Expected Bool, got {}", other)),
                     location,
@@ -220,7 +213,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
             Err(e) => {
                 results.push(TestResult {
                     name: test.name.clone(),
-                    function: test.function.clone(),
                     status: TestStatus::Fail,
                     message: Some(format!("Runtime error: {}", e)),
                     location,

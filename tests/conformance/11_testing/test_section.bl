@@ -1,0 +1,13 @@
+// Test @test section syntax
+// Tests are grouped below @test, separate from production code
+
+fn add(a: Int, b: Int) -> Int = a + b
+
+fn double(n: Int) -> Int = n * 2
+
+@test
+test "add positive numbers" = add(1, 2) == 3
+test "add negatives" = add(-1, 1) == 0
+test "double works" = double(5) == 10
+
+fn main() -> Int = 0

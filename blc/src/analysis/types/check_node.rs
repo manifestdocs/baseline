@@ -41,26 +41,6 @@ pub(super) fn check_inline_test(
     }
 }
 
-/// Check all inline_test nodes within a where_block child of a function_def.
-pub(super) fn check_where_block(
-    func_node: &Node,
-    source: &str,
-    file: &str,
-    symbols: &mut SymbolTable,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let mut cursor = func_node.walk();
-    for child in func_node.children(&mut cursor) {
-        if child.kind() == "where_block" {
-            let mut test_cursor = child.walk();
-            for test_node in child.children(&mut test_cursor) {
-                if test_node.kind() == "inline_test" {
-                    check_inline_test(&test_node, source, file, symbols, diagnostics);
-                }
-            }
-        }
-    }
-}
 
 /// Extract a qualified name like "List.map" from a field_expression node.
 pub(super) fn extract_qualified_name(node: &Node, source: &str) -> Option<String> {
@@ -312,9 +292,6 @@ fn check_node_inner(
                     });
                 }
 
-                // Check where_block inline tests (expressions must be Bool)
-                check_where_block(node, source, file, symbols, diagnostics);
-
                 symbols.exit_scope();
             }
 
@@ -323,6 +300,22 @@ fn check_node_inner(
         "inline_test" => {
             // Top-level inline test: test "name" = expr
             check_inline_test(node, source, file, symbols, diagnostics);
+            Type::Unit
+        }
+        "test_section" => {
+            // @test section containing inline_test and describe_block items
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                match child.kind() {
+                    "inline_test" => {
+                        check_inline_test(&child, source, file, symbols, diagnostics);
+                    }
+                    "describe_block" => {
+                        check_node(&child, source, file, symbols, diagnostics);
+                    }
+                    _ => {}
+                }
+            }
             Type::Unit
         }
         "describe_block" => {

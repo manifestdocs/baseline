@@ -2,15 +2,13 @@
 
 // Inline test demonstration
 
-// Top-level test (not attached to a function)
-test "math sanity" = 1 + 1 == 2
-
 fn add(a: Int, b: Int) -> Int = a + b
-  where
-    test "adds positive numbers" = add(1, 2) == 3
-    test "handles zero" = add(0, 5) == 5
 
 fn double(x: Int) -> Int = x * 2
-  where
-    test "doubles positive" = double(3) == 6
-    test "doubles zero" = double(0) == 0
+
+@test
+test "math sanity" = 1 + 1 == 2
+test "adds positive numbers" = add(1, 2) == 3
+test "handles zero" = add(0, 5) == 5
+test "doubles positive" = double(3) == 6
+test "doubles zero" = double(0) == 0

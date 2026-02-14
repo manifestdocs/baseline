@@ -555,7 +555,11 @@ impl<'a> Codegen<'a> {
         args: &[Expr],
         span: &Span,
     ) -> Result<(), CompileError> {
-        let qualified = format!("{}.{}", module, method);
+        let qualified = if module.is_empty() {
+            method.to_string()
+        } else {
+            format!("{}.{}", module, method)
+        };
         if let Some(fn_id) = self.natives.lookup(&qualified) {
             for arg in args {
                 self.gen_expr(arg, span)?;
@@ -1281,7 +1285,6 @@ impl<'a> Codegen<'a> {
 
             compiled_tests.push(super::chunk::CompiledTest {
                 name: test.name.clone(),
-                function: test.function.clone(),
                 chunk_idx,
                 line: test.line,
                 col: test.col,

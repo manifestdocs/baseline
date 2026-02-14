@@ -127,41 +127,6 @@ process = |input| {
           (identifier))))))
 
 ================================================================================
-Function with where block
-================================================================================
-
-add : Int -> Int
-add = |a| a + 1
-where
-  test "basic" = add(1) == 2
-
---------------------------------------------------------------------------------
-
-(source_file
-  (function_def
-    name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (binary_expression
-        (identifier)
-        (literal
-          (integer_literal))))
-    (where_block
-      (inline_test
-        (string_literal)
-        (binary_expression
-          (call_expression
-            (identifier)
-            (literal
-              (integer_literal)))
-          (literal
-            (integer_literal)))))))
-
-================================================================================
 Export function
 ================================================================================
 
@@ -183,46 +148,51 @@ greet = |name| "Hello"
         (string_literal)))))
 
 ================================================================================
-Function with multiple where tests
+Function with @test section
 ================================================================================
 
-add : Int -> Int
-add = |a| a + 1
-where
-  test "basic" = add(1) == 2
-  test "zero" = add(0) == 1
+fn add(a: Int) -> Int = a + 1
+
+@test
+test "basic" = add(1) == 2
+test "zero" = add(0) == 1
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        name: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (binary_expression
       (identifier)
+      (literal
+        (integer_literal))))
+  (test_section
+    (inline_test
+      (string_literal
+        (string_start)
+        (string_content)
+        (string_end))
       (binary_expression
-        (identifier)
+        (call_expression
+          (identifier)
+          (literal
+            (integer_literal)))
         (literal
           (integer_literal))))
-    (where_block
-      (inline_test
-        (string_literal)
-        (binary_expression
-          (call_expression
-            (identifier)
-            (literal
-              (integer_literal)))
+    (inline_test
+      (string_literal
+        (string_start)
+        (string_content)
+        (string_end))
+      (binary_expression
+        (call_expression
+          (identifier)
           (literal
-            (integer_literal))))
-      (inline_test
-        (string_literal)
-        (binary_expression
-          (call_expression
-            (identifier)
-            (literal
-              (integer_literal)))
-          (literal
-            (integer_literal)))))))
+            (integer_literal)))
+        (literal
+          (integer_literal))))))

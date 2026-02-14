@@ -79,7 +79,8 @@ module.exports = grammar({
       $._definition,
       $.spec_block,
       $.inline_test,
-      $.describe_block
+      $.describe_block,
+      $.test_section
     ),
 
     // --- Declarations ---
@@ -142,8 +143,7 @@ module.exports = grammar({
       optional($.type_params),
       '(', optional(field('params', $.param_list)), ')',
       optional(seq('->', optional(field('effects', $.effect_set)), field('return_type', $._type_expr))),
-      '=', field('body', $._expression),
-      optional($.where_block) // Inline tests
+      '=', field('body', $._expression)
     ),
 
     param_list: $ => commaSep1($.param),
@@ -399,7 +399,7 @@ module.exports = grammar({
 
     predicate: $ => $._expression,
 
-    where_block: $ => prec.right(seq('where', repeat1($.inline_test))),
+    test_section: $ => prec.right(seq('@test', repeat1(choice($.inline_test, $.describe_block)))),
     inline_test: $ => seq('test', $.string_literal, '=', $._expression),
 
     // --- BDD Testing ---

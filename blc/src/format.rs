@@ -98,6 +98,7 @@ impl<'a> Formatter<'a> {
             "type_def" => self.format_type_def(node),
             "effect_def" => self.format_raw(node),
             "inline_test" => self.format_inline_test(node),
+            "test_section" => self.format_test_section(node),
             _ => self.format_raw(node),
         }
     }
@@ -123,7 +124,7 @@ impl<'a> Formatter<'a> {
             let is_comment = kind == "line_comment" || kind == "block_comment";
             let is_def = matches!(
                 kind,
-                "function_def" | "type_def" | "effect_def" | "inline_test"
+                "function_def" | "type_def" | "effect_def" | "inline_test" | "test_section"
             );
 
             if let Some(per) = prev_end_row {
@@ -215,14 +216,6 @@ impl<'a> Formatter<'a> {
             self.format_expression(&body);
         }
 
-        // Optional where block
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == "where_block" {
-                self.newline();
-                self.format_where_block(&child);
-            }
-        }
     }
 
     fn format_effect_set(&mut self, node: &Node) {
@@ -390,19 +383,24 @@ impl<'a> Formatter<'a> {
         }
     }
 
-    fn format_where_block(&mut self, node: &Node) {
+    fn format_test_section(&mut self, node: &Node) {
         self.push_indent();
-        self.push("where");
+        self.push("@test");
         self.newline();
-        self.indent += 1;
         let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            if child.kind() == "inline_test" {
-                self.format_inline_test(&child);
-                self.newline();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "inline_test" => {
+                    self.format_inline_test(&child);
+                    self.newline();
+                }
+                "describe_block" => {
+                    self.format_raw(&child);
+                    self.newline();
+                }
+                _ => {}
             }
         }
-        self.indent -= 1;
     }
 
     fn format_expression(&mut self, node: &Node) {

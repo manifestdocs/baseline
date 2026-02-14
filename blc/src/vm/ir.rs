@@ -370,7 +370,6 @@ pub enum Matcher {
 #[derive(Debug, Clone)]
 pub struct IrTest {
     pub name: String,
-    pub function: Option<String>,
     pub body: Expr,
     pub line: usize,
     pub col: usize,

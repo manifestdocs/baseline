@@ -1286,8 +1286,9 @@ fn inline_test_bool_ok() {
     check_ok(
         r#"
 fn add(a: Int, b: Int) -> Int = a + b
-  where
-    test "basic" = add(1, 2) == 3
+
+@test
+test "basic" = add(1, 2) == 3
 "#,
     );
 }
@@ -1297,8 +1298,9 @@ fn inline_test_non_bool_errors() {
     check_has_error(
         r#"
 fn add(a: Int, b: Int) -> Int = a + b
-  where
-    test "returns int" = add(1, 2)
+
+@test
+test "returns int" = add(1, 2)
 "#,
         "TYP_026",
     );

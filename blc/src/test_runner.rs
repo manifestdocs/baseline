@@ -9,8 +9,6 @@ use crate::diagnostics::Location;
 #[derive(Debug, Serialize)]
 pub struct TestResult {
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub function: Option<String>,
     pub status: TestStatus,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
