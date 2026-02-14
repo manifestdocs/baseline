@@ -47,6 +47,10 @@ enum Commands {
         #[arg(long)]
         mem_stats: bool,
 
+        /// Restrict filesystem access to the given directory
+        #[arg(long)]
+        fs_sandbox: Option<PathBuf>,
+
         /// Arguments to pass to the Baseline program (after --)
         #[arg(last = true)]
         program_args: Vec<String>,
@@ -189,9 +193,11 @@ fn main() {
             file,
             jit,
             mem_stats,
+            fs_sandbox,
             program_args,
         } => {
             vm::natives::set_program_args(program_args);
+            vm::natives::set_fs_sandbox(fs_sandbox);
             if jit {
                 run_file_jit(&file);
             } else {
@@ -688,10 +694,7 @@ fn print_json_with_context(result: &CheckResult, source: &str) {
 
 fn print_test_results(result: &test_runner::TestSuiteResult) {
     for test in &result.tests {
-        let context = match &test.function {
-            Some(f) => format!("{}, line {}", f, test.location.line),
-            None => format!("line {}", test.location.line),
-        };
+        let context = format!("line {}", test.location.line);
         match test.status {
             test_runner::TestStatus::Pass => {
                 println!("PASS  {} ({})", test.name, context);
