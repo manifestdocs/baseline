@@ -1,0 +1,151 @@
+{
+  "Function": {
+    "prefix": "fn",
+    "body": [
+      "fn ${1:name}(${2:params}) -> ${3:Type} =",
+      "  ${0:body}"
+    ],
+    "description": "Define a function"
+  },
+  "Effectful Function": {
+    "prefix": "fn!",
+    "body": [
+      "fn ${1:name}!(${2:params}) -> ${3:Type} =",
+      "  ${0:body}"
+    ],
+    "description": "Define an effectful function"
+  },
+  "Main Function": {
+    "prefix": "main",
+    "body": [
+      "fn main() -> () =",
+      "  ${0}"
+    ],
+    "description": "Define a main function"
+  },
+  "Match Expression": {
+    "prefix": "match",
+    "body": [
+      "match ${1:expr} {",
+      "  ${2:Pattern} -> ${3:result}",
+      "  ${0:_ -> default}",
+      "}"
+    ],
+    "description": "Pattern match expression"
+  },
+  "If-Else": {
+    "prefix": "if",
+    "body": [
+      "if ${1:condition} then",
+      "  ${2:value}",
+      "else",
+      "  ${0:other}"
+    ],
+    "description": "If-else expression"
+  },
+  "Let Binding": {
+    "prefix": "let",
+    "body": "let ${1:name} = ${0:value}",
+    "description": "Let binding"
+  },
+  "Type Alias": {
+    "prefix": "type",
+    "body": "type ${1:Name} = ${0:definition}",
+    "description": "Define a type alias"
+  },
+  "Enum Type": {
+    "prefix": "enum",
+    "body": [
+      "type ${1:Name} =",
+      "  | ${2:Variant1}",
+      "  | ${0:Variant2}"
+    ],
+    "description": "Define an enum type"
+  },
+  "Record Type": {
+    "prefix": "record",
+    "body": "type ${1:Name} = { ${2:field}: ${0:Type} }",
+    "description": "Define a record type"
+  },
+  "Refined Type": {
+    "prefix": "refined",
+    "body": "type ${1:Name} = ${2:Int} where ${0:self > 0}",
+    "description": "Define a refined type"
+  },
+  "Effect Declaration": {
+    "prefix": "effect",
+    "body": [
+      "effect ${1:Name} {",
+      "  ${2:method}!: ${0:() -> Type}",
+      "}"
+    ],
+    "description": "Declare an effect"
+  },
+  "Test": {
+    "prefix": "test",
+    "body": "test \"${1:description}\" = ${0:expr}",
+    "description": "Inline test"
+  },
+  "Test Section": {
+    "prefix": "@test",
+    "body": [
+      "@test",
+      "test \"${1:description}\" = ${0:expr}"
+    ],
+    "description": "Test section"
+  },
+  "Describe Block": {
+    "prefix": "describe",
+    "body": [
+      "describe \"${1:subject}\" {",
+      "  it \"${2:should}\" =",
+      "    ${0:assertion}",
+      "}"
+    ],
+    "description": "BDD describe block"
+  },
+  "It Block": {
+    "prefix": "it",
+    "body": [
+      "it \"${1:should do something}\" =",
+      "  ${0:assertion}"
+    ],
+    "description": "BDD it block"
+  },
+  "Import": {
+    "prefix": "import",
+    "body": "import ${0:Module}",
+    "description": "Import a module"
+  },
+  "Pipe": {
+    "prefix": "pipe",
+    "body": "${1:value} |> ${0:func}",
+    "description": "Pipe expression"
+  },
+  "Lambda": {
+    "prefix": "lam",
+    "body": "|${1:args}| ${0:body}",
+    "description": "Lambda expression"
+  },
+  "Prelude": {
+    "prefix": "@prelude",
+    "body": "@prelude(${1|core,script,server,none,minimal,pure|})",
+    "description": "Set prelude level"
+  },
+  "Module Declaration": {
+    "prefix": "@module",
+    "body": "@module ${0:Name}",
+    "description": "Declare a module"
+  },
+  "Handle Effect": {
+    "prefix": "handle",
+    "body": [
+      "handle {",
+      "  ${1:body}",
+      "} with {",
+      "  ${2:Effect}.${3:method}!(${4:args}) -> resume(${0:value})",
+      "}"
+    ],
+    "description": "Handle an effect"
+  }
+}

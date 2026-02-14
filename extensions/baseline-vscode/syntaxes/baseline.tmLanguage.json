@@ -10,6 +10,7 @@
     { "include": "#effect-definition" },
     { "include": "#type-definition" },
     { "include": "#function-definition" },
+    { "include": "#test-section" },
     { "include": "#bdd-testing" },
     { "include": "#inline-test" },
     { "include": "#expressions" }
@@ -195,7 +196,6 @@
         { "include": "#comments" },
         { "include": "#parameters" },
         { "include": "#return-type" },
-        { "include": "#where-block" },
         { "include": "#expressions" }
       ]
     },
@@ -229,14 +229,17 @@
       }
     },
 
-    "where-block": {
-      "begin": "\\b(where)\\b(?=\\s*\\n?\\s*test\\b)",
+    "test-section": {
+      "begin": "(@test)\\b",
       "beginCaptures": {
-        "1": { "name": "keyword.control.where.baseline" }
+        "1": { "name": "entity.other.attribute-name.baseline" }
       },
-      "end": "(?=\\n\\s*(?:fn|type|effect|@|import|export|describe|context|$))",
+      "end": "(?=\\Z)",
       "patterns": [
+        { "include": "#comments" },
+        { "include": "#bdd-testing" },
         { "include": "#inline-test" },
+        { "include": "#function-definition" },
         { "include": "#expressions" }
       ]
     },

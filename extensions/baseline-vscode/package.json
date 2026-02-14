@@ -1,7 +1,7 @@
 {
   "name": "baseline-language",
   "displayName": "Baseline",
-  "description": "Language support for the Baseline programming language",
+  "description": "Language support for the Baseline programming language — diagnostics, hover, go-to-definition, and completions via blc LSP",
   "version": "0.1.0",
   "publisher": "baseline-lang",
   "license": "MIT",
@@ -15,6 +15,10 @@
   "categories": [
     "Programming Languages"
   ],
+  "activationEvents": [
+    "onLanguage:baseline"
+  ],
+  "main": "./out/extension.js",
   "contributes": {
     "languages": [
       {
@@ -39,6 +43,49 @@
         "scopeName": "source.baseline",
         "path": "./syntaxes/baseline.tmLanguage.json"
       }
-    ]
+    ],
+    "snippets": [
+      {
+        "language": "baseline",
+        "path": "./snippets/baseline.json"
+      }
+    ],
+    "configuration": {
+      "title": "Baseline",
+      "properties": {
+        "baseline.serverPath": {
+          "type": "string",
+          "default": "blc",
+          "description": "Path to the blc binary. Defaults to 'blc' (found via PATH)."
+        },
+        "baseline.serverArgs": {
+          "type": "array",
+          "default": ["lsp"],
+          "items": { "type": "string" },
+          "description": "Arguments passed to the blc binary to start the LSP server."
+        },
+        "baseline.trace.server": {
+          "type": "string",
+          "enum": ["off", "messages", "verbose"],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the Baseline language server."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node",
+    "watch": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --watch",
+    "package": "vsce package",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.75.0",
+    "@types/node": "^20.0.0",
+    "esbuild": "^0.21.0",
+    "typescript": "^5.4.0"
   }
 }
