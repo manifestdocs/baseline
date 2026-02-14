@@ -61,14 +61,42 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         }
         (Type::Set(ia), Type::Set(ib)) => types_compatible(ia, ib),
         (Type::Weak(ia), Type::Weak(ib)) => types_compatible(ia, ib),
-        // Row polymorphism: open record { a: T, ..r } is compatible with any record
-        // that has at least those fields with compatible types
-        (Type::Record(fields_a, Some(_)), Type::Record(fields_b, _))
-        | (Type::Record(fields_b, _), Type::Record(fields_a, Some(_))) => {
-            // The open record's fields must all exist in the other record with compatible types
-            fields_a.iter().all(|(k, ta)| {
-                fields_b.get(k).is_some_and(|tb| types_compatible(ta, tb))
-            })
+        // Function structural compatibility: same arity, compatible arg and return types
+        (Type::Function(args_a, ret_a), Type::Function(args_b, ret_b)) => {
+            if args_a.len() != args_b.len() {
+                return false;
+            }
+            for (ta, tb) in args_a.iter().zip(args_b.iter()) {
+                if !types_compatible(ta, tb) {
+                    return false;
+                }
+            }
+            types_compatible(ret_a, ret_b)
+        }
+        // Row polymorphism: when at least one record is open (has row variable):
+        // - Overlapping fields must have compatible types
+        // - Non-overlapping fields are ok because a row variable can absorb them
+        (Type::Record(fields_a, row_a), Type::Record(fields_b, row_b))
+            if row_a.is_some() || row_b.is_some() =>
+        {
+            // An open record with no fields is a wildcard — compatible with any record
+            if (row_a.is_some() && fields_a.is_empty())
+                || (row_b.is_some() && fields_b.is_empty())
+            {
+                return true;
+            }
+            // Overlapping fields must be compatible
+            for (k, ta) in fields_a.iter() {
+                if let Some(tb) = fields_b.get(k) {
+                    if !types_compatible(ta, tb) {
+                        return false;
+                    }
+                }
+                // Field only in A but not in B: ok, since at least one side is open
+            }
+            // Check B's unique fields have compatible types with A (if they overlap)
+            // No extra check needed — non-overlap is absorbed by row variables
+            true
         }
         (Type::Record(fa, None), Type::Record(fb, None)) => {
             // Closed records: exact field match

@@ -2,6 +2,92 @@ use super::type_def::Type;
 use crate::prelude::Prelude;
 use std::collections::HashMap;
 
+/// Concrete record type for HTTP Request.
+/// Shape: { method: String, url: String, headers: List<(String, String)>,
+///          body: String, params: Record, query: Record, cookies: Record, ..r3 }
+/// Open record (row variable) so handlers can declare a subset of fields.
+fn request_type() -> Type {
+    let mut fields = HashMap::new();
+    fields.insert("method".to_string(), Type::String);
+    fields.insert("url".to_string(), Type::String);
+    fields.insert(
+        "headers".to_string(),
+        Type::List(Box::new(Type::Tuple(vec![Type::String, Type::String]))),
+    );
+    fields.insert("body".to_string(), Type::String);
+    // params, query, cookies are open records (dynamic keys)
+    fields.insert("params".to_string(), Type::Record(HashMap::new(), Some(0)));
+    fields.insert("query".to_string(), Type::Record(HashMap::new(), Some(1)));
+    fields.insert("cookies".to_string(), Type::Record(HashMap::new(), Some(2)));
+    Type::Record(fields, Some(3))
+}
+
+/// Concrete record type for HTTP Response.
+/// Shape: { status: Int, headers: List<(String, String)>, body: String }
+fn response_type() -> Type {
+    let mut fields = HashMap::new();
+    fields.insert("status".to_string(), Type::Int);
+    fields.insert(
+        "headers".to_string(),
+        Type::List(Box::new(Type::Tuple(vec![Type::String, Type::String]))),
+    );
+    fields.insert("body".to_string(), Type::String);
+    Type::Record(fields, None)
+}
+
+/// Concrete record type for Router.
+/// Shape: { routes: List<Unknown>, middleware: List<Unknown> }
+fn router_type() -> Type {
+    let mut fields = HashMap::new();
+    fields.insert(
+        "routes".to_string(),
+        Type::List(Box::new(Type::Unknown)),
+    );
+    fields.insert(
+        "middleware".to_string(),
+        Type::List(Box::new(Type::Unknown)),
+    );
+    Type::Record(fields, None)
+}
+
+/// Handler type: (Request) -> {Http} Result<Response, String>
+fn handler_type() -> Type {
+    Type::Function(
+        vec![request_type()],
+        Box::new(Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![response_type()]),
+                ("Err".to_string(), vec![Type::String]),
+            ],
+        )),
+    )
+}
+
+/// Middleware type: (Request, (Request) -> Result<Response, String>) -> Result<Response, String>
+fn middleware_type() -> Type {
+    let next_fn = Type::Function(
+        vec![request_type()],
+        Box::new(Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![response_type()]),
+                ("Err".to_string(), vec![Type::String]),
+            ],
+        )),
+    );
+    Type::Function(
+        vec![request_type(), next_fn],
+        Box::new(Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![response_type()]),
+                ("Err".to_string(), vec![Type::String]),
+            ],
+        )),
+    )
+}
+
 /// Build a map of "Module.method" -> Function type for all builtins and native
 /// stdlib functions gated by the given prelude.
 pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type> {
@@ -259,28 +345,26 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
 
     // -- Http natives (effect: Http) — returns Response records --
     if native_modules.contains(&"Http") {
-        // Http.get!(url) -> Response, Http.post!(url, body) -> Response, etc.
-        // Return type is Unknown (record type) since we don't have named record types yet.
+        let resp = response_type();
         sigs.insert(
             "Http.get!".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Http.post!".into(),
-            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String, Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Http.put!".into(),
-            Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String, Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Http.delete!".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
-        // Http.request!(request_record) -> Response
         sigs.insert(
             "Http.request!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::Unknown], Box::new(resp)),
         );
     }
 
@@ -495,164 +579,146 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
-    // -- Response builder (pure) --
+    // -- Response builder (pure) — returns typed Response records --
     if native_modules.contains(&"Response") {
+        let resp = response_type();
+        let headers_list = Type::List(Box::new(Type::Tuple(vec![Type::String, Type::String])));
         sigs.insert(
             "Response.ok".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.json".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.created".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.no_content".into(),
-            Type::Function(vec![], Box::new(Type::Unknown)),
+            Type::Function(vec![], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.bad_request".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.not_found".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.error".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.status".into(),
-            Type::Function(vec![Type::Int, Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::Int, Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.with_header".into(),
             Type::Function(
-                vec![Type::Unknown, Type::String, Type::String],
-                Box::new(Type::Unknown),
+                vec![resp.clone(), Type::String, Type::String],
+                Box::new(resp.clone()),
             ),
         );
         sigs.insert(
             "Response.with_headers".into(),
-            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+            Type::Function(vec![resp.clone(), headers_list], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.redirect".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.redirect_permanent".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![Type::String], Box::new(resp)),
         );
     }
 
-    // -- Router native methods (pure) --
+    // -- Router native methods (pure) — typed Router record --
     if native_modules.contains(&"Router") {
+        let rtr = router_type();
+        let handler = handler_type();
+        let mw = middleware_type();
         sigs.insert(
             "Router.new".into(),
-            Type::Function(vec![], Box::new(Type::Unknown)),
+            Type::Function(vec![], Box::new(rtr.clone())),
         );
-        sigs.insert(
-            "Router.get".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
-        sigs.insert(
-            "Router.post".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
-        sigs.insert(
-            "Router.put".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
-        sigs.insert(
-            "Router.delete".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
-        sigs.insert(
-            "Router.patch".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
-        sigs.insert(
-            "Router.options".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
-        sigs.insert(
-            "Router.head".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
-        sigs.insert(
-            "Router.any".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
-        );
+        // All route methods: (Router, String, Handler) -> Router
+        for method_name in &[
+            "Router.get", "Router.post", "Router.put", "Router.delete",
+            "Router.patch", "Router.options", "Router.head", "Router.any",
+        ] {
+            sigs.insert(
+                (*method_name).into(),
+                Type::Function(
+                    vec![rtr.clone(), Type::String, handler.clone()],
+                    Box::new(rtr.clone()),
+                ),
+            );
+        }
         sigs.insert(
             "Router.routes".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+            Type::Function(
+                vec![rtr.clone()],
+                Box::new(Type::List(Box::new(Type::Unknown))),
+            ),
         );
         sigs.insert(
             "Router.use".into(),
-            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+            Type::Function(vec![rtr.clone(), mw], Box::new(rtr.clone())),
         );
         sigs.insert(
             "Router.group".into(),
             Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
+                vec![rtr.clone(), Type::String, rtr.clone()],
+                Box::new(rtr),
             ),
         );
     }
 
-    // -- Request helpers (pure) --
+    // -- Request helpers (pure) — typed Request record --
     if native_modules.contains(&"Request") {
+        let req = request_type();
+        let option_str = Type::Enum(
+            "Option".to_string(),
+            vec![
+                ("Some".to_string(), vec![Type::String]),
+                ("None".to_string(), vec![]),
+            ],
+        );
         sigs.insert(
             "Request.header".into(),
-            Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![req.clone(), Type::String], Box::new(option_str)),
         );
         sigs.insert(
             "Request.method".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+            Type::Function(vec![req.clone()], Box::new(Type::String)),
         );
         sigs.insert(
             "Request.body_json".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+            Type::Function(
+                vec![req.clone()],
+                Box::new(Type::Enum(
+                    "Result".to_string(),
+                    vec![
+                        ("Ok".to_string(), vec![Type::Unknown]),
+                        ("Err".to_string(), vec![Type::String]),
+                    ],
+                )),
+            ),
         );
         sigs.insert(
             "Request.with_state".into(),
             Type::Function(
-                vec![Type::Unknown, Type::String, Type::Unknown],
-                Box::new(Type::Unknown),
+                vec![req.clone(), Type::String, Type::Unknown],
+                Box::new(req.clone()),
             ),
         );
         sigs.insert(
             "Request.state".into(),
-            Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+            Type::Function(vec![req, Type::String], Box::new(Type::Unknown)),
         );
     }
 
@@ -689,7 +755,7 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
     if builtin_modules.contains(&"Server") {
         sigs.insert(
             "Server.listen!".into(),
-            Type::Function(vec![Type::Unknown, Type::Int], Box::new(Type::Unit)),
+            Type::Function(vec![router_type(), Type::Int], Box::new(Type::Unit)),
         );
     }
 
