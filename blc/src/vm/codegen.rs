@@ -214,15 +214,27 @@ impl<'a> Codegen<'a> {
                 self.emit(Op::MakeEnum(tag_idx), span);
             }
             Expr::MakeStruct { name, fields, .. } => {
-                for (key, val) in fields {
+                // Pre-evaluate values into temp locals so untracked key
+                // constants don't skew slot indices during gen_expr
+                // (same fix as MakeRecord — see BASEL-223).
+                self.begin_scope();
+                let temps: Vec<String> = (0..fields.len())
+                    .map(|i| format!("__struct_{}", i))
+                    .collect();
+                for (i, (_, val)) in fields.iter().enumerate() {
+                    self.gen_expr(val, span)?;
+                    self.declare_local(&temps[i]);
+                }
+                for (i, (key, _)) in fields.iter().enumerate() {
                     let key_idx = self.chunk.add_constant(NValue::string(key.as_str().into()));
                     self.emit(Op::LoadConst(key_idx), span);
-                    self.gen_expr(val, span)?;
+                    self.gen_var(&temps[i], span)?;
                 }
                 let count = Self::checked_u16(fields.len(), "struct fields", span)?;
                 self.emit(Op::MakeRecord(count), span);
                 let tag_idx = self.chunk.add_constant(NValue::string(name.as_str().into()));
                 self.emit(Op::MakeStruct(tag_idx), span);
+                self.end_scope(span);
             }
 
             Expr::MakeList(elems, _) => {
@@ -233,13 +245,26 @@ impl<'a> Codegen<'a> {
                 self.emit(Op::MakeList(count), span);
             }
             Expr::MakeRecord(fields, _) => {
-                for (key, val) in fields {
+                // Pre-evaluate values into temp locals so untracked key
+                // constants don't skew slot indices during gen_expr.
+                // Without this, string interpolation inside record values
+                // resolves GetLocal to the wrong stack position (BASEL-223).
+                self.begin_scope();
+                let temps: Vec<String> = (0..fields.len())
+                    .map(|i| format!("__rec_{}", i))
+                    .collect();
+                for (i, (_, val)) in fields.iter().enumerate() {
+                    self.gen_expr(val, span)?;
+                    self.declare_local(&temps[i]);
+                }
+                for (i, (key, _)) in fields.iter().enumerate() {
                     let key_idx = self.chunk.add_constant(NValue::string(key.as_str().into()));
                     self.emit(Op::LoadConst(key_idx), span);
-                    self.gen_expr(val, span)?;
+                    self.gen_var(&temps[i], span)?;
                 }
                 let count = Self::checked_u16(fields.len(), "record fields", span)?;
                 self.emit(Op::MakeRecord(count), span);
+                self.end_scope(span);
             }
             Expr::MakeTuple(elems, _) => {
                 for elem in elems {
@@ -254,14 +279,25 @@ impl<'a> Codegen<'a> {
                 self.emit(Op::MakeRange, span);
             }
             Expr::UpdateRecord { base, updates, .. } => {
+                // Pre-evaluate update values into temp locals (same fix as
+                // MakeRecord — see BASEL-223).
+                self.begin_scope();
+                let temps: Vec<String> = (0..updates.len())
+                    .map(|i| format!("__upd_{}", i))
+                    .collect();
+                for (i, (_, val)) in updates.iter().enumerate() {
+                    self.gen_expr(val, span)?;
+                    self.declare_local(&temps[i]);
+                }
                 self.gen_expr(base, span)?;
-                for (key, val) in updates {
+                for (i, (key, _)) in updates.iter().enumerate() {
                     let key_idx = self.chunk.add_constant(NValue::string(key.as_str().into()));
                     self.emit(Op::LoadConst(key_idx), span);
-                    self.gen_expr(val, span)?;
+                    self.gen_var(&temps[i], span)?;
                 }
                 let count = Self::checked_u16(updates.len(), "record update fields", span)?;
                 self.emit(Op::UpdateRecord(count), span);
+                self.end_scope(span);
             }
 
             Expr::GetField { object, field, .. } => {

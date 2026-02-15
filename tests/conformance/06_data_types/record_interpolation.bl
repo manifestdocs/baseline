@@ -1,0 +1,51 @@
+@prelude(core)
+
+// Conformance: string interpolation inside record literals (BASEL-223)
+// Verifies that field access in interpolated strings resolves correctly
+// when used as record field values.
+
+type Data = { name: String }
+
+fn make_greeting(data: Data) -> { content: String } =
+  { content: "Hello, ${data.name}!" }
+
+fn make_multi_field(data: Data) -> { greeting: String, label: String } =
+  { greeting: "Hi ${data.name}", label: "user_${data.name}" }
+
+fn make_nested(data: Data) -> { outer: { inner: String } } =
+  { outer: { inner: "nested ${data.name}" } }
+
+test "interpolation in record value" = {
+  let d = Data { name: "Alice" }
+  let r = make_greeting(d)
+  r.content == "Hello, Alice!"
+}
+
+test "multi-field record with interpolation" = {
+  let d = Data { name: "Bob" }
+  let r = make_multi_field(d)
+  r.greeting == "Hi Bob"
+}
+
+test "multi-field record second field" = {
+  let d = Data { name: "Bob" }
+  let r = make_multi_field(d)
+  r.label == "user_Bob"
+}
+
+test "nested record with interpolation" = {
+  let d = Data { name: "Carol" }
+  let r = make_nested(d)
+  r.outer.inner == "nested Carol"
+}
+
+test "simple record without interpolation" = {
+  let r = { x: 1, y: 2 }
+  r.x == 1
+}
+
+test "inline record with interpolation" = {
+  let name = "Dave"
+  let r = { msg: "hello ${name}" }
+  r.msg == "hello Dave"
+}
