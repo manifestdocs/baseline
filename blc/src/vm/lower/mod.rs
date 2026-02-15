@@ -41,6 +41,8 @@ pub struct Lowerer<'a> {
     /// Stored as qualified names like "Console.println" so that native calls
     /// matching these keys are compiled as PerformEffect instead of CallNative.
     handled_effects: HashSet<String>,
+    /// Simple enum definitions: enum name → variant names (nullary only).
+    enum_defs: HashMap<String, Vec<String>>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -55,6 +57,7 @@ impl<'a> Lowerer<'a> {
             tail_position: false,
             scopes: Vec::new(),
             handled_effects: HashSet::new(),
+            enum_defs: HashMap::new(),
         }
     }
 
@@ -97,6 +100,10 @@ impl<'a> Lowerer<'a> {
                 let params = self.extract_param_names(&func_node);
                 self.fn_params.insert(name.clone(), params);
                 func_nodes.push((name, i));
+            }
+            // Collect simple enum definitions for auto-derived methods
+            if child.kind() == "type_def" {
+                self.collect_enum_def(&child);
             }
         }
 
@@ -175,6 +182,9 @@ impl<'a> Lowerer<'a> {
                 let name = self.node_text(&name_node);
                 self.functions.insert(name.clone());
                 func_nodes.push((name, i));
+            }
+            if child.kind() == "type_def" {
+                self.collect_enum_def(&child);
             }
         }
 
@@ -306,6 +316,7 @@ impl<'a> Lowerer<'a> {
             "let_binding" => self.lower_let(node),
             "with_expression" => self.lower_with_expression(node),
             "handle_expression" => self.lower_handle_expression(node),
+            "restrict_expression" => self.lower_restrict_expression(node),
             "map_literal" => self.lower_map_literal(node),
             "set_literal" => self.lower_set_literal(node),
             "map_entry" => Ok(Expr::Unit),

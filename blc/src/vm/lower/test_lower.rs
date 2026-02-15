@@ -19,6 +19,9 @@ impl<'a> super::Lowerer<'a> {
                 self.fn_params.insert(name.clone(), params);
                 func_nodes.push((name, i));
             }
+            if child.kind() == "type_def" {
+                self.collect_enum_def(&child);
+            }
         }
 
         // Second pass: lower each function

@@ -254,7 +254,8 @@ fn check_node_inner(
             if let Type::Function(arg_types, ret_type) = &function_type {
                 symbols.enter_scope();
 
-                // Bind params from param_list
+                // Bind params from param_list and register param names
+                let mut param_names = Vec::new();
                 if let Some(params) = node.child_by_field_name("params") {
                     let mut cursor = params.walk();
                     let mut i = 0;
@@ -265,12 +266,14 @@ fn check_node_inner(
                             let arg_name =
                                 name_node.utf8_text(source.as_bytes()).unwrap().to_string();
                             if i < arg_types.len() {
-                                symbols.insert(arg_name, arg_types[i].clone());
+                                symbols.insert(arg_name.clone(), arg_types[i].clone());
                             }
+                            param_names.push(arg_name);
                             i += 1;
                         }
                     }
                 }
+                symbols.insert_fn_params(name.clone(), param_names);
 
                 let body_node = node.child_by_field_name("body").unwrap();
                 let body_type = check_node(&body_node, source, file, symbols, diagnostics);
@@ -493,6 +496,73 @@ fn check_node_inner(
                 }
             }
 
+            // Resolve named args: look up function param names, validate names,
+            // and build a mapping from call arg index -> parameter position.
+            let fn_name = extract_qualified_name(&func_node, source).or_else(|| {
+                let k = func_node.kind();
+                if k == "identifier" || k == "effect_identifier" {
+                    func_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            });
+            let fn_param_names = fn_name
+                .as_ref()
+                .and_then(|n| symbols.lookup_fn_params(n))
+                .cloned();
+
+            // arg_position_map[i] = which parameter position arg i fills
+            // Default: identity mapping (positional)
+            let mut arg_position_map: Vec<usize> = (0..params_provided).collect();
+            if !named_names.is_empty() {
+                if let Some(ref param_names) = fn_param_names {
+                    // Check for unknown named args
+                    for named in &named_names {
+                        if !param_names.contains(named) {
+                            // Find closest match for suggestion
+                            let suggestions: Vec<String> = param_names.iter()
+                                .filter(|p| !named_names.contains(p))
+                                .cloned()
+                                .collect();
+                            let suggestion_text = if suggestions.is_empty() {
+                                String::new()
+                            } else {
+                                format!(" Did you mean: {}?", suggestions.join(", "))
+                            };
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_032".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, node),
+                                message: format!("Unknown named argument: {}.{}", named, suggestion_text),
+                                context: format!(
+                                    "Available parameters: {}",
+                                    param_names.join(", ")
+                                ),
+                                suggestions: vec![],
+                            });
+                        }
+                    }
+
+                    // Build position mapping: positional args stay in order,
+                    // named args map to their parameter position
+                    let mut positional_idx = 0;
+                    for i in 0..params_provided {
+                        let arg = node.named_child(i + 1).unwrap();
+                        if arg.kind() == "named_argument" {
+                            if let Some(name_node) = arg.child_by_field_name("name") {
+                                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                                if let Some(pos) = param_names.iter().position(|p| p == name) {
+                                    arg_position_map[i] = pos;
+                                }
+                            }
+                        } else {
+                            arg_position_map[i] = positional_idx;
+                            positional_idx += 1;
+                        }
+                    }
+                }
+            }
+
             // STY_001: suggest pipe for nested single-arg calls like f(g(x))
             if params_provided == 1 {
                 let single_arg = node.named_child(1).unwrap();
@@ -674,13 +744,15 @@ fn check_node_inner(
                     });
                 }
 
-                for (i, expected_arg_type) in arg_types
-                    .iter()
-                    .enumerate()
-                    .take(std::cmp::min(params_provided, arg_types.len()))
-                {
+                for i in 0..std::cmp::min(params_provided, arg_types.len()) {
                     let raw_arg = node.named_child(i + 1).unwrap();
                     let arg_expr = call_arg_expr(&raw_arg);
+
+                    // Resolve which parameter position this arg fills
+                    let param_pos = arg_position_map.get(i).copied().unwrap_or(i);
+                    let expected_arg_type = arg_types
+                        .get(param_pos)
+                        .unwrap_or(arg_types.get(i).unwrap_or(&Type::Unknown));
 
                     // Lambda argument inference: if expected type is Function and arg is
                     // a lambda, check the lambda body with expected param types injected.
@@ -711,7 +783,7 @@ fn check_node_inner(
                             location: Location::from_node(file,&arg_expr),
                             message: format!(
                                 "Argument {} mismatch: expected {}, found {}",
-                                i + 1,
+                                param_pos + 1,
                                 expected_arg_type,
                                 arg_type
                             ),
@@ -743,6 +815,15 @@ fn check_node_inner(
                 .unwrap_or_else(|| node.named_child(1).unwrap());
             let body_type = check_node(&body_node, source, file, symbols, diagnostics);
             Type::Tuple(vec![body_type, Type::List(Box::new(Type::String))])
+        }
+        "restrict_expression" => {
+            // restrict(Effect1, Effect2) { body } — type is the body's type.
+            // Effect narrowing is enforced by the effect checker, not the type checker.
+            if let Some(body_node) = node.child_by_field_name("body") {
+                check_node(&body_node, source, file, symbols, diagnostics)
+            } else {
+                Type::Unknown
+            }
         }
         "struct_expression" => {
             let type_name_node = node.named_child(0).unwrap();
@@ -969,6 +1050,60 @@ fn check_node_inner(
                         ty.clone()
                     } else {
                         // Unknown method — allow for forward compat / effect-only checking
+                        Type::Unknown
+                    }
+                }
+                Type::Enum(ref enum_name, ref variants) => {
+                    // Auto-derived methods for simple enums (all variants nullary)
+                    let all_nullary = variants.iter().all(|(_, payload)| payload.is_empty());
+                    if all_nullary {
+                        match field_name {
+                            "to_string" => {
+                                Type::Function(
+                                    vec![obj_type.clone()],
+                                    Box::new(Type::String),
+                                )
+                            }
+                            "parse" => {
+                                let result_type = Type::Enum(
+                                    "Result".to_string(),
+                                    vec![
+                                        ("Ok".to_string(), vec![obj_type.clone()]),
+                                        ("Err".to_string(), vec![Type::String]),
+                                    ],
+                                );
+                                Type::Function(
+                                    vec![Type::String],
+                                    Box::new(result_type),
+                                )
+                            }
+                            _ => {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_015".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &field_node),
+                                    message: format!(
+                                        "Enum `{}` has no method `{}`",
+                                        enum_name, field_name
+                                    ),
+                                    context: "Simple enums support to_string and parse.".to_string(),
+                                    suggestions: vec![],
+                                });
+                                Type::Unknown
+                            }
+                        }
+                    } else {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_015".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &field_node),
+                            message: format!(
+                                "Enum `{}` has payload variants; auto-derived methods require all variants to be nullary",
+                                enum_name
+                            ),
+                            context: "Only simple enums (no payloads) support to_string and parse.".to_string(),
+                            suggestions: vec![],
+                        });
                         Type::Unknown
                     }
                 }

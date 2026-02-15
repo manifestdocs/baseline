@@ -96,6 +96,20 @@ impl<'a> super::Lowerer<'a> {
                     ty: None,
                 });
             }
+            // Auto-derived enum methods: Enum.to_string / Enum.parse
+            if let Some(variants) = self.enum_defs.get(&module).cloned() {
+                let mut args = Vec::new();
+                for arg in arg_nodes {
+                    args.push(self.lower_expression(arg)?);
+                }
+                self.tail_position = was_tail;
+                let result = super::helpers::generate_enum_method(
+                    &module, &method, &variants, args,
+                );
+                if let Some(expr) = result {
+                    return Ok(expr);
+                }
+            }
             // User-defined effect: Module.method!(args) where Module is not native
             if method.ends_with('!') {
                 let mut args = Vec::new();
