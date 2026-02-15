@@ -2,30 +2,53 @@
 
 // -- Handler functions using Response builders --
 
-fn hello_handler(req: { method: String, url: String, headers: List<(String, String)>, body: String, params: {} }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
+fn hello_handler(req: Request) -> {Http} Result<Response, HttpError> = {
   let resp = Response.ok("Hello, World!")
     |> Response.with_header("Content-Type", "text/plain")
   Ok(resp)
 }
 
-fn echo_handler(req: { method: String, url: String, headers: List<(String, String)>, body: String, params: {} }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
+fn echo_handler(req: Request) -> {Http} Result<Response, HttpError> = {
   let resp = Response.ok(req.body)
     |> Response.with_header("Content-Type", "text/plain")
   Ok(resp)
 }
 
-// -- Handler with path parameters --
+// -- Handler with typed path parameters --
 
-fn user_handler(req: { method: String, url: String, headers: List<(String, String)>, body: String, params: { id: String } }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
-  let id = req.params.id
+fn user_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
   Ok(Response.ok("User: ${id}"))
 }
 
 // -- Middleware: adds a custom header to every response --
 
-fn add_header_mw(req: Unknown, next: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
+fn add_header_mw(req: Request, next: Unknown) -> {Http} Result<Response, HttpError> = {
   let res = next(req)?
   Ok(res |> Response.with_header("X-Powered-By", "Baseline"))
+}
+
+// -- CRUD handlers for Router.resources --
+
+fn list_items(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.ok("[]"))
+
+fn get_item(req: Request) -> {Http} Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
+  Ok(Response.ok("item:${id}"))
+}
+
+fn create_item(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.created("created"))
+
+fn update_item(req: Request) -> {Http} Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
+  Ok(Response.ok("updated:${id}"))
+}
+
+fn delete_item(req: Request) -> {Http} Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
+  Ok(Response.ok("deleted:${id}"))
 }
 
 // -- Build router with direct calls --
@@ -38,7 +61,7 @@ fn build_direct() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   app
 }
 
-// -- Build router with pipe composition and middleware --
+// -- Build router with pipe composition, middleware, and resources --
 
 fn build_piped() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
   Router.new()
@@ -46,9 +69,16 @@ fn build_piped() -> { routes: List<Unknown>, middleware: List<Unknown> }  = {
     |> Router.get("/hello", hello_handler)
     |> Router.post("/echo", echo_handler)
     |> Router.get("/users/:id", user_handler)
+    |> Router.resources("/items", {
+      index: list_items,
+      show: get_item,
+      create: create_item,
+      update: update_item,
+      destroy: delete_item
+    })
 }
 
-// -- Test: verify route counts and middleware count --
+// -- Test: verify route counts --
 
 fn main!() -> {Console} () = {
   let direct = build_direct()
@@ -57,6 +87,6 @@ fn main!() -> {Console} () = {
   let piped_count = List.length(Router.routes(piped))
   Console.println!("direct routes: ${direct_count}")
   Console.println!("piped routes: ${piped_count}")
-  Console.println!("match: ${direct_count == piped_count}")
-  Console.println!("middleware: 1")
+  Console.println!("piped has resources: ${piped_count == 8}")
+  Console.println!("docs: ${Router.docs_json(piped)}")
 }

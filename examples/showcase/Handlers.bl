@@ -16,17 +16,6 @@ fn require_todo(id: Int) -> Result<Unknown, HttpError> =
     Some(todo) -> Ok(todo)
     None -> Err(HttpError.not_found("Todo not found"))
 
-fn parse_body(req: Request) -> Result<Unknown, HttpError> =
-  match Request.body_json(req)
-    Ok(data) -> Ok(data)
-    Err(e) -> Err(HttpError.bad_request("Invalid JSON: ${e}"))
-
-// Map a domain parse error to an HTTP 400 error
-fn reject(result: Result<Unknown, String>) -> Result<Unknown, HttpError> =
-  match result
-    Ok(v) -> Ok(v)
-    Err(msg) -> Err(HttpError.bad_request(msg))
-
 // --- Handlers ---
 
 // GET /health
@@ -49,11 +38,12 @@ fn get_todo(req: Request) -> {Http} Result<Response, HttpError> = {
 // POST /todos
 
 fn create_todo(req: Request) -> {Http, Random} Result<Response, HttpError> = {
-  let data = parse_body(req)?
-  let title = reject(Todo.parse_title(data.title))?
+  let data = Request.body_json(req)?
+  let title = Validate.string(data.title, "title")?
+  let title = Validate.min_length(title, 1, "title")?
+  let title = Validate.max_length(title, 100, "title")?
   let todo = Todo.create(Random.int!(1, 99999), title)
-  Ok(Response.created(Json.to_string(todo))
-    |> Response.with_header("Content-Type", "application/json"))
+  Ok(Response.created(todo))
 }
 
 // PUT /todos/:id
@@ -61,9 +51,12 @@ fn create_todo(req: Request) -> {Http, Random} Result<Response, HttpError> = {
 fn update_todo(req: Request) -> {Http} Result<Response, HttpError> = {
   let id = parse_id(req.params.id)?
   let _ = require_todo(id)?
-  let data = parse_body(req)?
-  let title = reject(Todo.parse_title(data.title))?
-  let status = reject(Todo.parse_status(data.status))?
+  let data = Request.body_json(req)?
+  let title = Validate.string(data.title, "title")?
+  let title = Validate.min_length(title, 1, "title")?
+  let title = Validate.max_length(title, 100, "title")?
+  let status = Validate.string(data.status, "status")?
+  let status = Validate.one_of(status, ["pending", "in_progress", "done"], "status")?
   Ok(Response.json(Todo.new(id, title, status)))
 }
 

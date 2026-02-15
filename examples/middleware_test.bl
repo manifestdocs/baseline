@@ -2,21 +2,21 @@
 
 // -- Middleware that wraps response body --
 
-fn wrap_middleware(req: Unknown, next: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
+fn wrap_middleware(req: Request, next: Unknown) -> {Http} Result<Response, HttpError> = {
   let res = next(req)?
   Ok(Response.ok("[${res.body}]"))
 }
 
 // -- Middleware that adds a prefix --
 
-fn prefix_middleware(req: Unknown, next: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
+fn prefix_middleware(req: Request, next: Unknown) -> {Http} Result<Response, HttpError> = {
   let res = next(req)?
   Ok(Response.ok("prefix:${res.body}"))
 }
 
 // -- Simple handler --
 
-fn simple_handler(req: Unknown) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> = {
+fn simple_handler(req: Request) -> {Http} Result<Response, HttpError> = {
   Ok(Response.ok("hello"))
 }
 
@@ -47,6 +47,14 @@ fn direct_use_router() -> { routes: List<Unknown>, middleware: List<Unknown> }  
   let app = Router.use(app, wrap_middleware)
   let app = Router.get(app, "/test", simple_handler)
   app
+}
+
+// -- Validation examples --
+
+fn validated_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let name = Validate.required(Request.query(req, "name"), "name")?
+  let name = Validate.min_length(name, 2, "name")?
+  Ok(Response.ok("Hello, ${name}!"))
 }
 
 fn main!() -> {Console} () = {

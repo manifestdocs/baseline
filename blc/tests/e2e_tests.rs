@@ -286,9 +286,9 @@ fn run_server_test() {
     assert_run_ok(
         "server_test.bl",
         "direct routes: 3\n\
-         piped routes: 3\n\
-         match: true\n\
-         middleware: 1\n",
+         piped routes: 8\n\
+         piped has resources: true\n\
+         docs: [{\"method\":\"GET\",\"path\":\"/hello\"},{\"method\":\"POST\",\"path\":\"/echo\"},{\"method\":\"GET\",\"path\":\"/users/:id\"},{\"method\":\"GET\",\"path\":\"/items\"},{\"method\":\"GET\",\"path\":\"/items/:id\"},{\"method\":\"POST\",\"path\":\"/items\"},{\"method\":\"PUT\",\"path\":\"/items/:id\"},{\"method\":\"DELETE\",\"path\":\"/items/:id\"}]\n",
     );
 }
 
