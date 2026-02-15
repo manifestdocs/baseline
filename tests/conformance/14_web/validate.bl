@@ -1,0 +1,17 @@
+@prelude(server)
+
+// Test Validate module type-checks correctly
+
+fn validate_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let body = Request.body_json(req)?
+  let name = Validate.string(body.name, "name")?
+  let name = Validate.min_length(name, 1, "name")?
+  let age = Validate.int(body.age, "age")?
+  let age = Validate.min(age, 0, "age")?
+  let age = Validate.max(age, 150, "age")?
+  Ok(Response.json({ name: name, age: age }))
+}
+
+fn main!() -> () = {
+  Console.println!("ok")
+}

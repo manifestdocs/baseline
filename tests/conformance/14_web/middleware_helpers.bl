@@ -1,0 +1,19 @@
+@prelude(server)
+
+// Test Middleware helper type-checks correctly
+
+fn auth_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let token = Middleware.extract_bearer(req)?
+  Ok(Response.ok("Token: ${token}"))
+}
+
+fn basic_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let creds = Middleware.extract_basic(req)?
+  Ok(Response.ok("ok"))
+}
+
+fn main!() -> () = {
+  let cors = Middleware.cors_config(["http://localhost:3000"])
+  let rl = Middleware.rate_limit_config(100, 200)
+  Console.println!("ok")
+}

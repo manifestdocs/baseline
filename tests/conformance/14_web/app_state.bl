@@ -1,0 +1,14 @@
+@prelude(server)
+
+// Test Router.state and Router.docs_json type-check correctly
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.ok("ok"))
+
+fn main!() -> () = {
+  let router = Router.new()
+  let router = Router.state(router, "db_url", "postgres://localhost/mydb")
+  let router = Router.state(router, "secret", 42)
+  let router = Router.get(router, "/health", handler)
+  let docs = Router.docs_json(router)
+  Console.println!(docs)
+}
