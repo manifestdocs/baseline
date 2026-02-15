@@ -335,6 +335,14 @@ pub(super) fn native_router_docs_json(args: &[NValue]) -> Result<NValue, NativeE
     Ok(NValue::string(json.into()))
 }
 
+/// Router.ws(router, path, handler) -> Router
+/// Registers a WebSocket handler for the given path.
+/// Internally stores the route with method "WS" so the server can detect
+/// it and perform the HTTP upgrade instead of normal request dispatch.
+pub(super) fn native_router_ws(args: &[NValue]) -> Result<NValue, NativeError> {
+    router_add_route("WS", args)
+}
+
 /// Router.resources(router, path, handlers) -> Router
 /// Generates 5 RESTful CRUD routes from a record of handler functions:
 ///   { index, show, create, update, destroy }

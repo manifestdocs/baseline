@@ -1,0 +1,94 @@
+// JSON auto-serialization conformance tests
+@prelude(pure)
+
+// -- Record serialization --
+
+test "record to json" = {
+  let json = Json.to_string({ name: "Alice", age: 30 })
+  String.contains(json, "\"name\"") && String.contains(json, "\"Alice\"")
+}
+
+test "record round-trip" = {
+  let json = Json.to_string({ x: 1, y: 2 })
+  let parsed = Json.parse(json)
+  let json2 = Json.to_string(parsed)
+  String.contains(json2, "\"x\"") && String.contains(json2, "\"y\"")
+}
+
+// -- Enum serialization (consistent format) --
+
+type Status = Active | Inactive
+
+test "enum unit variant" =
+  Json.to_string(Active) == "{\"type\":\"Active\"}"
+
+test "enum Some with payload" =
+  Json.to_string(Some(42)) == "{\"type\":\"Some\",\"value\":42}"
+
+test "enum None" =
+  Json.to_string(None) == "{\"type\":\"None\"}"
+
+test "enum Ok" =
+  Json.to_string(Ok(100)) == "{\"type\":\"Ok\",\"value\":100}"
+
+test "enum Err" =
+  Json.to_string(Err("bad")) == "{\"type\":\"Err\",\"value\":\"bad\"}"
+
+// -- Enum deserialization round-trip --
+
+test "enum round-trip" = {
+  let json = "{\"type\":\"Some\",\"value\":42}"
+  let parsed = Json.parse(json)
+  Json.to_string(parsed) == "{\"type\":\"Some\",\"value\":42}"
+}
+
+test "unit enum round-trip" = {
+  let json = "{\"type\":\"None\"}"
+  let parsed = Json.parse(json)
+  Json.to_string(parsed) == "{\"type\":\"None\"}"
+}
+
+// -- Nested records --
+
+test "nested record" = {
+  let json = Json.to_string({ user: { name: "Bob" }, active: true })
+  String.contains(json, "\"user\"") && String.contains(json, "\"Bob\"")
+}
+
+// -- List serialization --
+
+test "list to json" =
+  Json.to_string([1, 2, 3]) == "[1,2,3]"
+
+// -- camelCase conversion --
+
+test "to_camel_case" = {
+  let camel = Json.to_camel_case({ user_name: "Alice", first_item: 1 })
+  let json = Json.to_string(camel)
+  String.contains(json, "\"userName\"") && String.contains(json, "\"firstItem\"")
+}
+
+// -- snakeCase conversion --
+
+test "to_snake_case" = {
+  let record = Json.parse("{\"userName\":\"Alice\",\"firstName\":\"Bob\"}")
+  let snake = Json.to_snake_case(record)
+  let json = Json.to_string(snake)
+  String.contains(json, "\"user_name\"") && String.contains(json, "\"first_name\"")
+}
+
+// -- Nested camelCase --
+
+test "nested camelCase" = {
+  let camel = Json.to_camel_case({ outer_key: { inner_key: "value" } })
+  let json = Json.to_string(camel)
+  String.contains(json, "\"outerKey\"") && String.contains(json, "\"innerKey\"")
+}
+
+// -- Map serialization --
+
+test "map as JSON object" = {
+  let m = Map.insert(Map.insert(Map.empty(), "a", 1), "b", 2)
+  let json = Json.to_string(m)
+  String.contains(json, "\"a\"") && String.contains(json, "\"b\"")
+}

@@ -324,6 +324,8 @@ pub enum AsyncHandler {
     Native(Arc<dyn Fn(&AsyncRequest) -> AsyncResponse + Send + Sync>),
     /// SSE handler: receives request + sender channel, runs as a long-lived task.
     NativeSse(Arc<dyn Fn(AsyncRequest, tokio::sync::mpsc::Sender<SseEvent>) + Send + Sync>),
+    /// WebSocket handler: VM function invoked after HTTP upgrade completes.
+    VmWs(crate::vm::sendable::SendableHandler),
 }
 
 // ---------------------------------------------------------------------------
@@ -894,6 +896,134 @@ pub fn build_hyper_response_from_nvalue(val: &NValue) -> Response<ServerBody> {
     AsyncResponse::from_nvalue(val).into_hyper()
 }
 
+/// Create an empty boxed body for WebSocket upgrade responses.
+fn empty_body() -> ServerBody {
+    use http_body_util::Empty;
+    Empty::new().map_err(|never| match never {}).boxed()
+}
+
+/// Bridge between async WebSocket stream and sync VM handler.
+///
+/// Architecture:
+///   - WS reader task: reads from WebSocket → sends WsEvents to VM thread
+///   - WS writer task: receives WsCommands from VM thread → sends to WebSocket
+///   - VM thread: runs handler with thread-local WS channels installed
+async fn run_ws_handler<S>(
+    ws: tokio_tungstenite::WebSocketStream<S>,
+    handler: crate::vm::sendable::SendableHandler,
+    params: SmallParams,
+    chunks: Option<Arc<Vec<Chunk>>>,
+    _middleware: Vec<crate::vm::sendable::SendableHandler>,
+    state: crate::vm::sendable::SendableValue,
+    path: String,
+) where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
+{
+    use crate::vm::natives::ws::{WsCommand, WsEvent};
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (mut ws_sink, mut ws_stream) = ws.split();
+
+    // Channels between async WS tasks and sync VM handler thread
+    let (cmd_tx, mut cmd_rx) = tokio::sync::mpsc::channel::<WsCommand>(32);
+    let (evt_tx, evt_rx) = tokio::sync::mpsc::channel::<WsEvent>(32);
+
+    // Writer task: cmd_rx → ws_sink
+    let write_task = tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            let msg = match cmd {
+                WsCommand::SendText(text) => Message::Text(text),
+                WsCommand::Close => {
+                    let _ = ws_sink.send(Message::Close(None)).await;
+                    break;
+                }
+            };
+            if ws_sink.send(msg).await.is_err() {
+                break;
+            }
+        }
+        // Ensure sink is closed
+        let _ = ws_sink.close().await;
+    });
+
+    // Reader task: ws_stream → evt_tx
+    let evt_tx_clone = evt_tx.clone();
+    let read_task = tokio::spawn(async move {
+        while let Some(result) = ws_stream.next().await {
+            match result {
+                Ok(Message::Text(text)) => {
+                    if evt_tx_clone.send(WsEvent::Text(text)).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Binary(data)) => {
+                    if evt_tx_clone.send(WsEvent::Binary(data.to_vec())).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(Message::Ping(_)) | Ok(Message::Pong(_)) => {
+                    // Handled automatically by tungstenite
+                }
+                Ok(Message::Close(frame)) => {
+                    let reason = frame.map(|f| f.reason.to_string());
+                    let _ = evt_tx_clone.send(WsEvent::Closed(reason)).await;
+                    break;
+                }
+                Ok(Message::Frame(_)) => {
+                    // Raw frames — ignore
+                }
+                Err(e) => {
+                    let _ = evt_tx_clone.send(WsEvent::Closed(Some(e.to_string()))).await;
+                    break;
+                }
+            }
+        }
+    });
+
+    // VM handler thread (sync, blocking)
+    let vm_handle = tokio::task::spawn_blocking(move || {
+        // Install WS channels into thread-local storage
+        crate::vm::natives::ws::set_ws_channels(cmd_tx, evt_rx);
+
+        if let Some(chunks) = chunks {
+            HANDLER_VM.with(|cell| {
+                let mut vm = cell.borrow_mut();
+                // Build a minimal request-like record with path and params
+                let mut fields = vec![
+                    ("path".into(), NValue::string(path.into())),
+                    ("method".into(), NValue::string("WS".into())),
+                ];
+                // Add params
+                for (k, v) in params.as_slice().iter() {
+                    fields.push((k.as_str().into(), NValue::string(v.as_str().into())));
+                }
+                let request_nv = NValue::record(fields);
+                let state_nv = state.to_nvalue();
+                let request_nv = crate::vm::exec::http_helpers::inject_state_nv(&request_nv, &state_nv);
+                let handler_nv = handler.to_nvalue();
+
+                if let Err(e) = vm.call_nvalue(
+                    &handler_nv,
+                    &[request_nv],
+                    &chunks,
+                    0, 0,
+                ) {
+                    eprintln!("[server] WebSocket handler error: {}", e);
+                }
+            });
+        }
+
+        // Clean up WS channels
+        crate::vm::natives::ws::clear_ws_channels();
+    });
+
+    // Wait for VM handler to finish, then clean up tasks
+    let _ = vm_handle.await;
+    read_task.abort();
+    write_task.abort();
+}
+
 // ---------------------------------------------------------------------------
 // Query String Parser
 // ---------------------------------------------------------------------------
@@ -1118,7 +1248,16 @@ impl AsyncRouteTree {
                     .map(|(_, v)| v)
                     .ok_or("Route must have 'handler'")?;
 
-                if let Some(sendable) =
+                if method == "WS" {
+                    // WebSocket routes use method "WS" internally; register as GET for HTTP upgrade
+                    if let Some(sendable) =
+                        crate::vm::sendable::SendableHandler::from_nvalue(handler_val)
+                    {
+                        builder = builder.route("GET", path, AsyncHandler::VmWs(sendable));
+                    } else {
+                        return Err(format!("Invalid handler for WS route {}", path));
+                    }
+                } else if let Some(sendable) =
                     crate::vm::sendable::SendableHandler::from_nvalue(handler_val)
                 {
                     builder = builder.route(method, path, AsyncHandler::Vm(sendable));
@@ -1409,7 +1548,7 @@ pub(crate) async fn serve_http1_connection<I>(
     remote_addr: SocketAddr,
     shutdown_rx: &mut tokio::sync::watch::Receiver<bool>,
 ) where
-    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + 'static,
+    I: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
 {
     let config = Arc::clone(&ctx.config);
     let remote = remote_addr;
@@ -1426,7 +1565,7 @@ pub(crate) async fn serve_http1_connection<I>(
         builder.timer(hyper_util::rt::TokioTimer::new());
         builder.header_read_timeout(config.keep_alive_timeout);
     }
-    let conn = builder.serve_connection(io, service);
+    let conn = builder.serve_connection(io, service).with_upgrades();
     tokio::pin!(conn);
 
     tokio::select! {
@@ -1721,6 +1860,82 @@ async fn handle_request_with_context(
                     log_access(config, "GET", req_path, &file_resp, &meta, remote_addr);
                     return Ok(file_resp);
                 }
+            }
+        }
+    }
+
+    // -------------------------------------------------------------------
+    // WebSocket upgrade: check BEFORE body parsing (body is not consumed)
+    // -------------------------------------------------------------------
+    let is_ws_upgrade = req.method() == hyper::Method::GET
+        && req.headers().get("upgrade")
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.eq_ignore_ascii_case("websocket"))
+            .unwrap_or(false);
+
+    if is_ws_upgrade {
+        // Try to find a VmWs route for this path
+        let req_path = req.uri().path().to_string();
+        if let Some((handler, params)) = ctx.routes.find("GET", &req_path) {
+            if let AsyncHandler::VmWs(vm_handler) = handler {
+                // Perform the WebSocket upgrade
+                use tokio_tungstenite::tungstenite::protocol::Role;
+                use tokio_tungstenite::WebSocketStream;
+
+                let (response, on_upgrade) = {
+                    // Build 101 Switching Protocols response
+                    let key = req.headers().get("sec-websocket-key")
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default();
+                    let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
+
+                    let upgrade = hyper::upgrade::on(req);
+
+                    let resp = Response::builder()
+                        .status(101)
+                        .header("Upgrade", "websocket")
+                        .header("Connection", "Upgrade")
+                        .header("Sec-WebSocket-Accept", accept)
+                        .body(empty_body())
+                        .unwrap();
+
+                    (resp, upgrade)
+                };
+
+                // Spawn the WS handler task
+                let chunks = ctx.chunks.clone();
+                let middleware: Vec<_> = ctx.middleware.iter().cloned().collect();
+                let state = ctx.state.clone();
+                let handler_clone = vm_handler.clone();
+                let params_owned = params.clone_data();
+                let path_clone = req_path.clone();
+
+                tokio::spawn(async move {
+                    match on_upgrade.await {
+                        Ok(upgraded) => {
+                            let ws = WebSocketStream::from_raw_socket(
+                                hyper_util::rt::TokioIo::new(upgraded),
+                                Role::Server,
+                                None,
+                            ).await;
+
+                            run_ws_handler(ws, handler_clone, params_owned, chunks, middleware, state, path_clone).await;
+                        }
+                        Err(e) => {
+                            eprintln!("[server] WebSocket upgrade failed: {}", e);
+                        }
+                    }
+                });
+
+                if config.access_log {
+                    eprintln!(
+                        "[access] GET {} WebSocket upgrade {}{}",
+                        req_path,
+                        remote_addr.ip(),
+                        format_request_id(&meta.request_id),
+                    );
+                }
+                return Ok(response);
             }
         }
     }

@@ -1,4 +1,4 @@
-use super::{HeapObject, NValue, NativeError, RcStr};
+use super::{HeapObject, NValue, NativeError};
 use super::json::serde_to_nvalue;
 
 /// Request.header(req, name) -> Option<String>
@@ -110,72 +110,6 @@ fn bad_request_err(msg: &str) -> NValue {
         "Err".into(),
         NValue::enum_val("BadRequest".into(), NValue::string(msg.into())),
     )
-}
-
-/// Request.with_state(req, key, value) -> Request
-/// Add/update a field in the request's `state` sub-record.
-pub(super) fn native_request_with_state(args: &[NValue]) -> Result<NValue, NativeError> {
-    if args.len() != 3 {
-        return Err(NativeError(format!(
-            "Request.with_state expects 3 arguments (req, key, value), got {}",
-            args.len()
-        )));
-    }
-    let fields = match args[0].as_record() {
-        Some(f) => f.clone(),
-        None => {
-            return Err(NativeError(format!(
-                "Request.with_state: first arg must be Request record, got {}",
-                args[0]
-            )));
-        }
-    };
-    let key = match args[1].as_string() {
-        Some(s) => s.clone(),
-        None => {
-            return Err(NativeError(format!(
-                "Request.with_state: key must be String, got {}",
-                args[1]
-            )));
-        }
-    };
-
-    let mut new_fields = fields;
-    // Find or create state sub-record
-    let mut state_fields: Vec<(RcStr, NValue)> = new_fields
-        .iter()
-        .find(|(k, _)| &**k == "state")
-        .and_then(|(_, v)| v.as_record())
-        .cloned()
-        .unwrap_or_default();
-
-    // Update or insert the key
-    let mut found = false;
-    for (k, v) in &mut state_fields {
-        if *k == key {
-            *v = args[2].clone();
-            found = true;
-            break;
-        }
-    }
-    if !found {
-        state_fields.push((key, args[2].clone()));
-    }
-
-    // Update the state field on the request
-    let mut state_updated = false;
-    for (k, v) in &mut new_fields {
-        if &**k == "state" {
-            *v = NValue::record(state_fields.clone());
-            state_updated = true;
-            break;
-        }
-    }
-    if !state_updated {
-        new_fields.push(("state".into(), NValue::record(state_fields)));
-    }
-
-    Ok(NValue::record(new_fields))
 }
 
 /// Request.param(req, name) -> Result<String, String>
@@ -416,45 +350,3 @@ pub(super) fn native_request_query_int(args: &[NValue]) -> Result<NValue, Native
     ))
 }
 
-/// Request.state(req, key) -> Option<String>
-/// Read a value from the request's `state` sub-record.
-pub(super) fn native_request_state(args: &[NValue]) -> Result<NValue, NativeError> {
-    if args.len() != 2 {
-        return Err(NativeError(format!(
-            "Request.state expects 2 arguments (req, key), got {}",
-            args.len()
-        )));
-    }
-    let fields = match args[0].as_record() {
-        Some(f) => f,
-        None => {
-            return Err(NativeError(format!(
-                "Request.state: first arg must be Request record, got {}",
-                args[0]
-            )));
-        }
-    };
-    let key = match args[1].as_string() {
-        Some(s) => s,
-        None => {
-            return Err(NativeError(format!(
-                "Request.state: key must be String, got {}",
-                args[1]
-            )));
-        }
-    };
-
-    let state = fields
-        .iter()
-        .find(|(k, _)| &**k == "state")
-        .and_then(|(_, v)| v.as_record());
-
-    if let Some(state_fields) = state {
-        for (k, v) in state_fields {
-            if **k == **key {
-                return Ok(NValue::enum_val("Some".into(), v.clone()));
-            }
-        }
-    }
-    Ok(NValue::enum_val("None".into(), NValue::unit()))
-}

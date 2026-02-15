@@ -1,15 +1,16 @@
 @prelude(server)
 
-// Test Validate module type-checks correctly
+// Test Request.decode with refined types
 
-fn validate_handler(req: Request) -> {Http} Result<Response, HttpError> = {
-  let body = Request.body_json(req)?
-  let name = Validate.string(body.name, "name")?
-  let name = Validate.min_length(name, 1, "name")?
-  let age = Validate.int(body.age, "age")?
-  let age = Validate.min(age, 0, "age")?
-  let age = Validate.max(age, 150, "age")?
-  Ok(Response.json({ name: name, age: age }))
+type Name = String where String.length(self) >= 1
+
+type Age = Int where self >= 0 && self <= 150
+
+fn create_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let result = Request.decode(req, "CreateUser")
+  match result
+    Ok(user) -> Ok(Response.json(user))
+    Err(resp) -> Err(HttpError.unprocessable("validation failed"))
 }
 
 fn main!() -> () = {

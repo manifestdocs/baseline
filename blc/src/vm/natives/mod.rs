@@ -33,6 +33,7 @@ mod set;
 mod string;
 mod time;
 mod weak;
+pub(crate) mod ws;
 
 use std::collections::HashMap;
 
@@ -374,6 +375,15 @@ impl NativeRegistry {
         self.register("Router.resources", native_router_resources);
         self.register("Router.state", native_router_state);
         self.register("Router.docs_json", native_router_docs_json);
+        self.register("Router.ws", native_router_ws);
+
+        // -- Ws (WebSocket) --
+        self.register("Ws.send!", ws::native_ws_send);
+        self.register("Ws.send", ws::native_ws_send);
+        self.register("Ws.receive!", ws::native_ws_receive);
+        self.register("Ws.receive", ws::native_ws_receive);
+        self.register("Ws.close!", ws::native_ws_close);
+        self.register("Ws.close", ws::native_ws_close);
 
         // -- HttpError --
         self.register("HttpError.bad_request", http_error::native_http_error_bad_request);
@@ -397,8 +407,6 @@ impl NativeRegistry {
         self.register("Request.param_int", native_request_param_int);
         self.register("Request.query", native_request_query);
         self.register("Request.query_int", native_request_query_int);
-        self.register("Request.with_state", native_request_with_state);
-        self.register("Request.state", native_request_state);
         self.register("Request.decode", schema::native_request_decode);
 
         // -- Middleware --

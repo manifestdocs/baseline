@@ -2,6 +2,14 @@
 
 import Todo
 
+// --- Refined types for input validation ---
+// Constraints are encoded on the types themselves.
+// Request.decode validates against these automatically.
+
+type Title = String where String.length(self) >= 1 && String.length(self) <= 100
+
+type Status = String where self == "pending" || self == "in_progress" || self == "done"
+
 // --- Request parsing ---
 // These bridge HTTP to domain: raw request data -> parsed values,
 // with errors mapped to proper HTTP error types.
@@ -36,13 +44,11 @@ fn get_todo(req: Request) -> {Http} Result<Response, HttpError> = {
 }
 
 // POST /todos
+// Request.decode validates the body against the CreateTodo schema.
 
 fn create_todo(req: Request) -> {Http, Random} Result<Response, HttpError> = {
   let data = Request.body_json(req)?
-  let title = Validate.string(data.title, "title")?
-  let title = Validate.min_length(title, 1, "title")?
-  let title = Validate.max_length(title, 100, "title")?
-  let todo = Todo.create(Random.int!(1, 99999), title)
+  let todo = Todo.create(Random.int!(1, 99999), data.title)
   Ok(Response.created(todo))
 }
 
@@ -52,12 +58,7 @@ fn update_todo(req: Request) -> {Http} Result<Response, HttpError> = {
   let id = parse_id(req.params.id)?
   let _ = require_todo(id)?
   let data = Request.body_json(req)?
-  let title = Validate.string(data.title, "title")?
-  let title = Validate.min_length(title, 1, "title")?
-  let title = Validate.max_length(title, 100, "title")?
-  let status = Validate.string(data.status, "status")?
-  let status = Validate.one_of(status, ["pending", "in_progress", "done"], "status")?
-  Ok(Response.json(Todo.new(id, title, status)))
+  Ok(Response.json(Todo.new(id, data.title, data.status)))
 }
 
 // DELETE /todos/:id

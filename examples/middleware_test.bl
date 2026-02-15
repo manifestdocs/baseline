@@ -49,12 +49,13 @@ fn direct_use_router() -> { routes: List<Unknown>, middleware: List<Unknown> }  
   app
 }
 
-// -- Validation examples --
+// -- Query parameter handler --
 
-fn validated_handler(req: Request) -> {Http} Result<Response, HttpError> = {
-  let name = Validate.required(Request.query(req, "name"), "name")?
-  let name = Validate.min_length(name, 2, "name")?
-  Ok(Response.ok("Hello, ${name}!"))
+fn greeter_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let name = Request.query(req, "name")
+  match name
+    Some(n) -> Ok(Response.ok("Hello, ${n}!"))
+    None -> Err(HttpError.bad_request("Missing 'name' query parameter"))
 }
 
 fn main!() -> {Console} () = {
