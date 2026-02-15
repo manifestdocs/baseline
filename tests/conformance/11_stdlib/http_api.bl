@@ -3,68 +3,68 @@
 // Conformance: HTTP API surface — check-pass
 // Verifies type checking for Response, Request, Router, and Server builtins
 
-fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+fn health(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok("healthy"))
 
-fn json_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn json_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("{\"key\":\"value\"}"))
 
-fn created_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn created_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.created("{\"id\":1}"))
 
-fn no_content_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn no_content_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.no_content())
 
-fn bad_request_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn bad_request_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.bad_request("invalid"))
 
-fn not_found_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn not_found_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.not_found("missing"))
 
-fn error_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn error_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.error("oops"))
 
-fn status_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn status_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.status(418, "I'm a teapot"))
 
-fn header_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn header_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok("ok") |> Response.with_header("X-Custom", "value"))
 
-fn redirect_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn redirect_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.redirect("/new-location"))
 
-fn redirect_perm_handler(req: Unknown) -> {Http} Result<Unknown, String> =
+fn redirect_perm_handler(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.redirect_permanent("/permanent"))
 
-fn with_headers_handler(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn with_headers_handler(req: Request) -> {Http} Result<Response, HttpError> = {
   let headers = [("X-A", "1"), ("X-B", "2")]
   Ok(Response.ok("ok") |> Response.with_headers(headers))
 }
 
-fn method_handler(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn method_handler(req: Request) -> {Http} Result<Response, HttpError> = {
   let m = Request.method(req)
   Ok(Response.ok(m))
 }
 
-fn body_json_handler(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn body_json_handler(req: Request) -> {Http} Result<Response, HttpError> = {
   let parsed = Request.body_json(req)
   Ok(Response.ok("parsed"))
 }
 
-fn header_check(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn header_check(req: Request) -> {Http} Result<Response, HttpError> = {
   let h = Request.header(req, "Content-Type")
   Ok(Response.ok("ok"))
 }
 
 // Middleware: logs requests
-fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+fn logger(req: Request, next: Unknown) -> {Http, Log} Result<Response, HttpError> = {
   let res = next(req)?
   Log.info!("${req.method} ${req.url}")
   Ok(res)
 }
 
 // Middleware: adds timing header
-fn timer(req: Unknown, next: Unknown) -> {Http, Time} Result<Unknown, String> = {
+fn timer(req: Request, next: Unknown) -> {Http, Time} Result<Response, HttpError> = {
   let start = Time.now!()
   let res = next(req)?
   let elapsed = Time.now!() - start

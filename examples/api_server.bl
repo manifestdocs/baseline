@@ -2,21 +2,21 @@
 
 // HTTP Server example — demonstrates Router, Server.listen!, and Response builders
 
-fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+fn health(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("{\"status\":\"ok\"}"))
 
-fn list_users(req: Unknown) -> {Http} Result<Unknown, String> =
+fn list_users(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]"))
 
-fn get_user(req: Unknown) -> {Http} Result<Unknown, String> =
+fn get_user(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok("User: ${req.params.id}"))
 
-fn create_user(req: Unknown) -> {Http} Result<Unknown, String> =
+fn create_user(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.created("{\"id\":3}"))
 
 // Middleware: logs method + path
 
-fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+fn logger(req: Request, next: Unknown) -> {Http, Log} Result<Response, HttpError> = {
   let res = next(req)?
   Log.info!("${req.method} ${req.url} -> ${res.status}")
   Ok(res)

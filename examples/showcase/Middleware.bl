@@ -5,7 +5,7 @@
 
 // Middleware: log request method + path + response status
 
-fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+fn logger(req: Request, next: Unknown) -> {Http, Log} Result<Response, HttpError> = {
   let res = next(req)?
   Log.info!("${req.method} ${req.url} -> ${res.status}")
   Ok(res)
@@ -13,7 +13,7 @@ fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = 
 
 // Middleware: add CORS headers for cross-origin requests
 
-fn cors(req: Unknown, next: Unknown) -> {Http} Result<Unknown, String> = {
+fn cors(req: Request, next: Unknown) -> {Http} Result<Response, HttpError> = {
   let res = next(req)?
   Ok(res
     |> Response.with_header("Access-Control-Allow-Origin", "*")
@@ -23,7 +23,7 @@ fn cors(req: Unknown, next: Unknown) -> {Http} Result<Unknown, String> = {
 
 // Middleware: measure and report response time
 
-fn timer(req: Unknown, next: Unknown) -> {Http, Time} Result<Unknown, String> = {
+fn timer(req: Request, next: Unknown) -> {Http, Time} Result<Response, HttpError> = {
   let start = Time.now!()
   let res = next(req)?
   let elapsed = Time.now!() - start

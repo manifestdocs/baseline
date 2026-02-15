@@ -5,41 +5,41 @@
 
 // --- Handlers ---
 
-fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+fn health(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("{\"status\":\"ok\"}"))
 
-fn list_users(req: Unknown) -> {Http} Result<Unknown, String> =
+fn list_users(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("[{\"id\":1,\"name\":\"Alice\"},{\"id\":2,\"name\":\"Bob\"}]"))
 
-fn get_user(req: Unknown) -> {Http} Result<Unknown, String> =
+fn get_user(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok("User: ${req.params.id}"))
 
-fn create_user(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn create_user(req: Request) -> {Http} Result<Response, HttpError> = {
   let body = Request.body_json(req)
   Ok(Response.created("{\"id\":3}"))
 }
 
-fn update_user(req: Unknown) -> {Http} Result<Unknown, String> =
+fn update_user(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok("Updated user ${req.params.id}"))
 
-fn patch_user(req: Unknown) -> {Http} Result<Unknown, String> =
+fn patch_user(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok("Patched user ${req.params.id}"))
 
-fn delete_user(req: Unknown) -> {Http} Result<Unknown, String> =
+fn delete_user(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.no_content())
 
-fn go_home(req: Unknown) -> {Http} Result<Unknown, String> =
+fn go_home(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.redirect("/health"))
 
-fn gone_permanently(req: Unknown) -> {Http} Result<Unknown, String> =
+fn gone_permanently(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.redirect_permanent("/health"))
 
-fn echo_method(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn echo_method(req: Request) -> {Http} Result<Response, HttpError> = {
   let m = Request.method(req)
   Ok(Response.ok(m))
 }
 
-fn cors_preflight(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn cors_preflight(req: Request) -> {Http} Result<Response, HttpError> = {
   let headers = [
     ("Access-Control-Allow-Origin", "*"),
     ("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH"),
@@ -50,13 +50,13 @@ fn cors_preflight(req: Unknown) -> {Http} Result<Unknown, String> = {
 
 // --- Middleware ---
 
-fn logger(req: Unknown, next: Unknown) -> {Http, Log} Result<Unknown, String> = {
+fn logger(req: Request, next: Unknown) -> {Http, Log} Result<Response, HttpError> = {
   let res = next(req)?
   Log.info!("${req.method} ${req.url} -> ${res.status}")
   Ok(res)
 }
 
-fn timer(req: Unknown, next: Unknown) -> {Http, Time} Result<Unknown, String> = {
+fn timer(req: Request, next: Unknown) -> {Http, Time} Result<Response, HttpError> = {
   let start = Time.now!()
   let res = next(req)?
   let elapsed = Time.now!() - start

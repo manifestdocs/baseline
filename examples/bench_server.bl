@@ -6,23 +6,23 @@
 // Then test with: wrk -t4 -c100 -d10s http://localhost:8080/hello
 
 // Simple "Hello World" handler - minimal overhead
-fn hello(req: Unknown) -> {Http} Result<Unknown, String> =
+fn hello(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok("Hello, World!"))
 
 // JSON response handler - measures serialization overhead
-fn json(req: Unknown) -> {Http} Result<Unknown, String> =
+fn json(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("{\"message\":\"Hello, World!\"}"))
 
 // Echo handler - measures request parsing
-fn echo(req: Unknown) -> {Http} Result<Unknown, String> =
+fn echo(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.ok(req.body))
 
 // Health check
-fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+fn health(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("{\"status\":\"ok\"}"))
 
 // User by ID - tests parameter extraction
-fn get_user(req: Unknown) -> {Http} Result<Unknown, String> =
+fn get_user(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json("{\"id\":\"${req.params.id}\",\"name\":\"User ${req.params.id}\"}"))
 
 fn main!() -> {Http, Log} () = {

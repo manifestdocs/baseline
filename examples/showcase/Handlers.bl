@@ -4,46 +4,43 @@ import Todo
 
 // --- Request parsing ---
 // These bridge HTTP to domain: raw request data -> parsed values,
-// with errors mapped to proper HTTP responses.
+// with errors mapped to proper HTTP error types.
 
-fn parse_id(raw: String) -> Result<Int, Unknown> =
+fn parse_id(raw: String) -> Result<Int, HttpError> =
   match String.to_int(raw)
     Some(id) -> Ok(id)
-    None -> Err(Response.bad_request(
-      Json.to_string({ error: "Invalid ID: must be an integer" })))
+    None -> Err(HttpError.bad_request("Invalid ID: must be an integer"))
 
-fn require_todo(id: Int) -> Result<Unknown, Unknown> =
+fn require_todo(id: Int) -> Result<Unknown, HttpError> =
   match Todo.find(id)
     Some(todo) -> Ok(todo)
-    None -> Err(Response.not_found(
-      Json.to_string({ error: "Todo not found", id: id })))
+    None -> Err(HttpError.not_found("Todo not found"))
 
-fn parse_body(req: Unknown) -> Result<Unknown, Unknown> =
+fn parse_body(req: Request) -> Result<Unknown, HttpError> =
   match Request.body_json(req)
     Ok(data) -> Ok(data)
-    Err(e) -> Err(Response.bad_request(
-      Json.to_string({ error: "Invalid JSON", details: e })))
+    Err(e) -> Err(HttpError.bad_request("Invalid JSON: ${e}"))
 
-// Map a domain parse error to an HTTP 400 response
-fn reject(result: Result<Unknown, String>) -> Result<Unknown, Unknown> =
+// Map a domain parse error to an HTTP 400 error
+fn reject(result: Result<Unknown, String>) -> Result<Unknown, HttpError> =
   match result
     Ok(v) -> Ok(v)
-    Err(msg) -> Err(Response.bad_request(Json.to_string({ error: msg })))
+    Err(msg) -> Err(HttpError.bad_request(msg))
 
 // --- Handlers ---
 
 // GET /health
 
-fn health(req: Unknown) -> {Http} Result<Unknown, String> =
+fn health(req: Request) -> {Http} Result<Response, HttpError> =
   Ok(Response.json({ status: "ok", version: "0.1.0" }))
 
 // GET /todos
 
-fn list_todos(req: Unknown) -> {Http} Result<Unknown, String> = Ok(Response.json(Todo.all()))
+fn list_todos(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.json(Todo.all()))
 
 // GET /todos/:id
 
-fn get_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn get_todo(req: Request) -> {Http} Result<Response, HttpError> = {
   let id = parse_id(req.params.id)?
   let todo = require_todo(id)?
   Ok(Response.json(todo))
@@ -51,7 +48,7 @@ fn get_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
 
 // POST /todos
 
-fn create_todo(req: Unknown) -> {Http, Random} Result<Unknown, String> = {
+fn create_todo(req: Request) -> {Http, Random} Result<Response, HttpError> = {
   let data = parse_body(req)?
   let title = reject(Todo.parse_title(data.title))?
   let todo = Todo.create(Random.int!(1, 99999), title)
@@ -61,7 +58,7 @@ fn create_todo(req: Unknown) -> {Http, Random} Result<Unknown, String> = {
 
 // PUT /todos/:id
 
-fn update_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn update_todo(req: Request) -> {Http} Result<Response, HttpError> = {
   let id = parse_id(req.params.id)?
   let _ = require_todo(id)?
   let data = parse_body(req)?
@@ -72,7 +69,7 @@ fn update_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
 
 // DELETE /todos/:id
 
-fn delete_todo(req: Unknown) -> {Http} Result<Unknown, String> = {
+fn delete_todo(req: Request) -> {Http} Result<Response, HttpError> = {
   let id = parse_id(req.params.id)?
   let _ = require_todo(id)?
   Ok(Response.no_content())
