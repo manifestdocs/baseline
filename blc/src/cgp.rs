@@ -50,7 +50,7 @@ const TYPE_NAMES: &[&str] = &[
 ];
 
 const BUILTIN_EFFECTS: &[&str] = &[
-    "Console", "Http", "Fs", "Log", "Time", "Db", "Net", "Random", "Env",
+    "Console", "Http", "Fs", "Log", "Time", "Sqlite", "Postgres", "Mysql", "Net", "Random", "Env",
 ];
 
 // ---------------------------------------------------------------------------

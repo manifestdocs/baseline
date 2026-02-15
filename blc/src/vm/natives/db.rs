@@ -40,7 +40,7 @@ pub fn sqlite_execute(sql: &str, params: &[String]) -> Result<i64, NativeError> 
         let conn = borrow
             .as_ref()
             .ok_or_else(|| NativeError(
-                "SQLite execute: no connection (call Db.connect! or Sqlite.connect! first)".into(),
+                "SQLite execute: no connection (call Sqlite.connect! first)".into(),
             ))?;
 
         let affected = conn
@@ -58,7 +58,7 @@ pub fn sqlite_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeErro
         let conn = borrow
             .as_ref()
             .ok_or_else(|| NativeError(
-                "SQLite query: no connection (call Db.connect! or Sqlite.connect! first)".into(),
+                "SQLite query: no connection (call Sqlite.connect! first)".into(),
             ))?;
 
         let mut stmt = conn
@@ -150,57 +150,9 @@ fn extract_params(arg: Option<&NValue>) -> Result<Vec<String>, NativeError> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// Native entry points: Db.* (backwards-compatible, defaults to SQLite)
-// ---------------------------------------------------------------------------
-
-/// Db.connect!(url: String) -> ()
-///
-/// Opens a SQLite connection. `:memory:` for in-memory, otherwise a file path.
-pub fn native_db_connect(args: &[NValue]) -> Result<NValue, NativeError> {
-    let url = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Db.connect!: expected string argument".into()))?;
-
-    sqlite_connect(url.as_ref())?;
-    db_backend::set_active_sqlite();
-
-    Ok(NValue::unit())
-}
-
-/// Db.execute!(sql: String, params: List<String>) -> Int
-///
-/// Executes DDL/DML SQL. Returns number of affected rows.
-pub fn native_db_execute(args: &[NValue]) -> Result<NValue, NativeError> {
-    let sql = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Db.execute!: expected SQL string as first argument".into()))?;
-
-    let params = extract_params(args.get(1))?;
-    let affected = db_backend::active_execute(sql.as_ref(), &params)?;
-
-    Ok(NValue::int(affected))
-}
-
-/// Db.query!(sql: String, params: List<String>) -> List<Map<String, String>>
-///
-/// Executes a SELECT query. Returns rows as list of maps (all values stringified).
-pub fn native_db_query(args: &[NValue]) -> Result<NValue, NativeError> {
-    let sql = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Db.query!: expected SQL string as first argument".into()))?;
-
-    let params = extract_params(args.get(1))?;
-    let rows = db_backend::active_query(sql.as_ref(), &params)?;
-
-    Ok(rows_to_nvalue(rows))
-}
 
 // ---------------------------------------------------------------------------
-// Native entry points: Sqlite.* (explicit backend)
+// Native entry points: Sqlite.*
 // ---------------------------------------------------------------------------
 
 /// Sqlite.connect!(url: String) -> ()
@@ -248,26 +200,26 @@ mod tests {
 
     #[test]
     fn connect_in_memory() {
-        let result = native_db_connect(&[NValue::string(":memory:".into())]);
+        let result = native_sqlite_connect(&[NValue::string(":memory:".into())]);
         assert!(result.is_ok());
     }
 
     #[test]
     fn connect_returns_unit() {
-        let result = native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
+        let result = native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
         assert!(result.is_unit());
     }
 
     #[test]
     fn connect_requires_string_arg() {
-        let result = native_db_connect(&[NValue::int(42)]);
+        let result = native_sqlite_connect(&[NValue::int(42)]);
         assert!(result.is_err());
     }
 
     #[test]
     fn execute_create_table() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        let result = native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        let result = native_sqlite_execute(&[
             NValue::string("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)".into()),
             NValue::list(vec![]),
         ]);
@@ -276,14 +228,14 @@ mod tests {
 
     #[test]
     fn execute_insert_returns_affected_count() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
             NValue::string("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
 
-        let result = native_db_execute(&[
+        let result = native_sqlite_execute(&[
             NValue::string("INSERT INTO t (name) VALUES (?1)".into()),
             NValue::list(vec![NValue::string("Alice".into())]),
         ])
@@ -308,8 +260,8 @@ mod tests {
 
     #[test]
     fn execute_invalid_sql_errors() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        let result = native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        let result = native_sqlite_execute(&[
             NValue::string("NOT VALID SQL".into()),
             NValue::list(vec![]),
         ]);
@@ -318,19 +270,19 @@ mod tests {
 
     #[test]
     fn query_returns_list_of_maps() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
             NValue::string("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
-        native_db_execute(&[
+        native_sqlite_execute(&[
             NValue::string("INSERT INTO users (name) VALUES (?1)".into()),
             NValue::list(vec![NValue::string("Alice".into())]),
         ])
         .unwrap();
 
-        let result = native_db_query(&[
+        let result = native_sqlite_query(&[
             NValue::string("SELECT id, name FROM users".into()),
             NValue::list(vec![]),
         ])
@@ -342,14 +294,14 @@ mod tests {
 
     #[test]
     fn query_empty_result() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
             NValue::string("CREATE TABLE empty_t (id INTEGER)".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
 
-        let result = native_db_query(&[
+        let result = native_sqlite_query(&[
             NValue::string("SELECT * FROM empty_t".into()),
             NValue::list(vec![]),
         ])
@@ -361,13 +313,13 @@ mod tests {
 
     #[test]
     fn query_with_params() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
             NValue::string("CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT)".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
-        native_db_execute(&[
+        native_sqlite_execute(&[
             NValue::string("INSERT INTO items (name) VALUES (?1), (?2)".into()),
             NValue::list(vec![
                 NValue::string("foo".into()),
@@ -376,7 +328,7 @@ mod tests {
         ])
         .unwrap();
 
-        let result = native_db_query(&[
+        let result = native_sqlite_query(&[
             NValue::string("SELECT name FROM items WHERE name = ?1".into()),
             NValue::list(vec![NValue::string("foo".into())]),
         ])
@@ -400,19 +352,19 @@ mod tests {
 
     #[test]
     fn query_integer_values_as_strings() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
             NValue::string("CREATE TABLE nums (val INTEGER)".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
-        native_db_execute(&[
+        native_sqlite_execute(&[
             NValue::string("INSERT INTO nums (val) VALUES (42)".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
 
-        let result = native_db_query(&[
+        let result = native_sqlite_query(&[
             NValue::string("SELECT val FROM nums".into()),
             NValue::list(vec![]),
         ])
@@ -425,20 +377,20 @@ mod tests {
 
     #[test]
     fn sql_injection_prevented_by_parameterization() {
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        native_db_execute(&[
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
             NValue::string("CREATE TABLE secrets (id INTEGER, data TEXT)".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
-        native_db_execute(&[
+        native_sqlite_execute(&[
             NValue::string("INSERT INTO secrets (id, data) VALUES (1, 'secret')".into()),
             NValue::list(vec![]),
         ])
         .unwrap();
 
         // Attempt SQL injection via params — should be safely escaped
-        let result = native_db_query(&[
+        let result = native_sqlite_query(&[
             NValue::string("SELECT * FROM secrets WHERE data = ?1".into()),
             NValue::list(vec![NValue::string("' OR '1'='1".into())]),
         ])
@@ -475,11 +427,11 @@ mod tests {
     }
 
     #[test]
-    fn db_connect_sets_active_backend() {
-        // After Db.connect!, the active backend should be SQLite
-        // and Db.execute! should work via dispatch
-        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
-        let result = native_db_execute(&[
+    fn sqlite_connect_sets_active_backend() {
+        // After Sqlite.connect!, the active backend should be SQLite
+        // and Sqlite.execute! should work via dispatch
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        let result = native_sqlite_execute(&[
             NValue::string("CREATE TABLE ab_test (id INTEGER)".into()),
             NValue::list(vec![]),
         ]);

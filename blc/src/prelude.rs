@@ -36,7 +36,7 @@ impl Prelude {
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Middleware", "Router", "Db", "Sqlite", "Postgres", "Mysql", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Request", "HttpError", "Middleware", "Router", "Sqlite", "Postgres", "Mysql", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }
@@ -48,7 +48,7 @@ impl Prelude {
             Prelude::Pure | Prelude::Core => &["Math"],
             Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Async"],
             Prelude::Server => &[
-                "Math", "Console", "Log", "Time", "Env", "Server", "Db", "Sqlite", "Postgres", "Mysql", "Sql", "Metrics", "Async",
+                "Math", "Console", "Log", "Time", "Env", "Server", "Sqlite", "Postgres", "Mysql", "Sql", "Metrics", "Async",
             ],
         }
     }
@@ -70,7 +70,7 @@ impl Prelude {
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
                 "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Middleware",
-                "Router", "Server", "Db", "Sqlite", "Postgres", "Mysql", "Sql", "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Router", "Server", "Sqlite", "Postgres", "Mysql", "Sql", "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }
@@ -99,7 +99,9 @@ pub fn module_alias(short: &str) -> Option<&'static str> {
         "rsp" => Some("Response"),
         "rtr" => Some("Router"),
         "srv" => Some("Server"),
-        "db" => Some("Db"),
+        "sql" => Some("Sqlite"),
+        "pg" => Some("Postgres"),
+        "my" => Some("Mysql"),
         "dt" => Some("DateTime"),
         _ => None,
     }
@@ -128,7 +130,9 @@ pub fn reverse_module_alias(module: &str) -> Option<&'static str> {
         "Response" => Some("rsp"),
         "Router" => Some("rtr"),
         "Server" => Some("srv"),
-        "Db" => Some("db"),
+        "Sqlite" => Some("sql"),
+        "Postgres" => Some("pg"),
+        "Mysql" => Some("my"),
         "DateTime" => Some("dt"),
         _ => None,
     }
@@ -223,7 +227,7 @@ mod tests {
         assert!(p.native_modules().contains(&"Router"));
         assert!(p.native_modules().contains(&"Http"));
         assert!(p.builtin_modules().contains(&"Server"));
-        assert!(p.builtin_modules().contains(&"Db"));
+        assert!(p.builtin_modules().contains(&"Sqlite"));
         assert!(p.builtin_modules().contains(&"Metrics"));
         assert!(p.type_modules().contains(&"Router"));
         assert!(p.type_modules().contains(&"Server"));

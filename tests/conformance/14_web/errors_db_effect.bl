@@ -1,7 +1,7 @@
 @prelude(server)
 
-// Negative test: calling Db without declaring {Db} effect
+// Negative test: calling Sqlite without declaring {Sqlite} effect
 // Expected errors: CAP_001
 
 fn bad_query!() -> {Console} List<Map<String, String>> =
-  Db.query!("SELECT 1", [])
+  Sqlite.query!("SELECT 1", [])

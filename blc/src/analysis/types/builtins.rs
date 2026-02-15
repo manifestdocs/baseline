@@ -1054,8 +1054,8 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
-    // -- Db builtins (effect: Db) --
-    if builtin_modules.contains(&"Db") {
+    // -- Database builtins (effect: Db) --
+    if builtin_modules.contains(&"Sqlite") {
         // Connect/execute/query type shapes shared across backends
         let connect_ty = Type::Function(vec![Type::String], Box::new(Type::Unit));
         let execute_ty = Type::Function(
@@ -1070,22 +1070,17 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             )))),
         );
 
-        // Db.* (backwards-compatible, defaults to SQLite)
-        sigs.insert("Db.connect!".into(), connect_ty.clone());
-        sigs.insert("Db.execute!".into(), execute_ty.clone());
-        sigs.insert("Db.query!".into(), query_ty.clone());
-
-        // Sqlite.* (explicit backend)
+        // Sqlite.*
         sigs.insert("Sqlite.connect!".into(), connect_ty.clone());
         sigs.insert("Sqlite.execute!".into(), execute_ty.clone());
         sigs.insert("Sqlite.query!".into(), query_ty.clone());
 
-        // Postgres.* (behind feature flag, but type-checked always)
+        // Postgres.*
         sigs.insert("Postgres.connect!".into(), connect_ty.clone());
         sigs.insert("Postgres.execute!".into(), execute_ty.clone());
         sigs.insert("Postgres.query!".into(), query_ty.clone());
 
-        // Mysql.* (behind feature flag, but type-checked always)
+        // Mysql.*
         sigs.insert("Mysql.connect!".into(), connect_ty);
         sigs.insert("Mysql.execute!".into(), execute_ty);
         sigs.insert("Mysql.query!".into(), query_ty);

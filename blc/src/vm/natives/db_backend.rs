@@ -67,7 +67,7 @@ pub fn set_active_mysql() {
 }
 
 // ---------------------------------------------------------------------------
-// Generic dispatch (used by Sql.migrate! and Db.* compat layer)
+// Generic dispatch (used by Sql.migrate! and other backend-agnostic operations)
 // ---------------------------------------------------------------------------
 
 /// Execute SQL against the active backend.
@@ -76,7 +76,7 @@ pub fn active_execute(sql: &str, params: &[String]) -> Result<i64, NativeError> 
         let backend = cell.borrow();
         match *backend {
             ActiveBackendSlot::None => Err(NativeError(
-                "No database backend connected (call Db.connect!, Sqlite.connect!, etc. first)"
+                "No database backend connected (call Sqlite.connect!, Postgres.connect!, etc. first)"
                     .into(),
             )),
             ActiveBackendSlot::Sqlite => {
@@ -100,7 +100,7 @@ pub fn active_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeErro
         let backend = cell.borrow();
         match *backend {
             ActiveBackendSlot::None => Err(NativeError(
-                "No database backend connected (call Db.connect!, Sqlite.connect!, etc. first)"
+                "No database backend connected (call Sqlite.connect!, Postgres.connect!, etc. first)"
                     .into(),
             )),
             ActiveBackendSlot::Sqlite => {

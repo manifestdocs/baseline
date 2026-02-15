@@ -116,7 +116,7 @@ mod tests {
     use crate::vm::natives::db;
 
     fn setup_memory_db() {
-        db::native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
+        db::native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
     }
 
     #[test]

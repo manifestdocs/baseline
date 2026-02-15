@@ -436,15 +436,7 @@ impl NativeRegistry {
         self.register("Weak.downgrade", weak::native_weak_downgrade);
         self.register("Weak.upgrade", weak::native_weak_upgrade);
 
-        // -- Db (backwards-compatible, defaults to SQLite) --
-        self.register("Db.connect!", db::native_db_connect);
-        self.register("Db.connect", db::native_db_connect);
-        self.register("Db.execute!", db::native_db_execute);
-        self.register("Db.execute", db::native_db_execute);
-        self.register("Db.query!", db::native_db_query);
-        self.register("Db.query", db::native_db_query);
-
-        // -- Sqlite (explicit backend) --
+        // -- Sqlite --
         self.register("Sqlite.connect!", db::native_sqlite_connect);
         self.register("Sqlite.connect", db::native_sqlite_connect);
         self.register("Sqlite.execute!", db::native_sqlite_execute);
@@ -1045,14 +1037,14 @@ mod tests {
     }
 
     #[test]
-    fn db_functions_registered() {
+    fn sqlite_functions_registered() {
         let reg = NativeRegistry::new();
-        assert!(reg.lookup("Db.connect!").is_some());
-        assert!(reg.lookup("Db.connect").is_some());
-        assert!(reg.lookup("Db.execute!").is_some());
-        assert!(reg.lookup("Db.execute").is_some());
-        assert!(reg.lookup("Db.query!").is_some());
-        assert!(reg.lookup("Db.query").is_some());
+        assert!(reg.lookup("Sqlite.connect!").is_some());
+        assert!(reg.lookup("Sqlite.connect").is_some());
+        assert!(reg.lookup("Sqlite.execute!").is_some());
+        assert!(reg.lookup("Sqlite.execute").is_some());
+        assert!(reg.lookup("Sqlite.query!").is_some());
+        assert!(reg.lookup("Sqlite.query").is_some());
     }
 
     // Compile-time assertion: NativeRegistry must be Send+Sync
