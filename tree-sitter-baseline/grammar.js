@@ -221,7 +221,8 @@ module.exports = grammar({
     option_type: $ => prec.left(10, seq($._type_expr, '?')),
     tuple_type: $ => seq('(', commaSep($._type_expr), ')'),
     record_type: $ => seq('{', commaSep($.record_field_def), optional(seq(',', $.row_variable)), '}'),
-    record_field_def: $ => seq($.identifier, ':', $._type_expr),
+    _field_name: $ => choice($.identifier, $.string_literal),
+    record_field_def: $ => seq($._field_name, ':', $._type_expr),
     row_variable: $ => seq('..', $.identifier),
     function_type: $ => seq('(', commaSep($._type_expr), ')', '->', $._type_expr),
 
@@ -239,6 +240,7 @@ module.exports = grammar({
       $.for_expression,
       $.with_expression,
       $.handle_expression,
+      $.restrict_expression,
       $.binary_expression,
       $.unary_expression,
       $.try_expression,
@@ -319,6 +321,14 @@ module.exports = grammar({
       field('handler_body', $._expression),
     ),
 
+    // restrict(DB, Http) { body } — statically narrow allowed effects
+    // restrict { body } — enforce total purity (no effects allowed)
+    restrict_expression: $ => prec.right(seq(
+      'restrict',
+      optional(seq('(', field('effects', commaSep1($.type_identifier)), ')')),
+      field('body', $.block)
+    )),
+
     // req.params.id or Log.info!
     field_expression: $ => prec.left(PREC.MEMBER, seq(
       $._expression,
@@ -361,7 +371,7 @@ module.exports = grammar({
 
     // { id: 1 } (Anonymous)
     record_expression: $ => seq('{', commaSep($.record_field_init), '}'),
-    record_field_init: $ => seq($.identifier, ':', $._expression),
+    record_field_init: $ => seq($._field_name, ':', $._expression),
 
     // { ..record, field: newValue }
     record_update: $ => seq('{', '..', $._expression, repeat(seq(',', $.record_field_init)), optional(','), '}'),

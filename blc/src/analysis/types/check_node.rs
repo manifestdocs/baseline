@@ -9,6 +9,49 @@ use super::super::infer::{InferCtx, UserGenericSchema};
 use std::collections::HashSet;
 use tree_sitter::Node;
 
+/// Extract a field name from an identifier or string_literal node.
+/// For identifiers, returns the text directly.
+/// For string_literal nodes, concatenates string_content children and rejects interpolation.
+pub(super) fn extract_field_name(
+    node: &Node,
+    source: &str,
+    file: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<String> {
+    match node.kind() {
+        "identifier" => Some(node.utf8_text(source.as_bytes()).unwrap().to_string()),
+        "string_literal" => {
+            let mut name = String::new();
+            let mut cursor = node.walk();
+            for child in node.children(&mut cursor) {
+                match child.kind() {
+                    "string_content" => {
+                        name.push_str(child.utf8_text(source.as_bytes()).unwrap());
+                    }
+                    "interpolation" => {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_030".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &child),
+                            message: "Interpolation is not allowed in quoted field names".to_string(),
+                            context: "Use a plain string literal for field names.".to_string(),
+                            suggestions: vec![],
+                        });
+                        return None;
+                    }
+                    // string_start, string_end, escape_sequence — skip delimiters, allow escapes
+                    "escape_sequence" => {
+                        name.push_str(child.utf8_text(source.as_bytes()).unwrap());
+                    }
+                    _ => {}
+                }
+            }
+            Some(name)
+        }
+        _ => Some(node.utf8_text(source.as_bytes()).unwrap().to_string()),
+    }
+}
+
 /// Check a single `inline_test` node: the expression must type-check to Bool.
 pub(super) fn check_inline_test(
     test_node: &Node,
@@ -835,10 +878,13 @@ fn check_node_inner(
                 let count = node.named_child_count();
                 for i in 1..count {
                     let field_init = node.named_child(i).unwrap();
-                    let fname_node = field_init.child(0).unwrap();
-                    let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                    let fname_node = field_init.named_child(0).unwrap();
+                    let fname = match extract_field_name(&fname_node, source, file, diagnostics) {
+                        Some(n) => n,
+                        None => continue,
+                    };
 
-                    let fexpr_node = field_init.child(2).unwrap();
+                    let fexpr_node = field_init.named_child(1).unwrap();
                     let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
 
                     if let Some(expected_type) = fields.get(&fname) {
@@ -901,11 +947,12 @@ fn check_node_inner(
             for i in 0..count {
                 let field_init = node.named_child(i).unwrap();
                 if field_init.kind() == "record_field_init" {
-                    let fname_node = field_init.child(0).unwrap();
-                    let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                    let fexpr_node = field_init.child(2).unwrap();
-                    let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
-                    fields.insert(fname, ftype);
+                    let fname_node = field_init.named_child(0).unwrap();
+                    if let Some(fname) = extract_field_name(&fname_node, source, file, diagnostics) {
+                        let fexpr_node = field_init.named_child(1).unwrap();
+                        let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
+                        fields.insert(fname, ftype);
+                    }
                 }
             }
             Type::Record(fields, None)
@@ -921,9 +968,12 @@ fn check_node_inner(
                     let count = node.named_child_count();
                     for i in 1..count {
                         let field_init = node.named_child(i).unwrap();
-                        let fname_node = field_init.child(0).unwrap();
-                        let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                        let fexpr_node = field_init.child(2).unwrap();
+                        let fname_node = field_init.named_child(0).unwrap();
+                        let fname = match extract_field_name(&fname_node, source, file, diagnostics) {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        let fexpr_node = field_init.named_child(1).unwrap();
                         let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
 
                         if let Some(expected_type) = fields.get(&fname) {
@@ -957,9 +1007,12 @@ fn check_node_inner(
                     let count = node.named_child_count();
                     for i in 1..count {
                         let field_init = node.named_child(i).unwrap();
-                        let fname_node = field_init.child(0).unwrap();
-                        let fname = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                        let fexpr_node = field_init.child(2).unwrap();
+                        let fname_node = field_init.named_child(0).unwrap();
+                        let fname = match extract_field_name(&fname_node, source, file, diagnostics) {
+                            Some(n) => n,
+                            None => continue,
+                        };
+                        let fexpr_node = field_init.named_child(1).unwrap();
                         let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
 
                         if let Some(expected_type) = fields.get(&fname) {
@@ -1048,8 +1101,21 @@ fn check_node_inner(
                     let qualified = format!("{}.{}", module_name, field_name);
                     if let Some(ty) = symbols.lookup_module_method(&qualified) {
                         ty.clone()
+                    } else if symbols.is_user_module(module_name) {
+                        diagnostics.push(Diagnostic {
+                            code: "IMP_004".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &field_node),
+                            message: format!(
+                                "Symbol `{}` not found in module `{}`",
+                                field_name, module_name
+                            ),
+                            context: "The symbol may be private (not exported) or does not exist.".to_string(),
+                            suggestions: vec![],
+                        });
+                        Type::Unknown
                     } else {
-                        // Unknown method — allow for forward compat / effect-only checking
+                        // Builtin module — allow unknown methods for forward compat
                         Type::Unknown
                     }
                 }

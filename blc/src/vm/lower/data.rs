@@ -108,7 +108,7 @@ impl<'a> super::Lowerer<'a> {
             let val_node = field_init
                 .named_child(1)
                 .ok_or_else(|| self.error("Record field missing value".into(), &field_init))?;
-            let key = self.node_text(&key_node);
+            let key = self.field_name_text(&key_node)?;
             let val = self.lower_expression(&val_node)?;
             fields.push((key, val));
         }
@@ -165,7 +165,7 @@ impl<'a> super::Lowerer<'a> {
             }
             let key_node = field_init.named_child(0).unwrap();
             let val_node = field_init.named_child(1).unwrap();
-            let key = self.node_text(&key_node);
+            let key = self.field_name_text(&key_node)?;
             let val = self.lower_expression(&val_node)?;
             fields.push((key, val));
         }
@@ -221,7 +221,7 @@ impl<'a> super::Lowerer<'a> {
             if child.kind() == "record_field_init" {
                 let key = child.named_child(0).unwrap();
                 let val = child.named_child(1).unwrap();
-                let key_name = self.node_text(&key);
+                let key_name = self.field_name_text(&key)?;
                 let val_expr = self.lower_expression(&val)?;
                 updates.push((key_name, val_expr));
             }

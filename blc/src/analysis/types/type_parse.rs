@@ -138,10 +138,11 @@ pub(super) fn parse_type_ext(
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
                 if child.kind() == "record_field_def" {
-                    let name_node = child.child(0).unwrap();
-                    let type_node = child.child(2).unwrap();
+                    let name_node = child.named_child(0).unwrap();
+                    let type_node = child.named_child(1).unwrap();
 
-                    let name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                    let name = super::check_node::extract_field_name(&name_node, source, "", &mut vec![])
+                        .unwrap_or_default();
                     let ty = parse_type_ext(&type_node, source, symbols, type_params);
                     fields.insert(name, ty);
                 } else if child.kind() == "row_variable" {
