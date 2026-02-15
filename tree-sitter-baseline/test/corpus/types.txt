@@ -272,7 +272,7 @@ fn greet(person: { name: String, ..r }) -> String =
     name: (identifier)
     params: (param_list
       (param
-        name: (identifier)
+        pattern: (identifier)
         type: (record_type
           (record_field_def
             (identifier)

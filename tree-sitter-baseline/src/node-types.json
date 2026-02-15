@@ -796,6 +796,10 @@
           "named": true
         },
         {
+          "type": "record_pattern",
+          "named": true
+        },
+        {
           "type": "tuple_pattern",
           "named": true
         },
@@ -1393,6 +1397,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_pattern",
           "named": true
         },
         {
@@ -3053,6 +3061,10 @@
           "named": true
         },
         {
+          "type": "record_pattern",
+          "named": true
+        },
+        {
           "type": "record_update",
           "named": true
         },
@@ -3200,6 +3212,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_pattern",
           "named": true
         },
         {
@@ -3773,6 +3789,10 @@
           "named": true
         },
         {
+          "type": "record_pattern",
+          "named": true
+        },
+        {
           "type": "record_update",
           "named": true
         },
@@ -4040,6 +4060,10 @@
         },
         {
           "type": "record_expression",
+          "named": true
+        },
+        {
+          "type": "record_pattern",
           "named": true
         },
         {
@@ -4327,12 +4351,36 @@
     "type": "param",
     "named": true,
     "fields": {
-      "name": {
+      "pattern": {
         "multiple": false,
         "required": true,
         "types": [
           {
+            "type": "constructor_pattern",
+            "named": true
+          },
+          {
             "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "literal",
+            "named": true
+          },
+          {
+            "type": "record_pattern",
+            "named": true
+          },
+          {
+            "type": "tuple_pattern",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          },
+          {
+            "type": "wildcard_pattern",
             "named": true
           }
         ]
@@ -5143,6 +5191,71 @@
     }
   },
   {
+    "type": "record_pattern",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "record_pattern_field",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_pattern_field",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "pattern": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "constructor_pattern",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "literal",
+            "named": true
+          },
+          {
+            "type": "record_pattern",
+            "named": true
+          },
+          {
+            "type": "tuple_pattern",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          },
+          {
+            "type": "wildcard_pattern",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "record_type",
     "named": true,
     "fields": {},
@@ -5852,6 +5965,21 @@
     }
   },
   {
+    "type": "supertrait_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "type_identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "test_section",
     "named": true,
     "fields": {},
@@ -5871,6 +5999,21 @@
     }
   },
   {
+    "type": "trait_bound_list",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "type_identifier",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
     "type": "trait_def",
     "named": true,
     "fields": {
@@ -5883,12 +6026,26 @@
             "named": true
           }
         ]
+      },
+      "supertraits": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "supertrait_list",
+            "named": true
+          }
+        ]
       }
     },
     "children": {
       "multiple": true,
       "required": false,
       "types": [
+        {
+          "type": "function_def",
+          "named": true
+        },
         {
           "type": "function_signature",
           "named": true
@@ -6175,6 +6332,10 @@
           "named": true
         },
         {
+          "type": "record_pattern",
+          "named": true
+        },
+        {
           "type": "tuple_pattern",
           "named": true
         },
@@ -6324,6 +6485,32 @@
     }
   },
   {
+    "type": "type_param",
+    "named": true,
+    "fields": {
+      "bounds": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "trait_bound_list",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "type_params",
     "named": true,
     "fields": {},
@@ -6332,7 +6519,7 @@
       "required": true,
       "types": [
         {
-          "type": "type_identifier",
+          "type": "type_param",
           "named": true
         }
       ]

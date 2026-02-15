@@ -106,7 +106,7 @@ test "zero" = add(0) == 1
     name: (identifier)
     params: (param_list
       (param
-        name: (identifier)
+        pattern: (identifier)
         type: (type_identifier)))
     return_type: (type_identifier)
     body: (binary_expression

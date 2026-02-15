@@ -67,6 +67,10 @@ module.exports = grammar({
     [$.named_argument, $.record_field_init],
     // type_identifier in pattern could be nullary or start of constructor_pattern in matcher
     [$._pattern, $.constructor_pattern],
+    // { identifier could be record_expression or record_pattern
+    [$.record_expression, $.record_pattern],
+    // record_pattern_field shorthand (identifier) could be pattern or field init
+    [$.record_pattern_field, $.record_field_init],
   ],
 
   rules: {
@@ -149,7 +153,7 @@ module.exports = grammar({
     ),
 
     param_list: $ => commaSep1($.param),
-    param: $ => seq(field('name', $.identifier), ':', field('type', $._type_expr)),
+    param: $ => seq(field('pattern', $._pattern), ':', field('type', $._type_expr)),
 
     effect_def: $ => seq(
       optional('export'),
@@ -158,8 +162,11 @@ module.exports = grammar({
 
     trait_def: $ => seq(
       'trait', field('name', $.type_identifier), optional($.type_params),
-      '{', repeat($.function_signature), '}'
+      optional(seq(':', field('supertraits', $.supertrait_list))),
+      '{', repeat(choice($.function_signature, $.function_def)), '}'
     ),
+
+    supertrait_list: $ => commaSep1($.type_identifier),
 
     impl_block: $ => seq(
       'impl', field('trait_name', $.type_identifier), optional($.type_params),
@@ -241,7 +248,14 @@ module.exports = grammar({
 
     effect_set: $ => seq('{', commaSep1($.type_identifier), '}'),
     function_signature: $ => seq($._name, ':', $.type_signature),
-    type_params: $ => seq('<', commaSep1($.type_identifier), '>'),
+    type_params: $ => seq('<', commaSep1($.type_param), '>'),
+
+    type_param: $ => seq(
+      field('name', $.type_identifier),
+      optional(seq(':', field('bounds', $.trait_bound_list)))
+    ),
+
+    trait_bound_list: $ => seq($.type_identifier, repeat(seq('+', $.type_identifier))),
     type_annotation: $ => seq(':', $._type_expr),
 
     // --- Expressions ---
@@ -412,11 +426,17 @@ module.exports = grammar({
       $.constructor_pattern, // Matches constructors with payload: Some(v)
       $.literal,
       $.tuple_pattern,
-      $.wildcard_pattern
+      $.wildcard_pattern,
+      $.record_pattern
     ),
     constructor_pattern: $ => seq($.type_identifier, '(', commaSep($._pattern), ')'),
     tuple_pattern: $ => seq('(', commaSep($._pattern), ')'),
     wildcard_pattern: $ => '_',
+    record_pattern: $ => seq('{', commaSep($.record_pattern_field), '}'),
+    record_pattern_field: $ => choice(
+      seq(field('name', $.identifier), ':', field('pattern', $._pattern)),  // renamed: { x: pat }
+      field('name', $.identifier),                                          // shorthand: { x }
+    ),
 
     // --- Refinements & Testing ---
 
