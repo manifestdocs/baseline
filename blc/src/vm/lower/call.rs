@@ -64,6 +64,35 @@ impl<'a> super::Lowerer<'a> {
         let was_tail = self.tail_position;
         self.tail_position = false;
 
+        // Trait method call: check if the type checker resolved a mangled name for this callee
+        if callee.kind() == "field_expression" {
+            let mangled_name = self.type_map.as_ref().and_then(|tm| {
+                let key = callee.start_byte();
+                if let Some(ty) = tm.get(&key) {
+                    if let crate::analysis::types::Type::Module(mangled) = ty {
+                        if mangled.contains('$') {
+                            return Some(mangled.clone());
+                        }
+                    }
+                }
+                None
+            });
+            if let Some(mangled) = mangled_name {
+                if self.functions.contains(&mangled) {
+                    let mut args = Vec::new();
+                    for arg in arg_nodes {
+                        args.push(self.lower_expression(arg)?);
+                    }
+                    self.tail_position = was_tail;
+                    return Ok(Expr::CallDirect {
+                        name: mangled,
+                        args,
+                        ty: None,
+                    });
+                }
+            }
+        }
+
         // Native call: Module.method(args)
         if callee.kind() == "field_expression"
             && let Some((module, method, qualified)) = self.try_resolve_qualified(callee)

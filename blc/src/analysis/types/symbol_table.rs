@@ -4,6 +4,23 @@ use crate::prelude::{self, Prelude};
 use super::super::infer::{GenericSchema, UserGenericSchema, builtin_generic_schemas};
 use std::collections::{HashMap, HashSet};
 
+/// A trait definition: trait name + method signatures.
+#[allow(dead_code)]
+pub struct TraitDef {
+    pub name: String,
+    /// Method signatures: (method_name, fn_type with Self as TypeParam).
+    pub methods: Vec<(String, Type)>,
+}
+
+/// A concrete impl of a trait for a specific type.
+#[allow(dead_code)]
+pub struct TraitImpl {
+    pub trait_name: String,
+    pub target_type: Type,
+    /// method_name -> mangled function name (e.g. "Show$Int$show").
+    pub methods: HashMap<String, String>,
+}
+
 pub struct SymbolTable {
     pub(super) scopes: Vec<HashMap<String, Type>>,
     pub(super) types: HashMap<String, Type>, // Registry for named types (structs)
@@ -17,6 +34,10 @@ pub struct SymbolTable {
     pub type_map: TypeMap,
     /// Modules explicitly imported by the user (vs builtin pseudo-modules).
     pub(super) user_modules: HashSet<String>,
+    /// Trait definitions: trait_name -> TraitDef.
+    pub(super) trait_defs: HashMap<String, TraitDef>,
+    /// Trait implementations: (trait_name, type_key) -> TraitImpl.
+    pub(super) trait_impls: HashMap<(String, String), TraitImpl>,
 }
 
 impl SymbolTable {
@@ -30,6 +51,8 @@ impl SymbolTable {
             fn_params: HashMap::new(),
             type_map: TypeMap::new(),
             user_modules: HashSet::new(),
+            trait_defs: HashMap::new(),
+            trait_impls: HashMap::new(),
         };
 
         // Option/Result types and constructors are language primitives — always registered.
@@ -146,6 +169,30 @@ impl SymbolTable {
 
     pub(super) fn lookup_fn_params(&self, name: &str) -> Option<&Vec<String>> {
         self.fn_params.get(name)
+    }
+
+    /// Convert a type to a string key for trait impl lookup.
+    pub(super) fn type_key(ty: &Type) -> String {
+        match ty {
+            Type::Int => "Int".to_string(),
+            Type::Float => "Float".to_string(),
+            Type::String => "String".to_string(),
+            Type::Bool => "Bool".to_string(),
+            Type::Unit => "Unit".to_string(),
+            Type::Struct(name, _) => name.clone(),
+            Type::Enum(name, _) => name.clone(),
+            Type::List(inner) => format!("List<{}>", Self::type_key(inner)),
+            Type::Refined(_, name) => name.clone(),
+            _ => format!("{}", ty),
+        }
+    }
+
+    pub(super) fn lookup_trait(&self, name: &str) -> Option<&TraitDef> {
+        self.trait_defs.get(name)
+    }
+
+    pub(super) fn lookup_trait_impl(&self, trait_name: &str, type_key: &str) -> Option<&TraitImpl> {
+        self.trait_impls.get(&(trait_name.to_string(), type_key.to_string()))
     }
 
     /// Collect all visible bindings from current scope chain (for typed holes).

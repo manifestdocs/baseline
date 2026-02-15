@@ -105,7 +105,9 @@ module.exports = grammar({
     _definition: $ => choice(
       $.function_def,
       $.type_def,
-      $.effect_def
+      $.effect_def,
+      $.trait_def,
+      $.impl_block
     ),
 
     // type Port = Int where self > 0
@@ -152,6 +154,17 @@ module.exports = grammar({
     effect_def: $ => seq(
       optional('export'),
       'effect', $.type_identifier, '{', repeat($.function_signature), '}'
+    ),
+
+    trait_def: $ => seq(
+      'trait', field('name', $.type_identifier), optional($.type_params),
+      '{', repeat($.function_signature), '}'
+    ),
+
+    impl_block: $ => seq(
+      'impl', field('trait_name', $.type_identifier), optional($.type_params),
+      'for', field('target_type', $._type_expr),
+      '{', repeat($.function_def), '}'
     ),
 
     // --- Specifications ---

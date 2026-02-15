@@ -73,8 +73,11 @@ impl<'a> Lowerer<'a> {
     /// Lower a full source file into an IrModule.
     pub fn lower_module(&mut self, root: &Node) -> Result<IrModule, CompileError> {
         // First pass: collect function names and parameter names
-        // Handles both top-level function_def and function_def wrapped in spec_block
+        // Handles both top-level function_def, function_def wrapped in spec_block,
+        // and function_def inside impl_block (with mangled names)
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
+        // Collect impl_block functions separately: (mangled_name, parent_child_idx, func_child_idx)
+        let mut impl_func_nodes: Vec<(String, usize, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
             let func = if child.kind() == "function_def" {
@@ -104,6 +107,10 @@ impl<'a> Lowerer<'a> {
             // Collect simple enum definitions for auto-derived methods
             if child.kind() == "type_def" {
                 self.collect_enum_def(&child);
+            }
+            // Collect impl_block functions with mangled names
+            if child.kind() == "impl_block" {
+                self.collect_impl_block_functions(&child, i, &mut func_nodes, &mut impl_func_nodes);
             }
         }
 
@@ -137,6 +144,14 @@ impl<'a> Lowerer<'a> {
             functions.push(func);
         }
 
+        // Lower impl_block functions
+        for (mangled_name, parent_idx, func_idx) in &impl_func_nodes {
+            let impl_block = root.named_child(*parent_idx).unwrap();
+            let func_node = impl_block.named_child(*func_idx).unwrap();
+            let func = self.lower_function_def(&func_node, mangled_name)?;
+            functions.push(func);
+        }
+
         // Find entry point
         let entry = functions
             .iter()
@@ -159,6 +174,7 @@ impl<'a> Lowerer<'a> {
     pub fn lower_module_functions(&mut self, root: &Node) -> Result<Vec<IrFunction>, CompileError> {
         // First pass: collect function names (unwrap spec_block)
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
+        let mut impl_func_nodes: Vec<(String, usize, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
             let func = if child.kind() == "function_def" {
@@ -186,6 +202,9 @@ impl<'a> Lowerer<'a> {
             if child.kind() == "type_def" {
                 self.collect_enum_def(&child);
             }
+            if child.kind() == "impl_block" {
+                self.collect_impl_block_functions(&child, i, &mut func_nodes, &mut impl_func_nodes);
+            }
         }
 
         let mut functions = Vec::new();
@@ -205,6 +224,14 @@ impl<'a> Lowerer<'a> {
                 child
             };
             let func = self.lower_function_def(&func_node, name)?;
+            functions.push(func);
+        }
+
+        // Lower impl_block functions
+        for (mangled_name, parent_idx, func_idx) in &impl_func_nodes {
+            let impl_block = root.named_child(*parent_idx).unwrap();
+            let func_node = impl_block.named_child(*func_idx).unwrap();
+            let func = self.lower_function_def(&func_node, mangled_name)?;
             functions.push(func);
         }
 
@@ -255,6 +282,41 @@ impl<'a> Lowerer<'a> {
             ty,
             span,
         })
+    }
+
+    /// Collect function definitions from an impl_block, generating mangled names.
+    fn collect_impl_block_functions(
+        &mut self,
+        impl_node: &Node,
+        parent_idx: usize,
+        _func_nodes: &mut Vec<(String, usize)>,
+        impl_func_nodes: &mut Vec<(String, usize, usize)>,
+    ) {
+        let trait_name_node = match impl_node.child_by_field_name("trait_name") {
+            Some(n) => n,
+            None => return,
+        };
+        let trait_name = self.node_text(&trait_name_node);
+
+        let target_type_node = match impl_node.child_by_field_name("target_type") {
+            Some(n) => n,
+            None => return,
+        };
+        let type_key = self.node_text(&target_type_node);
+
+        let mut cursor = impl_node.walk();
+        for (func_idx, child) in impl_node.named_children(&mut cursor).enumerate() {
+            if child.kind() == "function_def" {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    let method_name = self.node_text(&name_node);
+                    let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+                    self.functions.insert(mangled.clone());
+                    let params = self.extract_param_names(&child);
+                    self.fn_params.insert(mangled.clone(), params);
+                    impl_func_nodes.push((mangled, parent_idx, func_idx));
+                }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -326,6 +388,7 @@ impl<'a> Lowerer<'a> {
                 Ok(Expr::Unit)
             }
             "handler_map" | "handler_binding" | "handler_clause" => Ok(Expr::Unit),
+            "trait_def" | "impl_block" => Ok(Expr::Unit),
             "line_comment" | "block_comment" => Ok(Expr::Unit),
             _ => Err(self.error(format!("Unsupported expression kind: {}", kind), node)),
         }

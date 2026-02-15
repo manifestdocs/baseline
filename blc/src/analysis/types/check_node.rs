@@ -107,7 +107,10 @@ pub(super) fn check_node(
 ) -> Type {
     let ty = check_node_inner(node, source, file, symbols, diagnostics);
     // Record the resolved type for this node (used by the VM compiler for specialization).
-    symbols.type_map.insert(node.start_byte(), ty.clone());
+    // Don't overwrite trait dispatch entries (mangled names stored as Type::Module with '$').
+    if !matches!(symbols.type_map.get(&node.start_byte()), Some(Type::Module(m)) if m.contains('$')) {
+        symbols.type_map.insert(node.start_byte(), ty.clone());
+    }
     ty
 }
 
@@ -180,6 +183,14 @@ fn check_node_inner(
             if !name.is_empty() {
                 symbols.insert_type(name.clone(), Type::Module(name));
             }
+            Type::Unit
+        }
+        "trait_def" => {
+            // Already handled in collect_signatures — just validate here
+            Type::Unit
+        }
+        "impl_block" => {
+            check_impl_block(node, source, file, symbols, diagnostics);
             Type::Unit
         }
         "type_def" => {
@@ -624,6 +635,77 @@ fn check_node_inner(
                             patch: None,
                         }],
                     });
+                }
+            }
+
+            // Trait method call: TraitName.method(value, args...)
+            if let Some(qualified) = extract_qualified_name(&func_node, source) {
+                let parts: Vec<&str> = qualified.splitn(2, '.').collect();
+                if parts.len() == 2 {
+                    let maybe_trait = parts[0];
+                    let method = parts[1];
+                    let is_trait = symbols.lookup_trait(maybe_trait).is_some();
+                    if is_trait && params_provided >= 1 {
+                        // Infer type of first argument to determine which impl to use
+                        let first_arg_node = node.named_child(1).unwrap();
+                        let first_arg_expr = call_arg_expr(&first_arg_node);
+                        let first_arg_type = check_node(&first_arg_expr, source, file, symbols, diagnostics);
+                        let type_key = SymbolTable::type_key(&first_arg_type);
+
+                        // Type-check remaining args
+                        for i in 2..=params_provided {
+                            if let Some(arg_node) = node.named_child(i) {
+                                let arg_expr = call_arg_expr(&arg_node);
+                                check_node(&arg_expr, source, file, symbols, diagnostics);
+                            }
+                        }
+
+                        if let Some(trait_impl) = symbols.lookup_trait_impl(maybe_trait, &type_key) {
+                            if let Some(mangled) = trait_impl.methods.get(method) {
+                                let mangled_clone = mangled.clone();
+                                // Store mangled name in type_map for the call site
+                                // so the lowerer can resolve it
+                                symbols.type_map.insert(
+                                    func_node.start_byte(),
+                                    Type::Module(mangled_clone.clone()),
+                                );
+
+                                // Get return type from the mangled function
+                                let ret_type = if let Some(Type::Function(_, ret)) = symbols.lookup(&mangled_clone) {
+                                    *ret.clone()
+                                } else {
+                                    Type::Unknown
+                                };
+                                return ret_type;
+                            } else {
+                                diagnostics.push(Diagnostic {
+                                    code: "TRT_004".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &func_node),
+                                    message: format!(
+                                        "No method `{}` in impl of `{}` for `{}`",
+                                        method, maybe_trait, type_key
+                                    ),
+                                    context: "Trait method not found in implementation.".to_string(),
+                                    suggestions: vec![],
+                                });
+                                return Type::Unknown;
+                            }
+                        } else {
+                            diagnostics.push(Diagnostic {
+                                code: "TRT_004".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, &func_node),
+                                message: format!(
+                                    "No impl of `{}` for `{}`",
+                                    maybe_trait, type_key
+                                ),
+                                context: "Implement the trait for this type first.".to_string(),
+                                suggestions: vec![],
+                            });
+                            return Type::Unknown;
+                        }
+                    }
                 }
             }
 
@@ -1723,6 +1805,208 @@ fn check_node_inner(
         }
         _ => {
             Type::Unit // simplified
+        }
+    }
+}
+
+/// Substitute all occurrences of TypeParam("Self") with the concrete target type.
+fn substitute_self(ty: &Type, target: &Type) -> Type {
+    match ty {
+        Type::TypeParam(name) if name == "Self" => target.clone(),
+        Type::Function(args, ret) => {
+            let new_args = args.iter().map(|a| substitute_self(a, target)).collect();
+            let new_ret = substitute_self(ret, target);
+            Type::Function(new_args, Box::new(new_ret))
+        }
+        Type::List(inner) => Type::List(Box::new(substitute_self(inner, target))),
+        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute_self(e, target)).collect()),
+        Type::Enum(name, variants) => {
+            let new_variants = variants.iter().map(|(n, payloads)| {
+                (n.clone(), payloads.iter().map(|p| substitute_self(p, target)).collect())
+            }).collect();
+            Type::Enum(name.clone(), new_variants)
+        }
+        _ => ty.clone(),
+    }
+}
+
+/// Type-check an impl block: validate trait exists, check method signatures, check bodies.
+fn check_impl_block(
+    node: &Node,
+    source: &str,
+    file: &str,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let trait_name_node = match node.child_by_field_name("trait_name") {
+        Some(n) => n,
+        None => return,
+    };
+    let trait_name = trait_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+
+    let target_type_node = match node.child_by_field_name("target_type") {
+        Some(n) => n,
+        None => return,
+    };
+    let target_type = super::type_parse::parse_type(&target_type_node, source, symbols);
+    let type_key = SymbolTable::type_key(&target_type);
+
+    // TRT_001: Unknown trait
+    let trait_def = match symbols.lookup_trait(&trait_name) {
+        Some(td) => td,
+        None => {
+            diagnostics.push(Diagnostic {
+                code: "TRT_001".to_string(),
+                severity: Severity::Error,
+                location: Location::from_node(file, &trait_name_node),
+                message: format!("Unknown trait `{}`", trait_name),
+                context: "Trait must be defined before implementing.".to_string(),
+                suggestions: vec![],
+            });
+            return;
+        }
+    };
+    let trait_methods: Vec<(String, Type)> = trait_def.methods.clone();
+
+    // TRT_003: Duplicate impl check
+    // Note: collect_impl_block already stored the first impl; we check here for diagnostics
+    // We detect duplicate by counting how many impl_block nodes have the same trait+type
+    // (collect_signatures skips duplicates, so the impl is already stored for the first one)
+
+    // TRT_007: Cannot impl trait for non-concrete type
+    match &target_type {
+        Type::TypeParam(_) | Type::Var(_) | Type::Unknown => {
+            diagnostics.push(Diagnostic {
+                code: "TRT_007".to_string(),
+                severity: Severity::Error,
+                location: Location::from_node(file, &target_type_node),
+                message: format!("Cannot impl trait for non-concrete type `{}`", target_type),
+                context: "Trait implementations require a concrete type.".to_string(),
+                suggestions: vec![],
+            });
+            return;
+        }
+        _ => {}
+    }
+
+    // Collect implemented method names
+    let mut impl_method_names: Vec<String> = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.named_children(&mut cursor) {
+        if child.kind() == "function_def" {
+            if let Some(name_node) = child.child_by_field_name("name") {
+                let method_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+
+                // TRT_006: Extra method not in trait
+                if !trait_methods.iter().any(|(n, _)| n == &method_name) {
+                    diagnostics.push(Diagnostic {
+                        code: "TRT_006".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &name_node),
+                        message: format!(
+                            "Extra method `{}` not in trait `{}`",
+                            method_name, trait_name
+                        ),
+                        context: format!(
+                            "Trait `{}` defines: {}",
+                            trait_name,
+                            trait_methods.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
+                        ),
+                        suggestions: vec![],
+                    });
+                    impl_method_names.push(method_name);
+                    continue;
+                }
+
+                // Type-check the method body using the mangled name
+                let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+                let fn_type = symbols.lookup(&mangled).cloned();
+
+                if let Some(Type::Function(ref arg_types, ref ret_type)) = fn_type {
+                    // TRT_005: Check method signature matches trait
+                    if let Some((_, trait_fn_type)) = trait_methods.iter().find(|(n, _)| n == &method_name) {
+                        let substituted = substitute_self(trait_fn_type, &target_type);
+                        if let Type::Function(ref expected_args, ref expected_ret) = substituted {
+                            let sig_matches = arg_types.len() == expected_args.len()
+                                && arg_types.iter().zip(expected_args.iter()).all(|(a, e)| {
+                                    super::type_compat::types_compatible(a, e)
+                                })
+                                && super::type_compat::types_compatible(ret_type, expected_ret);
+
+                            if !sig_matches {
+                                diagnostics.push(Diagnostic {
+                                    code: "TRT_005".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &name_node),
+                                    message: format!(
+                                        "Method `{}` signature doesn't match trait definition: expected {}, found {}",
+                                        method_name, substituted, fn_type.as_ref().unwrap()
+                                    ),
+                                    context: "Impl method signature must match the trait definition.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        }
+                    }
+
+                    // Type-check the function body
+                    symbols.enter_scope();
+
+                    if let Some(params) = child.child_by_field_name("params") {
+                        let mut pcursor = params.walk();
+                        let mut i = 0;
+                        for param in params.named_children(&mut pcursor) {
+                            if param.kind() == "param" {
+                                if let Some(pn) = param.child_by_field_name("name") {
+                                    let arg_name = pn.utf8_text(source.as_bytes()).unwrap().to_string();
+                                    if i < arg_types.len() {
+                                        symbols.insert(arg_name, arg_types[i].clone());
+                                    }
+                                    i += 1;
+                                }
+                            }
+                        }
+                    }
+
+                    if let Some(body_node) = child.child_by_field_name("body") {
+                        let body_type = check_node(&body_node, source, file, symbols, diagnostics);
+                        if !super::type_compat::types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_006".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, &body_node),
+                                message: format!(
+                                    "Function `{}` declares return type {}, body returns {}",
+                                    method_name, ret_type, body_type
+                                ),
+                                context: "Function body return type must match signature.".to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+                    }
+
+                    symbols.exit_scope();
+                }
+
+                impl_method_names.push(method_name);
+            }
+        }
+    }
+
+    // TRT_002: Missing methods
+    for (method_name, _) in &trait_methods {
+        if !impl_method_names.contains(method_name) {
+            diagnostics.push(Diagnostic {
+                code: "TRT_002".to_string(),
+                severity: Severity::Error,
+                location: Location::from_node(file, node),
+                message: format!(
+                    "Missing method `{}` in impl of `{}` for `{}`",
+                    method_name, trait_name, type_key
+                ),
+                context: "All trait methods must be implemented.".to_string(),
+                suggestions: vec![],
+            });
         }
     }
 }

@@ -1,0 +1,29 @@
+// Trait definitions and implementations
+// Tests basic trait/impl dispatch with concrete types
+
+trait Show {
+  show : Self -> String
+}
+
+impl Show for Int {
+  fn show(x: Int) -> String = Int.to_string(x)
+}
+
+impl Show for Bool {
+  fn show(b: Bool) -> String = if b then "true" else "false"
+}
+
+trait Double {
+  double : Self -> Self
+}
+
+impl Double for Int {
+  fn double(x: Int) -> Int = x + x
+}
+
+fn main() -> Int = 0
+
+test "trait Show for Int" = Show.show(42) == "42"
+test "trait Show for Bool true" = Show.show(true) == "true"
+test "trait Show for Bool false" = Show.show(false) == "false"
+test "trait Double for Int" = Double.double(21) == 42

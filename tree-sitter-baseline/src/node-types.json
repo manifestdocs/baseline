@@ -850,6 +850,10 @@
           "named": true
         },
         {
+          "type": "impl_block",
+          "named": true
+        },
+        {
           "type": "inline_test",
           "named": true
         },
@@ -859,6 +863,10 @@
         },
         {
           "type": "let_binding",
+          "named": true
+        },
+        {
+          "type": "trait_def",
           "named": true
         },
         {
@@ -2442,6 +2450,66 @@
         },
         {
           "type": "with_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "impl_block",
+    "named": true,
+    "fields": {
+      "target_type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "function_type",
+            "named": true
+          },
+          {
+            "type": "generic_type",
+            "named": true
+          },
+          {
+            "type": "option_type",
+            "named": true
+          },
+          {
+            "type": "record_type",
+            "named": true
+          },
+          {
+            "type": "tuple_type",
+            "named": true
+          },
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      },
+      "trait_name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "function_def",
+          "named": true
+        },
+        {
+          "type": "type_params",
           "named": true
         }
       ]
@@ -5597,6 +5665,10 @@
           "named": true
         },
         {
+          "type": "impl_block",
+          "named": true
+        },
+        {
           "type": "import_decl",
           "named": true
         },
@@ -5618,6 +5690,10 @@
         },
         {
           "type": "test_section",
+          "named": true
+        },
+        {
+          "type": "trait_def",
           "named": true
         },
         {
@@ -5687,7 +5763,15 @@
           "named": true
         },
         {
+          "type": "impl_block",
+          "named": true
+        },
+        {
           "type": "spec_attribute",
+          "named": true
+        },
+        {
+          "type": "trait_def",
           "named": true
         },
         {
@@ -5781,6 +5865,36 @@
         },
         {
           "type": "inline_test",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "trait_def",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "type_identifier",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "function_signature",
+          "named": true
+        },
+        {
+          "type": "type_params",
           "named": true
         }
       ]
@@ -6833,6 +6947,10 @@
     "named": false
   },
   {
+    "type": "impl",
+    "named": false
+  },
+  {
     "type": "import",
     "named": false
   },
@@ -6976,6 +7094,10 @@
   {
     "type": "total_attribute",
     "named": true
+  },
+  {
+    "type": "trait",
+    "named": false
   },
   {
     "type": "true",

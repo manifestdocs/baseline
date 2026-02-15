@@ -1,0 +1,30 @@
+@prelude(core)
+
+// Negative test: trait-related errors
+// Expected errors: TRT_001, TRT_002, TRT_004
+
+// TRT_001: Unknown trait
+impl Nonexistent for Int {
+  fn foo(x: Int) -> Int = x
+}
+
+// TRT_002: Missing method
+trait Greet {
+  greet : Self -> String
+  farewell : Self -> String
+}
+
+impl Greet for Int {
+  fn greet(x: Int) -> String = "hello"
+}
+
+// TRT_004: No impl for type
+trait Show {
+  show : Self -> String
+}
+
+impl Show for Int {
+  fn show(x: Int) -> String = Int.to_string(x)
+}
+
+fn main() -> String = Show.show("not implemented")

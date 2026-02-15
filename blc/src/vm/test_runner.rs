@@ -77,9 +77,15 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
         };
     }
 
+    // Get the TypeMap from the type checker for trait dispatch
+    let type_map = {
+        let (_, tm) = crate::analysis::types::check_types_with_map(&root, &source, &file_str);
+        tm
+    };
+
     // Compile with tests using the IR pipeline
     let natives = NativeRegistry::new();
-    let mut lowerer = Lowerer::new(&source, &natives, None);
+    let mut lowerer = Lowerer::new(&source, &natives, Some(type_map));
     let ir_test_module = match lowerer.lower_module_with_tests(&root) {
         Ok(m) => m,
         Err(e) => {

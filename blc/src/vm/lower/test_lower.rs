@@ -8,6 +8,7 @@ impl<'a> super::Lowerer<'a> {
     pub fn lower_module_with_tests(&mut self, root: &Node) -> Result<IrTestModule, CompileError> {
         // First pass: collect function names and parameter names
         let mut func_nodes: Vec<(String, usize)> = Vec::new();
+        let mut impl_func_nodes: Vec<(String, usize, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
             if let Some(func_node) = self.unwrap_function_def(&child)
@@ -22,6 +23,9 @@ impl<'a> super::Lowerer<'a> {
             if child.kind() == "type_def" {
                 self.collect_enum_def(&child);
             }
+            if child.kind() == "impl_block" {
+                self.collect_impl_block_functions(&child, i, &mut func_nodes, &mut impl_func_nodes);
+            }
         }
 
         // Second pass: lower each function
@@ -30,6 +34,14 @@ impl<'a> super::Lowerer<'a> {
             let child = root.named_child(*child_idx).unwrap();
             let func_node = self.unwrap_function_def(&child).unwrap_or(child);
             let func = self.lower_function_def(&func_node, name)?;
+            functions.push(func);
+        }
+
+        // Lower impl_block functions
+        for (mangled_name, parent_idx, func_idx) in &impl_func_nodes {
+            let impl_block = root.named_child(*parent_idx).unwrap();
+            let func_node = impl_block.named_child(*func_idx).unwrap();
+            let func = self.lower_function_def(&func_node, mangled_name)?;
             functions.push(func);
         }
 
