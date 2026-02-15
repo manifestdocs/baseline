@@ -27,6 +27,8 @@ jit = [
 aot = ["jit", "dep:cranelift-object"]
 async-server = ["dep:hyper", "dep:hyper-util", "dep:http-body-util", "dep:bytes", "dep:tokio-util", "dep:flate2", "dep:tokio-stream"]
 tls = ["async-server", "dep:tokio-rustls", "dep:rustls-pemfile"]
+postgres = ["dep:tokio-postgres"]
+mysql = ["dep:mysql_async"]
 
 [dependencies]
 baseline-rt = { path = "../baseline-rt" }
@@ -68,6 +70,10 @@ cranelift-jit = { version = "0.128", optional = true }
 cranelift-native = { version = "0.128", optional = true }
 target-lexicon = { version = "0.13", optional = true }
 cranelift-object = { version = "0.128", optional = true }
+
+# Database connectors (behind feature flags)
+tokio-postgres = { version = "0.7", optional = true }
+mysql_async = { version = "0.34", optional = true }
 
 [[example]]
 name = "async_bench_server"

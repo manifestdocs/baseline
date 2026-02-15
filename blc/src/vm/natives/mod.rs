@@ -2,6 +2,12 @@ mod console;
 mod crypto;
 mod datetime;
 mod db;
+pub(crate) mod db_backend;
+mod db_migrate;
+#[cfg(feature = "postgres")]
+mod db_postgres;
+#[cfg(feature = "mysql")]
+mod db_mysql;
 mod env;
 pub use env::set_program_args;
 mod fs;
@@ -324,6 +330,8 @@ impl NativeRegistry {
         self.register("Json.parse", native_json_parse);
         self.register("Json.to_string", native_json_to_string);
         self.register("Json.to_string_pretty", native_json_to_string_pretty);
+        self.register("Json.to_camel_case", native_json_to_camel_case);
+        self.register("Json.to_snake_case", native_json_to_snake_case);
 
         // -- Response --
         self.register("Response.ok", native_response_ok);
@@ -428,13 +436,47 @@ impl NativeRegistry {
         self.register("Weak.downgrade", weak::native_weak_downgrade);
         self.register("Weak.upgrade", weak::native_weak_upgrade);
 
-        // -- Db --
+        // -- Db (backwards-compatible, defaults to SQLite) --
         self.register("Db.connect!", db::native_db_connect);
         self.register("Db.connect", db::native_db_connect);
         self.register("Db.execute!", db::native_db_execute);
         self.register("Db.execute", db::native_db_execute);
         self.register("Db.query!", db::native_db_query);
         self.register("Db.query", db::native_db_query);
+
+        // -- Sqlite (explicit backend) --
+        self.register("Sqlite.connect!", db::native_sqlite_connect);
+        self.register("Sqlite.connect", db::native_sqlite_connect);
+        self.register("Sqlite.execute!", db::native_sqlite_execute);
+        self.register("Sqlite.execute", db::native_sqlite_execute);
+        self.register("Sqlite.query!", db::native_sqlite_query);
+        self.register("Sqlite.query", db::native_sqlite_query);
+
+        // -- Postgres (behind feature flag) --
+        #[cfg(feature = "postgres")]
+        {
+            self.register("Postgres.connect!", db_postgres::native_postgres_connect);
+            self.register("Postgres.connect", db_postgres::native_postgres_connect);
+            self.register("Postgres.execute!", db_postgres::native_postgres_execute);
+            self.register("Postgres.execute", db_postgres::native_postgres_execute);
+            self.register("Postgres.query!", db_postgres::native_postgres_query);
+            self.register("Postgres.query", db_postgres::native_postgres_query);
+        }
+
+        // -- Mysql (behind feature flag) --
+        #[cfg(feature = "mysql")]
+        {
+            self.register("Mysql.connect!", db_mysql::native_mysql_connect);
+            self.register("Mysql.connect", db_mysql::native_mysql_connect);
+            self.register("Mysql.execute!", db_mysql::native_mysql_execute);
+            self.register("Mysql.execute", db_mysql::native_mysql_execute);
+            self.register("Mysql.query!", db_mysql::native_mysql_query);
+            self.register("Mysql.query", db_mysql::native_mysql_query);
+        }
+
+        // -- Sql.migrate! (generic migration runner) --
+        self.register("Sql.migrate!", db_migrate::native_sql_migrate);
+        self.register("Sql.migrate", db_migrate::native_sql_migrate);
 
         // -- Fs (VM-side) --
         self.register("Fs.read_file!", native_fs_read_file);

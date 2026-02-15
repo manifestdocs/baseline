@@ -484,6 +484,14 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Json.to_string_pretty".into(),
             Type::Function(vec![Type::Unknown], Box::new(Type::String)),
         );
+        sigs.insert(
+            "Json.to_camel_case".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Json.to_snake_case".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+        );
     }
 
     // -- String native methods --
@@ -1048,28 +1056,52 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
 
     // -- Db builtins (effect: Db) --
     if builtin_modules.contains(&"Db") {
-        // Db.connect!(url: String) -> ()
-        sigs.insert(
-            "Db.connect!".into(),
-            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        // Connect/execute/query type shapes shared across backends
+        let connect_ty = Type::Function(vec![Type::String], Box::new(Type::Unit));
+        let execute_ty = Type::Function(
+            vec![Type::String, Type::List(Box::new(Type::String))],
+            Box::new(Type::Int),
         );
-        // Db.execute!(sql: String, params: List<String>) -> Int
-        sigs.insert(
-            "Db.execute!".into(),
-            Type::Function(
-                vec![Type::String, Type::List(Box::new(Type::String))],
-                Box::new(Type::Int),
-            ),
+        let query_ty = Type::Function(
+            vec![Type::String, Type::List(Box::new(Type::String))],
+            Box::new(Type::List(Box::new(Type::Map(
+                Box::new(Type::String),
+                Box::new(Type::String),
+            )))),
         );
-        // Db.query!(sql: String, params: List<String>) -> List<Map<String, String>>
+
+        // Db.* (backwards-compatible, defaults to SQLite)
+        sigs.insert("Db.connect!".into(), connect_ty.clone());
+        sigs.insert("Db.execute!".into(), execute_ty.clone());
+        sigs.insert("Db.query!".into(), query_ty.clone());
+
+        // Sqlite.* (explicit backend)
+        sigs.insert("Sqlite.connect!".into(), connect_ty.clone());
+        sigs.insert("Sqlite.execute!".into(), execute_ty.clone());
+        sigs.insert("Sqlite.query!".into(), query_ty.clone());
+
+        // Postgres.* (behind feature flag, but type-checked always)
+        sigs.insert("Postgres.connect!".into(), connect_ty.clone());
+        sigs.insert("Postgres.execute!".into(), execute_ty.clone());
+        sigs.insert("Postgres.query!".into(), query_ty.clone());
+
+        // Mysql.* (behind feature flag, but type-checked always)
+        sigs.insert("Mysql.connect!".into(), connect_ty);
+        sigs.insert("Mysql.execute!".into(), execute_ty);
+        sigs.insert("Mysql.query!".into(), query_ty);
+
+        // Sql.migrate!(dir: String) -> Result<Int, String>
         sigs.insert(
-            "Db.query!".into(),
+            "Sql.migrate!".into(),
             Type::Function(
-                vec![Type::String, Type::List(Box::new(Type::String))],
-                Box::new(Type::List(Box::new(Type::Map(
-                    Box::new(Type::String),
-                    Box::new(Type::String),
-                )))),
+                vec![Type::String],
+                Box::new(Type::Enum(
+                    "Result".to_string(),
+                    vec![
+                        ("Ok".to_string(), vec![Type::Int]),
+                        ("Err".to_string(), vec![Type::String]),
+                    ],
+                )),
             ),
         );
     }

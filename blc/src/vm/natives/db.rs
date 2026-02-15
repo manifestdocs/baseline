@@ -2,6 +2,7 @@ use std::cell::RefCell;
 
 use rusqlite::{Connection, params_from_iter};
 
+use super::db_backend::{self, Row};
 use super::{NValue, NativeError, RcStr};
 
 // ---------------------------------------------------------------------------
@@ -12,74 +13,57 @@ thread_local! {
     static DB_CONNECTION: RefCell<Option<Connection>> = RefCell::new(None);
 }
 
-/// Db.connect!(url: String) -> ()
-///
-/// Opens a SQLite connection. `:memory:` for in-memory, otherwise a file path.
-pub fn native_db_connect(args: &[NValue]) -> Result<NValue, NativeError> {
-    let url = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Db.connect!: expected string argument".into()))?;
+// ---------------------------------------------------------------------------
+// Internal functions (used by db_backend dispatch)
+// ---------------------------------------------------------------------------
 
-    let conn = if url.as_ref() == ":memory:" {
+/// Open a SQLite connection. `:memory:` for in-memory, otherwise a file path.
+pub fn sqlite_connect(url: &str) -> Result<(), NativeError> {
+    let conn = if url == ":memory:" {
         Connection::open_in_memory()
     } else {
-        Connection::open(url.as_ref())
+        Connection::open(url)
     }
-    .map_err(|e| NativeError(format!("Db.connect!: {}", e)))?;
+    .map_err(|e| NativeError(format!("SQLite connect: {}", e)))?;
 
     DB_CONNECTION.with(|cell| {
         *cell.borrow_mut() = Some(conn);
     });
 
-    Ok(NValue::unit())
+    Ok(())
 }
 
-/// Db.execute!(sql: String, params: List<String>) -> Int
-///
-/// Executes DDL/DML SQL. Returns number of affected rows.
-pub fn native_db_execute(args: &[NValue]) -> Result<NValue, NativeError> {
-    let sql = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Db.execute!: expected SQL string as first argument".into()))?;
-
-    let params = extract_params(args.get(1))?;
-
+/// Execute DDL/DML SQL against the SQLite connection.
+pub fn sqlite_execute(sql: &str, params: &[String]) -> Result<i64, NativeError> {
     DB_CONNECTION.with(|cell| {
         let borrow = cell.borrow();
         let conn = borrow
             .as_ref()
-            .ok_or_else(|| NativeError("Db.execute!: no database connection (call Db.connect! first)".into()))?;
+            .ok_or_else(|| NativeError(
+                "SQLite execute: no connection (call Db.connect! or Sqlite.connect! first)".into(),
+            ))?;
 
         let affected = conn
-            .execute(&sql.as_ref(), params_from_iter(params.iter()))
-            .map_err(|e| NativeError(format!("Db.execute!: {}", e)))?;
+            .execute(sql, params_from_iter(params.iter()))
+            .map_err(|e| NativeError(format!("SQLite execute: {}", e)))?;
 
-        Ok(NValue::int(affected as i64))
+        Ok(affected as i64)
     })
 }
 
-/// Db.query!(sql: String, params: List<String>) -> List<Map<String, String>>
-///
-/// Executes a SELECT query. Returns rows as list of maps (all values stringified).
-pub fn native_db_query(args: &[NValue]) -> Result<NValue, NativeError> {
-    let sql = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Db.query!: expected SQL string as first argument".into()))?;
-
-    let params = extract_params(args.get(1))?;
-
+/// Execute a SELECT query against the SQLite connection.
+pub fn sqlite_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeError> {
     DB_CONNECTION.with(|cell| {
         let borrow = cell.borrow();
         let conn = borrow
             .as_ref()
-            .ok_or_else(|| NativeError("Db.query!: no database connection (call Db.connect! first)".into()))?;
+            .ok_or_else(|| NativeError(
+                "SQLite query: no connection (call Db.connect! or Sqlite.connect! first)".into(),
+            ))?;
 
         let mut stmt = conn
-            .prepare(sql.as_ref())
-            .map_err(|e| NativeError(format!("Db.query!: {}", e)))?;
+            .prepare(sql)
+            .map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
 
         let column_names: Vec<String> = stmt
             .column_names()
@@ -96,23 +80,54 @@ pub fn native_db_query(args: &[NValue]) -> Result<NValue, NativeError> {
                         Ok(v) => value_to_string(&v),
                         Err(_) => String::new(),
                     };
-                    entries.push((
-                        NValue::string(RcStr::from(col_name.as_str())),
-                        NValue::string(RcStr::from(val_str.as_str())),
-                    ));
+                    entries.push((col_name.clone(), val_str));
                 }
-                Ok(NValue::map(entries))
+                Ok(entries)
             })
-            .map_err(|e| NativeError(format!("Db.query!: {}", e)))?;
+            .map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
 
         let mut result = Vec::new();
         for row in rows {
-            let row_val = row.map_err(|e| NativeError(format!("Db.query!: {}", e)))?;
+            let row_val = row.map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
             result.push(row_val);
         }
 
-        Ok(NValue::list(result))
+        Ok(result)
     })
+}
+
+// ---------------------------------------------------------------------------
+// Helper: convert rusqlite Value to String
+// ---------------------------------------------------------------------------
+
+fn value_to_string(val: &rusqlite::types::Value) -> String {
+    match val {
+        rusqlite::types::Value::Null => String::new(),
+        rusqlite::types::Value::Integer(i) => i.to_string(),
+        rusqlite::types::Value::Real(f) => f.to_string(),
+        rusqlite::types::Value::Text(s) => s.clone(),
+        rusqlite::types::Value::Blob(b) => format!("<blob:{} bytes>", b.len()),
+    }
+}
+
+/// Convert raw rows to NValue list of maps.
+fn rows_to_nvalue(rows: Vec<Row>) -> NValue {
+    let nvalue_rows: Vec<NValue> = rows
+        .into_iter()
+        .map(|row| {
+            let entries: Vec<(NValue, NValue)> = row
+                .into_iter()
+                .map(|(k, v)| {
+                    (
+                        NValue::string(RcStr::from(k.as_str())),
+                        NValue::string(RcStr::from(v.as_str())),
+                    )
+                })
+                .collect();
+            NValue::map(entries)
+        })
+        .collect();
+    NValue::list(nvalue_rows)
 }
 
 /// Extract params from a List<String> NValue argument.
@@ -135,15 +150,96 @@ fn extract_params(arg: Option<&NValue>) -> Result<Vec<String>, NativeError> {
         .collect()
 }
 
-/// Convert a rusqlite Value to a String representation.
-fn value_to_string(val: &rusqlite::types::Value) -> String {
-    match val {
-        rusqlite::types::Value::Null => String::new(),
-        rusqlite::types::Value::Integer(i) => i.to_string(),
-        rusqlite::types::Value::Real(f) => f.to_string(),
-        rusqlite::types::Value::Text(s) => s.clone(),
-        rusqlite::types::Value::Blob(b) => format!("<blob:{} bytes>", b.len()),
-    }
+// ---------------------------------------------------------------------------
+// Native entry points: Db.* (backwards-compatible, defaults to SQLite)
+// ---------------------------------------------------------------------------
+
+/// Db.connect!(url: String) -> ()
+///
+/// Opens a SQLite connection. `:memory:` for in-memory, otherwise a file path.
+pub fn native_db_connect(args: &[NValue]) -> Result<NValue, NativeError> {
+    let url = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("Db.connect!: expected string argument".into()))?;
+
+    sqlite_connect(url.as_ref())?;
+    db_backend::set_active_sqlite();
+
+    Ok(NValue::unit())
+}
+
+/// Db.execute!(sql: String, params: List<String>) -> Int
+///
+/// Executes DDL/DML SQL. Returns number of affected rows.
+pub fn native_db_execute(args: &[NValue]) -> Result<NValue, NativeError> {
+    let sql = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("Db.execute!: expected SQL string as first argument".into()))?;
+
+    let params = extract_params(args.get(1))?;
+    let affected = db_backend::active_execute(sql.as_ref(), &params)?;
+
+    Ok(NValue::int(affected))
+}
+
+/// Db.query!(sql: String, params: List<String>) -> List<Map<String, String>>
+///
+/// Executes a SELECT query. Returns rows as list of maps (all values stringified).
+pub fn native_db_query(args: &[NValue]) -> Result<NValue, NativeError> {
+    let sql = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("Db.query!: expected SQL string as first argument".into()))?;
+
+    let params = extract_params(args.get(1))?;
+    let rows = db_backend::active_query(sql.as_ref(), &params)?;
+
+    Ok(rows_to_nvalue(rows))
+}
+
+// ---------------------------------------------------------------------------
+// Native entry points: Sqlite.* (explicit backend)
+// ---------------------------------------------------------------------------
+
+/// Sqlite.connect!(url: String) -> ()
+pub fn native_sqlite_connect(args: &[NValue]) -> Result<NValue, NativeError> {
+    let url = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("Sqlite.connect!: expected string argument".into()))?;
+
+    sqlite_connect(url.as_ref())?;
+    db_backend::set_active_sqlite();
+
+    Ok(NValue::unit())
+}
+
+/// Sqlite.execute!(sql: String, params: List<String>) -> Int
+pub fn native_sqlite_execute(args: &[NValue]) -> Result<NValue, NativeError> {
+    let sql = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("Sqlite.execute!: expected SQL string as first argument".into()))?;
+
+    let params = extract_params(args.get(1))?;
+    let affected = sqlite_execute(sql.as_ref(), &params)?;
+
+    Ok(NValue::int(affected))
+}
+
+/// Sqlite.query!(sql: String, params: List<String>) -> List<Map<String, String>>
+pub fn native_sqlite_query(args: &[NValue]) -> Result<NValue, NativeError> {
+    let sql = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("Sqlite.query!: expected SQL string as first argument".into()))?;
+
+    let params = extract_params(args.get(1))?;
+    let rows = sqlite_query(sql.as_ref(), &params)?;
+
+    Ok(rows_to_nvalue(rows))
 }
 
 #[cfg(test)]
@@ -201,7 +297,9 @@ mod tests {
         DB_CONNECTION.with(|cell| {
             *cell.borrow_mut() = None;
         });
-        let result = native_db_execute(&[
+        db_backend::set_active_sqlite(); // backend set but no connection
+        // Need to reset active backend too for clean error
+        let result = native_sqlite_execute(&[
             NValue::string("SELECT 1".into()),
             NValue::list(vec![]),
         ]);
@@ -293,7 +391,7 @@ mod tests {
         DB_CONNECTION.with(|cell| {
             *cell.borrow_mut() = None;
         });
-        let result = native_db_query(&[
+        let result = native_sqlite_query(&[
             NValue::string("SELECT 1".into()),
             NValue::list(vec![]),
         ]);
@@ -348,5 +446,43 @@ mod tests {
 
         let rows = result.as_list().unwrap();
         assert_eq!(rows.len(), 0); // injection attempt matches nothing
+    }
+
+    // -- Explicit Sqlite.* tests --
+
+    #[test]
+    fn sqlite_explicit_connect_and_query() {
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
+            NValue::string("CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)".into()),
+            NValue::list(vec![]),
+        ])
+        .unwrap();
+        native_sqlite_execute(&[
+            NValue::string("INSERT INTO t (val) VALUES (?1)".into()),
+            NValue::list(vec![NValue::string("hello".into())]),
+        ])
+        .unwrap();
+
+        let result = native_sqlite_query(&[
+            NValue::string("SELECT val FROM t".into()),
+            NValue::list(vec![]),
+        ])
+        .unwrap();
+
+        let rows = result.as_list().unwrap();
+        assert_eq!(rows.len(), 1);
+    }
+
+    #[test]
+    fn db_connect_sets_active_backend() {
+        // After Db.connect!, the active backend should be SQLite
+        // and Db.execute! should work via dispatch
+        native_db_connect(&[NValue::string(":memory:".into())]).unwrap();
+        let result = native_db_execute(&[
+            NValue::string("CREATE TABLE ab_test (id INTEGER)".into()),
+            NValue::list(vec![]),
+        ]);
+        assert!(result.is_ok());
     }
 }

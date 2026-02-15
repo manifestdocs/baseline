@@ -32,11 +32,11 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Validate", "Middleware", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Request", "HttpError", "Middleware", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Validate", "Middleware", "Router", "Db", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Request", "HttpError", "Middleware", "Router", "Db", "Sqlite", "Postgres", "Mysql", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }
@@ -48,7 +48,7 @@ impl Prelude {
             Prelude::Pure | Prelude::Core => &["Math"],
             Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Async"],
             Prelude::Server => &[
-                "Math", "Console", "Log", "Time", "Env", "Server", "Db", "Metrics", "Async",
+                "Math", "Console", "Log", "Time", "Env", "Server", "Db", "Sqlite", "Postgres", "Mysql", "Sql", "Metrics", "Async",
             ],
         }
     }
@@ -64,13 +64,13 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "HttpError", "Validate",
+                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "HttpError",
                 "Middleware", "Cell", "Scope", "DateTime", "Crypto",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Validate", "Middleware",
-                "Router", "Server", "Db", "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Middleware",
+                "Router", "Server", "Db", "Sqlite", "Postgres", "Mysql", "Sql", "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }
