@@ -2181,13 +2181,16 @@ fn check_impl_block(
                         let mut i = 0;
                         for param in params.named_children(&mut pcursor) {
                             if param.kind() == "param" {
-                                if let Some(pn) = param.child_by_field_name("name") {
+                                // Grammar uses field('pattern', ...) not field('name', ...)
+                                let name_node = param.child_by_field_name("name")
+                                    .or_else(|| param.child_by_field_name("pattern"));
+                                if let Some(pn) = name_node {
                                     let arg_name = pn.utf8_text(source.as_bytes()).unwrap().to_string();
                                     if i < arg_types.len() {
                                         symbols.insert(arg_name, arg_types[i].clone());
                                     }
-                                    i += 1;
                                 }
+                                i += 1;
                             }
                         }
                     }
@@ -2265,13 +2268,16 @@ fn check_impl_block(
                     let mut i = 0;
                     for param in params.named_children(&mut pcursor) {
                         if param.kind() == "param" {
-                            if let Some(pn) = param.child_by_field_name("name") {
+                            // Grammar uses field('pattern', ...) not field('name', ...)
+                            let name_node = param.child_by_field_name("name")
+                                .or_else(|| param.child_by_field_name("pattern"));
+                            if let Some(pn) = name_node {
                                 let arg_name = pn.utf8_text(source.as_bytes()).unwrap().to_string();
                                 if i < arg_types.len() {
                                     symbols.insert(arg_name, arg_types[i].clone());
                                 }
-                                i += 1;
                             }
+                            i += 1;
                         }
                     }
                 }

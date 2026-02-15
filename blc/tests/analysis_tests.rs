@@ -1880,3 +1880,98 @@ fn db_missing_effect_detected() {
         "CAP_001",
     );
 }
+
+// --- Trait system tests ---
+
+#[test]
+fn trait_impl_parameter_in_scope() {
+    // Parameters defined in impl block methods must be in scope in the body
+    check_ok(
+        "trait Show {\n\
+           show : Self -> String\n\
+         }\n\
+         impl Show for Bool {\n\
+           fn show(b: Bool) -> String = if b then \"true\" else \"false\"\n\
+         }\n\
+         fn main() -> Int = 0",
+    );
+}
+
+#[test]
+fn trait_impl_method_body_type_checked() {
+    // Method bodies should be type-checked — using a param variable works
+    check_ok(
+        "trait Double {\n\
+           double : Self -> Self\n\
+         }\n\
+         impl Double for Int {\n\
+           fn double(x: Int) -> Int = x + x\n\
+         }\n\
+         fn main() -> Int = 0",
+    );
+}
+
+#[test]
+fn trait_dispatch_concrete() {
+    // Calling Trait.method(concrete_val) should type-check
+    check_ok(
+        "trait Show {\n\
+           show : Self -> String\n\
+         }\n\
+         impl Show for Int {\n\
+           fn show(x: Int) -> String = Int.to_string(x)\n\
+         }\n\
+         fn main() -> String = Show.show(42)",
+    );
+}
+
+// --- Effect system tests ---
+
+#[test]
+fn random_effect_requires_declaration() {
+    // Random is NOT ambient — it affects determinism for testing/reproducibility
+    // Declaring {Console} without {Random} should trigger CAP_001
+    check_has_error(
+        "@prelude(core)\n\
+         fn roll!() -> {Console} Int = Random.int!(1, 6)",
+        "CAP_001",
+    );
+}
+
+#[test]
+fn log_effect_is_ambient() {
+    // Log IS ambient — observability only
+    check_no_errors(
+        "@prelude(core)\n\
+         fn trace!() -> () = Log.debug!(\"msg\")",
+    );
+}
+
+#[test]
+fn time_effect_is_ambient() {
+    // Time IS ambient — observability only
+    check_no_errors(
+        "@prelude(core)\n\
+         fn now!() -> Int = Time.now!()",
+    );
+}
+
+#[test]
+fn pure_annotation_rejects_effects() {
+    // @pure functions must not use any non-ambient effects
+    check_has_error(
+        "@prelude(core)\n\
+         @pure\n\
+         fn bad!() -> () = Console.println!(\"hi\")",
+        "CAP_001",
+    );
+}
+
+#[test]
+fn pure_annotation_allows_pure_functions() {
+    // @pure functions with no effects should pass
+    check_no_errors(
+        "@pure\n\
+         fn add(a: Int, b: Int) -> Int = a + b",
+    );
+}

@@ -23,8 +23,71 @@ use crate::resolver::{ImportKind, ModuleLoader};
 use std::collections::HashSet;
 use tree_sitter::Node;
 
+/// Result of type checking — contains all outputs.
+/// Callers destructure only what they need.
+pub struct CheckResult {
+    pub diagnostics: Vec<Diagnostic>,
+    pub type_map: TypeMap,
+    pub dict_map: DictMap,
+    pub type_defs: HashMap<String, Type>,
+}
+
+/// Core type checking function. All public APIs delegate to this.
+fn check_types_core(
+    root: &Node,
+    source: &str,
+    file: &str,
+    loader: Option<&mut ModuleLoader>,
+) -> CheckResult {
+    let mut diagnostics = Vec::new();
+
+    let prelude = match prelude::extract_prelude(root, source) {
+        Ok(p) => p,
+        Err(msg) => {
+            diagnostics.push(Diagnostic {
+                code: "PRE_001".to_string(),
+                severity: Severity::Error,
+                location: Location {
+                    file: file.to_string(),
+                    line: 1,
+                    col: 1,
+                    end_line: None,
+                    end_col: None,
+                },
+                message: msg,
+                context: "Valid prelude variants are: core, script.".to_string(),
+                suggestions: vec![],
+            });
+            return CheckResult {
+                diagnostics,
+                type_map: TypeMap::new(),
+                dict_map: DictMap::new(),
+                type_defs: HashMap::new(),
+            };
+        }
+    };
+
+    let mut symbols = SymbolTable::with_prelude(prelude);
+
+    if let Some(loader) = loader {
+        process_imports(root, source, file, loader, &mut symbols, &mut diagnostics);
+    }
+
+    collect_signatures(root, source, &mut symbols);
+    check_node(root, source, file, &mut symbols, &mut diagnostics);
+
+    CheckResult {
+        diagnostics,
+        type_map: symbols.type_map,
+        dict_map: symbols.dict_map,
+        type_defs: symbols.types,
+    }
+}
+
+// --- Public API: thin wrappers over check_types_core ---
+
 pub fn check_types(root: &Node, source: &str, file: &str) -> Vec<Diagnostic> {
-    check_types_with_loader(root, source, file, None)
+    check_types_core(root, source, file, None).diagnostics
 }
 
 pub fn check_types_with_loader(
@@ -33,201 +96,41 @@ pub fn check_types_with_loader(
     file: &str,
     loader: Option<&mut ModuleLoader>,
 ) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
-
-    // Extract prelude from the AST to gate module availability.
-    let prelude = match prelude::extract_prelude(root, source) {
-        Ok(p) => p,
-        Err(msg) => {
-            diagnostics.push(Diagnostic {
-                code: "PRE_001".to_string(),
-                severity: Severity::Error,
-                location: Location {
-                    file: file.to_string(),
-                    line: 1,
-                    col: 1,
-                    end_line: None,
-                    end_col: None,
-                },
-                message: msg,
-                context: "Valid prelude variants are: core, script.".to_string(),
-                suggestions: vec![],
-            });
-            return diagnostics;
-        }
-    };
-
-    let mut symbols = SymbolTable::with_prelude(prelude);
-
-    // Process imports before collecting signatures
-    if let Some(loader) = loader {
-        process_imports(root, source, file, loader, &mut symbols, &mut diagnostics);
-    }
-
-    collect_signatures(root, source, &mut symbols);
-    check_node(root, source, file, &mut symbols, &mut diagnostics);
-    diagnostics
+    check_types_core(root, source, file, loader).diagnostics
 }
 
-/// Run the type checker and return both diagnostics and a TypeMap.
-/// The TypeMap maps CST node start_byte to resolved Type, enabling
-/// the VM compiler to emit specialized opcodes.
 pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagnostic>, TypeMap, DictMap) {
-    let mut diagnostics = Vec::new();
-
-    let prelude = match prelude::extract_prelude(root, source) {
-        Ok(p) => p,
-        Err(msg) => {
-            diagnostics.push(Diagnostic {
-                code: "PRE_001".to_string(),
-                severity: Severity::Error,
-                location: Location {
-                    file: file.to_string(),
-                    line: 1,
-                    col: 1,
-                    end_line: None,
-                    end_col: None,
-                },
-                message: msg,
-                context: "Valid prelude variants are: core, script.".to_string(),
-                suggestions: vec![],
-            });
-            return (diagnostics, TypeMap::new(), DictMap::new());
-        }
-    };
-
-    let mut symbols = SymbolTable::with_prelude(prelude);
-    collect_signatures(root, source, &mut symbols);
-    check_node(root, source, file, &mut symbols, &mut diagnostics);
-    let type_map = symbols.type_map;
-    let dict_map = symbols.dict_map;
-    (diagnostics, type_map, dict_map)
+    let r = check_types_core(root, source, file, None);
+    (r.diagnostics, r.type_map, r.dict_map)
 }
 
-/// Run the type checker with import support and return both diagnostics and a TypeMap.
-/// Combines `check_types_with_loader` (import handling) with `check_types_with_map` (TypeMap).
 pub fn check_types_with_loader_and_map(
     root: &Node,
     source: &str,
     file: &str,
     loader: Option<&mut ModuleLoader>,
 ) -> (Vec<Diagnostic>, TypeMap, DictMap) {
-    let mut diagnostics = Vec::new();
-
-    let prelude = match prelude::extract_prelude(root, source) {
-        Ok(p) => p,
-        Err(msg) => {
-            diagnostics.push(Diagnostic {
-                code: "PRE_001".to_string(),
-                severity: Severity::Error,
-                location: Location {
-                    file: file.to_string(),
-                    line: 1,
-                    col: 1,
-                    end_line: None,
-                    end_col: None,
-                },
-                message: msg,
-                context: "Valid prelude variants are: core, script.".to_string(),
-                suggestions: vec![],
-            });
-            return (diagnostics, TypeMap::new(), DictMap::new());
-        }
-    };
-
-    let mut symbols = SymbolTable::with_prelude(prelude);
-
-    if let Some(loader) = loader {
-        process_imports(root, source, file, loader, &mut symbols, &mut diagnostics);
-    }
-
-    collect_signatures(root, source, &mut symbols);
-    check_node(root, source, file, &mut symbols, &mut diagnostics);
-    let type_map = symbols.type_map;
-    let dict_map = symbols.dict_map;
-    (diagnostics, type_map, dict_map)
+    let r = check_types_core(root, source, file, loader);
+    (r.diagnostics, r.type_map, r.dict_map)
 }
 
-/// Run the type checker (no imports) and return diagnostics, TypeMap, type defs, and DictMap.
 pub fn check_types_with_map_and_defs(
     root: &Node,
     source: &str,
     file: &str,
 ) -> (Vec<Diagnostic>, TypeMap, HashMap<String, Type>, DictMap) {
-    let mut diagnostics = Vec::new();
-
-    let prelude = match prelude::extract_prelude(root, source) {
-        Ok(p) => p,
-        Err(msg) => {
-            diagnostics.push(Diagnostic {
-                code: "PRE_001".to_string(),
-                severity: Severity::Error,
-                location: Location {
-                    file: file.to_string(),
-                    line: 1,
-                    col: 1,
-                    end_line: None,
-                    end_col: None,
-                },
-                message: msg,
-                context: "Valid prelude variants are: core, script.".to_string(),
-                suggestions: vec![],
-            });
-            return (diagnostics, TypeMap::new(), HashMap::new(), DictMap::new());
-        }
-    };
-
-    let mut symbols = SymbolTable::with_prelude(prelude);
-    collect_signatures(root, source, &mut symbols);
-    check_node(root, source, file, &mut symbols, &mut diagnostics);
-    let type_map = symbols.type_map;
-    let dict_map = symbols.dict_map;
-    let type_defs = symbols.types.clone();
-    (diagnostics, type_map, type_defs, dict_map)
+    let r = check_types_core(root, source, file, None);
+    (r.diagnostics, r.type_map, r.type_defs, r.dict_map)
 }
 
-/// Run the type checker with import support and return diagnostics, TypeMap, type defs, and DictMap.
 pub fn check_types_with_loader_map_and_defs(
     root: &Node,
     source: &str,
     file: &str,
     loader: Option<&mut ModuleLoader>,
 ) -> (Vec<Diagnostic>, TypeMap, HashMap<String, Type>, DictMap) {
-    let mut diagnostics = Vec::new();
-
-    let prelude = match prelude::extract_prelude(root, source) {
-        Ok(p) => p,
-        Err(msg) => {
-            diagnostics.push(Diagnostic {
-                code: "PRE_001".to_string(),
-                severity: Severity::Error,
-                location: Location {
-                    file: file.to_string(),
-                    line: 1,
-                    col: 1,
-                    end_line: None,
-                    end_col: None,
-                },
-                message: msg,
-                context: "Valid prelude variants are: core, script.".to_string(),
-                suggestions: vec![],
-            });
-            return (diagnostics, TypeMap::new(), HashMap::new(), DictMap::new());
-        }
-    };
-
-    let mut symbols = SymbolTable::with_prelude(prelude);
-
-    if let Some(loader) = loader {
-        process_imports(root, source, file, loader, &mut symbols, &mut diagnostics);
-    }
-
-    collect_signatures(root, source, &mut symbols);
-    check_node(root, source, file, &mut symbols, &mut diagnostics);
-    let type_map = symbols.type_map;
-    let dict_map = symbols.dict_map;
-    let type_defs = symbols.types.clone();
-    (diagnostics, type_map, type_defs, dict_map)
+    let r = check_types_core(root, source, file, loader);
+    (r.diagnostics, r.type_map, r.type_defs, r.dict_map)
 }
 
 /// CGP type-check result: diagnostics, type map, visible bindings, and module methods.
@@ -588,7 +491,10 @@ fn collect_impl_block(node: &Node, source: &str, symbols: &mut SymbolTable) {
                     let mut pcursor = params.walk();
                     for param in params.named_children(&mut pcursor) {
                         if param.kind() == "param" {
-                            if let Some(pn) = param.child_by_field_name("name") {
+                            // Grammar uses field('pattern', ...) not field('name', ...)
+                            let name_node = param.child_by_field_name("name")
+                                .or_else(|| param.child_by_field_name("pattern"));
+                            if let Some(pn) = name_node {
                                 param_names.push(pn.utf8_text(source.as_bytes()).unwrap().to_string());
                             }
                         }
