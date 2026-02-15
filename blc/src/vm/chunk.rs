@@ -91,6 +91,10 @@ pub enum Op {
     MakeRecord(u16),
     /// Pop record from stack, push value of field (constant index for field name string).
     GetField(u16),
+    /// Pop record from stack, push value of field by index.
+    /// First arg: field index (compile-time hint). Second arg: constant pool index for
+    /// field name (used for verification and fallback). O(1) when index matches.
+    GetFieldIdx(u16, u16),
     /// Pop N values from stack, push as Tuple.
     MakeTuple(u16),
     /// Pop Tuple from stack, push element at index.
@@ -433,6 +437,7 @@ impl Chunk {
                 | Op::ListConcat
                 | Op::TupleGet(_)
                 | Op::GetField(_)
+                | Op::GetFieldIdx(_, _)
                 | Op::ListGet
                 | Op::MakeRange
                 | Op::MakeList(_)

@@ -300,12 +300,16 @@ impl<'a> Codegen<'a> {
                 self.end_scope(span);
             }
 
-            Expr::GetField { object, field, .. } => {
+            Expr::GetField { object, field, field_idx, .. } => {
                 self.gen_expr(object, span)?;
                 let name_idx = self
                     .chunk
                     .add_constant(NValue::string(field.as_str().into()));
-                self.emit(Op::GetField(name_idx), span);
+                if let Some(idx) = field_idx {
+                    self.emit(Op::GetFieldIdx(*idx, name_idx), span);
+                } else {
+                    self.emit(Op::GetField(name_idx), span);
+                }
             }
 
             Expr::BinOp { op, lhs, rhs, ty } => {

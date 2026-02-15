@@ -583,6 +583,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                         None,
                     )),
                     field: "y".into(),
+                    field_idx: None,
                     ty: Some(Type::Int),
                 },
                 ty: Some(Type::Int),
@@ -957,11 +958,13 @@ use crate::vm::nvalue::{HeapObject, NValue};
                             Expr::GetField {
                                 object: Box::new(Expr::Var("r".into(), None)),
                                 field: "x".into(),
+                                field_idx: None,
                                 ty: Some(Type::Int),
                             },
                             Expr::GetField {
                                 object: Box::new(Expr::Var("r".into(), None)),
                                 field: "y".into(),
+                                field_idx: None,
                                 ty: Some(Type::Int),
                             },
                         ),
@@ -1020,6 +1023,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
             Expr::GetField {
                 object: Box::new(Expr::Var("r".into(), None)),
                 field: "x".into(),
+                field_idx: None,
                 ty: Some(Type::Int),
             },
         ];
@@ -1944,6 +1948,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                         Expr::GetField {
                             object: Box::new(Expr::Var("r".into(), None)),
                             field: "x".into(),
+                            field_idx: None,
                             ty: Some(Type::Int),
                         },
                     ],

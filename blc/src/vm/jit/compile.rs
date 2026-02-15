@@ -987,26 +987,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 for (idx, e) in exprs.iter().enumerate() {
                     let is_last = idx == exprs.len() - 1;
                     // SRA: intercept Let bindings to MakeRecord for candidates
-                    if let Expr::Let { pattern, value, .. } = e {
-                        if let Pattern::Var(name) = pattern.as_ref() {
-                            if sra_names.contains(name.as_str()) {
-                                if let Expr::MakeRecord(fields, _) = value.as_ref() {
-                                    let mut field_vars = HashMap::new();
-                                    for (fname, fexpr) in fields {
-                                        let val = self.compile_expr(fexpr)?;
-                                        let var = self.new_var();
-                                        self.builder.def_var(var, val);
-                                        field_vars.insert(fname.clone(), var);
-                                    }
-                                    self.sra_records.insert(name.clone(), field_vars);
-                                    result = self.builder.ins().iconst(
-                                        types::I64,
-                                        NV_UNIT as i64,
-                                    );
-                                    continue;
-                                }
-                            }
-                        }
+                    if self.try_compile_sra_let(e, &sra_names)? {
+                        result = self.builder.ins().iconst(
+                            types::I64,
+                            NV_UNIT as i64,
+                        );
+                        continue;
                     }
                     result = self.compile_expr(e)?;
                     // RC: decref intermediate results (not the last expression)
@@ -2850,6 +2836,37 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Expr::GetClosureVar(_) => false,
             _ => true, // conservative: escape for anything else
         }
+    }
+
+    /// Try to compile an expression as an SRA Let binding.
+    /// Returns `true` if the expression was intercepted and compiled as scalar
+    /// field variables (skipping the MakeRecord allocation), `false` otherwise.
+    fn try_compile_sra_let(
+        &mut self,
+        expr: &Expr,
+        sra_names: &std::collections::HashSet<&str>,
+    ) -> Result<bool, CompileError> {
+        let Expr::Let { pattern, value, .. } = expr else {
+            return Ok(false);
+        };
+        let Pattern::Var(name) = pattern.as_ref() else {
+            return Ok(false);
+        };
+        if !sra_names.contains(name.as_str()) {
+            return Ok(false);
+        }
+        let Expr::MakeRecord(fields, _) = value.as_ref() else {
+            return Ok(false);
+        };
+        let mut field_vars = HashMap::new();
+        for (fname, fexpr) in fields {
+            let val = self.compile_expr(fexpr)?;
+            let var = self.new_var();
+            self.builder.def_var(var, val);
+            field_vars.insert(fname.clone(), var);
+        }
+        self.sra_records.insert(name.clone(), field_vars);
+        Ok(true)
     }
 
     /// Find SRA candidates in a block: Let bindings to MakeRecord where the

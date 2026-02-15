@@ -182,6 +182,9 @@ pub enum Expr {
     GetField {
         object: Box<Expr>,
         field: String,
+        /// Compile-time field index hint (from type info). When present,
+        /// codegen emits `GetFieldIdx` for O(1) access instead of name scan.
+        field_idx: Option<u16>,
         ty: Option<Type>,
     },
 
@@ -495,6 +498,7 @@ mod tests {
             Expr::GetField {
                 object: Box::new(Expr::Unit),
                 field: "f".into(),
+                field_idx: None,
                 ty: None,
             },
             Expr::BinOp {

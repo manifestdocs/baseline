@@ -180,10 +180,17 @@ impl<'a> super::Lowerer<'a> {
         let object = self.lower_expression(&obj)?;
         let field_name = self.node_text(&field);
 
+        // Look up the resolved type of this field_expression from the type checker.
+        let ty = self
+            .type_map
+            .as_ref()
+            .and_then(|tm| tm.get(&node.start_byte()).cloned());
+
         Ok(Expr::GetField {
             object: Box::new(object),
             field: field_name,
-            ty: None,
+            field_idx: None,
+            ty,
         })
     }
 

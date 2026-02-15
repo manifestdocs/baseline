@@ -199,6 +199,58 @@ impl super::Vm {
                     }
                 }
             }
+            Op::GetFieldIdx(field_idx, name_idx) => {
+                let field_name = match chunk.constants[*name_idx as usize].as_string() {
+                    Some(s) => s.clone(),
+                    None => {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            "GetFieldIdx constant must be String".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                };
+                let record = self.pop_fast();
+                if !record.is_heap() {
+                    let (line, col) = chunk.source_map[ip - 1];
+                    return Err(self.error(
+                        format!("Cannot access field '{}' on {}", field_name, record),
+                        line,
+                        col,
+                    ));
+                }
+                match record.as_heap_ref() {
+                    HeapObject::Record(fields) | HeapObject::Struct { fields, .. } => {
+                        let idx = *field_idx as usize;
+                        // Fast path: direct index access with name verification
+                        if idx < fields.len() && *fields[idx].0 == *field_name {
+                            self.stack.push(fields[idx].1.clone());
+                        } else {
+                            // Fallback: linear scan (layout mismatch or row polymorphism)
+                            match fields.iter().find(|(k, _)| *k == field_name) {
+                                Some((_, v)) => self.stack.push(v.clone()),
+                                None => {
+                                    let (line, col) = chunk.source_map[ip - 1];
+                                    return Err(self.error(
+                                        format!("Record has no field '{}'", field_name),
+                                        line,
+                                        col,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot access field '{}' on {}", field_name, record),
+                            line,
+                            col,
+                        ));
+                    }
+                }
+            }
             Op::MakeTuple(n) => {
                 let count = *n as usize;
                 let start = self.stack.len() - count;

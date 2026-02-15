@@ -415,9 +415,10 @@ fn walk_expr_children(expr: Expr, mut f: impl FnMut(Expr) -> Expr) -> Expr {
         },
 
         // Field access
-        Expr::GetField { object, field, ty } => Expr::GetField {
+        Expr::GetField { object, field, field_idx, ty } => Expr::GetField {
             object: Box::new(f(*object)),
             field,
+            field_idx,
             ty,
         },
 
