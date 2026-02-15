@@ -1,12 +1,13 @@
-// Test: arithmetic and function calls
-// Expected exit code: 42
+// Test: nested function calls and conditionals
+// Expected exit code: 10
 
-fn square(x: Int) -> Int = x * x
+fn max(a: Int, b: Int) -> Int =
+  if a > b then a else b
 
-fn sum_squares(a: Int, b: Int) -> Int = square(a) + square(b)
+fn min(a: Int, b: Int) -> Int =
+  if a < b then a else b
 
 fn main() -> Int = {
-  let a = sum_squares(3, 4)
-  let b = a + 42 - 25
-  b
+  let a = max(0, min(100, 10))
+  a
 }
