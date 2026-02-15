@@ -1,0 +1,5 @@
+@module NoExportHelper
+
+fn add(a: Int, b: Int) -> Int = a + b
+
+fn multiply(a: Int, b: Int) -> Int = a * b

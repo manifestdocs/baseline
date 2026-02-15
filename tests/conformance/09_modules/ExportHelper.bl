@@ -1,0 +1,5 @@
+@module ExportHelper
+
+export fn public_add(a: Int, b: Int) -> Int = a + b
+
+fn private_helper(x: Int) -> Int = x * 2

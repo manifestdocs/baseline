@@ -284,6 +284,7 @@ fn process_imports(
 
         // Register the module namespace
         symbols.insert(short_name.to_string(), Type::Module(short_name.to_string()));
+        symbols.user_modules.insert(short_name.to_string());
 
         // Register each exported function as a module method
         for (func_name, _sig_text) in &exports.functions {

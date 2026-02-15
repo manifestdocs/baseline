@@ -1,0 +1,4 @@
+import ExportHelper
+
+fn main() -> Int = ExportHelper.private_helper(5)
+// expect_error: IMP_004

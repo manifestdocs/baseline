@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use tree_sitter::{Parser, Tree};
@@ -336,12 +336,18 @@ impl ModuleLoader {
     }
 
     /// Extract exported symbols from a loaded module's root node.
+    /// If any definition uses the `export` keyword, only exported items are returned.
+    /// Otherwise all definitions are returned (backward compatible).
     pub fn extract_exports(root: &tree_sitter::Node, source: &str) -> ModuleExports {
+        let uses_exports = module_uses_exports(root, source);
         let mut functions = Vec::new();
         let mut types = Vec::new();
         let mut cursor = root.walk();
 
         for child in root.children(&mut cursor) {
+            if uses_exports && !has_export_keyword(&child, source) {
+                continue;
+            }
             match child.kind() {
                 "function_def" => {
                     if let Some(name_node) = child.child_by_field_name("name") {
@@ -403,6 +409,41 @@ impl ModuleLoader {
     }
 }
 
+
+/// Check if a CST node (function_def, type_def, effect_def) has the `export` keyword.
+pub fn has_export_keyword(node: &tree_sitter::Node, source: &str) -> bool {
+    let mut cursor = node.walk();
+    node.children(&mut cursor)
+        .any(|c| c.utf8_text(source.as_bytes()).unwrap_or("") == "export")
+}
+
+/// Check if any top-level definition in the module uses `export`.
+pub fn module_uses_exports(root: &tree_sitter::Node, source: &str) -> bool {
+    let mut cursor = root.walk();
+    root.children(&mut cursor).any(|child| {
+        matches!(child.kind(), "function_def" | "type_def" | "effect_def")
+            && has_export_keyword(&child, source)
+    })
+}
+
+/// Extract just the exported function names from a module's CST.
+pub fn exported_function_names(root: &tree_sitter::Node, source: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() == "function_def" && has_export_keyword(&child, source) {
+            if let Some(name_node) = child.child_by_field_name("name") {
+                names.insert(
+                    name_node
+                        .utf8_text(source.as_bytes())
+                        .unwrap_or("")
+                        .to_string(),
+                );
+            }
+        }
+    }
+    names
+}
 
 fn has_syntax_errors(node: &tree_sitter::Node) -> bool {
     if node.is_error() || node.is_missing() {

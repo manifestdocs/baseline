@@ -10,9 +10,13 @@ pub struct SymbolTable {
     pub(super) module_methods: HashMap<String, Type>, // "Module.method" -> Function type
     pub(super) generic_schemas: HashMap<String, GenericSchema>, // "Module.method" -> generic schema
     pub(super) user_generic_schemas: HashMap<String, UserGenericSchema>, // user function -> generic schema
+    /// Parameter names for known functions (for named argument resolution).
+    pub(super) fn_params: HashMap<String, Vec<String>>,
     /// Accumulated type map: CST node start_byte -> resolved Type.
     /// Populated during type checking for use by the VM compiler.
     pub type_map: TypeMap,
+    /// Modules explicitly imported by the user (vs builtin pseudo-modules).
+    pub(super) user_modules: HashSet<String>,
 }
 
 impl SymbolTable {
@@ -23,7 +27,9 @@ impl SymbolTable {
             module_methods: builtin_type_signatures(&prelude),
             generic_schemas: builtin_generic_schemas(),
             user_generic_schemas: HashMap::new(),
+            fn_params: HashMap::new(),
             type_map: TypeMap::new(),
+            user_modules: HashSet::new(),
         };
 
         // Option/Result types and constructors are language primitives — always registered.
@@ -57,6 +63,23 @@ impl SymbolTable {
             "Err".to_string(),
             Type::Function(vec![Type::Unknown], Box::new(result_type.clone())),
         );
+
+        // HttpError type — gated by server/script prelude.
+        if prelude.native_modules().contains(&"HttpError") {
+            let http_error_type = Type::Enum(
+                "HttpError".to_string(),
+                vec![
+                    ("BadRequest".to_string(), vec![Type::String]),
+                    ("NotFound".to_string(), vec![Type::String]),
+                    ("Unauthorized".to_string(), vec![Type::String]),
+                    ("Forbidden".to_string(), vec![Type::String]),
+                    ("Conflict".to_string(), vec![Type::String]),
+                    ("Unprocessable".to_string(), vec![Type::String]),
+                    ("Internal".to_string(), vec![Type::String]),
+                ],
+            );
+            table.insert_type("HttpError".to_string(), http_error_type);
+        }
 
         // Register module namespaces gated by prelude.
         for module in prelude.type_modules() {
@@ -105,12 +128,24 @@ impl SymbolTable {
         self.module_methods.get(qualified_name)
     }
 
+    pub(super) fn is_user_module(&self, name: &str) -> bool {
+        self.user_modules.contains(name)
+    }
+
     pub(super) fn lookup_generic_schema(&self, qualified_name: &str) -> Option<&GenericSchema> {
         self.generic_schemas.get(qualified_name)
     }
 
     pub(super) fn lookup_user_generic_schema(&self, name: &str) -> Option<&UserGenericSchema> {
         self.user_generic_schemas.get(name)
+    }
+
+    pub(super) fn insert_fn_params(&mut self, name: String, params: Vec<String>) {
+        self.fn_params.insert(name, params);
+    }
+
+    pub(super) fn lookup_fn_params(&self, name: &str) -> Option<&Vec<String>> {
+        self.fn_params.get(name)
     }
 
     /// Collect all visible bindings from current scope chain (for typed holes).

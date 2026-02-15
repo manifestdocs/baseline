@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::resolver::{ImportKind, ModuleLoader, ResolvedImport};
+use crate::resolver::{ImportKind, ModuleLoader, ResolvedImport, exported_function_names, module_uses_exports};
 
 use super::chunk::{Chunk, Program};
 use super::codegen::Codegen;
@@ -213,6 +213,13 @@ fn compile_module_recursive(
         if global_idx >= pre_chunk_count {
             local_map.insert(name.clone(), global_idx - pre_chunk_count);
         }
+    }
+
+    // Filter local_map by export visibility: if module uses `export`, only keep exported functions
+    let uses_exports = module_uses_exports(&mod_root, &mod_source_owned);
+    if uses_exports {
+        let exported = exported_function_names(&mod_root, &mod_source_owned);
+        local_map.retain(|name, _| exported.contains(name.as_str()));
     }
 
     let offset = merged_chunks.len();

@@ -1,0 +1,10 @@
+import ExportHelper
+import NoExportHelper
+
+fn main() -> Int = {
+  let a = ExportHelper.public_add(1, 2)
+  let b = NoExportHelper.add(3, 4)
+  let c = NoExportHelper.multiply(2, 3)
+  a + b + c
+}
+// expect: 16
