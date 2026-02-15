@@ -1,0 +1,104 @@
+// MCP Server — a Model Context Protocol server written in Baseline
+// Communicates via JSON-RPC 2.0 over stdio
+// Run with: blc run examples/mcp_server.bl
+
+@prelude(script)
+
+// --- Response builders ---
+
+fn ok_response(id: Unknown, result: Unknown) -> String =
+  Json.to_string({ jsonrpc: "2.0", id: id, result: result })
+
+fn error_response(id: Unknown, code: Int, message: String) -> String =
+  Json.to_string({ jsonrpc: "2.0", id: id, error: { code: code, message: message } })
+
+// --- Tool definitions ---
+// MCP uses camelCase keys (inputSchema) — raw string keeps it readable
+
+fn tool_schemas() -> Unknown =
+  Json.parse(r#"[
+    {
+      "name": "add",
+      "description": "Add two numbers together",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "a": { "type": "number", "description": "First number" },
+          "b": { "type": "number", "description": "Second number" }
+        },
+        "required": ["a", "b"]
+      }
+    },
+    {
+      "name": "hello",
+      "description": "Greet someone by name",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "name": { "type": "string", "description": "Name to greet" }
+        },
+        "required": ["name"]
+      }
+    },
+    {
+      "name": "fibonacci",
+      "description": "Compute the nth Fibonacci number",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "n": { "type": "number", "description": "Which Fibonacci number (0-indexed)" }
+        },
+        "required": ["n"]
+      }
+    }
+  ]"#)
+
+fn init_result() -> Unknown =
+  Json.parse(r#"{
+    "protocolVersion": "2025-03-26",
+    "capabilities": { "tools": {} },
+    "serverInfo": { "name": "baseline-mcp", "version": "0.1.0" }
+  }"#)
+
+// --- Tool implementations ---
+
+fn fibonacci(n: Int) -> Int =
+  if n <= 1 then n else fibonacci(n - 1) + fibonacci(n - 2)
+
+fn handle_tool_call(name: String, args: Unknown) -> Unknown = {
+  // Note: field access in interpolation inside record literals has a scoping bug,
+  // so we extract to let bindings first
+  let result = match name
+    "add" -> "${args.a + args.b}"
+    "hello" -> """Hello, ${args.name}! Response from a Baseline MCP server."""
+    "fibonacci" -> "${fibonacci(args.n)}"
+    _ -> "Unknown tool: ${name}"
+  { content: [{ text: result }] }
+}
+
+// --- Request dispatch ---
+
+fn dispatch(msg: Unknown) -> String =
+  match msg.method
+    "initialize" -> ok_response(msg.id, init_result())
+    "tools/list" -> ok_response(msg.id, { tools: tool_schemas() })
+    "tools/call" -> ok_response(msg.id, handle_tool_call(msg.params.name, msg.params.arguments))
+    "ping" -> ok_response(msg.id, {})
+    _ -> error_response(msg.id, -32601, "Method not found: ${msg.method}")
+
+// --- Main loop ---
+
+fn server_loop() -> {Console} () = {
+  let line = Console.read_line!()
+  if String.length(line) > 0 then {
+    let msg = Json.parse(line)
+    if msg.method == "notifications/initialized" then
+      ()
+    else
+      dispatch(msg) |> Console.println!
+    server_loop()
+  } else
+    ()
+}
+
+fn main!() -> {Console} () = server_loop()
