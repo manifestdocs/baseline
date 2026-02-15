@@ -6,7 +6,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
 use crate::vm::radix::{RadixNode, RadixTree, SmallParams};
 use crate::vm::sendable::{SendableHandler, SendableValue};
 
-use super::http_helpers::{extract_response_nv, inject_params_nv, parse_url_query_nv};
+use super::http_helpers::{extract_response_nv, inject_params_nv, inject_state_nv, parse_url_query_nv};
 
 /// Thread-safe route tree node.
 struct SendableNode {
@@ -202,6 +202,7 @@ fn handle_request(
     route_tree: &NvRadixTree,
     middleware: &[NValue],
     chunks: &[Chunk],
+    state: &NValue,
 ) {
     let req_method = request.method().to_string();
     let raw_url = request.url().to_string();
@@ -235,6 +236,7 @@ fn handle_request(
         ("query".into(), query_record),
         ("url".into(), NValue::string(raw_url.into())),
     ]);
+    let req_record = inject_state_nv(&req_record, state);
 
     let mut params = SmallParams::new();
     let (status, resp_headers, body) = match route_tree.find(&req_method, &req_path, &mut params) {
@@ -335,6 +337,30 @@ impl super::Vm {
             .filter_map(SendableHandler::from_nvalue)
             .collect();
 
+        let state: NValue = router_fields
+            .iter()
+            .find(|(k, _)| &**k == "state")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| NValue::record(Vec::new()));
+        let sendable_state = SendableValue::from_nvalue(&state);
+
+        let routes: Vec<NValue> = router_fields
+            .iter()
+            .find(|(k, _)| &**k == "routes")
+            .and_then(|(_, v)| v.as_list())
+            .cloned()
+            .unwrap_or_default();
+
+        let route_meta: Vec<(String, String)> = routes
+            .iter()
+            .filter_map(|route| {
+                let fields = route.as_record()?;
+                let method = fields.iter().find(|(k, _)| &**k == "method")?.1.as_string()?.to_string();
+                let path = fields.iter().find(|(k, _)| &**k == "path")?.1.as_string()?.to_string();
+                Some((method, path))
+            })
+            .collect();
+
         let route_tree = crate::vm::hyper_server::AsyncRouteTree::from_nvalue(&router_val)
             .map_err(|e| self.error(format!("Failed to build route tree: {}", e), line, col))?;
 
@@ -345,11 +371,13 @@ impl super::Vm {
             Some(ref cv) => parse_server_config(cv),
             None => crate::vm::hyper_server::ServerConfig::default(),
         };
-        let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::with_executor(
+        let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::with_executor_state_and_meta(
             route_tree,
             chunks_vec,
             sendable_mw,
             config,
+            sendable_state,
+            route_meta,
         ));
 
         let rt = tokio::runtime::Builder::new_multi_thread()
@@ -423,12 +451,19 @@ impl super::Vm {
             .cloned()
             .unwrap_or_default();
 
-        // Serialize route tree + middleware + chunks to thread-safe form
+        let state: NValue = router_fields
+            .iter()
+            .find(|(k, _)| &**k == "state")
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(|| NValue::record(Vec::new()));
+
+        // Serialize route tree + middleware + state + chunks to thread-safe form
         let sendable_routes = SendableRouteTree::from_nv_routes(&routes);
         let sendable_mw: Vec<SendableHandler> = middleware
             .iter()
             .filter_map(SendableHandler::from_nvalue)
             .collect();
+        let sendable_state = SendableValue::from_nvalue(&state);
         let sendable_chunks = SendableChunks::from_chunks(chunks);
 
         let addr = format!("0.0.0.0:{}", port);
@@ -451,6 +486,7 @@ impl super::Vm {
         let server = Arc::new(server);
         let sendable_routes = Arc::new(sendable_routes);
         let sendable_mw = Arc::new(sendable_mw);
+        let sendable_state = Arc::new(sendable_state);
         let sendable_chunks = Arc::new(sendable_chunks);
 
         let mut handles = Vec::with_capacity(num_workers);
@@ -458,6 +494,7 @@ impl super::Vm {
             let server = Arc::clone(&server);
             let s_routes = Arc::clone(&sendable_routes);
             let s_mw = Arc::clone(&sendable_mw);
+            let s_state = Arc::clone(&sendable_state);
             let s_chunks = Arc::clone(&sendable_chunks);
 
             handles.push(std::thread::spawn(move || {
@@ -466,9 +503,10 @@ impl super::Vm {
                 let chunks = s_chunks.to_chunks();
                 let route_tree = s_routes.to_nv_radix_tree();
                 let middleware: Vec<NValue> = s_mw.iter().map(|h| h.to_nvalue()).collect();
+                let state = s_state.to_nvalue();
 
                 for request in server.incoming_requests() {
-                    handle_request(&mut vm, request, &route_tree, &middleware, &chunks);
+                    handle_request(&mut vm, request, &route_tree, &middleware, &chunks, &state);
                 }
             }));
         }
@@ -641,6 +679,13 @@ fn parse_server_config(val: &NValue) -> crate::vm::hyper_server::ServerConfig {
                             }
                         })
                         .collect();
+                }
+            }
+            "docs" => {
+                if v.is_bool() && v.as_bool() {
+                    config.docs_path = Some("/docs".to_string());
+                } else if let Some(s) = v.as_string() {
+                    config.docs_path = Some(s.to_string());
                 }
             }
             _ => {}

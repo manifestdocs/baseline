@@ -97,6 +97,8 @@ pub struct ServerConfig {
     pub compression: bool,
     /// Static file directory mappings: (url_prefix, filesystem_path)
     pub static_dirs: Vec<(String, String)>,
+    /// Auto-generated API docs path (None to disable, e.g. Some("/docs"))
+    pub docs_path: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -130,6 +132,7 @@ impl Default for ServerConfig {
             tls_key_path: None,
             compression: false,
             static_dirs: Vec::new(),
+            docs_path: None,
         }
     }
 }
@@ -1156,6 +1159,10 @@ pub struct AsyncServerContext {
     pub config: Arc<ServerConfig>,
     /// Rate limiter (if configured)
     pub rate_limiter: Option<Arc<RateLimiter>>,
+    /// Router-level shared state (injected into every request)
+    pub state: SendableValue,
+    /// Route metadata for API docs: (method, path) pairs
+    pub route_meta: Vec<(String, String)>,
 }
 
 impl AsyncServerContext {
@@ -1172,6 +1179,8 @@ impl AsyncServerContext {
             middleware: Vec::new(),
             config: Arc::new(config),
             rate_limiter,
+            state: SendableValue::Record(Vec::new()),
+            route_meta: Vec::new(),
         }
     }
 
@@ -1181,6 +1190,29 @@ impl AsyncServerContext {
         chunks: Vec<Chunk>,
         middleware: Vec<SendableHandler>,
         config: ServerConfig,
+    ) -> Self {
+        Self::with_executor_and_state(routes, chunks, middleware, config, SendableValue::Record(Vec::new()))
+    }
+
+    /// Create a full server context with VM executor, inline chunks, and shared state.
+    pub fn with_executor_and_state(
+        routes: AsyncRouteTree,
+        chunks: Vec<Chunk>,
+        middleware: Vec<SendableHandler>,
+        config: ServerConfig,
+        state: SendableValue,
+    ) -> Self {
+        Self::with_executor_state_and_meta(routes, chunks, middleware, config, state, Vec::new())
+    }
+
+    /// Create a full server context with VM executor, inline chunks, shared state, and route metadata.
+    pub fn with_executor_state_and_meta(
+        routes: AsyncRouteTree,
+        chunks: Vec<Chunk>,
+        middleware: Vec<SendableHandler>,
+        config: ServerConfig,
+        state: SendableValue,
+        route_meta: Vec<(String, String)>,
     ) -> Self {
         let chunks_arc = Arc::new(chunks);
         let executor = AsyncVmExecutor::new((*chunks_arc).clone(), AsyncExecutorConfig::default());
@@ -1195,6 +1227,8 @@ impl AsyncServerContext {
             middleware,
             config: Arc::new(config),
             rate_limiter,
+            state,
+            route_meta,
         }
     }
 }
@@ -1556,6 +1590,59 @@ async fn handle_request_with_context(
         }
     }
 
+    // Auto-generated API docs
+    if let Some(ref docs_path) = config.docs_path {
+        let req_path = req.uri().path();
+        if req.method() == Method::GET && req_path == docs_path.as_str() {
+            let html = generate_docs_html(&ctx.route_meta, docs_path);
+            let mut resp = Response::builder()
+                .status(StatusCode::OK)
+                .header("content-type", "text/html; charset=utf-8")
+                .body(Full::new(Bytes::from(html)).boxed())
+                .unwrap();
+            if let Some(ref id) = request_id {
+                if let Some(ref hdr) = request_id_hdr {
+                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                        resp.headers_mut().insert(hdr.clone(), val);
+                    }
+                }
+            }
+            if config.access_log {
+                eprintln!(
+                    "[access] GET {} 200 {:.1}ms {}{}",
+                    docs_path,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    remote_addr.ip(),
+                    format_request_id(&request_id),
+                );
+            }
+            return Ok(resp);
+        }
+
+        let openapi_path = format!("{}/openapi.json", docs_path.trim_end_matches('/'));
+        if req.method() == Method::GET && req_path == openapi_path {
+            let json = generate_openapi_json(&ctx.route_meta);
+            let mut resp = AsyncResponse::json(&json).into_hyper();
+            if let Some(ref id) = request_id {
+                if let Some(ref hdr) = request_id_hdr {
+                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                        resp.headers_mut().insert(hdr.clone(), val);
+                    }
+                }
+            }
+            if config.access_log {
+                eprintln!(
+                    "[access] GET {} 200 {:.1}ms {}{}",
+                    openapi_path,
+                    start.elapsed().as_secs_f64() * 1000.0,
+                    remote_addr.ip(),
+                    format_request_id(&request_id),
+                );
+            }
+            return Ok(resp);
+        }
+    }
+
     // CORS preflight — respond to OPTIONS before body parsing
     if let Some(ref cors) = config.cors {
         if req.method() == Method::OPTIONS {
@@ -1681,9 +1768,11 @@ async fn handle_request_with_context(
                         let chunks = Arc::clone(chunks);
                         let middleware: Vec<_> = ctx.middleware.iter().collect();
                         HANDLER_VM.with(|cell| {
+                            let state_nv = ctx.state.to_nvalue();
                             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 let mut vm = cell.borrow_mut();
                                 let request_nv = async_req.to_nvalue();
+                                let request_nv = crate::vm::exec::http_helpers::inject_state_nv(&request_nv, &state_nv);
                                 let handler_nv = vm_handler.to_nvalue();
                                 let result = if middleware.is_empty() {
                                     vm.call_nvalue(
@@ -1807,6 +1896,115 @@ async fn handle_request_with_context(
     }
 
     Ok(resp)
+}
+
+// ---------------------------------------------------------------------------
+// Auto-generated API documentation
+// ---------------------------------------------------------------------------
+
+/// Generate an HTML documentation page listing all API routes.
+fn generate_docs_html(routes: &[(String, String)], docs_path: &str) -> String {
+    // Group routes by path for cleaner display
+    let mut path_methods: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for (method, path) in routes {
+        path_methods.entry(path.as_str()).or_default().push(method.as_str());
+    }
+
+    let openapi_path = format!("{}/openapi.json", docs_path.trim_end_matches('/'));
+
+    let mut rows = String::new();
+    for (path, methods) in &path_methods {
+        let method_badges: Vec<String> = methods
+            .iter()
+            .map(|m| {
+                let color = match *m {
+                    "GET" => "#61affe",
+                    "POST" => "#49cc90",
+                    "PUT" => "#fca130",
+                    "DELETE" => "#f93e3e",
+                    "PATCH" => "#50e3c2",
+                    "OPTIONS" => "#0d5aa7",
+                    "HEAD" => "#9012fe",
+                    _ => "#999",
+                };
+                format!(
+                    r#"<span class="method" style="background:{};">{}</span>"#,
+                    color, m
+                )
+            })
+            .collect();
+        rows.push_str(&format!(
+            r#"<tr><td class="path">{}</td><td>{}</td></tr>"#,
+            path,
+            method_badges.join(" ")
+        ));
+    }
+
+    format!(
+        r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API Documentation</title>
+<style>
+  * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #fafafa; color: #333; padding: 2rem; }}
+  h1 {{ font-size: 1.5rem; margin-bottom: 0.25rem; }}
+  .subtitle {{ color: #666; margin-bottom: 1.5rem; font-size: 0.9rem; }}
+  .subtitle a {{ color: #4a90d9; text-decoration: none; }}
+  .subtitle a:hover {{ text-decoration: underline; }}
+  table {{ width: 100%; border-collapse: collapse; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }}
+  th {{ text-align: left; padding: 0.75rem 1rem; background: #f5f5f5; font-size: 0.85rem; text-transform: uppercase; color: #666; border-bottom: 2px solid #eee; }}
+  td {{ padding: 0.6rem 1rem; border-bottom: 1px solid #f0f0f0; }}
+  .path {{ font-family: 'SF Mono', Monaco, monospace; font-size: 0.9rem; }}
+  .method {{ display: inline-block; padding: 2px 8px; border-radius: 3px; color: #fff; font-size: 0.75rem; font-weight: 600; margin-right: 4px; font-family: 'SF Mono', Monaco, monospace; }}
+  .footer {{ margin-top: 1.5rem; font-size: 0.8rem; color: #999; }}
+</style>
+</head>
+<body>
+<h1>API Documentation</h1>
+<p class="subtitle">{} route(s) &middot; <a href="{}">OpenAPI JSON</a></p>
+<table>
+<thead><tr><th>Path</th><th>Methods</th></tr></thead>
+<tbody>{}</tbody>
+</table>
+<p class="footer">Generated by Baseline</p>
+</body>
+</html>"##,
+        path_methods.len(),
+        openapi_path,
+        rows
+    )
+}
+
+/// Generate an OpenAPI 3.0 JSON spec from route metadata.
+fn generate_openapi_json(routes: &[(String, String)]) -> String {
+    let mut paths: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    for (method, path) in routes {
+        paths.entry(path.as_str()).or_default().push(method.as_str());
+    }
+
+    let mut path_entries = Vec::new();
+    for (path, methods) in &paths {
+        let mut method_entries = Vec::new();
+        for method in methods {
+            method_entries.push(format!(
+                r#""{}": {{"responses": {{"200": {{"description": "Success"}}}}}}"#,
+                method.to_lowercase()
+            ));
+        }
+        path_entries.push(format!(
+            r#""{}": {{{}}}"#,
+            path,
+            method_entries.join(",")
+        ));
+    }
+
+    format!(
+        r#"{{"openapi":"3.0.3","info":{{"title":"Baseline API","version":"1.0.0"}},"paths":{{{}}}}}"#,
+        path_entries.join(",")
+    )
 }
 
 /// Extract a human-readable message from a panic payload.
