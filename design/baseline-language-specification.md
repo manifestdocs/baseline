@@ -1281,46 +1281,127 @@ test "fetch user" =
   expect result == Ok({ id: 1, name: "Alice" })
 ```
 
-### 6.4 Effect Inference
+### 6.4 Effect Inference [IMPLEMENTED]
 
-When effects are not explicitly declared, they are inferred:
+Functions without explicit effect annotations have their effects inferred bottom-up from their body. The compiler computes the union of all effects used (directly and transitively) and treats that as the function's effect signature. No `CAP_001` error is emitted.
 
 ```baseline
+// No explicit effect declaration — compiler infers {Http, Console}
 fn fetch_and_print!(url: String) =
   let data = Http.get!(url)?
   Console.print!(data.body)
   Ok(())
 ```
 
-### 6.5 Pure Functions
-
-Functions without `!` are pure and cannot use effects:
+When a function *does* have an explicit effect declaration, the compiler checks that the inferred effects are a subset of the declared effects:
 
 ```baseline
+// Explicit declaration — compiler verifies inferred ⊆ declared
+fn fetch_only!(url: String) -> {Http} String =
+  Http.get!(url)?.body
+
+// ERROR: CAP_001 — function declares {Http} but also uses Console
+fn fetch_bad!(url: String) -> {Http} String =
+  Console.print!("fetching...")  // Unauthorized Side Effect
+  Http.get!(url)?.body
+```
+
+Explicit declarations act as **upper bounds** on what effects a function may use. They serve as a security contract: the caller can trust that the function will not exceed its declared effects.
+
+### 6.5 Pure Functions [IMPLEMENTED]
+
+The `@pure` annotation asserts that a function uses no effects. Any effectful call (other than ambient effects) is a compile error:
+
+```baseline
+@pure
 fn add(a: Int, b: Int) -> Int = a + b
 
+@pure
 fn bad(x: Int) -> Int =
-  Console.print!("x is ${x}")  // Error: pure function cannot use effects
+  Console.print!("x is ${x}")  // Error: CAP_001 — @pure function cannot use effects
   x
 ```
 
-### 6.6 Built-in Effects
+### 6.6 Ambient Effects [IMPLEMENTED]
 
-| Effect | Description | Status |
-|--------|-------------|--------|
-| `Console` | Terminal I/O | [IMPLEMENTED] |
-| `Http` | HTTP client | [IMPLEMENTED] |
-| `Fs` | File system | [IMPLEMENTED] |
-| `Net` | TCP/UDP sockets | [PLANNED] |
-| `Db` | Database access | [PARTIAL — namespace registered, no methods] |
-| `Time` | Current time, delays | [IMPLEMENTED] |
-| `Random` | Random number generation | [IMPLEMENTED] |
-| `Env` | Environment variables | [IMPLEMENTED] |
-| `Process` | Spawn processes | [PLANNED] |
-| `Log` | Structured logging | [IMPLEMENTED] |
-| `Metrics` | Observability metrics | [PARTIAL — namespace registered, no methods] |
+Low-risk observability effects are **ambient**: they are allowed without explicit declaration, even in functions with explicit effect annotations. This prevents the "logging tax" where every function in a realistic codebase would need `{Log}` in its signature.
 
-### 6.7 The Standard Prelude
+Ambient effects: `Log`, `Time`, `Random`.
+
+```baseline
+// Log is ambient — no need to declare {Log} alongside {Http}
+fn fetch_data!(url: String) -> {Http} String = {
+  Log.info!("Fetching ${url}")          // Allowed — Log is ambient
+  let response = Http.get!(url)?
+  Log.info!("Got ${response.status}")   // Allowed
+  response.body
+}
+```
+
+Runtime `handle` blocks can still intercept ambient effects when needed (e.g., for testing or log capture).
+
+### 6.7 Restrict Blocks [IMPLEMENTED]
+
+The `restrict` keyword narrows the allowed effects within a lexical scope. It is the compile-time inverse of `handle`: instead of dynamically intercepting effects at runtime, it statically limits permissions at compile time.
+
+```baseline
+// Only DB calls are allowed inside this block
+fn process_order!(order: Order) -> {Http, Db} () = {
+  let validated = validate(order)
+  restrict(Db) {
+    Db.insert!(validated)           // Allowed
+    Http.post!("http://notify")     // ERROR: CAP_002 — Http not permitted
+  }
+}
+
+// Enforce total purity — no effects allowed
+restrict {
+  let result = pure_computation(data)
+  result
+}
+```
+
+`restrict` emits `CAP_002` diagnostics with clear messages about which effects are permitted:
+
+```
+error[CAP_002]: Effect 'Http' is not permitted inside this restrict block
+  = This restrict block allows {Db}, but 'Http.post!' requires {Http}.
+```
+
+`restrict` has zero runtime cost. The compiler backend ignores it entirely and generates the same code as a normal block.
+
+**Use case — sandboxing AI-generated code:**
+
+```baseline
+fn handle_checkout(req: Request) -> {Db} Response = {
+  restrict(Db) {
+    // AI-generated helpers can only use Db here.
+    // Even if the AI adds {Fs} to its helper's inferred signature,
+    // the restrict block catches it at compile time.
+    let tax = ai_generated_tax_helper(req.amount)
+    Db.insert!(Order { amount: req.amount, tax: tax })
+  }
+  Response.ok("done")
+}
+```
+
+### 6.8 Built-in Effects
+
+| Effect | Description | Ambient | Status |
+|--------|-------------|---------|--------|
+| `Console` | Terminal I/O | No | [IMPLEMENTED] |
+| `Http` | HTTP client | No | [IMPLEMENTED] |
+| `Fs` | File system | No | [IMPLEMENTED] |
+| `Net` | TCP/UDP sockets | No | [PLANNED] |
+| `Db` | Database access | No | [PARTIAL] |
+| `Time` | Current time, delays | **Yes** | [IMPLEMENTED] |
+| `Random` | Random number generation | **Yes** | [IMPLEMENTED] |
+| `Env` | Environment variables | No | [IMPLEMENTED] |
+| `Process` | Spawn processes | No | [PLANNED] |
+| `Log` | Structured logging | **Yes** | [IMPLEMENTED] |
+| `Metrics` | Observability metrics | No | [PARTIAL] |
+
+### 6.9 The Standard Prelude
 
 ```baseline
 // WITH prelude: just write code
@@ -1353,7 +1434,7 @@ handlers = {
 }
 ```
 
-### 6.8 Row Polymorphism [PLANNED]
+### 6.10 Row Polymorphism [PLANNED]
 
 Baseline's effect system is built on row polymorphism:
 
@@ -1362,7 +1443,7 @@ Baseline's effect system is built on row polymorphism:
 fn map<A, B, e>(list: List<A>, f: A -> {e} B) -> {e} List<B> = ...
 ```
 
-### 6.9 Direct Style [PLANNED]
+### 6.11 Direct Style [PLANNED]
 
 Baseline compiles algebraic effects to Direct Style code, avoiding the "colored function" problem of async/await.
 
@@ -1391,20 +1472,22 @@ import Http as H               // Import with alias [PLANNED]
 import Http.*                  // Import all (lint warning)
 ```
 
-### 7.3 Exports [PARTIAL]
+### 7.3 Exports [IMPLEMENTED]
 
-The `export` keyword is accepted by the parser but visibility is not yet enforced — all top-level definitions are currently public. When visibility enforcement is implemented, unexported definitions will become private.
+The `export` keyword controls visibility of definitions to importers. Enforcement is **opt-in per module**: if a module contains zero `export` keywords, all definitions remain public (backward compatible). Once any definition uses `export`, only exported items are visible to importers — unexported definitions become private.
 
 ```baseline
 export fn greet(name: String) -> String =
   "Hello, ${name}"
 
-fn helper(s: String) -> String = String.trim(s)  // Will be private when enforced
+fn helper(s: String) -> String = String.trim(s)  // Private: not visible to importers
 
 export type User = { name: String, age: Int }
 export type Status = Active | Inactive
 export effect MyEffect { ... }
 ```
+
+Attempting to use a private symbol from an importing module produces diagnostic `IMP_004`.
 
 ### 7.4 Module Organization
 
