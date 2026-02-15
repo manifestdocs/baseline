@@ -248,3 +248,149 @@ pub(super) fn native_router_group(args: &[NValue]) -> Result<NValue, NativeError
     }
     Ok(NValue::record(new_fields))
 }
+
+/// Router.state(router, key, value) -> Router
+/// Attach a named value to the router's `state` sub-record.
+pub(super) fn native_router_state(args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Router.state: expected Router, got {}",
+                args[0]
+            )));
+        }
+    };
+    let key = match args[1].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Router.state: key must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let mut new_fields: Vec<(RcStr, NValue)> = Vec::new();
+    let mut state_found = false;
+    for (k, v) in fields.iter() {
+        if &**k == "state" {
+            let mut state_rec = v.as_record().cloned().unwrap_or_default();
+            let mut key_found = false;
+            for (sk, sv) in &mut state_rec {
+                if *sk == key {
+                    *sv = args[2].clone();
+                    key_found = true;
+                    break;
+                }
+            }
+            if !key_found {
+                state_rec.push((key.clone(), args[2].clone()));
+            }
+            new_fields.push((k.clone(), NValue::record(state_rec)));
+            state_found = true;
+        } else {
+            new_fields.push((k.clone(), v.clone()));
+        }
+    }
+    if !state_found {
+        new_fields.push((
+            "state".into(),
+            NValue::record(vec![(key, args[2].clone())]),
+        ));
+    }
+    Ok(NValue::record(new_fields))
+}
+
+/// Router.docs_json(router) -> String
+/// Serializes the route table as a JSON array of {method, path} objects.
+pub(super) fn native_router_docs_json(args: &[NValue]) -> Result<NValue, NativeError> {
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Router.docs_json: expected Router, got {}",
+                args[0]
+            )));
+        }
+    };
+    let routes = fields
+        .iter()
+        .find(|(k, _)| &**k == "routes")
+        .and_then(|(_, v)| v.as_list())
+        .cloned()
+        .unwrap_or_default();
+
+    let mut entries = Vec::new();
+    for route in &routes {
+        if let Some(rf) = route.as_record() {
+            let method = rf.iter().find(|(k, _)| &**k == "method").and_then(|(_, v)| v.as_string());
+            let path = rf.iter().find(|(k, _)| &**k == "path").and_then(|(_, v)| v.as_string());
+            if let (Some(m), Some(p)) = (method, path) {
+                entries.push(format!(r#"{{"method":"{}","path":"{}"}}"#, m, p));
+            }
+        }
+    }
+    let json = format!("[{}]", entries.join(","));
+    Ok(NValue::string(json.into()))
+}
+
+/// Router.resources(router, path, handlers) -> Router
+/// Generates 5 RESTful CRUD routes from a record of handler functions:
+///   { index, show, create, update, destroy }
+/// Produces:
+///   GET    /path          -> index
+///   GET    /path/:id      -> show
+///   POST   /path          -> create
+///   PUT    /path/:id      -> update
+///   DELETE /path/:id      -> destroy
+pub(super) fn native_router_resources(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 3 {
+        return Err(NativeError(format!(
+            "Router.resources expects 3 arguments (router, path, handlers), got {}",
+            args.len()
+        )));
+    }
+    let handlers = match args[2].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Router.resources: third arg must be record of handlers, got {}",
+                args[2]
+            )));
+        }
+    };
+    let base_path = match args[1].as_string() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(NativeError(format!(
+                "Router.resources: second arg must be String path, got {}",
+                args[1]
+            )));
+        }
+    };
+    let base = base_path.trim_end_matches('/');
+    let item_path = format!("{}/:id", base);
+
+    let mut result = args[0].clone();
+    let routes: &[(&str, &str, &str)] = &[
+        ("index", "GET", base),
+        ("show", "GET", &item_path),
+        ("create", "POST", base),
+        ("update", "PUT", &item_path),
+        ("destroy", "DELETE", &item_path),
+    ];
+
+    for (handler_name, method, path) in routes {
+        if let Some(handler) = handlers.iter().find(|(k, _)| &**k == *handler_name) {
+            let route_args = [
+                result,
+                NValue::string(RcStr::from(*path)),
+                handler.1.clone(),
+            ];
+            result = router_add_route(method, &route_args)?;
+        }
+    }
+
+    Ok(result)
+}
