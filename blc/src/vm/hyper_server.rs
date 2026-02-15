@@ -1174,14 +1174,33 @@ impl AsyncRouteTree {
     /// Find a handler for the given method and path.
     /// Returns the handler and extracted path parameters.
     pub fn find(&self, method: &str, path: &str) -> Option<(AsyncHandler, SmallParams)> {
-        let segments: Vec<&str> = path
-            .trim_start_matches('/')
-            .split('/')
-            .filter(|s| !s.is_empty())
-            .collect();
+        // Stack-allocated segment buffer avoids heap allocation for typical paths (≤8 segments).
+        let mut buf: [&str; 8] = [""; 8];
+        let mut count = 0;
+        for seg in path.trim_start_matches('/').split('/') {
+            if !seg.is_empty() {
+                if count < buf.len() {
+                    buf[count] = seg;
+                } else {
+                    // Fallback: deep path, collect remaining into Vec
+                    let mut vec: Vec<&str> = buf[..count].to_vec();
+                    vec.push(seg);
+                    for s in path.trim_start_matches('/').split('/').skip(count + 1) {
+                        if !s.is_empty() {
+                            vec.push(s);
+                        }
+                    }
+                    let mut params = SmallParams::new();
+                    let node = self.find_node(&self.root, &vec, &mut params)?;
+                    let handler = node.handlers.get(method)?;
+                    return Some((handler.clone(), params));
+                }
+                count += 1;
+            }
+        }
 
         let mut params = SmallParams::new();
-        let node = self.find_node(&self.root, &segments, &mut params)?;
+        let node = self.find_node(&self.root, &buf[..count], &mut params)?;
 
         let handler = node.handlers.get(method)?;
         Some((handler.clone(), params))

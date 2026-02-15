@@ -271,18 +271,17 @@ impl Vm {
             "chunk must end with Return (sentinel)"
         );
 
-        // Local counter for periodic limit checking (avoids field access on every op)
+        // Local counter for periodic limit/safety checking (avoids field access on every op)
         let mut local_count: u64 = 0;
         let check_interval = INSTRUCTION_CHECK_INTERVAL;
         let has_limit = self.instruction_limit > 0;
 
         loop {
-            // Periodic instruction limit check (only if limit is set)
-            if has_limit {
-                local_count += 1;
-                if local_count >= check_interval {
+            // Periodic safety checks (instruction limit + stack size)
+            local_count += 1;
+            if local_count >= check_interval {
+                if has_limit {
                     self.instruction_count += local_count;
-                    local_count = 0;
                     if self.instruction_count > self.instruction_limit {
                         let (line, col) = chunk
                             .source_map
@@ -299,24 +298,26 @@ impl Vm {
                         ));
                     }
                 }
-            }
 
-            // Stack size check (less frequent than instruction check)
-            if self.stack.len() > MAX_STACK_SIZE {
-                let (line, col) = chunk
-                    .source_map
-                    .get(ip.saturating_sub(1))
-                    .copied()
-                    .unwrap_or((0, 0));
-                return Err(self.error(
-                    format!(
-                        "Stack overflow: {} values (limit: {})",
-                        self.stack.len(),
-                        MAX_STACK_SIZE
-                    ),
-                    line,
-                    col,
-                ));
+                // Stack size check — only every check_interval ops
+                if self.stack.len() > MAX_STACK_SIZE {
+                    let (line, col) = chunk
+                        .source_map
+                        .get(ip.saturating_sub(1))
+                        .copied()
+                        .unwrap_or((0, 0));
+                    return Err(self.error(
+                        format!(
+                            "Stack overflow: {} values (limit: {})",
+                            self.stack.len(),
+                            MAX_STACK_SIZE
+                        ),
+                        line,
+                        col,
+                    ));
+                }
+
+                local_count = 0;
             }
 
             let op = unsafe { *chunk.code.get_unchecked(ip) };
