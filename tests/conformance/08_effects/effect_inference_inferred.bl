@@ -1,0 +1,11 @@
+@prelude(script)
+
+// Conformance: effect inference — functions without explicit effect
+// annotations have their effects inferred. No errors should be emitted.
+
+fn print_result() -> () = Console.println!("result")
+
+fn main!() -> {Console} () = {
+  print_result()
+  Console.println!("effect inference works")
+}

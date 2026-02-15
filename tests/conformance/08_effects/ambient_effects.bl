@@ -1,0 +1,14 @@
+@prelude(script)
+
+// Conformance: ambient effects (Log, Time, Random) don't need declaration.
+// Functions with explicit {Console} can use Log.info! without declaring {Log}.
+
+fn logged_print() -> {Console} () = {
+  Log.info!("about to print")
+  Console.println!("hello")
+  Log.info!("done printing")
+}
+
+fn main!() -> {Console} () = {
+  logged_print()
+}

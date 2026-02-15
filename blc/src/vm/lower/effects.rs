@@ -180,6 +180,20 @@ impl<'a> super::Lowerer<'a> {
         })
     }
 
+    /// Lower `restrict(Effect1, Effect2) { body }` — purely static, just evaluate body.
+    ///
+    /// Effect narrowing is enforced at analysis time by the effect checker.
+    /// At the IR level, restrict is transparent — it's just the body expression.
+    pub(super) fn lower_restrict_expression(
+        &mut self,
+        node: &Node,
+    ) -> Result<Expr, CompileError> {
+        let body_node = node
+            .child_by_field_name("body")
+            .ok_or_else(|| self.error("restrict_expression missing body".into(), node))?;
+        self.lower_expression(&body_node)
+    }
+
     /// Check if a handler body is tail-resumptive (body is exactly `resume(expr)`).
     fn is_tail_resumptive_body(expr: &Expr) -> bool {
         match expr {

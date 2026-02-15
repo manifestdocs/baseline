@@ -1,0 +1,11 @@
+@prelude(script)
+
+// Negative test: restrict block that disallows an effect used inside it.
+// Expected errors: CAP_002
+
+fn main!() -> {Console, Http} () = {
+  restrict(Console) {
+    Console.println!("this is fine")
+    Http.get!("http://example.com")
+  }
+}

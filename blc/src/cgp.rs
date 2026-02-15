@@ -299,7 +299,7 @@ fn analyze_cursor_context(root: &tree_sitter::Node, source: &str) -> CursorConte
             "if_expression" | "for_expression" | "binary_expression"
             | "unary_expression" | "pipe_expression" | "block"
             | "lambda_expression" | "try_expression" | "with_expression"
-            | "handle_expression" | "parenthesized_expression" => {
+            | "handle_expression" | "restrict_expression" | "parenthesized_expression" => {
                 return CursorContext::Expression;
             }
             _ => {}

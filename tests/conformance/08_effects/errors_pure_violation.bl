@@ -1,0 +1,7 @@
+@prelude(script)
+
+// Negative test: @pure function that uses effects should error.
+// Expected errors: CAP_001
+
+@pure
+fn bad_pure() -> () = Console.println!("oops")

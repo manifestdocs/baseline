@@ -11,12 +11,93 @@
 //! 6. Compute transitive effect closure via fixed-point iteration
 //! 7. Verify that each function's declared effects cover its transitive closure
 //! 8. Emit CAP_XXX diagnostics for violations
+//!
+//! ## Ambient Effects
+//!
+//! Low-risk observability effects (Log, Time, Random) are "ambient": they are
+//! allowed without explicit declaration. This prevents the logging tax where
+//! every function in a realistic codebase would need `{Log}` in its signature.
+//!
+//! ## Effect Inference
+//!
+//! Functions without explicit effect annotations get their effects inferred
+//! bottom-up from their body. Only functions with explicit `{Effect}` declarations
+//! or `@pure` annotations are checked against their declaration.
+//!
+//! ## Restrict Blocks
+//!
+//! `restrict(Effect1, Effect2) { body }` narrows the allowed effects within
+//! a lexical scope. This is the compile-time inverse of `handle`: instead of
+//! dynamically intercepting effects, it statically limits permissions.
 
 use std::collections::{HashMap, HashSet};
 
 use tree_sitter::{Node, Tree};
 
 use crate::diagnostics::{Diagnostic, Location, Patch, Severity, Suggestion};
+
+/// Effects that are allowed without explicit declaration.
+///
+/// These are low-risk observability effects that would otherwise infect every
+/// function signature in a realistic codebase. The runtime `handle` blocks can
+/// still intercept these effects if needed (e.g., for testing).
+const AMBIENT_EFFECTS: &[&str] = &["Log", "Time", "Random"];
+
+/// Check if an effect is ambient (allowed without declaration).
+fn is_ambient_effect(effect: &str) -> bool {
+    AMBIENT_EFFECTS
+        .iter()
+        .any(|e| e.eq_ignore_ascii_case(effect))
+}
+
+/// Check if a top-level node (function_def or spec_block) has a `@pure` annotation.
+fn has_pure_annotation(node: Node) -> bool {
+    if node.kind() == "spec_block" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "spec_attribute" {
+                let mut inner = child.walk();
+                for attr in child.children(&mut inner) {
+                    if attr.kind() == "pure_attribute" {
+                        return true;
+                    }
+                }
+            }
+            if child.kind() == "pure_attribute" {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Determine the effect declaration mode for a function.
+///
+/// - `Declared(effects)` — function has explicit `{Effect}` annotations; check inferred ⊆ declared.
+/// - `Pure` — function has `@pure`; any non-ambient effect is a violation.
+/// - `Inferred` — no annotation; effects are inferred bottom-up, no checking needed.
+#[derive(Debug)]
+enum EffectMode {
+    Declared(Vec<String>),
+    Pure,
+    Inferred,
+}
+
+fn determine_effect_mode(func_node: Node, top_level_node: Node, source: &str) -> EffectMode {
+    if has_pure_annotation(top_level_node) {
+        return EffectMode::Pure;
+    }
+    let declared = extract_declared_effects(func_node, source);
+    if !declared.is_empty() {
+        EffectMode::Declared(declared)
+    } else {
+        // Check if the function has an explicit empty effect set vs no annotation at all.
+        // If the function has `-> Type` with no `{...}`, it's Inferred.
+        // If it has `-> {} Type` (empty braces), that would be Pure, but the grammar
+        // requires at least one type_identifier in effect_set, so empty isn't possible.
+        EffectMode::Inferred
+    }
+}
 
 /// Extract function_def from a top-level child, unwrapping spec_block if needed.
 fn extract_function_def<'a>(node: Node<'a>) -> Option<Node<'a>> {
@@ -54,23 +135,33 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
         }
     }
 
-    // Phase 1: Direct effect checking (existing behavior) +
-    //          Build call graph and direct effects map
-    let mut declared_effects_map: HashMap<String, Vec<String>> = HashMap::new();
+    // Phase 1: Direct effect checking + build call graph and direct effects map.
+    // Effect mode determines checking behavior:
+    //   Declared(effects) — check direct calls against declared set
+    //   Pure — check direct calls against empty set
+    //   Inferred — skip direct checking entirely
+    let mut effect_mode_map: HashMap<String, EffectMode> = HashMap::new();
     let mut direct_effects_map: HashMap<String, HashSet<String>> = HashMap::new();
     let mut call_graph: HashMap<String, HashSet<String>> = HashMap::new();
 
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         if let Some(func) = extract_function_def(child) {
-            // Existing direct checking (emits CAP_001 for direct ! calls)
-            check_function(func, source, file, &mut diagnostics);
+            let mode = determine_effect_mode(func, child, source);
 
-            // Build call graph data
+            // Only check direct effects for functions with explicit declarations
+            match &mode {
+                EffectMode::Declared(_) | EffectMode::Pure => {
+                    check_function(func, &mode, source, file, &mut diagnostics);
+                }
+                EffectMode::Inferred => {
+                    // No direct checking — effects will be inferred
+                }
+            }
+
+            // Build call graph data (always, even for inferred functions)
             if let Some(name) = find_function_name(func, source) {
                 let name = name.to_string();
-                let declared = extract_declared_effects(func, source);
-                declared_effects_map.insert(name.clone(), declared);
 
                 let mut direct_effects = HashSet::new();
                 let mut callees = HashSet::new();
@@ -86,7 +177,8 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
                 }
 
                 direct_effects_map.insert(name.clone(), direct_effects);
-                call_graph.insert(name, callees);
+                call_graph.insert(name.clone(), callees);
+                effect_mode_map.insert(name, mode);
             }
         }
     }
@@ -94,24 +186,34 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
     // Phase 2: Compute transitive effect closure via fixed-point iteration
     let transitive_effects = compute_transitive_effects(&direct_effects_map, &call_graph);
 
-    // Phase 3: Check transitive effects against declared effects
+    // Phase 3: Check transitive effects against declared/pure effects.
+    // Inferred functions are skipped — their transitive set IS their effect signature.
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
         if let Some(func) = extract_function_def(child)
             && let Some(name) = find_function_name(func, source)
         {
             let name_str = name.to_string();
-            check_transitive_effects(
-                func,
-                &name_str,
-                source,
-                file,
-                &declared_effects_map,
-                &transitive_effects,
-                &call_graph,
-                &direct_effects_map,
-                &mut diagnostics,
-            );
+            let mode = effect_mode_map.get(&name_str);
+
+            match mode {
+                Some(EffectMode::Inferred) | None => {
+                    // No transitive checking for inferred functions
+                }
+                Some(EffectMode::Declared(_)) | Some(EffectMode::Pure) => {
+                    check_transitive_effects(
+                        func,
+                        &name_str,
+                        &mode.unwrap(),
+                        source,
+                        file,
+                        &transitive_effects,
+                        &call_graph,
+                        &direct_effects_map,
+                        &mut diagnostics,
+                    );
+                }
+            }
         }
     }
 
@@ -294,18 +396,20 @@ fn find_effect_source<'a>(
 fn check_transitive_effects(
     func_node: Node,
     func_name: &str,
+    mode: &EffectMode,
     source: &str,
     file: &str,
-    declared_effects_map: &HashMap<String, Vec<String>>,
     transitive_effects: &HashMap<String, HashSet<String>>,
     call_graph: &HashMap<String, HashSet<String>>,
     direct_effects_map: &HashMap<String, HashSet<String>>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let declared = declared_effects_map
-        .get(func_name)
-        .cloned()
-        .unwrap_or_default();
+    let declared: Vec<String> = match mode {
+        EffectMode::Declared(effects) => effects.clone(),
+        EffectMode::Pure => Vec::new(),
+        EffectMode::Inferred => return, // No transitive checking for inferred functions
+    };
+
     let direct = direct_effects_map
         .get(func_name)
         .cloned()
@@ -313,6 +417,11 @@ fn check_transitive_effects(
 
     if let Some(transitive) = transitive_effects.get(func_name) {
         for effect in transitive {
+            // Skip ambient effects — they don't need declaration
+            if is_ambient_effect(effect) {
+                continue;
+            }
+
             // Skip effects that are already caught by direct checking
             if direct.contains(effect) {
                 continue;
@@ -334,14 +443,29 @@ fn check_transitive_effects(
 
                 let (patch, _) = build_effect_patch(func_node, source, effect);
 
-                diagnostics.push(Diagnostic {
-                    code: "CAP_001".to_string(),
-                    severity: Severity::Error,
-                    location: Location::from_node(file, &func_node),
-                    message: format!(
+                let diag_code = if matches!(mode, EffectMode::Pure) {
+                    "CAP_003"
+                } else {
+                    "CAP_001"
+                };
+
+                let message = if matches!(mode, EffectMode::Pure) {
+                    format!(
+                        "Function '{}' is marked @pure but transitively requires {{{}}} via '{}'",
+                        func_name, effect, via_name
+                    )
+                } else {
+                    format!(
                         "Function '{}' transitively requires {{{}}} via '{}' but does not declare it",
                         func_name, effect, via_name
-                    ),
+                    )
+                };
+
+                diagnostics.push(Diagnostic {
+                    code: diag_code.to_string(),
+                    severity: Severity::Error,
+                    location: Location::from_node(file, &func_node),
+                    message,
                     context: format!(
                         "Function '{}' declares effects {{{}}}, but transitively requires {{{}}} through call to '{}'.",
                         func_name,
@@ -364,14 +488,21 @@ fn check_transitive_effects(
 }
 
 /// Check a single function declaration for direct effect violations.
-fn check_function(node: Node, source: &str, file: &str, diagnostics: &mut Vec<Diagnostic>) {
-    // Extract function name
+fn check_function(
+    node: Node,
+    mode: &EffectMode,
+    source: &str,
+    file: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     let func_name = find_function_name(node, source).unwrap_or("<unknown>");
 
-    // Extract declared effects from the type annotation
-    let declared_effects = extract_declared_effects(node, source);
+    let declared_effects = match mode {
+        EffectMode::Declared(effects) => effects.clone(),
+        EffectMode::Pure => Vec::new(),
+        EffectMode::Inferred => return, // No direct checking for inferred functions
+    };
 
-    // Find the function body
     if let Some(body) = get_function_body(node) {
         check_node_for_effects(
             body,
@@ -450,6 +581,29 @@ fn check_node_for_effects(
     func_node: Node,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    check_node_for_effects_inner(
+        node,
+        source,
+        file,
+        func_name,
+        declared_effects,
+        func_node,
+        false,
+        diagnostics,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn check_node_for_effects_inner(
+    node: Node,
+    source: &str,
+    file: &str,
+    func_name: &str,
+    declared_effects: &[String],
+    func_node: Node,
+    in_restrict: bool,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     // Check for effectful identifiers (calls ending in !)
     if node.kind() == "effect_identifier"
         && let Ok(call_name) = node.utf8_text(source.as_bytes())
@@ -462,6 +616,7 @@ fn check_node_for_effects(
             func_name,
             declared_effects,
             func_node,
+            in_restrict,
             diagnostics,
         );
     }
@@ -486,6 +641,7 @@ fn check_node_for_effects(
                 func_name,
                 declared_effects,
                 func_node,
+                in_restrict,
                 diagnostics,
             );
             // Don't recurse to avoid double reporting
@@ -504,6 +660,7 @@ fn check_node_for_effects(
                 func_name,
                 declared_effects,
                 func_node,
+                in_restrict,
                 diagnostics,
             );
         }
@@ -516,19 +673,55 @@ fn check_node_for_effects(
         return;
     }
 
+    // restrict_expression narrows the allowed effects for its body
+    if node.kind() == "restrict_expression" {
+        let allowed = extract_restrict_effects(node, source);
+        if let Some(body) = node.child_by_field_name("body") {
+            check_node_for_effects_inner(
+                body,
+                source,
+                file,
+                func_name,
+                &allowed,
+                func_node,
+                true,
+                diagnostics,
+            );
+        }
+        return;
+    }
+
     // Recurse into children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        check_node_for_effects(
+        check_node_for_effects_inner(
             child,
             source,
             file,
             func_name,
             declared_effects,
             func_node,
+            in_restrict,
             diagnostics,
         );
     }
+}
+
+/// Extract allowed effects from a restrict_expression node.
+///
+/// `restrict(DB, Http) { ... }` → `["DB", "Http"]`
+/// `restrict { ... }` → `[]` (enforce total purity)
+fn extract_restrict_effects(node: Node, source: &str) -> Vec<String> {
+    let mut effects = Vec::new();
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        if child.kind() == "type_identifier" {
+            if let Ok(name) = child.utf8_text(source.as_bytes()) {
+                effects.push(name.to_string());
+            }
+        }
+    }
+    effects
 }
 
 /// Extract effect name and method from a qualified identifier like `Http.get!`.
@@ -551,10 +744,16 @@ fn check_effectful_call(
     func_name: &str,
     declared_effects: &[String],
     func_node: Node,
+    in_restrict: bool,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     // Infer the required effect from the call
     let required_effect = infer_required_effect(call_name);
+
+    // Skip ambient effects — they don't need declaration
+    if is_ambient_effect(&required_effect) {
+        return;
+    }
 
     // Check if the required effect is in the declared set
     let has_effect = declared_effects
@@ -564,41 +763,78 @@ fn check_effectful_call(
     if !has_effect {
         let start = node.start_position();
 
-        // Build the suggestion patch
-        let (patch, _original_text) = build_effect_patch(func_node, source, &required_effect);
+        if in_restrict {
+            // CAP_002: Effect not permitted inside restrict block
+            let allowed_str = if declared_effects.is_empty() {
+                "no effects (pure)".to_string()
+            } else {
+                format!("{{{}}}", declared_effects.join(", "))
+            };
+            diagnostics.push(Diagnostic {
+                code: "CAP_002".to_string(),
+                severity: Severity::Error,
+                location: Location::from_node(file, &node),
+                message: format!(
+                    "Effect '{}' is not permitted inside this restrict block",
+                    required_effect
+                ),
+                context: format!(
+                    "This restrict block allows {}, but '{}' requires {{{}}}.",
+                    allowed_str,
+                    call_name,
+                    required_effect
+                ),
+                suggestions: vec![
+                    Suggestion {
+                        strategy: "remove_call".to_string(),
+                        description: "Remove the effectful call from the restrict block".to_string(),
+                        confidence: None,
+                        patch: Some(Patch {
+                            start_line: start.row + 1,
+                            original_text: Some(call_name.to_string()),
+                            replacement_text: None,
+                            operation: Some("delete".to_string()),
+                        }),
+                    },
+                ],
+            });
+        } else {
+            // CAP_001: Undeclared effect in function signature
+            let (patch, _original_text) = build_effect_patch(func_node, source, &required_effect);
 
-        diagnostics.push(Diagnostic {
-            code: "CAP_001".to_string(),
-            severity: Severity::Error,
-            location: Location::from_node(file, &node),
-            message: format!("Unauthorized Side Effect: '{}'", call_name),
-            context: format!(
-                "Function '{}' declares effects {{{}}}, but calls '{}' which requires {{{}}}.",
-                func_name,
-                declared_effects.join(", "),
-                call_name,
-                required_effect
-            ),
-            suggestions: vec![
-                Suggestion {
-                    strategy: "escalate_capability".to_string(),
-                    description: format!("Add {} to the function signature", required_effect),
-                    confidence: None,
-                    patch: Some(patch),
-                },
-                Suggestion {
-                    strategy: "remove_call".to_string(),
-                    description: "Delete the unauthorized call".to_string(),
-                    confidence: None,
-                    patch: Some(Patch {
-                        start_line: start.row + 1,
-                        original_text: Some(call_name.to_string()),
-                        replacement_text: None,
-                        operation: Some("delete".to_string()),
-                    }),
-                },
-            ],
-        });
+            diagnostics.push(Diagnostic {
+                code: "CAP_001".to_string(),
+                severity: Severity::Error,
+                location: Location::from_node(file, &node),
+                message: format!("Unauthorized Side Effect: '{}'", call_name),
+                context: format!(
+                    "Function '{}' declares effects {{{}}}, but calls '{}' which requires {{{}}}.",
+                    func_name,
+                    declared_effects.join(", "),
+                    call_name,
+                    required_effect
+                ),
+                suggestions: vec![
+                    Suggestion {
+                        strategy: "escalate_capability".to_string(),
+                        description: format!("Add {} to the function signature", required_effect),
+                        confidence: None,
+                        patch: Some(patch),
+                    },
+                    Suggestion {
+                        strategy: "remove_call".to_string(),
+                        description: "Delete the unauthorized call".to_string(),
+                        confidence: None,
+                        patch: Some(Patch {
+                            start_line: start.row + 1,
+                            original_text: Some(call_name.to_string()),
+                            replacement_text: None,
+                            operation: Some("delete".to_string()),
+                        }),
+                    },
+                ],
+            });
+        }
     }
 }
 
@@ -614,6 +850,7 @@ fn infer_required_effect(call_name: &str) -> String {
         return match module {
             "Server" => "Http".to_string(),
             "Scope" | "Cell" => "Async".to_string(),
+            "DateTime" => "Time".to_string(),
             _ => module.to_string(),
         };
     }

@@ -1,7 +1,7 @@
 @prelude(script)
 
-// Negative test: missing effect annotation
+// Negative test: explicit effect declaration violated
 // Expected errors: CAP_001
 
-// This function calls Console but does not declare the effect
-fn bad_print() -> () = Console.println!("oops")
+// This function declares {Http} but calls Console (which is not declared)
+fn bad_print() -> {Http} () = Console.println!("oops")

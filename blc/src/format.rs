@@ -412,6 +412,7 @@ impl<'a> Formatter<'a> {
             "match_expression" => self.format_match(node),
             "for_expression" => self.format_for(node),
             "with_expression" => self.format_with(node),
+            "restrict_expression" => self.format_restrict(node),
             "lambda" | "lambda_expression" => self.format_lambda(node),
             "call_expression" => self.format_call(node),
             "let_binding" => self.format_let(node),
@@ -514,6 +515,32 @@ impl<'a> Formatter<'a> {
                 continue;
             }
             i += 1;
+        }
+    }
+
+    fn format_restrict(&mut self, node: &Node) {
+        // restrict(Effect1, Effect2) { body }  or  restrict { body }
+        self.push("restrict");
+        let mut has_effects = false;
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "type_identifier" {
+                if !has_effects {
+                    self.push("(");
+                    has_effects = true;
+                } else {
+                    self.push(", ");
+                }
+                self.push(self.text(&child));
+            }
+            if child.kind() == "block" {
+                if has_effects {
+                    self.push(") ");
+                } else {
+                    self.push(" ");
+                }
+                self.format_block(&child);
+            }
         }
     }
 
