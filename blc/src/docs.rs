@@ -3,6 +3,9 @@
 //! Walks the builtin registry, native function list, and type inference schemas
 //! to emit structured JSON or human-readable markdown describing all available
 //! modules and their functions.
+//!
+//! This is the **single source of truth** for API documentation. Both
+//! `blc docs` (CLI) and the website consume the same data model.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -16,24 +19,84 @@ use crate::prelude::Prelude;
 // Output types
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct DocsOutput {
     pub modules: Vec<ModuleDoc>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct ModuleDoc {
     pub name: String,
+    pub description: String,
+    pub category: String,
     pub functions: Vec<FunctionDoc>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct FunctionDoc {
     pub name: String,
     pub signature: String,
     pub effects: Vec<String>,
     pub prelude_level: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub example: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Module descriptions
+// ---------------------------------------------------------------------------
+
+fn module_descriptions() -> HashMap<&'static str, &'static str> {
+    let mut m = HashMap::new();
+    m.insert("Console", "Print output to the terminal, read user input, and write errors to stderr.");
+    m.insert("Crypto", "Hash data, compute HMACs, and perform constant-time comparisons.");
+    m.insert("DateTime", "Parse, format, and manipulate dates and times.");
+    m.insert("Db", "Connect to SQLite and run queries with parameter binding.");
+    m.insert("Env", "Read configuration from environment variables and set them for child processes.");
+    m.insert("Fs", "Read files, write data to disk, and list directory contents.");
+    m.insert("Http", "Make HTTP requests to external APIs and fetch remote data.");
+    m.insert("HttpError", "Create structured HTTP error values for use with error middleware.");
+    m.insert("Int", "Parse integers from strings and format numbers as text.");
+    m.insert("Json", "Decode JSON from APIs and encode your data structures back to JSON.");
+    m.insert("List", "Transform collections with map and filter, reduce values with fold, and search for elements.");
+    m.insert("Log", "Record structured events at different severity levels for debugging and monitoring.");
+    m.insert("Map", "Store and retrieve values by key in immutable dictionaries.");
+    m.insert("Math", "Perform common calculations like absolute value, min/max, and exponentiation.");
+    m.insert("Middleware", "Extract authentication credentials, configure CORS, and set up rate limiting.");
+    m.insert("Option", "Represent values that might be missing without using null.");
+    m.insert("Random", "Generate random numbers, booleans, and unique identifiers.");
+    m.insert("Request", "Extract HTTP method, headers, body, and attached state from incoming requests.");
+    m.insert("Response", "Build HTTP responses with custom status codes, headers, and JSON or text bodies.");
+    m.insert("Result", "Handle operations that can fail with explicit error values instead of exceptions.");
+    m.insert("Router", "Define URL patterns, register handlers for HTTP methods, and organize routes into groups.");
+    m.insert("Server", "Start an HTTP server listening on a specific port.");
+    m.insert("Set", "Store unique elements and perform operations like union, intersection, and membership testing.");
+    m.insert("String", "Split, trim, search, replace, and convert between strings and individual characters.");
+    m.insert("Time", "Get the current timestamp and pause execution for a specified duration.");
+    m.insert("Weak", "Break reference cycles with weak pointers that don't prevent garbage collection.");
+    m
+}
+
+/// Map each module to its package category.
+fn module_categories() -> HashMap<&'static str, &'static str> {
+    let mut m = HashMap::new();
+    // Web framework
+    m.insert("Router", "web");
+    m.insert("Server", "web");
+    m.insert("Request", "web");
+    m.insert("Response", "web");
+    m.insert("Middleware", "web");
+    m.insert("HttpError", "web");
+    // Database
+    m.insert("Db", "database");
+    m.insert("Sqlite", "database");
+    m.insert("Postgres", "database");
+    m.insert("Mysql", "database");
+    m.insert("Sql", "database");
+    // Everything else is "language"
+    m
 }
 
 // ---------------------------------------------------------------------------
@@ -85,166 +148,314 @@ fn effects_for_function(qualified_name: &str) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Known function registry
+// Known function registry (single source of truth)
 // ---------------------------------------------------------------------------
 
-/// All known stdlib functions with their qualified names and descriptions.
+/// All known stdlib functions with descriptions and optional usage examples.
+///
 /// This is the single source of truth derived from:
 /// - NativeRegistry::register_all() in vm/natives/mod.rs
 /// - builtin_type_signatures() in analysis/types/builtins.rs
 /// - builtin_generic_schemas() in analysis/infer.rs
 ///
-/// Entries are (module, function_name, description).
-fn known_functions() -> Vec<(&'static str, &'static str, &'static str)> {
+/// Entries: (module, function_name, description, example).
+fn known_functions() -> Vec<(&'static str, &'static str, &'static str, Option<&'static str>)> {
     vec![
-        // Console
-        ("Console", "println!", "Print a string to stdout followed by a newline."),
-        ("Console", "print!", "Print a string to stdout without a trailing newline."),
-        ("Console", "error!", "Print a string to stderr."),
-        ("Console", "read_line!", "Read a line of input from stdin."),
-        // Log
-        ("Log", "info!", "Log a message at info level."),
-        ("Log", "warn!", "Log a message at warning level."),
-        ("Log", "error!", "Log a message at error level."),
-        ("Log", "debug!", "Log a message at debug level."),
-        // Math
-        ("Math", "abs", "Return the absolute value of an integer."),
-        ("Math", "min", "Return the smaller of two integers."),
-        ("Math", "max", "Return the larger of two integers."),
-        ("Math", "clamp", "Constrain a value between a minimum and maximum."),
-        ("Math", "pow", "Raise a base to an exponent."),
-        // String
-        ("String", "length", "Return the number of characters in a string."),
-        ("String", "to_upper", "Convert all characters to uppercase."),
-        ("String", "to_lower", "Convert all characters to lowercase."),
-        ("String", "trim", "Remove leading and trailing whitespace."),
-        ("String", "contains", "Check if a string contains a substring."),
-        ("String", "starts_with", "Check if a string starts with a prefix."),
-        ("String", "ends_with", "Check if a string ends with a suffix."),
-        ("String", "split", "Split a string by a delimiter into a list of strings."),
-        ("String", "join", "Join a list of strings with a separator."),
-        ("String", "slice", "Extract a substring by start and end index."),
-        ("String", "chars", "Split a string into a list of single-character strings."),
-        ("String", "char_at", "Return the character at a given index."),
-        ("String", "index_of", "Return the index of the first occurrence of a substring, or -1."),
-        ("String", "to_int", "Parse a string as an integer."),
-        ("String", "from_char_code", "Create a single-character string from a Unicode code point."),
-        ("String", "char_code", "Return the Unicode code point of the first character."),
-        ("String", "replace", "Replace all occurrences of a pattern with a replacement."),
-        // List
-        ("List", "length", "Return the number of elements in a list."),
-        ("List", "head", "Return the first element, or None if the list is empty."),
-        ("List", "tail", "Return all elements except the first."),
-        ("List", "reverse", "Return the list in reverse order."),
-        ("List", "sort", "Return the list sorted in ascending order."),
-        ("List", "concat", "Concatenate two lists."),
-        ("List", "contains", "Check if a list contains a given element."),
-        ("List", "get", "Return the element at an index, or None if out of bounds."),
-        ("List", "map", "Apply a function to every element, returning a new list."),
-        ("List", "filter", "Return elements that satisfy a predicate."),
-        ("List", "fold", "Reduce a list to a single value using an accumulator function."),
-        ("List", "find", "Return the first element that satisfies a predicate, or None."),
-        // Option
-        ("Option", "unwrap", "Extract the value from Some, or panic on None."),
-        ("Option", "unwrap_or", "Extract the value from Some, or return a default."),
-        ("Option", "is_some", "Return true if the option contains a value."),
-        ("Option", "is_none", "Return true if the option is None."),
-        ("Option", "map", "Apply a function to the contained value, if present."),
-        ("Option", "flat_map", "Apply a function that returns an Option, flattening the result."),
-        // Result
-        ("Result", "unwrap", "Extract the Ok value, or panic on Err."),
-        ("Result", "unwrap_or", "Extract the Ok value, or return a default."),
-        ("Result", "is_ok", "Return true if the result is Ok."),
-        ("Result", "is_err", "Return true if the result is Err."),
-        ("Result", "map", "Apply a function to the Ok value, if present."),
-        ("Result", "and_then", "Chain a function that returns a Result, flattening the result."),
-        // Int
-        ("Int", "to_string", "Convert an integer to its string representation."),
-        ("Int", "parse", "Parse a string as an integer."),
-        // Json
-        ("Json", "parse", "Parse a JSON string into a value."),
-        ("Json", "to_string", "Serialize a value to a compact JSON string."),
-        ("Json", "to_string_pretty", "Serialize a value to a pretty-printed JSON string."),
-        // Map
-        ("Map", "empty", "Create an empty map."),
-        ("Map", "insert", "Insert a key-value pair, returning a new map."),
-        ("Map", "get", "Look up a key, returning Some(value) or None."),
-        ("Map", "remove", "Remove a key, returning a new map."),
-        ("Map", "contains", "Check if a key exists in the map."),
-        ("Map", "keys", "Return all keys as a list."),
-        ("Map", "values", "Return all values as a list."),
-        ("Map", "len", "Return the number of entries in the map."),
-        ("Map", "from_list", "Create a map from a list of (key, value) pairs."),
-        // Set
-        ("Set", "empty", "Create an empty set."),
-        ("Set", "insert", "Add an element, returning a new set."),
-        ("Set", "remove", "Remove an element, returning a new set."),
-        ("Set", "contains", "Check if an element exists in the set."),
-        ("Set", "union", "Return the union of two sets."),
-        ("Set", "intersection", "Return the intersection of two sets."),
-        ("Set", "len", "Return the number of elements in the set."),
-        ("Set", "from_list", "Create a set from a list of elements."),
-        // Weak
-        ("Weak", "downgrade", "Create a weak reference from a strong reference."),
-        ("Weak", "upgrade", "Attempt to upgrade a weak reference to a strong one, returning an Option."),
-        // Time
-        ("Time", "now!", "Return the current Unix timestamp in milliseconds."),
-        ("Time", "sleep!", "Pause execution for the given number of milliseconds."),
-        // Random
-        ("Random", "int!", "Generate a random integer between min and max (inclusive)."),
-        ("Random", "bool!", "Generate a random boolean."),
-        ("Random", "uuid!", "Generate a random UUID v4 string."),
-        // Env
-        ("Env", "get!", "Read an environment variable, returning None if unset."),
-        ("Env", "set!", "Set an environment variable."),
-        // Fs
-        ("Fs", "read!", "Read a file's contents as a string."),
-        ("Fs", "write!", "Write a string to a file, creating or overwriting it."),
-        ("Fs", "exists!", "Check if a file path exists."),
-        ("Fs", "read_file!", "Read a file's contents as a string."),
-        ("Fs", "write_file!", "Write a string to a file, creating or overwriting it."),
-        ("Fs", "list_dir!", "List the entries in a directory."),
-        ("Fs", "with_file!", "Open a file, pass it to a callback, and close it automatically."),
-        // Http
-        ("Http", "get!", "Send an HTTP GET request to a URL."),
-        ("Http", "post!", "Send an HTTP POST request with a body."),
-        ("Http", "put!", "Send an HTTP PUT request with a body."),
-        ("Http", "delete!", "Send an HTTP DELETE request to a URL."),
-        ("Http", "request!", "Send a custom HTTP request from a request record."),
-        // Response
-        ("Response", "ok", "Create a 200 OK response with a text body."),
-        ("Response", "json", "Create a 200 OK response with a JSON body."),
-        ("Response", "created", "Create a 201 Created response with a text body."),
-        ("Response", "no_content", "Create a 204 No Content response."),
-        ("Response", "bad_request", "Create a 400 Bad Request response."),
-        ("Response", "not_found", "Create a 404 Not Found response."),
-        ("Response", "error", "Create a 500 Internal Server Error response."),
-        ("Response", "status", "Create a response with a custom status code and body."),
-        ("Response", "with_header", "Add a single header to a response."),
-        ("Response", "with_headers", "Add multiple headers to a response."),
-        ("Response", "redirect", "Create a 302 temporary redirect to a URL."),
-        ("Response", "redirect_permanent", "Create a 301 permanent redirect to a URL."),
-        // Request
-        ("Request", "header", "Read a header value from the request."),
-        ("Request", "method", "Return the HTTP method of the request."),
-        ("Request", "body_json", "Parse the request body as JSON."),
-        ("Request", "with_state", "Attach a named state value to the request."),
-        ("Request", "state", "Retrieve a named state value from the request."),
-        // Router
-        ("Router", "new", "Create a new empty router."),
-        ("Router", "routes", "Return the configured route table."),
-        ("Router", "get", "Register a handler for GET requests at a path."),
-        ("Router", "post", "Register a handler for POST requests at a path."),
-        ("Router", "put", "Register a handler for PUT requests at a path."),
-        ("Router", "delete", "Register a handler for DELETE requests at a path."),
-        ("Router", "patch", "Register a handler for PATCH requests at a path."),
-        ("Router", "options", "Register a handler for OPTIONS requests at a path."),
-        ("Router", "head", "Register a handler for HEAD requests at a path."),
-        ("Router", "any", "Register a handler for all HTTP methods at a path."),
-        ("Router", "use", "Add middleware to the router."),
-        ("Router", "group", "Group routes under a shared path prefix."),
-        // Server
-        ("Server", "listen!", "Start the HTTP server on the given port."),
+        // -- Console --
+        ("Console", "println!", "Print a string to stdout followed by a newline.",
+         Some("Console.println!(\"Hello, world!\")")),
+        ("Console", "print!", "Print a string to stdout without a trailing newline.",
+         Some("Console.print!(\"Enter name: \")")),
+        ("Console", "error!", "Print a string to stderr.",
+         Some("Console.error!(\"Something went wrong\")")),
+        ("Console", "read_line!", "Read a line of input from stdin.",
+         Some("let name = Console.read_line!()")),
+        // -- Log --
+        ("Log", "info!", "Log a message at info level.",
+         Some("Log.info!(\"Server started on port 3000\")")),
+        ("Log", "warn!", "Log a message at warning level.",
+         Some("Log.warn!(\"Cache miss for key: ${key}\")")),
+        ("Log", "error!", "Log a message at error level.",
+         Some("Log.error!(\"Failed to connect: ${msg}\")")),
+        ("Log", "debug!", "Log a message at debug level.",
+         Some("Log.debug!(\"Request payload: ${body}\")")),
+        // -- Math --
+        ("Math", "abs", "Return the absolute value of an integer.",
+         Some("Math.abs(-5)  // => 5")),
+        ("Math", "min", "Return the smaller of two integers.",
+         Some("Math.min(3, 7)  // => 3")),
+        ("Math", "max", "Return the larger of two integers.",
+         Some("Math.max(3, 7)  // => 7")),
+        ("Math", "clamp", "Constrain a value between a minimum and maximum.",
+         Some("Math.clamp(15, 0, 10)  // => 10")),
+        ("Math", "pow", "Raise a base to an exponent.",
+         Some("Math.pow(2, 10)  // => 1024")),
+        // -- String --
+        ("String", "length", "Return the number of characters in a string.",
+         Some("String.length(\"hello\")  // => 5")),
+        ("String", "to_upper", "Convert all characters to uppercase.",
+         Some("String.to_upper(\"hello\")  // => \"HELLO\"")),
+        ("String", "to_lower", "Convert all characters to lowercase.",
+         Some("String.to_lower(\"HELLO\")  // => \"hello\"")),
+        ("String", "trim", "Remove leading and trailing whitespace.",
+         Some("String.trim(\"  hi  \")  // => \"hi\"")),
+        ("String", "contains", "Check if a string contains a substring.",
+         Some("String.contains(\"hello world\", \"world\")  // => true")),
+        ("String", "starts_with", "Check if a string starts with a prefix.",
+         Some("String.starts_with(\"hello\", \"hel\")  // => true")),
+        ("String", "ends_with", "Check if a string ends with a suffix.",
+         Some("String.ends_with(\"hello\", \"llo\")  // => true")),
+        ("String", "split", "Split a string by a delimiter into a list of strings.",
+         Some("\"a,b,c\" |> String.split(\",\")  // => [\"a\", \"b\", \"c\"]")),
+        ("String", "join", "Join a list of strings with a separator.",
+         Some("[\"a\", \"b\", \"c\"] |> String.join(\", \")  // => \"a, b, c\"")),
+        ("String", "slice", "Extract a substring by start and end index.",
+         Some("String.slice(\"hello\", 1, 4)  // => \"ell\"")),
+        ("String", "chars", "Split a string into a list of single-character strings.",
+         Some("String.chars(\"hi\")  // => [\"h\", \"i\"]")),
+        ("String", "char_at", "Return the character at a given index.",
+         Some("String.char_at(\"hello\", 0)  // => \"h\"")),
+        ("String", "index_of", "Return the index of the first occurrence of a substring, or -1.",
+         Some("String.index_of(\"hello\", \"ll\")  // => 2")),
+        ("String", "to_int", "Parse a string as an integer.",
+         Some("String.to_int(\"42\")  // => 42")),
+        ("String", "from_char_code", "Create a single-character string from a Unicode code point.",
+         Some("String.from_char_code(65)  // => \"A\"")),
+        ("String", "char_code", "Return the Unicode code point of the first character.",
+         Some("String.char_code(\"A\")  // => 65")),
+        ("String", "replace", "Replace all occurrences of a pattern with a replacement.",
+         Some("String.replace(\"hello world\", \"world\", \"there\")  // => \"hello there\"")),
+        // -- List --
+        ("List", "length", "Return the number of elements in a list.",
+         Some("List.length([1, 2, 3])  // => 3")),
+        ("List", "head", "Return the first element, or None if the list is empty.",
+         Some("List.head([1, 2, 3])  // => Some(1)")),
+        ("List", "tail", "Return all elements except the first.",
+         Some("List.tail([1, 2, 3])  // => [2, 3]")),
+        ("List", "reverse", "Return the list in reverse order.",
+         Some("List.reverse([1, 2, 3])  // => [3, 2, 1]")),
+        ("List", "sort", "Return the list sorted in ascending order.",
+         Some("List.sort([3, 1, 2])  // => [1, 2, 3]")),
+        ("List", "concat", "Concatenate two lists.",
+         Some("List.concat([1, 2], [3, 4])  // => [1, 2, 3, 4]")),
+        ("List", "contains", "Check if a list contains a given element.",
+         Some("List.contains([1, 2, 3], 2)  // => true")),
+        ("List", "get", "Return the element at an index, or None if out of bounds.",
+         Some("List.get([10, 20, 30], 1)  // => Some(20)")),
+        ("List", "map", "Apply a function to every element, returning a new list.",
+         Some("[1, 2, 3] |> List.map(|x| x * 2)\n// => [2, 4, 6]")),
+        ("List", "filter", "Return elements that satisfy a predicate.",
+         Some("[1, 2, 3, 4] |> List.filter(|x| x > 2)\n// => [3, 4]")),
+        ("List", "fold", "Reduce a list to a single value using an accumulator function.",
+         Some("[1, 2, 3] |> List.fold(0, |acc, x| acc + x)\n// => 6")),
+        ("List", "find", "Return the first element that satisfies a predicate, or None.",
+         Some("[1, 2, 3] |> List.find(|x| x > 1)\n// => Some(2)")),
+        // -- Option --
+        ("Option", "unwrap", "Extract the value from Some, or panic on None.",
+         Some("Some(42) |> Option.unwrap  // => 42")),
+        ("Option", "unwrap_or", "Extract the value from Some, or return a default.",
+         Some("None |> Option.unwrap_or(0)  // => 0")),
+        ("Option", "is_some", "Return true if the option contains a value.",
+         Some("Option.is_some(Some(1))  // => true")),
+        ("Option", "is_none", "Return true if the option is None.",
+         Some("Option.is_none(None)  // => true")),
+        ("Option", "map", "Apply a function to the contained value, if present.",
+         Some("Some(5) |> Option.map(|x| x * 2)\n// => Some(10)")),
+        ("Option", "flat_map", "Apply a function that returns an Option, flattening the result.",
+         Some("Some(5) |> Option.flat_map(|x|\n  if x > 0 then Some(x) else None\n)\n// => Some(5)")),
+        // -- Result --
+        ("Result", "unwrap", "Extract the Ok value, or panic on Err.",
+         Some("Ok(42) |> Result.unwrap  // => 42")),
+        ("Result", "unwrap_or", "Extract the Ok value, or return a default.",
+         Some("Err(\"fail\") |> Result.unwrap_or(0)  // => 0")),
+        ("Result", "is_ok", "Return true if the result is Ok.",
+         Some("Result.is_ok(Ok(1))  // => true")),
+        ("Result", "is_err", "Return true if the result is Err.",
+         Some("Result.is_err(Err(\"fail\"))  // => true")),
+        ("Result", "map", "Apply a function to the Ok value, if present.",
+         Some("Ok(5) |> Result.map(|x| x * 2)\n// => Ok(10)")),
+        ("Result", "and_then", "Chain a function that returns a Result, flattening the result.",
+         Some("Ok(5) |> Result.and_then(|x|\n  if x > 0 then Ok(x) else Err(\"negative\")\n)\n// => Ok(5)")),
+        // -- Int --
+        ("Int", "to_string", "Convert an integer to its string representation.",
+         Some("Int.to_string(42)  // => \"42\"")),
+        ("Int", "parse", "Parse a string as an integer.",
+         Some("Int.parse(\"42\")  // => 42")),
+        // -- Json --
+        ("Json", "parse", "Parse a JSON string into a value.",
+         Some("let data = Json.parse(\"{\\\"name\\\": \\\"Alice\\\"}\")")),
+        ("Json", "to_string", "Serialize a value to a compact JSON string.",
+         Some("Json.to_string({ name: \"Alice\", age: 30 })\n// => \"{\\\"name\\\":\\\"Alice\\\",\\\"age\\\":30}\"")),
+        ("Json", "to_string_pretty", "Serialize a value to a pretty-printed JSON string.",
+         Some("Json.to_string_pretty({ name: \"Alice\" })")),
+        // -- Map --
+        ("Map", "empty", "Create an empty map.", None),
+        ("Map", "insert", "Insert a key-value pair, returning a new map.",
+         Some("Map.empty()\n|> Map.insert(\"name\", \"Alice\")\n|> Map.insert(\"age\", \"30\")")),
+        ("Map", "get", "Look up a key, returning Some(value) or None.",
+         Some("map |> Map.get(\"name\")  // => Some(\"Alice\")")),
+        ("Map", "remove", "Remove a key, returning a new map.",
+         Some("map |> Map.remove(\"age\")")),
+        ("Map", "contains", "Check if a key exists in the map.",
+         Some("Map.contains(map, \"name\")  // => true")),
+        ("Map", "keys", "Return all keys as a list.",
+         Some("Map.keys(map)  // => [\"age\", \"name\"]")),
+        ("Map", "values", "Return all values as a list.",
+         Some("Map.values(map)  // => [\"30\", \"Alice\"]")),
+        ("Map", "len", "Return the number of entries in the map.",
+         Some("Map.len(map)  // => 2")),
+        ("Map", "from_list", "Create a map from a list of (key, value) pairs.",
+         Some("Map.from_list([(\"a\", 1), (\"b\", 2)])")),
+        // -- Set --
+        ("Set", "empty", "Create an empty set.", None),
+        ("Set", "insert", "Add an element, returning a new set.",
+         Some("Set.empty() |> Set.insert(1) |> Set.insert(2)")),
+        ("Set", "remove", "Remove an element, returning a new set.", None),
+        ("Set", "contains", "Check if an element exists in the set.",
+         Some("Set.contains(s, 1)  // => true")),
+        ("Set", "union", "Return the union of two sets.", None),
+        ("Set", "intersection", "Return the intersection of two sets.", None),
+        ("Set", "len", "Return the number of elements in the set.", None),
+        ("Set", "from_list", "Create a set from a list of elements.",
+         Some("Set.from_list([1, 2, 3, 2])  // duplicates removed")),
+        // -- Weak --
+        ("Weak", "downgrade", "Create a weak reference from a strong reference.", None),
+        ("Weak", "upgrade", "Attempt to upgrade a weak reference to a strong one, returning an Option.", None),
+        // -- Time --
+        ("Time", "now!", "Return the current Unix timestamp in milliseconds.",
+         Some("let start = Time.now!()")),
+        ("Time", "sleep!", "Pause execution for the given number of milliseconds.",
+         Some("Time.sleep!(1000)  // wait 1 second")),
+        // -- DateTime --
+        ("DateTime", "now!", "Return the current date and time as a DateTime record.",
+         Some("let now = DateTime.now!()")),
+        ("DateTime", "parse", "Parse a date string into a DateTime record.",
+         Some("DateTime.parse(\"2025-01-15T10:30:00Z\")")),
+        ("DateTime", "to_string", "Format a DateTime as an ISO 8601 string.",
+         Some("DateTime.to_string(dt)")),
+        ("DateTime", "add", "Add a duration to a DateTime.",
+         Some("DateTime.add(dt, \"hours\", 2)")),
+        ("DateTime", "diff", "Calculate the difference between two DateTimes.",
+         Some("DateTime.diff(end, start, \"seconds\")")),
+        // -- Random --
+        ("Random", "int!", "Generate a random integer between min and max (inclusive).",
+         Some("Random.int!(1, 100)")),
+        ("Random", "bool!", "Generate a random boolean.",
+         Some("if Random.bool!() then \"heads\" else \"tails\"")),
+        ("Random", "uuid!", "Generate a random UUID v4 string.",
+         Some("let id = Random.uuid!()")),
+        // -- Crypto --
+        ("Crypto", "sha256", "Compute the SHA-256 hash of a string.",
+         Some("Crypto.sha256(\"hello\")")),
+        ("Crypto", "hmac_sha256", "Compute an HMAC-SHA256 signature.",
+         Some("Crypto.hmac_sha256(\"secret\", \"message\")")),
+        ("Crypto", "constant_time_eq", "Compare two strings in constant time to prevent timing attacks.",
+         Some("Crypto.constant_time_eq(provided, expected)")),
+        // -- Env --
+        ("Env", "get!", "Read an environment variable, returning None if unset.",
+         Some("let port = Env.get!(\"PORT\") |> Option.unwrap_or(\"3000\")")),
+        ("Env", "set!", "Set an environment variable.",
+         Some("Env.set!(\"NODE_ENV\", \"production\")")),
+        // -- Fs --
+        ("Fs", "read!", "Read a file's contents as a string.",
+         Some("let config = Fs.read!(\"config.json\")")),
+        ("Fs", "write!", "Write a string to a file, creating or overwriting it.",
+         Some("Fs.write!(\"output.txt\", \"Hello!\")")),
+        ("Fs", "exists!", "Check if a file path exists.",
+         Some("if Fs.exists!(\"config.json\") then\n  Fs.read!(\"config.json\")\nelse\n  \"{}\"")),
+        ("Fs", "read_file!", "Read a file's contents as a string.", None),
+        ("Fs", "write_file!", "Write a string to a file, creating or overwriting it.", None),
+        ("Fs", "list_dir!", "List the entries in a directory.",
+         Some("Fs.list_dir!(\"./src\")")),
+        ("Fs", "with_file!", "Open a file, pass it to a callback, and close it automatically.", None),
+        // -- Http --
+        ("Http", "get!", "Send an HTTP GET request to a URL.",
+         Some("let resp = Http.get!(\"https://api.example.com/users\")?")),
+        ("Http", "post!", "Send an HTTP POST request with a body.",
+         Some("Http.post!(\"https://api.example.com/users\", body)?")),
+        ("Http", "put!", "Send an HTTP PUT request with a body.", None),
+        ("Http", "delete!", "Send an HTTP DELETE request to a URL.", None),
+        ("Http", "request!", "Send a custom HTTP request from a request record.", None),
+        // -- Response --
+        ("Response", "ok", "Create a 200 OK response with a text body.",
+         Some("Response.ok(\"Hello!\")")),
+        ("Response", "json", "Create a 200 OK response with a JSON body.",
+         Some("Response.json({ users: users, count: List.length(users) })")),
+        ("Response", "created", "Create a 201 Created response with a text body.",
+         Some("Response.created(user)")),
+        ("Response", "no_content", "Create a 204 No Content response.",
+         Some("Response.no_content()")),
+        ("Response", "bad_request", "Create a 400 Bad Request response.",
+         Some("Response.bad_request(\"Missing required field: name\")")),
+        ("Response", "not_found", "Create a 404 Not Found response.",
+         Some("Response.not_found(\"User not found\")")),
+        ("Response", "error", "Create a 500 Internal Server Error response.",
+         Some("Response.error(\"Internal error\")")),
+        ("Response", "status", "Create a response with a custom status code and body.",
+         Some("Response.status(429, \"Rate limit exceeded\")")),
+        ("Response", "with_header", "Add a single header to a response.",
+         Some("Response.ok(\"hi\")\n|> Response.with_header(\"X-Request-Id\", id)")),
+        ("Response", "with_headers", "Add multiple headers to a response.", None),
+        ("Response", "redirect", "Create a 302 temporary redirect to a URL.",
+         Some("Response.redirect(\"/login\")")),
+        ("Response", "redirect_permanent", "Create a 301 permanent redirect to a URL.", None),
+        // -- Request --
+        ("Request", "header", "Read a header value from the request.",
+         Some("let token = Request.header(req, \"Authorization\")")),
+        ("Request", "method", "Return the HTTP method of the request.",
+         Some("let method = Request.method(req)")),
+        ("Request", "body_json", "Parse the request body as JSON.",
+         Some("let data = Request.body_json(req)")),
+        // -- Router --
+        ("Router", "new", "Create a new empty router.",
+         Some("let app = Router.new()")),
+        ("Router", "routes", "Return the configured route table.", None),
+        ("Router", "get", "Register a handler for GET requests at a path.",
+         Some("Router.new()\n|> Router.get(\"/hello\", |req| Response.ok(\"Hello!\"))")),
+        ("Router", "post", "Register a handler for POST requests at a path.",
+         Some("router |> Router.post(\"/users\", create_user)")),
+        ("Router", "put", "Register a handler for PUT requests at a path.", None),
+        ("Router", "delete", "Register a handler for DELETE requests at a path.", None),
+        ("Router", "patch", "Register a handler for PATCH requests at a path.", None),
+        ("Router", "options", "Register a handler for OPTIONS requests at a path.", None),
+        ("Router", "head", "Register a handler for HEAD requests at a path.", None),
+        ("Router", "any", "Register a handler for all HTTP methods at a path.", None),
+        ("Router", "use", "Add middleware to the router.",
+         Some("router |> Router.use(auth_middleware)")),
+        ("Router", "group", "Group routes under a shared path prefix.",
+         Some("router |> Router.group(\"/api\", |r|\n  r |> Router.get(\"/users\", list_users)\n    |> Router.post(\"/users\", create_user)\n)")),
+        // -- Middleware --
+        ("Middleware", "extract_bearer", "Extract a Bearer token from the Authorization header.",
+         Some("let token = Middleware.extract_bearer(req)")),
+        ("Middleware", "extract_basic", "Extract Basic auth credentials from the Authorization header.",
+         Some("let creds = Middleware.extract_basic(req)")),
+        ("Middleware", "cors_config", "Create a CORS configuration record.", None),
+        ("Middleware", "rate_limit_config", "Create a rate limiting configuration record.", None),
+        // -- HttpError --
+        ("HttpError", "bad_request", "Create a 400 Bad Request error.",
+         Some("HttpError.bad_request(\"Invalid email\")")),
+        ("HttpError", "not_found", "Create a 404 Not Found error.",
+         Some("HttpError.not_found(\"User not found\")")),
+        ("HttpError", "unauthorized", "Create a 401 Unauthorized error.", None),
+        ("HttpError", "forbidden", "Create a 403 Forbidden error.", None),
+        ("HttpError", "conflict", "Create a 409 Conflict error.", None),
+        ("HttpError", "unprocessable", "Create a 422 Unprocessable Entity error.", None),
+        ("HttpError", "internal", "Create a 500 Internal Server Error.", None),
+        ("HttpError", "method_not_allowed", "Create a 405 Method Not Allowed error.", None),
+        ("HttpError", "too_many_requests", "Create a 429 Too Many Requests error.", None),
+        ("HttpError", "bad_gateway", "Create a 502 Bad Gateway error.", None),
+        ("HttpError", "service_unavailable", "Create a 503 Service Unavailable error.", None),
+        ("HttpError", "gateway_timeout", "Create a 504 Gateway Timeout error.", None),
+        // -- Db --
+        ("Db", "connect!", "Open a connection to a SQLite database.",
+         Some("let db = Db.connect!(\"app.db\")")),
+        ("Db", "execute!", "Execute a SQL statement with parameter binding.",
+         Some("Db.execute!(db, \"INSERT INTO users (name) VALUES (?)\", [name])")),
+        ("Db", "query!", "Run a SQL query and return matching rows.",
+         Some("let users = Db.query!(db, \"SELECT * FROM users WHERE active = ?\", [1])")),
+        // -- Server --
+        ("Server", "listen!", "Start the HTTP server on the given port.",
+         Some("let app = Router.new()\n  |> Router.get(\"/\", |req| Response.ok(\"Hello!\"))\n\nServer.listen!(app, 3000)")),
     ]
 }
 
@@ -273,10 +484,22 @@ fn build_type_signatures() -> HashMap<String, Type> {
     sigs.insert("Time.now!".into(), Type::Function(vec![], Box::new(Type::Int)));
     sigs.insert("Time.sleep!".into(), Type::Function(vec![Type::Int], Box::new(Type::Unit)));
 
+    // DateTime
+    sigs.insert("DateTime.now!".into(), Type::Function(vec![], Box::new(Type::Unknown)));
+    sigs.insert("DateTime.parse".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("DateTime.to_string".into(), Type::Function(vec![Type::Unknown], Box::new(Type::String)));
+    sigs.insert("DateTime.add".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Int], Box::new(Type::Unknown)));
+    sigs.insert("DateTime.diff".into(), Type::Function(vec![Type::Unknown, Type::Unknown, Type::String], Box::new(Type::Int)));
+
     // Random
     sigs.insert("Random.int!".into(), Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)));
     sigs.insert("Random.bool!".into(), Type::Function(vec![], Box::new(Type::Bool)));
     sigs.insert("Random.uuid!".into(), Type::Function(vec![], Box::new(Type::String)));
+
+    // Crypto
+    sigs.insert("Crypto.sha256".into(), Type::Function(vec![Type::String], Box::new(Type::String)));
+    sigs.insert("Crypto.hmac_sha256".into(), Type::Function(vec![Type::String, Type::String], Box::new(Type::String)));
+    sigs.insert("Crypto.constant_time_eq".into(), Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)));
 
     // Env
     let option_string = Type::Enum(
@@ -388,6 +611,31 @@ fn build_type_signatures() -> HashMap<String, Type> {
     sigs.insert("Router.any".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
     sigs.insert("Router.use".into(), Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)));
     sigs.insert("Router.group".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
+
+    // Middleware
+    sigs.insert("Middleware.extract_bearer".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+    sigs.insert("Middleware.extract_basic".into(), Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)));
+    sigs.insert("Middleware.cors_config".into(), Type::Function(vec![], Box::new(Type::Unknown)));
+    sigs.insert("Middleware.rate_limit_config".into(), Type::Function(vec![], Box::new(Type::Unknown)));
+
+    // HttpError
+    sigs.insert("HttpError.bad_request".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.not_found".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.unauthorized".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.forbidden".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.conflict".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.unprocessable".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.internal".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.method_not_allowed".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.too_many_requests".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.bad_gateway".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.service_unavailable".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("HttpError.gateway_timeout".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+
+    // Db
+    sigs.insert("Db.connect!".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
+    sigs.insert("Db.execute!".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
+    sigs.insert("Db.query!".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
 
     // Server
     sigs.insert("Server.listen!".into(), Type::Function(vec![Type::Unknown, Type::Int], Box::new(Type::Unit)));
@@ -557,10 +805,12 @@ fn build_signature(func_name: &str, ty: &Type) -> String {
 pub fn generate_docs() -> DocsOutput {
     let type_sigs = build_type_signatures();
     let functions = known_functions();
+    let mod_descs = module_descriptions();
+    let mod_cats = module_categories();
 
     let mut modules: BTreeMap<String, Vec<FunctionDoc>> = BTreeMap::new();
 
-    for (module, func_name, desc) in &functions {
+    for (module, func_name, desc, example) in &functions {
         let qualified = format!("{}.{}", module, func_name);
         let base_name = func_name.trim_end_matches('!');
 
@@ -585,17 +835,95 @@ pub fn generate_docs() -> DocsOutput {
                 effects,
                 prelude_level,
                 description: Some(desc.to_string()),
+                example: example.map(|e| e.to_string()),
             });
     }
 
     let modules_vec: Vec<ModuleDoc> = modules
         .into_iter()
-        .map(|(name, functions)| ModuleDoc { name, functions })
+        .map(|(name, functions)| {
+            let description = mod_descs
+                .get(name.as_str())
+                .unwrap_or(&"")
+                .to_string();
+            let category = mod_cats
+                .get(name.as_str())
+                .unwrap_or(&"language")
+                .to_string();
+            ModuleDoc {
+                name,
+                description,
+                category,
+                functions,
+            }
+        })
         .collect();
 
     DocsOutput {
         modules: modules_vec,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Search / filter
+// ---------------------------------------------------------------------------
+
+/// Filter documentation to entries matching a query string.
+///
+/// Matches against module names, function names (qualified and unqualified),
+/// descriptions, signatures, and examples. Case-insensitive substring match.
+pub fn filter_docs(docs: &DocsOutput, query: &str) -> DocsOutput {
+    let q = query.to_lowercase();
+
+    // Check for exact qualified name match first (e.g. "List.map")
+    let is_exact = query.contains('.');
+
+    let modules: Vec<ModuleDoc> = docs
+        .modules
+        .iter()
+        .filter_map(|module| {
+            let matching_fns: Vec<FunctionDoc> = module
+                .functions
+                .iter()
+                .filter(|func| {
+                    let qualified = format!("{}.{}", module.name, func.name).to_lowercase();
+
+                    if is_exact {
+                        // Exact qualified match
+                        qualified == q || qualified.contains(&q)
+                    } else {
+                        // Fuzzy: search across name, description, signature, example
+                        qualified.contains(&q)
+                            || func.name.to_lowercase().contains(&q)
+                            || module.name.to_lowercase().contains(&q)
+                            || func
+                                .description
+                                .as_ref()
+                                .map_or(false, |d| d.to_lowercase().contains(&q))
+                            || func.signature.to_lowercase().contains(&q)
+                            || func
+                                .example
+                                .as_ref()
+                                .map_or(false, |e| e.to_lowercase().contains(&q))
+                    }
+                })
+                .cloned()
+                .collect();
+
+            if matching_fns.is_empty() {
+                None
+            } else {
+                Some(ModuleDoc {
+                    name: module.name.clone(),
+                    description: module.description.clone(),
+                    category: module.category.clone(),
+                    functions: matching_fns,
+                })
+            }
+        })
+        .collect();
+
+    DocsOutput { modules }
 }
 
 // ---------------------------------------------------------------------------
@@ -609,6 +937,10 @@ pub fn render_markdown(docs: &DocsOutput) -> String {
 
     for module in &docs.modules {
         out.push_str(&format!("## {}\n\n", module.name));
+
+        if !module.description.is_empty() {
+            out.push_str(&format!("{}\n\n", module.description));
+        }
 
         for func in &module.functions {
             out.push_str(&format!("### `{}.{}`\n\n", module.name, func.name));
@@ -630,9 +962,100 @@ pub fn render_markdown(docs: &DocsOutput) -> String {
                 out.push_str(&format!("{}\n\n", desc));
             }
 
+            if let Some(example) = &func.example {
+                out.push_str(&format!("**Example:**\n```baseline\n{}\n```\n\n", example));
+            }
+
             out.push_str("---\n\n");
         }
     }
 
     out
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_generate_docs_has_modules_and_functions() {
+        let docs = generate_docs();
+        assert!(!docs.modules.is_empty(), "should have modules");
+
+        let total_fns: usize = docs.modules.iter().map(|m| m.functions.len()).sum();
+        assert!(total_fns > 50, "should have many functions, got {}", total_fns);
+    }
+
+    #[test]
+    fn test_module_descriptions_present() {
+        let docs = generate_docs();
+        for module in &docs.modules {
+            assert!(
+                !module.description.is_empty(),
+                "module {} should have a description",
+                module.name
+            );
+        }
+    }
+
+    #[test]
+    fn test_examples_present() {
+        let docs = generate_docs();
+        let example_count: usize = docs
+            .modules
+            .iter()
+            .flat_map(|m| &m.functions)
+            .filter(|f| f.example.is_some())
+            .count();
+
+        assert!(
+            example_count > 30,
+            "should have many examples, got {}",
+            example_count
+        );
+    }
+
+    #[test]
+    fn test_filter_exact_match() {
+        let docs = generate_docs();
+        let filtered = filter_docs(&docs, "List.map");
+        assert_eq!(filtered.modules.len(), 1);
+        assert_eq!(filtered.modules[0].name, "List");
+        assert!(filtered.modules[0].functions.iter().any(|f| f.name == "map"));
+    }
+
+    #[test]
+    fn test_filter_fuzzy_search() {
+        let docs = generate_docs();
+        let filtered = filter_docs(&docs, "filter");
+        let total: usize = filtered.modules.iter().map(|m| m.functions.len()).sum();
+        assert!(total > 0, "should find functions matching 'filter'");
+    }
+
+    #[test]
+    fn test_filter_no_results() {
+        let docs = generate_docs();
+        let filtered = filter_docs(&docs, "xyznonexistent");
+        assert!(filtered.modules.is_empty());
+    }
+
+    #[test]
+    fn test_markdown_includes_examples() {
+        let docs = generate_docs();
+        let md = render_markdown(&docs);
+        assert!(md.contains("**Example:**"), "markdown should include examples");
+        assert!(md.contains("```baseline"), "example code should be fenced");
+    }
+
+    #[test]
+    fn test_json_serialization() {
+        let docs = generate_docs();
+        let json = serde_json::to_string_pretty(&docs).unwrap();
+        assert!(json.contains("\"example\""));
+        assert!(json.contains("\"description\""));
+    }
 }
