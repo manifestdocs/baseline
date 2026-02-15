@@ -41,7 +41,10 @@ use crate::diagnostics::{Diagnostic, Location, Patch, Severity, Suggestion};
 /// These are low-risk observability effects that would otherwise infect every
 /// function signature in a realistic codebase. The runtime `handle` blocks can
 /// still intercept these effects if needed (e.g., for testing).
-const AMBIENT_EFFECTS: &[&str] = &["Log", "Time", "Random"];
+///
+/// Random is NOT ambient: it affects determinism, which matters for property-based
+/// testing and reproducibility.
+const AMBIENT_EFFECTS: &[&str] = &["Log", "Time"];
 
 /// Check if an effect is ambient (allowed without declaration).
 fn is_ambient_effect(effect: &str) -> bool {
