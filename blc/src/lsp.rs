@@ -78,6 +78,37 @@ impl BaselineLanguageServer {
         uri.to_file_path().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
     }
 
+    /// Collect symbols from a module's exports based on the import kind.
+    fn collect_import_symbols(
+        kind: &ImportKind,
+        exports: &crate::resolver::ModuleExports,
+        mod_name: &str,
+        target_uri: &Option<Url>,
+        symbols: &mut Vec<SymbolInfo>,
+    ) {
+        let filter: Option<&Vec<String>> = match kind {
+            ImportKind::Selective(names) => Some(names),
+            ImportKind::Wildcard => None,
+            ImportKind::Qualified => return, // No direct symbols injected
+        };
+        for (func_name, sig) in &exports.functions {
+            if let Some(names) = filter {
+                if !names.contains(func_name) {
+                    continue;
+                }
+            }
+            symbols.push(SymbolInfo {
+                name: func_name.clone(),
+                kind: SymbolKind::FUNCTION,
+                type_sig: sig.clone(),
+                range: Range::default(),
+                selection_range: Range::default(),
+                defined_in: target_uri.clone(),
+                module_name: Some(mod_name.to_string()),
+            });
+        }
+    }
+
     /// Re-parse a file, publish diagnostics, and update cached symbols.
     async fn on_change(&self, uri: Url, text: String) {
         self.analyze_file(uri.clone(), text).await;
@@ -143,74 +174,43 @@ impl BaselineLanguageServer {
                 let parsed_imports = ModuleLoader::parse_imports(&root, &text);
 
                 for (mut resolved, import_node) in parsed_imports {
-                    match loader.resolve_path(&resolved.module_name, &import_node, &file_name) {
-                        Ok(path) => {
-                            resolved.file_path = path.clone();
+                    let Ok(path) = loader.resolve_path(&resolved.module_name, &import_node, &file_name) else {
+                        continue;
+                    };
+                    resolved.file_path = path.clone();
 
-                            // Load and extract exports from the resolved module
-                            let mut mod_loader = ModuleLoader::with_base_dir(
-                                path.parent().unwrap_or(&path).to_path_buf(),
-                            );
-                            if let Ok(idx) = mod_loader.load_module(&path, &import_node, &file_name)
-                                && let Some((mod_root, mod_source, _)) = mod_loader.get_module(idx)
-                            {
-                                let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
-                                let mod_name = &resolved.module_name;
+                    // Load and extract exports from the resolved module
+                    let mut mod_loader = ModuleLoader::with_base_dir(
+                        path.parent().unwrap_or(&path).to_path_buf(),
+                    );
+                    if let Ok(idx) = mod_loader.load_module(&path, &import_node, &file_name)
+                        && let Some((mod_root, mod_source, _)) = mod_loader.get_module(idx)
+                    {
+                        let exports = ModuleLoader::extract_exports(&mod_root, mod_source);
+                        let mod_name = &resolved.module_name;
 
-                                // Build module_methods entries
-                                for (func_name, sig) in &exports.functions {
-                                    let key = format!("{}.{}", mod_name, func_name);
-                                    let sig_str = sig.clone().unwrap_or_else(|| "()".to_string());
-                                    module_methods.insert(key, sig_str);
-                                }
-
-                                // Add imported symbols based on import kind
-                                let target_uri = Url::from_file_path(&path).ok();
-                                match &resolved.kind {
-                                    ImportKind::Selective(names) => {
-                                        for (func_name, sig) in &exports.functions {
-                                            if names.contains(func_name) {
-                                                symbols.push(SymbolInfo {
-                                                    name: func_name.clone(),
-                                                    kind: SymbolKind::FUNCTION,
-                                                    type_sig: sig.clone(),
-                                                    range: Range::default(),
-                                                    selection_range: Range::default(),
-                                                    defined_in: target_uri.clone(),
-                                                    module_name: Some(mod_name.clone()),
-                                                });
-                                            }
-                                        }
-                                    }
-                                    ImportKind::Wildcard => {
-                                        for (func_name, sig) in &exports.functions {
-                                            symbols.push(SymbolInfo {
-                                                name: func_name.clone(),
-                                                kind: SymbolKind::FUNCTION,
-                                                type_sig: sig.clone(),
-                                                range: Range::default(),
-                                                selection_range: Range::default(),
-                                                defined_in: target_uri.clone(),
-                                                module_name: Some(mod_name.clone()),
-                                            });
-                                        }
-                                    }
-                                    ImportKind::Qualified => {
-                                        // Qualified imports are accessed via Module.method
-                                        // No direct symbols injected
-                                    }
-                                }
-                            }
-
-                            imports.push(ResolvedImportInfo {
-                                module_name: resolved.module_name,
-                                file_path: path,
-                            });
+                        // Build module_methods entries
+                        for (func_name, sig) in &exports.functions {
+                            let key = format!("{}.{}", mod_name, func_name);
+                            let sig_str = sig.clone().unwrap_or_else(|| "()".to_string());
+                            module_methods.insert(key, sig_str);
                         }
-                        Err(_) => {
-                            // Import resolution failed — diagnostics already emitted
-                        }
+
+                        // Add imported symbols based on import kind
+                        let target_uri = Url::from_file_path(&path).ok();
+                        Self::collect_import_symbols(
+                            &resolved.kind,
+                            &exports,
+                            mod_name,
+                            &target_uri,
+                            &mut symbols,
+                        );
                     }
+
+                    imports.push(ResolvedImportInfo {
+                        module_name: resolved.module_name,
+                        file_path: path,
+                    });
                 }
             }
         }
