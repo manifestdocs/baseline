@@ -1194,6 +1194,7 @@ mod tests {
 
     // Compile-time assertions: Program and Chunk must be Send+Sync
     // for cross-fiber sharing in the structured concurrency runtime.
+    #[allow(dead_code)]
     const _: () = {
         fn assert_send_sync<T: Send + Sync>() {}
         fn check() {

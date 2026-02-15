@@ -327,7 +327,7 @@ impl<'a> Lowerer<'a> {
         if !param_lets.is_empty() {
              // Prepend lets to body
              // If body is Block, prepend. Else wrap in Block.
-             if let Expr::Block(ref mut stmts, ref mut ty) = body {
+             if let Expr::Block(ref mut stmts, ref mut _ty) = body {
                  // Efficiently prepend: verify overhead of insert vs new vec?
                  // For small number of params, insert(0) is fine? Or construct new vec.
                  let mut new_stmts = param_lets;

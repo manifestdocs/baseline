@@ -4,7 +4,9 @@
 // a VmWs handler. Provides `Ws.send!`, `Ws.receive!`, and `Ws.close!`
 // that operate on a thread-local active WebSocket connection.
 
-use super::{NValue, NativeError, RcStr};
+use super::{NValue, NativeError};
+#[cfg(any(feature = "async-server", test))]
+use super::RcStr;
 
 #[cfg(feature = "async-server")]
 use std::cell::RefCell;
