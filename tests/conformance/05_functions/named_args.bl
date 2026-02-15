@@ -31,3 +31,9 @@ test "three named args" = make_range(start: 0, end: 100, step: 10) == 10
 
 // Test 7: Three params reordered
 test "three named args reordered" = make_range(step: 5, end: 50, start: 10) == 8
+
+// Test 8: Mixed positional + named
+test "mixed positional and named" = add(3, b: 4) == 7
+
+// Test 9: Mixed with three params
+test "mixed three args" = make_range(0, end: 100, step: 10) == 10
