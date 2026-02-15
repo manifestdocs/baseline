@@ -10,6 +10,39 @@ impl<'a> super::Lowerer<'a> {
             .to_string()
     }
 
+    /// Extract a field name from an identifier or string_literal node.
+    /// Returns the identifier text, or the string content (rejecting interpolation).
+    pub(super) fn field_name_text(&self, node: &Node) -> Result<String, CompileError> {
+        match node.kind() {
+            "identifier" => Ok(self.node_text(node)),
+            "string_literal" => {
+                let mut name = String::new();
+                let mut cursor = node.walk();
+                for child in node.children(&mut cursor) {
+                    match child.kind() {
+                        "string_content" => {
+                            name.push_str(child.utf8_text(self.source.as_bytes()).unwrap_or(""));
+                        }
+                        "interpolation" => {
+                            return Err(self.error(
+                                "Interpolation is not allowed in quoted field names".into(),
+                                &child,
+                            ));
+                        }
+                        "escape_sequence" => {
+                            name.push_str(&unescape(
+                                child.utf8_text(self.source.as_bytes()).unwrap_or(""),
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+                Ok(name)
+            }
+            _ => Ok(self.node_text(node)),
+        }
+    }
+
     pub(super) fn span(&self, node: &Node) -> Span {
         Span {
             line: node.start_position().row + 1,

@@ -1,0 +1,45 @@
+@prelude(core)
+
+// Conformance: quoted record field names
+// Field access via dot notation on quoted fields is out of scope —
+// tests verify construction type-checks and runs without error.
+
+// Record literal with quoted field names (snake_case accessible via dot)
+test "quoted field names in record" = {
+  let r = { "name": "Alice", "age": 30 }
+  r.name == "Alice"
+}
+
+// Mixed quoted and bare field names
+test "mixed quoted and bare fields" = {
+  let r = { "version": "2025", count: 42 }
+  r.count == 42
+}
+
+// Type definition with quoted field names
+type ApiResponse = { "status": Int, "body": String }
+
+test "type with quoted fields" = {
+  let resp = ApiResponse { "status": 200, "body": "ok" }
+  resp.status == 200
+}
+
+// Record update with quoted field names
+test "record update with quoted fields" = {
+  let r = { "version": "2024", "name": "test" }
+  let r2 = { ..r, "version": "2025" }
+  r2.version == "2025"
+}
+
+// camelCase quoted fields (construction only — dot access out of scope)
+test "camelCase quoted field construction" = {
+  let r = { "protocolVersion": "2025-03-26", "serverName": "baseline" }
+  // Verify construction succeeds (field values are correct types)
+  true
+}
+
+// Bare fields still work (regression)
+test "bare fields still work" = {
+  let r = { x: 1, y: 2 }
+  r.x == 1
+}
