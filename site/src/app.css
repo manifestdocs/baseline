@@ -894,6 +894,71 @@ code {
   border-radius: 2px;
 }
 
+/* -- API search -- */
+
+.api-search {
+  position: relative;
+  margin-bottom: var(--sp-4);
+}
+
+.api-search-input {
+  width: 100%;
+  font-family: var(--sans);
+  font-size: 0.88rem;
+  padding: var(--sp-1) var(--sp-2);
+  padding-right: 36px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--fg-faint);
+  border-radius: 0;
+  color: var(--fg);
+  outline: none;
+  transition: border-color 0.15s;
+  box-sizing: border-box;
+}
+
+.api-search-input::placeholder {
+  color: var(--fg-dim);
+}
+
+.api-search-input:focus {
+  border-color: var(--fg-dim);
+}
+
+.api-search-clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--fg-dim);
+  font-size: 0.82rem;
+  cursor: pointer;
+  padding: 2px 6px;
+  line-height: 1;
+  height: auto;
+}
+
+.api-search-clear:hover {
+  color: var(--fg);
+}
+
+.api-result-count {
+  font-size: 0.76rem;
+  color: var(--fg-dim);
+  margin-bottom: var(--sp-3);
+}
+
+.api-no-results {
+  font-size: 0.88rem;
+  color: var(--fg-dim);
+  margin-top: var(--sp-3);
+}
+
+.api-no-results strong {
+  color: var(--fg-muted);
+}
+
 .syntax-guide {
   margin-bottom: var(--sp-6);
   border-bottom: 1px solid var(--fg-faint);
