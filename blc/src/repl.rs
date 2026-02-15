@@ -183,12 +183,13 @@ fn compile_and_run(source: &str) -> Result<vm::value::Value, String> {
     let tree = parser.parse(source, None).ok_or("Parse failed")?;
     let root = tree.root_node();
 
-    let (_type_diags, type_map) =
+    let (_type_diags, type_map, dict_map) =
         analysis::check_types_with_map(&root, source, REPL_FILE);
 
     let mut vm_instance = vm::exec::Vm::new();
     let mut lowerer =
         vm::lower::Lowerer::new(source, vm_instance.natives(), Some(type_map));
+    lowerer.set_dict_map(dict_map);
     let ir_module = lowerer
         .lower_module(&root)
         .map_err(|e| format!("Compile error: {}", e.message))?;
@@ -214,7 +215,7 @@ fn type_check_source(source: &str) -> Vec<Diagnostic> {
         None => return vec![],
     };
     let root = tree.root_node();
-    let (diags, _type_map) = analysis::check_types_with_map(&root, source, REPL_FILE);
+    let (diags, _type_map, _dict_map) = analysis::check_types_with_map(&root, source, REPL_FILE);
     diags
 }
 
@@ -226,7 +227,7 @@ fn infer_expr_type(source: &str, expr_byte_offset: usize) -> Option<String> {
         .expect("Failed to load grammar");
     let tree = parser.parse(source, None)?;
     let root = tree.root_node();
-    let (_diags, type_map) = analysis::check_types_with_map(&root, source, REPL_FILE);
+    let (_diags, type_map, _dict_map) = analysis::check_types_with_map(&root, source, REPL_FILE);
 
     // Look for the TypeMap entry at or near the expression offset.
     // The expression's top-level node should be in the map.

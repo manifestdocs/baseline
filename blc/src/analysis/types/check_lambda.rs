@@ -106,6 +106,34 @@ pub(super) fn bind_pattern(node: &Node, ty: Type, source: &str, symbols: &mut Sy
                 }
             }
         }
+        "record_pattern" => {
+            let count = node.named_child_count();
+            for i in 0..count {
+                let field_node = node.named_child(i).unwrap();
+                if field_node.kind() == "record_pattern_field" {
+                    let name_node = field_node.child_by_field_name("name");
+                    let name = name_node
+                        .map(|n| n.utf8_text(source.as_bytes()).unwrap().to_string())
+                        .unwrap_or_default();
+
+                    let field_type = match &ty {
+                        Type::Record(fields, _) => fields
+                            .iter()
+                            .find(|(f, _)| *f == &name)
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or(Type::Unknown),
+                        _ => Type::Unknown,
+                    };
+
+                    if let Some(pat_node) = field_node.child_by_field_name("pattern") {
+                        bind_pattern(&pat_node, field_type, source, symbols);
+                    } else {
+                        // Shorthand: { x } — bind x with field's type
+                        symbols.insert(name, field_type);
+                    }
+                }
+            }
+        }
         _ => {}
     }
 }

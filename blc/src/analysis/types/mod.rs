@@ -8,12 +8,12 @@ mod type_def;
 mod type_parse;
 
 pub use type_def::{Type, TypeMap};
-pub use symbol_table::SymbolTable;
+pub use symbol_table::{DictEntry, DictMap, SymbolTable};
 
 use std::collections::HashMap;
 
 use check_node::check_node;
-use type_compat::{detect_implicit_type_params, extract_explicit_type_params};
+use type_compat::{detect_implicit_type_params, extract_explicit_type_params, extract_type_param_bounds};
 use type_parse::parse_type_ext;
 
 use super::infer::UserGenericSchema;
@@ -72,7 +72,7 @@ pub fn check_types_with_loader(
 /// Run the type checker and return both diagnostics and a TypeMap.
 /// The TypeMap maps CST node start_byte to resolved Type, enabling
 /// the VM compiler to emit specialized opcodes.
-pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagnostic>, TypeMap) {
+pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagnostic>, TypeMap, DictMap) {
     let mut diagnostics = Vec::new();
 
     let prelude = match prelude::extract_prelude(root, source) {
@@ -92,7 +92,7 @@ pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagn
                 context: "Valid prelude variants are: core, script.".to_string(),
                 suggestions: vec![],
             });
-            return (diagnostics, TypeMap::new());
+            return (diagnostics, TypeMap::new(), DictMap::new());
         }
     };
 
@@ -100,7 +100,8 @@ pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagn
     collect_signatures(root, source, &mut symbols);
     check_node(root, source, file, &mut symbols, &mut diagnostics);
     let type_map = symbols.type_map;
-    (diagnostics, type_map)
+    let dict_map = symbols.dict_map;
+    (diagnostics, type_map, dict_map)
 }
 
 /// Run the type checker with import support and return both diagnostics and a TypeMap.
@@ -110,7 +111,7 @@ pub fn check_types_with_loader_and_map(
     source: &str,
     file: &str,
     loader: Option<&mut ModuleLoader>,
-) -> (Vec<Diagnostic>, TypeMap) {
+) -> (Vec<Diagnostic>, TypeMap, DictMap) {
     let mut diagnostics = Vec::new();
 
     let prelude = match prelude::extract_prelude(root, source) {
@@ -130,7 +131,7 @@ pub fn check_types_with_loader_and_map(
                 context: "Valid prelude variants are: core, script.".to_string(),
                 suggestions: vec![],
             });
-            return (diagnostics, TypeMap::new());
+            return (diagnostics, TypeMap::new(), DictMap::new());
         }
     };
 
@@ -143,15 +144,16 @@ pub fn check_types_with_loader_and_map(
     collect_signatures(root, source, &mut symbols);
     check_node(root, source, file, &mut symbols, &mut diagnostics);
     let type_map = symbols.type_map;
-    (diagnostics, type_map)
+    let dict_map = symbols.dict_map;
+    (diagnostics, type_map, dict_map)
 }
 
-/// Run the type checker (no imports) and return diagnostics, TypeMap, and type definitions.
+/// Run the type checker (no imports) and return diagnostics, TypeMap, type defs, and DictMap.
 pub fn check_types_with_map_and_defs(
     root: &Node,
     source: &str,
     file: &str,
-) -> (Vec<Diagnostic>, TypeMap, HashMap<String, Type>) {
+) -> (Vec<Diagnostic>, TypeMap, HashMap<String, Type>, DictMap) {
     let mut diagnostics = Vec::new();
 
     let prelude = match prelude::extract_prelude(root, source) {
@@ -171,7 +173,7 @@ pub fn check_types_with_map_and_defs(
                 context: "Valid prelude variants are: core, script.".to_string(),
                 suggestions: vec![],
             });
-            return (diagnostics, TypeMap::new(), HashMap::new());
+            return (diagnostics, TypeMap::new(), HashMap::new(), DictMap::new());
         }
     };
 
@@ -179,17 +181,18 @@ pub fn check_types_with_map_and_defs(
     collect_signatures(root, source, &mut symbols);
     check_node(root, source, file, &mut symbols, &mut diagnostics);
     let type_map = symbols.type_map;
+    let dict_map = symbols.dict_map;
     let type_defs = symbols.types.clone();
-    (diagnostics, type_map, type_defs)
+    (diagnostics, type_map, type_defs, dict_map)
 }
 
-/// Run the type checker with import support and return diagnostics, TypeMap, and type definitions.
+/// Run the type checker with import support and return diagnostics, TypeMap, type defs, and DictMap.
 pub fn check_types_with_loader_map_and_defs(
     root: &Node,
     source: &str,
     file: &str,
     loader: Option<&mut ModuleLoader>,
-) -> (Vec<Diagnostic>, TypeMap, HashMap<String, Type>) {
+) -> (Vec<Diagnostic>, TypeMap, HashMap<String, Type>, DictMap) {
     let mut diagnostics = Vec::new();
 
     let prelude = match prelude::extract_prelude(root, source) {
@@ -209,7 +212,7 @@ pub fn check_types_with_loader_map_and_defs(
                 context: "Valid prelude variants are: core, script.".to_string(),
                 suggestions: vec![],
             });
-            return (diagnostics, TypeMap::new(), HashMap::new());
+            return (diagnostics, TypeMap::new(), HashMap::new(), DictMap::new());
         }
     };
 
@@ -222,8 +225,9 @@ pub fn check_types_with_loader_map_and_defs(
     collect_signatures(root, source, &mut symbols);
     check_node(root, source, file, &mut symbols, &mut diagnostics);
     let type_map = symbols.type_map;
+    let dict_map = symbols.dict_map;
     let type_defs = symbols.types.clone();
-    (diagnostics, type_map, type_defs)
+    (diagnostics, type_map, type_defs, dict_map)
 }
 
 /// CGP type-check result: diagnostics, type map, visible bindings, and module methods.
@@ -462,11 +466,13 @@ fn collect_signatures(node: &Node, source: &str, symbols: &mut SymbolTable) {
 
                     // Register user generic schema if the function has type parameters
                     if !type_param_names.is_empty() {
+                        let bounds = extract_type_param_bounds(&child, source);
                         symbols.user_generic_schemas.insert(
                             name,
                             UserGenericSchema {
                                 type_param_names,
                                 fn_type: ty,
+                                bounds,
                             },
                         );
                     }
@@ -488,7 +494,19 @@ fn collect_trait_def(node: &Node, source: &str, symbols: &mut SymbolTable) {
     };
     let trait_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
 
+    // Parse supertraits
+    let mut supertraits = Vec::new();
+    if let Some(supertrait_list) = node.child_by_field_name("supertraits") {
+        let mut scursor = supertrait_list.walk();
+        for st_child in supertrait_list.named_children(&mut scursor) {
+            if st_child.kind() == "type_identifier" {
+                supertraits.push(st_child.utf8_text(source.as_bytes()).unwrap().to_string());
+            }
+        }
+    }
+
     let mut methods = Vec::new();
+    let mut default_method_bytes = HashMap::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
         if child.kind() == "function_signature" {
@@ -500,6 +518,15 @@ fn collect_trait_def(node: &Node, source: &str, symbols: &mut SymbolTable) {
             let self_params: HashSet<String> = ["Self".to_string()].into_iter().collect();
             let fn_type = parse_type_ext(&type_sig_node, source, symbols, &self_params);
             methods.push((sig_name, fn_type));
+        } else if child.kind() == "function_def" {
+            // Default method: extract name and type, store byte offset
+            if let Some(fname_node) = child.child_by_field_name("name") {
+                let method_name = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                let self_params: HashSet<String> = ["Self".to_string()].into_iter().collect();
+                let fn_type = parse_function_type_with_params(&child, source, symbols, &self_params);
+                methods.push((method_name.clone(), fn_type));
+                default_method_bytes.insert(method_name, child.start_byte());
+            }
         }
     }
 
@@ -508,6 +535,8 @@ fn collect_trait_def(node: &Node, source: &str, symbols: &mut SymbolTable) {
         symbol_table::TraitDef {
             name: trait_name,
             methods,
+            default_method_bytes,
+            supertraits,
         },
     );
 }
@@ -527,12 +556,11 @@ fn collect_impl_block(node: &Node, source: &str, symbols: &mut SymbolTable) {
     let target_type = parse_type_ext(&target_type_node, source, symbols, &HashSet::new());
     let type_key = SymbolTable::type_key(&target_type);
 
-    // Check that the trait exists
-    let trait_def = match symbols.trait_defs.get(&trait_name) {
-        Some(td) => td,
+    // Check that the trait exists — clone data to avoid borrow conflicts
+    let (trait_methods, default_bytes) = match symbols.trait_defs.get(&trait_name) {
+        Some(td) => (td.methods.clone(), td.default_method_bytes.clone()),
         None => return, // TRT_001 emitted during check_node
     };
-    let trait_methods: Vec<(String, Type)> = trait_def.methods.clone();
 
     // Check for duplicate impl
     if symbols.trait_impls.contains_key(&(trait_name.clone(), type_key.clone())) {
@@ -573,10 +601,17 @@ fn collect_impl_block(node: &Node, source: &str, symbols: &mut SymbolTable) {
         }
     }
 
-    // Verify all trait methods are implemented (method names only, signature checks in check_node)
-    for (method_name, _) in &trait_methods {
+    // For default methods not overridden, generate mangled names and register them
+    for (method_name, method_type) in &trait_methods {
         if !impl_methods.contains_key(method_name) {
-            // Will be reported as TRT_002 during check_node
+            if default_bytes.contains_key(method_name) {
+                // Default method: register a mangled function for the concrete type
+                let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+                let substituted = substitute_self_in_type(method_type, &target_type);
+                symbols.insert(mangled.clone(), substituted);
+                impl_methods.insert(method_name.clone(), mangled);
+            }
+            // else: Will be reported as TRT_002 during check_node
         }
     }
 
@@ -614,4 +649,25 @@ fn parse_function_type_with_params(
         Type::Unit
     };
     Type::Function(arg_types, Box::new(ret_type))
+}
+
+/// Substitute all occurrences of TypeParam("Self") with the concrete target type.
+fn substitute_self_in_type(ty: &Type, target: &Type) -> Type {
+    match ty {
+        Type::TypeParam(name) if name == "Self" => target.clone(),
+        Type::Function(args, ret) => {
+            let new_args = args.iter().map(|a| substitute_self_in_type(a, target)).collect();
+            let new_ret = substitute_self_in_type(ret, target);
+            Type::Function(new_args, Box::new(new_ret))
+        }
+        Type::List(inner) => Type::List(Box::new(substitute_self_in_type(inner, target))),
+        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute_self_in_type(e, target)).collect()),
+        Type::Enum(name, variants) => {
+            let new_variants = variants.iter().map(|(n, payloads)| {
+                (n.clone(), payloads.iter().map(|p| substitute_self_in_type(p, target)).collect())
+            }).collect();
+            Type::Enum(name.clone(), new_variants)
+        }
+        _ => ty.clone(),
+    }
 }

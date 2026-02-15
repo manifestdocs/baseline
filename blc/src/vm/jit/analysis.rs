@@ -183,6 +183,9 @@ fn pattern_can_jit(pattern: &Pattern) -> bool {
                 .iter()
                 .all(|p| matches!(p, Pattern::Var(_) | Pattern::Wildcard))
         }
+        Pattern::Record(fields) => {
+            fields.iter().all(|(_, sub)| pattern_can_jit(sub))
+        }
     }
 }
 

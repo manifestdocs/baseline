@@ -1,0 +1,34 @@
+@prelude(core)
+
+// Conformance: record update can extend records with new fields
+
+test "record extend adds field" = {
+  let r = { x: 1, y: 2 }
+  let r2 = { ..r, z: 3 }
+  r2.z == 3
+}
+
+test "record extend preserves existing" = {
+  let r = { name: "Alice" }
+  let r2 = { ..r, age: 30 }
+  r2.name == "Alice"
+}
+
+test "record extend multiple fields" = {
+  let r = { a: 1 }
+  let r2 = { ..r, b: 2, c: 3 }
+  r2.a + r2.b + r2.c == 6
+}
+
+test "record extend override and add" = {
+  let r = { x: 1, y: 2 }
+  let r2 = { ..r, x: 10, z: 3 }
+  r2.x == 10 && r2.y == 2 && r2.z == 3
+}
+
+test "record extend chained" = {
+  let r = { a: 1 }
+  let r2 = { ..r, b: 2 }
+  let r3 = { ..r2, c: 3 }
+  r3.a + r3.b + r3.c == 6
+}

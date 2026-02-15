@@ -113,14 +113,49 @@ impl<'a> super::Lowerer<'a> {
         if let Some(param_list) = func_def.child_by_field_name("params") {
             let mut cursor = param_list.walk();
             for child in param_list.named_children(&mut cursor) {
-                if child.kind() == "param"
-                    && let Some(name_node) = child.child_by_field_name("name")
-                {
-                    params.push(self.node_text(&name_node));
+                if child.kind() == "param" {
+                    if let Some(name_node) = child.child_by_field_name("name") {
+                         params.push(self.node_text(&name_node));
+                    } else if let Some(pat_node) = child.child_by_field_name("pattern") {
+                        // For patterns, we need to lower the pattern to find bound names.
+                        // However, we don't have mutable access here (Lowerer is immutable here),
+                        // and lower_pattern might not be easily callable without self mutation if it was mutating.
+                        // But lower_pattern IS &self.
+                        // So we can call it.
+                        // But we want to avoid cloning/lowering twice?
+                        // Actually extract_param_names is used for "fn_params" map (named args).
+                        // Pattern params are not named args. So we can ignore them or push ""?
+                        // For strictness, let's treat them as positional-only (no named arg support).
+                        // So we don't push anything?
+                        // Wait, params list here corresponds to argument positions.
+                        // If I omit it, the count is wrong.
+                        // So I must push SOMETHING.
+                         params.push("".to_string());
+                    }
                 }
             }
         }
         params
+    }
+
+    /// Recursively collect all variable names bound by a pattern.
+    pub(super) fn collect_bound_names(&self, pattern: &Pattern) -> Vec<String> {
+        let mut names = Vec::new();
+        match pattern {
+            Pattern::Var(name) => names.push(name.clone()),
+            Pattern::Record(fields) => {
+                for (_, sub_pat) in fields {
+                    names.extend(self.collect_bound_names(sub_pat));
+                }
+            }
+            Pattern::Tuple(sub_pats) | Pattern::Constructor(_, sub_pats) => {
+                for sub_pat in sub_pats {
+                    names.extend(self.collect_bound_names(sub_pat));
+                }
+            }
+            Pattern::Wildcard | Pattern::Literal(_) => {}
+        }
+        names
     }
 }
 

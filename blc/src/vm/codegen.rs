@@ -711,6 +711,25 @@ impl<'a> Codegen<'a> {
                     self.end_scope(span);
                     end_jumps.push(self.emit(Op::Jump(0), span));
                 }
+                Pattern::Record(fields) => {
+                    // Record patterns always match structurally
+                    self.begin_scope();
+                    for (field_name, sub_pattern) in fields {
+                        self.emit(Op::GetLocal(subject_slot), span);
+                        let name_idx = self
+                            .chunk
+                            .add_constant(NValue::string(field_name.as_str().into()));
+                        self.emit(Op::GetField(name_idx), span);
+                        match sub_pattern {
+                            Pattern::Var(name) => self.declare_local(name),
+                            Pattern::Wildcard => self.declare_local("_"),
+                            _ => {}
+                        }
+                    }
+                    self.gen_expr(&arm.body, span)?;
+                    self.end_scope(span);
+                    end_jumps.push(self.emit(Op::Jump(0), span));
+                }
             }
         }
 
@@ -810,6 +829,22 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::GetLocal(tuple_slot), span);
                     self.emit(Op::TupleGet(i as u16), span);
                     match pat {
+                        Pattern::Var(name) => self.declare_local(name),
+                        Pattern::Wildcard => self.declare_local("_"),
+                        _ => {}
+                    }
+                }
+            }
+            Pattern::Record(fields) => {
+                self.declare_local("__let_record");
+                let record_slot = (self.locals.len() - 1) as u16;
+                for (field_name, sub_pattern) in fields {
+                    self.emit(Op::GetLocal(record_slot), span);
+                    let name_idx = self
+                        .chunk
+                        .add_constant(NValue::string(field_name.as_str().into()));
+                    self.emit(Op::GetField(name_idx), span);
+                    match sub_pattern {
                         Pattern::Var(name) => self.declare_local(name),
                         Pattern::Wildcard => self.declare_local("_"),
                         _ => {}

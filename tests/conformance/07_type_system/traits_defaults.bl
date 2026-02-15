@@ -1,0 +1,25 @@
+// Trait default methods
+// Tests that traits can define default method implementations
+
+trait Show {
+  show : Self -> String
+  fn show_pretty(x: Self) -> String = "pretty: ${Show.show(x)}"
+}
+
+impl Show for Int {
+  fn show(x: Int) -> String = Int.to_string(x)
+  // show_pretty inherited from default
+}
+
+impl Show for Bool {
+  fn show(b: Bool) -> String = if b then "true" else "false"
+  // Override the default
+  fn show_pretty(b: Bool) -> String = "bool: ${Show.show(b)}"
+}
+
+fn main() -> Int = 0
+
+test "default method used" = Show.show_pretty(42) == "pretty: 42"
+test "default method overridden" = Show.show_pretty(true) == "bool: true"
+test "required method still works" = Show.show(42) == "42"
+test "default calls trait method" = Show.show_pretty(99) == "pretty: 99"

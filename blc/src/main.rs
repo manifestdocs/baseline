@@ -112,6 +112,13 @@ enum Commands {
         /// Output as JSON (default: markdown)
         #[arg(long)]
         json: bool,
+
+        /// Search query (e.g. "List.map" or "filter")
+        #[arg(long)]
+        search: Option<String>,
+
+        /// Look up a specific function by qualified name (e.g. List.map)
+        query: Option<String>,
     },
 }
 
@@ -265,8 +272,21 @@ fn main() {
         Commands::Repl => {
             blc::repl::run();
         }
-        Commands::Docs { json } => {
+        Commands::Docs { json, search, query } => {
             let docs = blc::docs::generate_docs();
+
+            // Apply search/query filter if provided
+            let q = query.or(search);
+            let docs = match &q {
+                Some(query) => blc::docs::filter_docs(&docs, query),
+                None => docs,
+            };
+
+            if q.is_some() && docs.modules.is_empty() {
+                eprintln!("No matching functions found.");
+                std::process::exit(1);
+            }
+
             if json {
                 println!("{}", serde_json::to_string_pretty(&docs).unwrap());
             } else {
@@ -343,19 +363,25 @@ fn run_file_vm(file: &PathBuf) {
     let imports = resolver::ModuleLoader::parse_imports(&root, &source);
 
     // Run the type checker to build a TypeMap for opcode specialization.
+    // Also collect type definitions for schema-driven request decoding.
     // For files with imports, use the loader-aware variant for transitive import support.
-    let (type_diags, type_map) = if imports.is_empty() {
-        blc::analysis::check_types_with_map(&root, &source, &file_str)
+    let (type_diags, type_map, type_defs, dict_map) = if imports.is_empty() {
+        blc::analysis::check_types_with_map_and_defs(&root, &source, &file_str)
     } else {
         let base_dir = file.parent().expect("Cannot determine base directory");
         let mut loader = resolver::ModuleLoader::with_base_dir(base_dir.to_path_buf());
-        blc::analysis::check_types_with_loader_and_map(
+        blc::analysis::check_types_with_loader_map_and_defs(
             &root,
             &source,
             &file_str,
             Some(&mut loader),
         )
     };
+
+    // Populate schema registry for Request.decode
+    let refined_types = blc::analysis::collect_refined_types(&tree, &source);
+    vm::natives::schema::populate_schemas(&type_defs, &refined_types);
+
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
@@ -370,6 +396,7 @@ fn run_file_vm(file: &PathBuf) {
     let program = if imports.is_empty() {
         // Use the new IR pipeline: CST → lower → codegen → Program
         let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
+        lowerer.set_dict_map(dict_map);
         let ir_module = lowerer.lower_module(&root);
         ir_module.and_then(|mut module| {
             vm::optimize_ir::optimize_for_bytecode(&mut module);
@@ -426,7 +453,7 @@ fn run_file_jit(file: &PathBuf) {
     let tree = parser.parse(&source, None).expect("Failed to parse");
     let root = tree.root_node();
 
-    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let (type_diags, type_map, dict_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
@@ -438,6 +465,7 @@ fn run_file_jit(file: &PathBuf) {
 
     let vm_instance = vm::exec::Vm::new();
     let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
+    lowerer.set_dict_map(dict_map);
     let ir_module = match lowerer.lower_module(&root) {
         Ok(m) => m,
         Err(e) => {
@@ -550,7 +578,7 @@ fn build_file_aot(file: &PathBuf, output: Option<&Path>, trace: bool) {
     let root = tree.root_node();
 
     // Type-check (exit on errors)
-    let (type_diags, type_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let (type_diags, type_map, dict_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
@@ -569,6 +597,7 @@ fn build_file_aot(file: &PathBuf, output: Option<&Path>, trace: bool) {
     // Lower to IR + optimize
     let vm_instance = vm::exec::Vm::new();
     let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), Some(type_map));
+    lowerer.set_dict_map(dict_map);
     let ir_module = match lowerer.lower_module(&root) {
         Ok(m) => m,
         Err(e) => {

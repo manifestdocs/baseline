@@ -78,6 +78,28 @@ impl<'a> super::Lowerer<'a> {
                 None
             });
             if let Some(mangled) = mangled_name {
+                // Dictionary passing: __dict$TraitName$method$ParamName markers
+                // mean we're inside a bounded generic body — call through hidden param
+                if mangled.starts_with("__dict$") {
+                    // Parse: __dict$TraitName$method$ParamName
+                    let parts: Vec<&str> = mangled.splitn(4, '$').collect();
+                    if parts.len() >= 3 {
+                        let trait_name = parts[1];
+                        let method = parts[2];
+                        let hidden_param = format!("__{}_{}", trait_name, method);
+                        let mut args = Vec::new();
+                        for arg in arg_nodes {
+                            args.push(self.lower_expression(arg)?);
+                        }
+                        self.tail_position = was_tail;
+                        return Ok(Expr::CallIndirect {
+                            callee: Box::new(Expr::Var(hidden_param, None)),
+                            args,
+                            ty: None,
+                        });
+                    }
+                }
+                // Concrete trait dispatch: call the mangled function directly
                 if self.functions.contains(&mangled) {
                     let mut args = Vec::new();
                     for arg in arg_nodes {
@@ -181,7 +203,9 @@ impl<'a> super::Lowerer<'a> {
         if callee.kind() == "identifier" || callee.kind() == "effect_identifier" {
             let callee_name = self.node_text(callee);
             if self.functions.contains(&callee_name) {
-                let args = self.resolve_named_call_args(&callee_name.clone(), arg_nodes)?;
+                let mut args = self.resolve_named_call_args(&callee_name.clone(), arg_nodes)?;
+                // Append hidden dictionary args for bounded generic calls
+                self.append_dict_args(node, &mut args);
                 self.tail_position = was_tail;
                 return Ok(Expr::CallDirect {
                     name: callee_name,
@@ -430,5 +454,25 @@ impl<'a> super::Lowerer<'a> {
             .into_iter()
             .map(|r| r.unwrap_or(Expr::Unit))
             .collect())
+    }
+
+    /// Append hidden dictionary arguments for a bounded generic call site.
+    /// Reads dict_map entries at the call_expression's start_byte, and for
+    /// each trait bound's methods, appends Expr::Var(mangled_impl_name).
+    /// Entries are sorted by trait name then method name for deterministic order.
+    pub(super) fn append_dict_args(&self, call_node: &Node, args: &mut Vec<Expr>) {
+        if let Some(entries) = self.dict_map.get(&call_node.start_byte()) {
+            // Sort entries by trait name for deterministic parameter ordering
+            let mut sorted_entries: Vec<&crate::analysis::types::DictEntry> =
+                entries.iter().collect();
+            sorted_entries.sort_by_key(|e| &e.trait_name);
+            for entry in sorted_entries {
+                let mut methods: Vec<&(String, String)> = entry.methods.iter().collect();
+                methods.sort_by_key(|(name, _)| name.clone());
+                for (_method_name, mangled_impl) in methods {
+                    args.push(Expr::Var(mangled_impl.clone(), None));
+                }
+            }
+        }
     }
 }

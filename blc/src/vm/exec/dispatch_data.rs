@@ -357,12 +357,8 @@ impl super::Vm {
                                 {
                                     existing.1 = pair[1].clone();
                                 } else {
-                                    let (line, col) = chunk.source_map[ip - 1];
-                                    return Err(self.error(
-                                        format!("Record has no field '{}'", key),
-                                        line,
-                                        col,
-                                    ));
+                                    // Records are open: append new field
+                                    new_fields.push((key.clone(), pair[1].clone()));
                                 }
                             }
                         }

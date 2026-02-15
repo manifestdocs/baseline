@@ -341,6 +341,7 @@ pub enum Pattern {
     Literal(Box<Expr>),
     Constructor(String, Vec<Pattern>),
     Tuple(Vec<Pattern>),
+    Record(Vec<(String, Pattern)>),  // field_name → sub_pattern
 }
 
 // ---------------------------------------------------------------------------
@@ -581,8 +582,12 @@ mod tests {
             Pattern::Literal(Box::new(Expr::Int(42))),
             Pattern::Constructor("Some".into(), vec![Pattern::Var("v".into())]),
             Pattern::Tuple(vec![Pattern::Var("a".into()), Pattern::Var("b".into())]),
+            Pattern::Record(vec![
+                ("x".into(), Pattern::Var("x".into())),
+                ("y".into(), Pattern::Var("y".into())),
+            ]),
         ];
-        assert_eq!(patterns.len(), 5);
+        assert_eq!(patterns.len(), 6);
     }
 
     #[test]

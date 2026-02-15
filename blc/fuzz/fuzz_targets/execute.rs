@@ -53,7 +53,7 @@ fuzz_target!(|data: &[u8]| {
     let mut vm = blc::vm::exec::Vm::with_instruction_limit(100_000);
 
     // Try to compile the source to IR
-    let (_type_diags, type_map) = blc::analysis::check_types_with_map(&root, source, "<fuzz>");
+    let (_type_diags, type_map, _dict_map) = blc::analysis::check_types_with_map(&root, source, "<fuzz>");
     let type_map = Some(type_map);
 
     let mut lowerer = blc::vm::lower::Lowerer::new(source, vm.natives(), type_map);

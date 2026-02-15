@@ -23,6 +23,9 @@ impl<'a> super::Lowerer<'a> {
             if child.kind() == "type_def" {
                 self.collect_enum_def(&child);
             }
+            if child.kind() == "trait_def" {
+                self.collect_trait_defaults(&child, i);
+            }
             if child.kind() == "impl_block" {
                 self.collect_impl_block_functions(&child, i, &mut func_nodes, &mut impl_func_nodes);
             }

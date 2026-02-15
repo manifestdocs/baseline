@@ -10,6 +10,11 @@ pub struct TraitDef {
     pub name: String,
     /// Method signatures: (method_name, fn_type with Self as TypeParam).
     pub methods: Vec<(String, Type)>,
+    /// Default method CST byte offsets: method_name -> start_byte of function_def node.
+    /// Used by the lowerer to re-lower the default body per concrete type.
+    pub default_method_bytes: HashMap<String, usize>,
+    /// Supertrait names (direct parents only).
+    pub supertraits: Vec<String>,
 }
 
 /// A concrete impl of a trait for a specific type.
@@ -38,7 +43,21 @@ pub struct SymbolTable {
     pub(super) trait_defs: HashMap<String, TraitDef>,
     /// Trait implementations: (trait_name, type_key) -> TraitImpl.
     pub(super) trait_impls: HashMap<(String, String), TraitImpl>,
+    /// Dictionary info for bounded generic call sites.
+    /// Key: call_expression start_byte. Value: dictionary entries.
+    pub dict_map: HashMap<usize, Vec<DictEntry>>,
+    /// Active trait bounds in current generic function scope.
+    pub(super) current_bounds: HashMap<String, Vec<String>>,
 }
+
+/// Dictionary entry for a single trait bound at a call site.
+pub struct DictEntry {
+    pub trait_name: String,
+    pub methods: Vec<(String, String)>,  // (method_name, mangled_impl_name)
+}
+
+/// Dictionary map: call_expression start_byte -> dictionary entries for hidden args.
+pub type DictMap = HashMap<usize, Vec<DictEntry>>;
 
 impl SymbolTable {
     pub(super) fn with_prelude(prelude: Prelude) -> Self {
@@ -53,6 +72,8 @@ impl SymbolTable {
             user_modules: HashSet::new(),
             trait_defs: HashMap::new(),
             trait_impls: HashMap::new(),
+            dict_map: HashMap::new(),
+            current_bounds: HashMap::new(),
         };
 
         // Option/Result types and constructors are language primitives — always registered.
@@ -193,6 +214,25 @@ impl SymbolTable {
 
     pub(super) fn lookup_trait_impl(&self, trait_name: &str, type_key: &str) -> Option<&TraitImpl> {
         self.trait_impls.get(&(trait_name.to_string(), type_key.to_string()))
+    }
+
+    /// All supertraits transitively (flattened, deduplicated).
+    pub(super) fn all_supertraits(&self, trait_name: &str) -> Vec<String> {
+        let mut result = Vec::new();
+        let mut visited = HashSet::new();
+        self.collect_supertraits(trait_name, &mut result, &mut visited);
+        result
+    }
+
+    fn collect_supertraits(&self, trait_name: &str, result: &mut Vec<String>, visited: &mut HashSet<String>) {
+        if let Some(td) = self.trait_defs.get(trait_name) {
+            for st in &td.supertraits {
+                if visited.insert(st.clone()) {
+                    result.push(st.clone());
+                    self.collect_supertraits(st, result, visited);
+                }
+            }
+        }
     }
 
     /// Collect all visible bindings from current scope chain (for typed holes).

@@ -1,7 +1,7 @@
 use super::check_lambda::{bind_pattern, check_lambda_with_expected};
 use super::check_pattern::{check_match_exhaustiveness, check_pattern};
 use super::symbol_table::SymbolTable;
-use super::type_compat::{detect_implicit_type_params, extract_explicit_type_params, types_compatible};
+use super::type_compat::{detect_implicit_type_params, extract_explicit_type_params, extract_type_param_bounds, types_compatible};
 use super::type_def::Type;
 use super::type_parse::{call_arg_expr, infer_expected_type, parse_type};
 use crate::diagnostics::{Diagnostic, Location, Severity, Suggestion};
@@ -186,7 +186,8 @@ fn check_node_inner(
             Type::Unit
         }
         "trait_def" => {
-            // Already handled in collect_signatures — just validate here
+            // Already handled in collect_signatures — validate supertraits here
+            check_trait_def(node, source, file, symbols, diagnostics);
             Type::Unit
         }
         "impl_block" => {
@@ -295,12 +296,14 @@ fn check_node_inner(
             symbols.insert(name.clone(), function_type.clone());
 
             // Register user generic schema if type params present
+            let bounds = extract_type_param_bounds(node, source);
             if !type_param_names.is_empty() {
                 symbols.user_generic_schemas.insert(
                     name.clone(),
                     UserGenericSchema {
                         type_param_names,
                         fn_type: function_type.clone(),
+                        bounds: bounds.clone(),
                     },
                 );
             }
@@ -308,21 +311,40 @@ fn check_node_inner(
             if let Type::Function(arg_types, ret_type) = &function_type {
                 symbols.enter_scope();
 
+                // Set current_bounds for trait call resolution inside bounded generic bodies
+                let prev_bounds = std::mem::replace(&mut symbols.current_bounds, bounds);
+
                 // Bind params from param_list and register param names
                 let mut param_names = Vec::new();
                 if let Some(params) = node.child_by_field_name("params") {
                     let mut cursor = params.walk();
                     let mut i = 0;
                     for param in params.named_children(&mut cursor) {
-                        if param.kind() == "param"
-                            && let Some(name_node) = param.child_by_field_name("name")
-                        {
-                            let arg_name =
-                                name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                            if i < arg_types.len() {
-                                symbols.insert(arg_name.clone(), arg_types[i].clone());
+                        if param.kind() == "param" {
+                            let param_type = if i < arg_types.len() {
+                                arg_types[i].clone()
+                            } else {
+                                Type::Unknown
+                            };
+
+                            if let Some(name_node) = param.child_by_field_name("name") {
+                                let arg_name =
+                                    name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                                symbols.insert(arg_name.clone(), param_type.clone());
+                                param_names.push(arg_name);
+                            } else if let Some(pat_node) = param.child_by_field_name("pattern") {
+                                // Bind pattern variables
+                                bind_pattern(&pat_node, param_type, source, symbols);
+                                
+                                // Collect param name for named args if simple identifier
+                                if pat_node.kind() == "identifier" {
+                                    let arg_name = pat_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                                    param_names.push(arg_name);
+                                } else {
+                                    // Complex pattern parameters cannot be targeted by named arguments
+                                    param_names.push("".to_string());
+                                }
                             }
-                            param_names.push(arg_name);
                             i += 1;
                         }
                     }
@@ -349,6 +371,7 @@ fn check_node_inner(
                     });
                 }
 
+                symbols.current_bounds = prev_bounds;
                 symbols.exit_scope();
             }
 
@@ -650,7 +673,6 @@ fn check_node_inner(
                         let first_arg_node = node.named_child(1).unwrap();
                         let first_arg_expr = call_arg_expr(&first_arg_node);
                         let first_arg_type = check_node(&first_arg_expr, source, file, symbols, diagnostics);
-                        let type_key = SymbolTable::type_key(&first_arg_type);
 
                         // Type-check remaining args
                         for i in 2..=params_provided {
@@ -659,6 +681,38 @@ fn check_node_inner(
                                 check_node(&arg_expr, source, file, symbols, diagnostics);
                             }
                         }
+
+                        // If first arg is a TypeParam, check trait bounds (dictionary passing)
+                        if let Type::TypeParam(ref param_name) = first_arg_type {
+                            let has_bound = symbols.current_bounds
+                                .get(param_name)
+                                .map_or(false, |bs| bs.contains(&maybe_trait.to_string()));
+                            if has_bound {
+                                // Store a dict marker so the lowerer uses the hidden parameter
+                                let dict_marker = format!("__dict${}${}${}", maybe_trait, method, param_name);
+                                symbols.type_map.insert(
+                                    func_node.start_byte(),
+                                    Type::Module(dict_marker),
+                                );
+                                // Return type: look up trait method sig, substitute Self -> TypeParam
+                                let trait_methods = symbols.lookup_trait(maybe_trait)
+                                    .map(|td| td.methods.clone())
+                                    .unwrap_or_default();
+                                let ret_type = trait_methods.iter()
+                                    .find(|(n, _)| n == method)
+                                    .map(|(_, ty)| {
+                                        substitute_self(ty, &first_arg_type)
+                                    })
+                                    .and_then(|ty| {
+                                        if let Type::Function(_, ret) = ty { Some(*ret) } else { None }
+                                    })
+                                    .unwrap_or(Type::Unknown);
+                                return ret_type;
+                            }
+                            // Fall through to TRT_004 if no bound
+                        }
+
+                        let type_key = SymbolTable::type_key(&first_arg_type);
 
                         if let Some(trait_impl) = symbols.lookup_trait_impl(maybe_trait, &type_key) {
                             if let Some(mangled) = trait_impl.methods.get(method) {
@@ -734,11 +788,26 @@ fn check_node_inner(
             };
 
             if builtin_schema.is_some() || user_schema.is_some() {
+                // Capture bounds info before borrowing for instantiation
+                let schema_bounds = user_schema.map(|us| {
+                    (us.bounds.clone(), us.type_param_names.clone())
+                });
+
                 let mut ctx = InferCtx::new();
-                let instantiated = if let Some(schema) = builtin_schema {
-                    (schema.build)(&mut ctx)
+                let (instantiated, param_vars) = if let Some(schema) = builtin_schema {
+                    ((schema.build)(&mut ctx), Vec::new())
                 } else {
-                    user_schema.unwrap().instantiate(&mut ctx)
+                    let us = user_schema.unwrap();
+                    // Build mapping from param names to fresh vars (for bound checking)
+                    let mut mapping = std::collections::HashMap::new();
+                    let mut pvars = Vec::new();
+                    for name in &us.type_param_names {
+                        let v = ctx.fresh_var();
+                        pvars.push((name.clone(), v.clone()));
+                        mapping.insert(name.clone(), v);
+                    }
+                    let instantiated = crate::analysis::infer::substitute_type_params(&us.fn_type, &mapping);
+                    (instantiated, pvars)
                 };
                 if let Type::Function(schema_params, schema_ret) = instantiated {
                     // Check arg count
@@ -790,6 +859,77 @@ fn check_node_inner(
                         };
 
                         let _ = ctx.unify(&arg_type, schema_param);
+                    }
+
+                    // After unification: validate trait bounds and populate dict_map
+                    if let Some((bounds, _param_names)) = schema_bounds {
+                        if !bounds.is_empty() {
+                            let mut dict_entries = Vec::new();
+                            for (param_name, var) in &param_vars {
+                                let resolved_type = ctx.apply(var);
+                                if let Some(bound_traits) = bounds.get(param_name) {
+                                    let resolved_key = SymbolTable::type_key(&resolved_type);
+                                    for trait_name in bound_traits {
+                                        if let Some(trait_impl) = symbols.lookup_trait_impl(trait_name, &resolved_key) {
+                                            // Concrete type: pass the mangled impl functions
+                                            let methods: Vec<(String, String)> = trait_impl.methods.iter()
+                                                .map(|(k, v)| (k.clone(), v.clone()))
+                                                .collect();
+                                            dict_entries.push(super::symbol_table::DictEntry {
+                                                trait_name: trait_name.clone(),
+                                                methods,
+                                            });
+                                        } else if let Type::TypeParam(ref tp_name) = resolved_type {
+                                            // TypeParam: check if caller has the same bound
+                                            let caller_has_bound = symbols.current_bounds
+                                                .get(tp_name)
+                                                .map_or(false, |bs| bs.contains(trait_name));
+                                            if caller_has_bound {
+                                                // Forward caller's hidden params as dict entries.
+                                                // Use hidden param names like "__Show_show".
+                                                let trait_methods = symbols.lookup_trait(trait_name)
+                                                    .map(|td| td.methods.clone())
+                                                    .unwrap_or_default();
+                                                let methods: Vec<(String, String)> = trait_methods.iter()
+                                                    .map(|(mn, _)| (mn.clone(), format!("__{}_{}", trait_name, mn)))
+                                                    .collect();
+                                                dict_entries.push(super::symbol_table::DictEntry {
+                                                    trait_name: trait_name.clone(),
+                                                    methods,
+                                                });
+                                            } else {
+                                                diagnostics.push(Diagnostic {
+                                                    code: "TRT_011".to_string(),
+                                                    severity: Severity::Error,
+                                                    location: Location::from_node(file, node),
+                                                    message: format!(
+                                                        "Type `{}` does not implement `{}` required by bound on `{}`",
+                                                        resolved_type, trait_name, param_name
+                                                    ),
+                                                    context: "Trait bound not satisfied.".to_string(),
+                                                    suggestions: vec![],
+                                                });
+                                            }
+                                        } else if resolved_type != Type::Unknown {
+                                            diagnostics.push(Diagnostic {
+                                                code: "TRT_011".to_string(),
+                                                severity: Severity::Error,
+                                                location: Location::from_node(file, node),
+                                                message: format!(
+                                                    "Type `{}` does not implement `{}` required by bound on `{}`",
+                                                    resolved_type, trait_name, param_name
+                                                ),
+                                                context: "Trait bound not satisfied.".to_string(),
+                                                suggestions: vec![],
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            if !dict_entries.is_empty() {
+                                symbols.dict_map.insert(node.start_byte(), dict_entries);
+                            }
+                        }
                     }
 
                     return ctx.apply(&schema_ret);
@@ -1086,6 +1226,9 @@ fn check_node_inner(
                     base_type.clone()
                 }
                 Type::Record(ref fields, _) => {
+                    // Records are open: updates can override existing fields
+                    // or extend the record with new fields.
+                    let mut result_fields = fields.clone();
                     let count = node.named_child_count();
                     for i in 1..count {
                         let field_init = node.named_child(i).unwrap();
@@ -1111,18 +1254,11 @@ fn check_node_inner(
                                     suggestions: vec![],
                                 });
                             }
-                        } else {
-                            diagnostics.push(Diagnostic {
-                                code: "TYP_029".to_string(),
-                                severity: Severity::Error,
-                                location: Location::from_node(file,&fname_node),
-                                message: format!("Record has no field `{}`", fname),
-                                context: "Field not defined in record.".to_string(),
-                                suggestions: vec![],
-                            });
                         }
+                        // Insert or update the field in the result type
+                        result_fields.insert(fname, ftype);
                     }
-                    base_type.clone()
+                    Type::Record(result_fields, None)
                 }
                 Type::Unknown => Type::Unknown,
                 _ => {
@@ -1809,6 +1945,22 @@ fn check_node_inner(
     }
 }
 
+/// Find a function_def node at a given byte offset by walking the tree.
+fn find_function_def_at_byte<'a>(root: &Node<'a>, byte: usize) -> Option<Node<'a>> {
+    let mut cursor = root.walk();
+    for child in root.named_children(&mut cursor) {
+        if child.kind() == "trait_def" {
+            let mut inner = child.walk();
+            for tc in child.named_children(&mut inner) {
+                if tc.kind() == "function_def" && tc.start_byte() == byte {
+                    return Some(tc);
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Substitute all occurrences of TypeParam("Self") with the concrete target type.
 fn substitute_self(ty: &Type, target: &Type) -> Type {
     match ty {
@@ -1828,6 +1980,61 @@ fn substitute_self(ty: &Type, target: &Type) -> Type {
         }
         _ => ty.clone(),
     }
+}
+
+/// Validate a trait definition: check supertraits exist and detect cycles.
+fn check_trait_def(
+    node: &Node,
+    source: &str,
+    file: &str,
+    symbols: &mut SymbolTable,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let trait_name_node = match node.child_by_field_name("name") {
+        Some(n) => n,
+        None => return,
+    };
+    let trait_name = trait_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+
+    // Clone supertraits to avoid borrow conflicts
+    let supertraits = match symbols.lookup_trait(&trait_name) {
+        Some(td) => td.supertraits.clone(),
+        None => return,
+    };
+
+    // TRT_008: Unknown supertrait
+    if let Some(supertrait_list) = node.child_by_field_name("supertraits") {
+        let mut scursor = supertrait_list.walk();
+        for st_child in supertrait_list.named_children(&mut scursor) {
+            if st_child.kind() == "type_identifier" {
+                let st_name = st_child.utf8_text(source.as_bytes()).unwrap().to_string();
+                if symbols.lookup_trait(&st_name).is_none() {
+                    diagnostics.push(Diagnostic {
+                        code: "TRT_008".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &st_child),
+                        message: format!("Unknown supertrait `{}`", st_name),
+                        context: "Supertrait must be defined before use.".to_string(),
+                        suggestions: vec![],
+                    });
+                }
+            }
+        }
+    }
+
+    // TRT_009: Cycle detection — check if trait_name appears in its own transitive supertraits
+    let all_supers = symbols.all_supertraits(&trait_name);
+    if all_supers.contains(&trait_name) {
+        diagnostics.push(Diagnostic {
+            code: "TRT_009".to_string(),
+            severity: Severity::Error,
+            location: Location::from_node(file, &trait_name_node),
+            message: format!("Cyclic trait inheritance involving `{}`", trait_name),
+            context: "Trait inheritance must form a DAG (no cycles).".to_string(),
+            suggestions: vec![],
+        });
+    }
+    drop(supertraits);
 }
 
 /// Type-check an impl block: validate trait exists, check method signatures, check bodies.
@@ -1851,9 +2058,9 @@ fn check_impl_block(
     let target_type = super::type_parse::parse_type(&target_type_node, source, symbols);
     let type_key = SymbolTable::type_key(&target_type);
 
-    // TRT_001: Unknown trait
-    let trait_def = match symbols.lookup_trait(&trait_name) {
-        Some(td) => td,
+    // TRT_001: Unknown trait — clone data to avoid borrow conflicts with symbols
+    let (trait_methods, default_methods) = match symbols.lookup_trait(&trait_name) {
+        Some(td) => (td.methods.clone(), td.default_method_bytes.clone()),
         None => {
             diagnostics.push(Diagnostic {
                 code: "TRT_001".to_string(),
@@ -1866,7 +2073,6 @@ fn check_impl_block(
             return;
         }
     };
-    let trait_methods: Vec<(String, Type)> = trait_def.methods.clone();
 
     // TRT_003: Duplicate impl check
     // Note: collect_impl_block already stored the first impl; we check here for diagnostics
@@ -1887,6 +2093,24 @@ fn check_impl_block(
             return;
         }
         _ => {}
+    }
+
+    // TRT_010: Check all transitive supertraits are implemented
+    let all_supers = symbols.all_supertraits(&trait_name);
+    for super_name in &all_supers {
+        if symbols.lookup_trait_impl(super_name, &type_key).is_none() {
+            diagnostics.push(Diagnostic {
+                code: "TRT_010".to_string(),
+                severity: Severity::Error,
+                location: Location::from_node(file, node),
+                message: format!(
+                    "Impl `{}` for `{}` requires impl `{}` for `{}`",
+                    trait_name, type_key, super_name, type_key
+                ),
+                context: "All supertraits must be implemented.".to_string(),
+                suggestions: vec![],
+            });
+        }
     }
 
     // Collect implemented method names
@@ -1993,9 +2217,9 @@ fn check_impl_block(
         }
     }
 
-    // TRT_002: Missing methods
+    // TRT_002: Missing methods (only for methods without defaults)
     for (method_name, _) in &trait_methods {
-        if !impl_method_names.contains(method_name) {
+        if !impl_method_names.contains(method_name) && !default_methods.contains_key(method_name) {
             diagnostics.push(Diagnostic {
                 code: "TRT_002".to_string(),
                 severity: Severity::Error,
@@ -2007,6 +2231,58 @@ fn check_impl_block(
                 context: "All trait methods must be implemented.".to_string(),
                 suggestions: vec![],
             });
+        }
+    }
+
+    // Type-check default method bodies in the context of this concrete type
+    for (method_name, default_byte) in &default_methods {
+        if impl_method_names.contains(method_name) {
+            continue; // Overridden by impl, skip
+        }
+        // Find the CST node for the default method body
+        let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+        let fn_type = symbols.lookup(&mangled).cloned();
+        if let Some(Type::Function(ref arg_types, ref _ret_type)) = fn_type {
+            // Find the default function_def node by byte offset
+            let tcursor = node.walk();
+            // We need to find the function_def in the TRAIT node, not the impl node
+            // The default_byte refers to a byte in the trait_def
+            // We'll search all top-level nodes for it
+            let root = {
+                let mut n = *node;
+                while let Some(p) = n.parent() {
+                    n = p;
+                }
+                n
+            };
+            // Search for the function_def at the given byte offset in the source tree
+            if let Some(default_node) = find_function_def_at_byte(&root, *default_byte) {
+                symbols.enter_scope();
+
+                // Bind parameters with concrete types
+                if let Some(params) = default_node.child_by_field_name("params") {
+                    let mut pcursor = params.walk();
+                    let mut i = 0;
+                    for param in params.named_children(&mut pcursor) {
+                        if param.kind() == "param" {
+                            if let Some(pn) = param.child_by_field_name("name") {
+                                let arg_name = pn.utf8_text(source.as_bytes()).unwrap().to_string();
+                                if i < arg_types.len() {
+                                    symbols.insert(arg_name, arg_types[i].clone());
+                                }
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+
+                if let Some(body_node) = default_node.child_by_field_name("body") {
+                    let _body_type = check_node(&body_node, source, file, symbols, diagnostics);
+                }
+
+                symbols.exit_scope();
+            }
+            drop(tcursor);
         }
     }
 }

@@ -927,7 +927,37 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Router.docs_json".into(),
-            Type::Function(vec![rtr], Box::new(Type::String)),
+            Type::Function(vec![rtr.clone()], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Router.ws".into(),
+            Type::Function(
+                vec![rtr.clone(), Type::String, handler.clone()],
+                Box::new(rtr),
+            ),
+        );
+    }
+
+    // -- Ws (WebSocket) natives (effect: Ws) --
+    if native_modules.contains(&"Ws") {
+        let result_string_string = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::String]),
+                ("Err".to_string(), vec![Type::String]),
+            ],
+        );
+        sigs.insert(
+            "Ws.send!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Ws.receive!".into(),
+            Type::Function(vec![], Box::new(result_string_string)),
+        );
+        sigs.insert(
+            "Ws.close!".into(),
+            Type::Function(vec![], Box::new(Type::Unit)),
         );
     }
 
@@ -1003,17 +1033,6 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
                 vec![req.clone(), Type::String],
                 Box::new(result_int_string),
             ),
-        );
-        sigs.insert(
-            "Request.with_state".into(),
-            Type::Function(
-                vec![req.clone(), Type::String, Type::Unknown],
-                Box::new(req.clone()),
-            ),
-        );
-        sigs.insert(
-            "Request.state".into(),
-            Type::Function(vec![req, Type::String], Box::new(Type::Unknown)),
         );
     }
 

@@ -1,0 +1,18 @@
+// Errors: trait bounds on generics
+// Tests error diagnostics for missing trait implementations at call sites
+
+trait Show {
+  show : Self -> String
+}
+
+impl Show for Int {
+  fn show(x: Int) -> String = Int.to_string(x)
+}
+
+fn show_value<T: Show>(x: T) -> String = Show.show(x)
+
+// ERROR: Bool does not implement Show (no impl provided)
+// This should trigger TRT_011
+fn main() -> String = show_value("hello")
+
+// expect-error: TRT_011

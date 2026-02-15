@@ -14,6 +14,8 @@ pub struct GenericSchema {
 pub struct UserGenericSchema {
     pub type_param_names: Vec<String>,
     pub fn_type: Type,
+    /// Trait bounds per type parameter: param_name -> [trait_name].
+    pub bounds: HashMap<String, Vec<String>>,
 }
 
 impl UserGenericSchema {

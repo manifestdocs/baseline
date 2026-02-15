@@ -2434,6 +2434,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     self.builder.ins().jump(body_block, &[]);
                 }
             }
+            Pattern::Record(_) => {
+                // Record patterns always match structurally
+                self.builder.ins().jump(body_block, &[]);
+            }
         }
         Ok(())
     }
@@ -2468,6 +2472,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let idx = self.builder.ins().iconst(types::I64, i as i64);
                     let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
                     self.bind_pattern_vars(sub, elem)?;
+                }
+            }
+            Pattern::Record(fields) => {
+                for (field_name, sub_pat) in fields {
+                    let field_nv = NValue::string(field_name.as_str().into());
+                    let field_val = self.emit_heap_nvalue(field_nv);
+                    let elem = self.call_helper("jit_get_field", &[subject, field_val]);
+                    self.bind_pattern_vars(sub_pat, elem)?;
                 }
             }
         }
@@ -2511,6 +2523,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let idx = self.builder.ins().iconst(types::I64, i as i64);
                     let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
                     self.bind_pattern_vars_rc(sub, elem)?;
+                }
+            }
+            Pattern::Record(fields) => {
+                for (field_name, sub_pat) in fields {
+                    let field_nv = NValue::string(field_name.as_str().into());
+                    let field_val = self.emit_heap_nvalue(field_nv);
+                    let elem = self.call_helper("jit_get_field", &[subject, field_val]);
+                    self.bind_pattern_vars_rc(sub_pat, elem)?;
                 }
             }
         }

@@ -158,7 +158,13 @@ fn parse_spec_block(node: &Node, source: &str, file: &str) -> Option<FuncSpec> {
                 let mut cursor = child.walk();
                 for gc in child.named_children(&mut cursor) {
                     if gc.kind() == "param" {
-                        let pname = text(&gc.child_by_field_name("name").unwrap(), source);
+                        // param has 'pattern' and 'type' fields
+                        let pname = if let Some(pat) = gc.child_by_field_name("pattern") {
+                            text(&pat, source)
+                        } else {
+                            // Fallback if grammar mismatch or error
+                            "_"
+                        };
                         let ptype = text(&gc.child_by_field_name("type").unwrap(), source);
                         params.push((pname.to_string(), ptype.to_string()));
                     }
@@ -206,11 +212,29 @@ fn parse_spec_block(node: &Node, source: &str, file: &str) -> Option<FuncSpec> {
                     && let Some(param_list) = child.child_by_field_name("params")
                 {
                     let mut cursor = param_list.walk();
+                    let mut idx = 0;
                     for p in param_list.named_children(&mut cursor) {
                         if p.kind() == "param" {
-                            let pname = text(&p.child_by_field_name("name").unwrap(), source);
-                            let ptype = text(&p.child_by_field_name("type").unwrap(), source);
-                            params.push((pname.to_string(), ptype.to_string()));
+                            let pname = if let Some(pat) = p.child_by_field_name("pattern") {
+                                if pat.kind() == "identifier" {
+                                    text(&pat, source).to_string()
+                                } else {
+                                    // Complex pattern: use synthetic name (user likely won't reference this in spec directly)
+                                    // or validation will fail if they try.
+                                    format!("param_{}", idx)
+                                }
+                            } else {
+                                format!("param_{}", idx)
+                            };
+                            
+                            let ptype = if let Some(t) = p.child_by_field_name("type") {
+                                text(&t, source).to_string()
+                            } else {
+                                "Unknown".to_string()
+                            };
+                            
+                            params.push((pname, ptype));
+                            idx += 1;
                         }
                     }
                 }

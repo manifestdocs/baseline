@@ -129,6 +129,11 @@ fn collect_pattern_names(pattern: &Pattern, names: &mut HashSet<String>) {
                 collect_pattern_names(p, names);
             }
         }
+        Pattern::Record(fields) => {
+            for (_, sub_pat) in fields {
+                collect_pattern_names(sub_pat, names);
+            }
+        }
         Pattern::Wildcard | Pattern::Literal(_) => {}
     }
 }

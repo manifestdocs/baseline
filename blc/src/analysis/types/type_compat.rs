@@ -1,6 +1,6 @@
 use super::symbol_table::SymbolTable;
 use super::type_def::Type;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 /// Check if two types are compatible, treating Unknown as a wildcard.
@@ -125,7 +125,12 @@ pub(super) fn extract_explicit_type_params(func_node: &Node, source: &str) -> Ve
             let mut params = Vec::new();
             let mut inner = child.walk();
             for tp in child.named_children(&mut inner) {
-                if tp.kind() == "type_identifier" {
+                if tp.kind() == "type_param" {
+                    if let Some(name_node) = tp.child_by_field_name("name") {
+                        params.push(name_node.utf8_text(source.as_bytes()).unwrap().to_string());
+                    }
+                } else if tp.kind() == "type_identifier" {
+                    // Backward compat: bare type identifier (shouldn't happen with new grammar)
                     params.push(tp.utf8_text(source.as_bytes()).unwrap().to_string());
                 }
             }
@@ -133,6 +138,38 @@ pub(super) fn extract_explicit_type_params(func_node: &Node, source: &str) -> Ve
         }
     }
     Vec::new()
+}
+
+/// Extract trait bounds from a function_def's type_params node.
+/// Returns a map from type parameter name to list of trait bound names.
+pub(super) fn extract_type_param_bounds(func_node: &Node, source: &str) -> HashMap<String, Vec<String>> {
+    let mut bounds = HashMap::new();
+    let mut cursor = func_node.walk();
+    for child in func_node.children(&mut cursor) {
+        if child.kind() == "type_params" {
+            let mut inner = child.walk();
+            for tp in child.named_children(&mut inner) {
+                if tp.kind() == "type_param" {
+                    if let Some(name_node) = tp.child_by_field_name("name") {
+                        let param_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                        if let Some(bounds_node) = tp.child_by_field_name("bounds") {
+                            let mut bound_names = Vec::new();
+                            let mut bcursor = bounds_node.walk();
+                            for bc in bounds_node.named_children(&mut bcursor) {
+                                if bc.kind() == "type_identifier" {
+                                    bound_names.push(bc.utf8_text(source.as_bytes()).unwrap().to_string());
+                                }
+                            }
+                            if !bound_names.is_empty() {
+                                bounds.insert(param_name, bound_names);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    bounds
 }
 
 /// Detect implicit type parameters: scan a function's param and return types

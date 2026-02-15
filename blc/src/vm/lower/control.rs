@@ -55,6 +55,8 @@ impl<'a> super::Lowerer<'a> {
                 }
             }
             Pattern::Tuple(pats)
+        } else if pattern_node.kind() == "record_pattern" {
+            self.lower_pattern(&pattern_node)?
         } else {
             let name = self.node_text(&pattern_node);
             Pattern::Var(name)
@@ -211,6 +213,30 @@ impl<'a> super::Lowerer<'a> {
                     pats.push(self.lower_pattern(child)?);
                 }
                 Ok(Pattern::Tuple(pats))
+            }
+            "record_pattern" => {
+                let mut pat_cursor = node.walk();
+                let field_nodes: Vec<Node> = node.named_children(&mut pat_cursor).collect();
+                let mut fields = Vec::new();
+                for field_node in &field_nodes {
+                    if field_node.kind() == "record_pattern_field" {
+                        let named_count = field_node.named_child_count();
+                        let name_node = field_node.child_by_field_name("name")
+                            .ok_or_else(|| self.error("Record pattern field missing name".into(), field_node))?;
+                        let name = self.node_text(&name_node);
+                        if named_count > 1 {
+                            // { x: pat } form
+                            let pat_node = field_node.child_by_field_name("pattern")
+                                .ok_or_else(|| self.error("Record pattern field missing pattern".into(), field_node))?;
+                            let sub_pattern = self.lower_pattern(&pat_node)?;
+                            fields.push((name, sub_pattern));
+                        } else {
+                            // { x } shorthand — binds to variable with same name
+                            fields.push((name.clone(), Pattern::Var(name)));
+                        }
+                    }
+                }
+                Ok(Pattern::Record(fields))
             }
             _ => Err(self.error(format!("Unsupported pattern kind: {}", node.kind()), node)),
         }

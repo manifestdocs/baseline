@@ -92,6 +92,36 @@ pub(super) fn check_pattern(
                 }
             }
         }
+        "record_pattern" => {
+            let count = node.named_child_count();
+            for i in 0..count {
+                let field_node = node.named_child(i).unwrap();
+                if field_node.kind() == "record_pattern_field" {
+                    let name_node = field_node.child_by_field_name("name");
+                    let name = name_node
+                        .map(|n| n.utf8_text(source.as_bytes()).unwrap().to_string())
+                        .unwrap_or_default();
+
+                    // Resolve field type from expected record type
+                    let field_type = match expected_type {
+                        Type::Record(fields, _) => fields
+                            .iter()
+                            .find(|(f, _)| *f == &name)
+                            .map(|(_, t)| t.clone())
+                            .unwrap_or(Type::Unknown),
+                        _ => Type::Unknown,
+                    };
+
+                    // Check sub-pattern if { x: pat }, otherwise bind shorthand { x }
+                    if let Some(pat_node) = field_node.child_by_field_name("pattern") {
+                        check_pattern(&pat_node, &field_type, source, symbols, diagnostics);
+                    } else {
+                        // Shorthand: { x } — bind x with field's type
+                        symbols.insert(name, field_type);
+                    }
+                }
+            }
+        }
         "integer_literal" => {
             // Basic check
         }

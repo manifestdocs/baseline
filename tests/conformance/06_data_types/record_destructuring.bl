@@ -1,0 +1,89 @@
+@prelude(core)
+
+// Conformance: record destructuring in let bindings, match arms, function parameters
+
+type Point = { x: Int, y: Int }
+
+type User = {
+  name: String,
+  age: Int,
+}
+
+// --- Let binding destructuring ---
+
+test "let destructure basic" = {
+  let p = Point { x: 10, y: 20 }
+  let { x, y } = p
+  x + y == 30
+}
+
+test "let destructure single field" = {
+  let u = User { name: "Alice", age: 30 }
+  let { name } = u
+  name == "Alice"
+}
+
+test "let destructure with rename" = {
+  let p = Point { x: 5, y: 7 }
+  let { x: a, y: b } = p
+  a + b == 12
+}
+
+// --- Match arm destructuring ---
+
+test "match record pattern" = {
+  let p = Point { x: 3, y: 4 }
+  let result = match p
+    { x, y } -> x * x + y * y;
+  
+  result == 25
+}
+
+test "match record with rename" = {
+  let p = Point { x: 1, y: 2 }
+  let result = match p
+    { x: a, y: b } -> a + b;
+  
+  result == 3
+}
+
+// --- Function parameter destructuring ---
+
+fn get_x({ x }: Point) -> Int = x
+
+fn sum_coords({ x, y }: Point) -> Int = x + y
+
+fn user_info({ name, age }: User) -> String = "${name} is ${age}"
+
+test "fn param destructure" = {
+  let p = Point { x: 100, y: 200 }
+  get_x(p) == 100
+}
+
+test "fn param destructure multi" = {
+  let p = Point { x: 10, y: 20 }
+  sum_coords(p) == 30
+}
+
+test "fn param user info" = {
+  let u = User { name: "Bob", age: 40 }
+  user_info(u) == "Bob is 40"
+}
+
+// --- Nested / complex patterns ---
+
+test "destructure anonymous record" = {
+  let r = { a: 100, b: 200 }
+  let { a, b } = r
+  a + b == 300
+}
+
+test "destructure in computation" = {
+  let p1 = Point { x: 1, y: 2 }
+  let p2 = Point { x: 3, y: 4 }
+  let { x: x1, y: y1 } = p1
+  let { x: x2, y: y2 } = p2
+  let dx = x2 - x1
+  let dy = y2 - y1
+  dx * dx + dy * dy == 8
+}

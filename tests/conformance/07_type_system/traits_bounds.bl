@@ -1,0 +1,44 @@
+// Trait bounds on generics with dictionary passing
+// Tests that bounded generic functions dispatch through hidden parameters
+
+trait Show {
+  show : Self -> String
+}
+
+impl Show for Int {
+  fn show(x: Int) -> String = Int.to_string(x)
+}
+
+impl Show for Bool {
+  fn show(b: Bool) -> String = if b then "true" else "false"
+}
+
+trait Eq {
+  eq : (Self, Self) -> Bool
+}
+
+impl Eq for Int {
+  fn eq(a: Int, b: Int) -> Bool = a == b
+}
+
+// Single bound: T: Show
+fn show_value<T: Show>(x: T) -> String = Show.show(x)
+
+// Multiple bounds: T: Show + Eq
+fn show_if_equal<T: Show + Eq>(a: T, b: T) -> String =
+  if Eq.eq(a, b) then Show.show(a) else "not equal"
+
+// Bounded generic calling another bounded generic
+fn show_twice<T: Show>(x: T) -> String = "${show_value(x)} and ${show_value(x)}"
+
+// Bound with default method
+fn pretty_show<T: Show>(x: T) -> String = "value: ${Show.show(x)}"
+
+fn main() -> Int = 0
+
+test "single bound with Int" = show_value(42) == "42"
+test "single bound with Bool" = show_value(true) == "true"
+test "multiple bounds equal" = show_if_equal(5, 5) == "5"
+test "multiple bounds not equal" = show_if_equal(3, 7) == "not equal"
+test "chained bounded generics" = show_twice(99) == "99 and 99"
+test "bound used in interpolation" = pretty_show(7) == "value: 7"

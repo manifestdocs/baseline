@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
-use crate::analysis::types::TypeMap;
+use crate::analysis::types::{DictEntry, TypeMap};
 
 use super::chunk::CompileError;
 use super::ir::*;
@@ -43,6 +43,11 @@ pub struct Lowerer<'a> {
     handled_effects: HashSet<String>,
     /// Simple enum definitions: enum name → variant names (nullary only).
     enum_defs: HashMap<String, Vec<String>>,
+    /// Default trait methods: (trait_name, method_name) -> (trait_def_root_idx, func_child_idx).
+    trait_defaults: HashMap<(String, String), (usize, usize)>,
+    /// Dictionary map from type checker: call_expression start_byte -> dictionary entries.
+    /// Used to inject hidden trait method args at call sites of bounded generic functions.
+    dict_map: HashMap<usize, Vec<DictEntry>>,
 }
 
 impl<'a> Lowerer<'a> {
@@ -58,7 +63,14 @@ impl<'a> Lowerer<'a> {
             scopes: Vec::new(),
             handled_effects: HashSet::new(),
             enum_defs: HashMap::new(),
+            trait_defaults: HashMap::new(),
+            dict_map: HashMap::new(),
         }
+    }
+
+    /// Set the dictionary map from the type checker for bounded generic dispatch.
+    pub fn set_dict_map(&mut self, dict_map: HashMap<usize, Vec<DictEntry>>) {
+        self.dict_map = dict_map;
     }
 
     /// Provide pre-registered function names (e.g. from imported modules).
@@ -107,6 +119,10 @@ impl<'a> Lowerer<'a> {
             // Collect simple enum definitions for auto-derived methods
             if child.kind() == "type_def" {
                 self.collect_enum_def(&child);
+            }
+            // Collect trait default method info
+            if child.kind() == "trait_def" {
+                self.collect_trait_defaults(&child, i);
             }
             // Collect impl_block functions with mangled names
             if child.kind() == "impl_block" {
@@ -202,6 +218,9 @@ impl<'a> Lowerer<'a> {
             if child.kind() == "type_def" {
                 self.collect_enum_def(&child);
             }
+            if child.kind() == "trait_def" {
+                self.collect_trait_defaults(&child, i);
+            }
             if child.kind() == "impl_block" {
                 self.collect_impl_block_functions(&child, i, &mut func_nodes, &mut impl_func_nodes);
             }
@@ -248,24 +267,78 @@ impl<'a> Lowerer<'a> {
 
         // Extract params from param_list
         let mut params = Vec::new();
+        let mut param_lets = Vec::new();
+        let mut param_scope_names = HashSet::new();
+
         if let Some(param_list) = node.child_by_field_name("params") {
             let mut cursor = param_list.walk();
+            let mut param_idx = 0;
             for param in param_list.named_children(&mut cursor) {
-                if param.kind() == "param"
-                    && let Some(name_node) = param.child_by_field_name("name")
-                {
-                    params.push(self.node_text(&name_node));
+                if param.kind() == "param" {
+                    if let Some(name_node) = param.child_by_field_name("name") {
+                        let name = self.node_text(&name_node);
+                        params.push(name.clone());
+                        param_scope_names.insert(name);
+                    } else if let Some(pat_node) = param.child_by_field_name("pattern") {
+                        let pattern = self.lower_pattern(&pat_node)?;
+                        if let Pattern::Var(name) = pattern {
+                            params.push(name.clone());
+                            param_scope_names.insert(name);
+                        } else {
+                            // Complex pattern: destructure
+                            let synth_name = format!("$param{}", param_idx);
+                            params.push(synth_name.clone());
+                            param_scope_names.insert(synth_name.clone());
+
+                            let bound_names = self.collect_bound_names(&pattern);
+                            for bn in bound_names {
+                                param_scope_names.insert(bn);
+                            }
+
+                            param_lets.push(Expr::Let {
+                                pattern: Box::new(pattern),
+                                value: Box::new(Expr::Var(synth_name, None)),
+                                ty: None,
+                            });
+                        }
+                    }
+                    param_idx += 1;
                 }
             }
         }
 
+        // Inject hidden parameters for trait bounds on type params.
+        // For each type param (decl order), each bound (alphabetical),
+        // each method (alphabetical), append one hidden param like "__Show_show".
+        let hidden_params = self.extract_hidden_dict_params(node);
+        params.extend(hidden_params.clone());
+        for hp in hidden_params {
+            param_scope_names.insert(hp);
+        }
+
         // Enter scope with params and lower body
-        let param_set: HashSet<String> = params.iter().cloned().collect();
-        self.scopes.push(param_set);
+        self.scopes.push(param_scope_names);
         self.tail_position = true;
-        let body = self.lower_expression(&body_node)?;
+        let mut body = self.lower_expression(&body_node)?;
         self.tail_position = false;
         self.scopes.pop();
+
+        // Wrap body with destructuring bindings if any
+        if !param_lets.is_empty() {
+             // Prepend lets to body
+             // If body is Block, prepend. Else wrap in Block.
+             if let Expr::Block(ref mut stmts, ref mut ty) = body {
+                 // Efficiently prepend: verify overhead of insert vs new vec?
+                 // For small number of params, insert(0) is fine? Or construct new vec.
+                 let mut new_stmts = param_lets;
+                 new_stmts.append(stmts);
+                 *stmts = new_stmts;
+             } else {
+                 let mut stmts = param_lets;
+                 stmts.push(body);
+                 body = Expr::Block(stmts, None); // TODO: Type?
+             }
+        }
 
         self.current_fn_name = None;
 
@@ -284,7 +357,94 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// Extract hidden dictionary parameters for a bounded generic function.
+    /// Parses type_params from the CST to find bounds like `<T: Show + Eq>`.
+    /// Returns hidden param names in deterministic order: for each type param
+    /// (decl order), each bound trait (alphabetical), each method (alphabetical).
+    fn extract_hidden_dict_params(&self, func_node: &Node) -> Vec<String> {
+        let mut hidden = Vec::new();
+        let mut cursor = func_node.walk();
+        for child in func_node.children(&mut cursor) {
+            if child.kind() == "type_params" {
+                let mut inner = child.walk();
+                for tp in child.named_children(&mut inner) {
+                    if tp.kind() == "type_param" {
+                        if let Some(bounds_node) = tp.child_by_field_name("bounds") {
+                            // Collect bound trait names
+                            let mut bound_names = Vec::new();
+                            let mut bcursor = bounds_node.walk();
+                            for bc in bounds_node.named_children(&mut bcursor) {
+                                if bc.kind() == "type_identifier" {
+                                    bound_names.push(self.node_text(&bc));
+                                }
+                            }
+                            // Sort traits alphabetically for deterministic param order
+                            bound_names.sort();
+                            // For each bound trait, look up its methods from trait_defs
+                            // via type_map (we look for known trait method patterns)
+                            for trait_name in &bound_names {
+                                let methods = self.get_trait_method_names(trait_name);
+                                for method in methods {
+                                    hidden.push(format!("__{}_{}", trait_name, method));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        hidden
+    }
+
+    /// Get sorted method names for a trait by scanning trait_def CST nodes.
+    /// Falls back to scanning TypeMap for `__dict$TraitName$method$` patterns.
+    fn get_trait_method_names(&self, trait_name: &str) -> Vec<String> {
+        // Scan the type_map for `__dict$TraitName$method$ParamName` entries.
+        // This is a fallback; the primary source is the trait_def CST nodes
+        // we've already seen during collection.
+        let mut methods = HashSet::new();
+        if let Some(ref tm) = self.type_map {
+            let prefix = format!("__dict${}$", trait_name);
+            for ty in tm.values() {
+                if let crate::analysis::types::Type::Module(marker) = ty {
+                    if let Some(rest) = marker.strip_prefix(&prefix) {
+                        // rest is "method$ParamName"
+                        if let Some(method) = rest.split('$').next() {
+                            methods.insert(method.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        let mut result: Vec<String> = methods.into_iter().collect();
+        result.sort();
+        result
+    }
+
+    /// Collect default method info from a trait_def: (trait_name, method_name) -> (root_idx, child_idx).
+    fn collect_trait_defaults(&mut self, trait_node: &Node, root_idx: usize) {
+        let trait_name_node = match trait_node.child_by_field_name("name") {
+            Some(n) => n,
+            None => return,
+        };
+        let trait_name = self.node_text(&trait_name_node);
+
+        let mut cursor = trait_node.walk();
+        for (child_idx, child) in trait_node.named_children(&mut cursor).enumerate() {
+            if child.kind() == "function_def" {
+                if let Some(name_node) = child.child_by_field_name("name") {
+                    let method_name = self.node_text(&name_node);
+                    self.trait_defaults.insert(
+                        (trait_name.clone(), method_name),
+                        (root_idx, child_idx),
+                    );
+                }
+            }
+        }
+    }
+
     /// Collect function definitions from an impl_block, generating mangled names.
+    /// Also registers default methods from the trait that are not overridden.
     fn collect_impl_block_functions(
         &mut self,
         impl_node: &Node,
@@ -304,11 +464,14 @@ impl<'a> Lowerer<'a> {
         };
         let type_key = self.node_text(&target_type_node);
 
+        // Collect explicitly defined methods
+        let mut overridden_methods = HashSet::new();
         let mut cursor = impl_node.walk();
         for (func_idx, child) in impl_node.named_children(&mut cursor).enumerate() {
             if child.kind() == "function_def" {
                 if let Some(name_node) = child.child_by_field_name("name") {
                     let method_name = self.node_text(&name_node);
+                    overridden_methods.insert(method_name.clone());
                     let mangled = format!("{}${}${}", trait_name, type_key, method_name);
                     self.functions.insert(mangled.clone());
                     let params = self.extract_param_names(&child);
@@ -316,6 +479,20 @@ impl<'a> Lowerer<'a> {
                     impl_func_nodes.push((mangled, parent_idx, func_idx));
                 }
             }
+        }
+
+        // Find default methods from the trait that are not overridden
+        let defaults: Vec<(String, usize, usize)> = self.trait_defaults.iter()
+            .filter(|((tn, mn), _)| tn == &trait_name && !overridden_methods.contains(mn))
+            .map(|((_, mn), (root_idx, child_idx))| (mn.clone(), *root_idx, *child_idx))
+            .collect();
+
+        for (method_name, trait_root_idx, trait_child_idx) in defaults {
+            let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+            self.functions.insert(mangled.clone());
+            // Get param names from the default method's function_def
+            // We'll store trait_root_idx so the second pass can find the node
+            impl_func_nodes.push((mangled, trait_root_idx, trait_child_idx));
         }
     }
 

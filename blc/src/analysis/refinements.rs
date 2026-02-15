@@ -39,8 +39,12 @@ pub enum StringConstraint {
     EndsWith(String),
     /// String.contains(self, substr)
     Contains(String),
+    /// Exact equality: self == "value"
+    Equals(String),
     /// Intersection of multiple constraints (from `&&`)
     All(Vec<StringConstraint>),
+    /// Union of multiple constraints (from `||`)
+    Any(Vec<StringConstraint>),
 }
 
 impl StringConstraint {
@@ -99,11 +103,27 @@ impl StringConstraint {
                     Err(format!("does not contain \"{}\"", substr))
                 }
             }
+            StringConstraint::Equals(expected) => {
+                if value == expected {
+                    Ok(())
+                } else {
+                    Err(format!("must be \"{}\"", expected))
+                }
+            }
             StringConstraint::All(constraints) => {
                 for c in constraints {
                     c.check(value)?;
                 }
                 Ok(())
+            }
+            StringConstraint::Any(constraints) => {
+                for c in constraints {
+                    if c.check(value).is_ok() {
+                        return Ok(());
+                    }
+                }
+                let options: Vec<_> = constraints.iter().map(|c| c.describe()).collect();
+                Err(format!("must be one of: {}", options.join(" or ")))
             }
         }
     }
@@ -121,11 +141,17 @@ impl StringConstraint {
             StringConstraint::StartsWith(s) => format!("starts with \"{}\"", s),
             StringConstraint::EndsWith(s) => format!("ends with \"{}\"", s),
             StringConstraint::Contains(s) => format!("contains \"{}\"", s),
+            StringConstraint::Equals(s) => format!("\"{}\"" , s),
             StringConstraint::All(cs) => cs
                 .iter()
                 .map(|c| c.describe())
                 .collect::<Vec<_>>()
                 .join(" && "),
+            StringConstraint::Any(cs) => cs
+                .iter()
+                .map(|c| c.describe())
+                .collect::<Vec<_>>()
+                .join(" || "),
         }
     }
 }
@@ -172,11 +198,10 @@ impl ValueTable {
     }
 }
 
-pub fn check_refinements(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
-    let mut diagnostics = Vec::new();
+/// Collect all refined type definitions from the AST.
+/// Returns a map of type name → constraint.
+pub fn collect_refined_types(tree: &Tree, source: &str) -> HashMap<String, Constraint> {
     let root = tree.root_node();
-
-    // 1. Collect refined types
     let mut refined_types: HashMap<String, Constraint> = HashMap::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
@@ -186,6 +211,15 @@ pub fn check_refinements(tree: &Tree, source: &str, file: &str) -> Vec<Diagnosti
             refined_types.insert(name, constraint);
         }
     }
+    refined_types
+}
+
+pub fn check_refinements(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
+    let mut diagnostics = Vec::new();
+    let root = tree.root_node();
+
+    // 1. Collect refined types
+    let refined_types = collect_refined_types(tree, source);
 
     // 2. Check usages
     let mut values = ValueTable::new();
@@ -323,7 +357,7 @@ fn find_constraint_expr(node: Node) -> Option<Node> {
 fn parse_constraint_node(node: Node, source: &str) -> Option<StringConstraint> {
     match node.kind() {
         "binary_expression" => {
-            // Could be && conjunction or comparison (length >= n)
+            // Could be &&, ||, ==, or comparison (length >= n)
             let children: Vec<_> = {
                 let mut cursor = node.walk();
                 node.children(&mut cursor).collect()
@@ -332,13 +366,26 @@ fn parse_constraint_node(node: Node, source: &str) -> Option<StringConstraint> {
                 let op = children[1].utf8_text(source.as_bytes()).unwrap_or("");
                 if op == "&&" {
                     let mut parts = Vec::new();
-                    parts.extend(collect_constraint_parts(children[0], source));
-                    parts.extend(collect_constraint_parts(children[2], source));
+                    parts.extend(collect_constraint_parts(children[0], source, "&&"));
+                    parts.extend(collect_constraint_parts(children[2], source, "&&"));
                     return if parts.len() > 1 {
                         Some(StringConstraint::All(parts))
                     } else {
                         parts.into_iter().next()
                     };
+                }
+                if op == "||" {
+                    let mut parts = Vec::new();
+                    parts.extend(collect_constraint_parts(children[0], source, "||"));
+                    parts.extend(collect_constraint_parts(children[2], source, "||"));
+                    return if parts.len() > 1 {
+                        Some(StringConstraint::Any(parts))
+                    } else {
+                        parts.into_iter().next()
+                    };
+                }
+                if op == "==" {
+                    return parse_equality_constraint(node, source);
                 }
                 // Comparison: String.length(self) >= n
                 return parse_length_comparison(node, source);
@@ -359,8 +406,8 @@ fn parse_constraint_node(node: Node, source: &str) -> Option<StringConstraint> {
     }
 }
 
-/// Recursively collect leaf constraints from && conjunctions.
-fn collect_constraint_parts(node: Node, source: &str) -> Vec<StringConstraint> {
+/// Recursively collect leaf constraints from && or || conjunctions/disjunctions.
+fn collect_constraint_parts(node: Node, source: &str, target_op: &str) -> Vec<StringConstraint> {
     if node.kind() == "binary_expression" {
         let children: Vec<_> = {
             let mut cursor = node.walk();
@@ -368,10 +415,10 @@ fn collect_constraint_parts(node: Node, source: &str) -> Vec<StringConstraint> {
         };
         if children.len() >= 3 {
             let op = children[1].utf8_text(source.as_bytes()).unwrap_or("");
-            if op == "&&" {
+            if op == target_op {
                 let mut parts = Vec::new();
-                parts.extend(collect_constraint_parts(children[0], source));
-                parts.extend(collect_constraint_parts(children[2], source));
+                parts.extend(collect_constraint_parts(children[0], source, target_op));
+                parts.extend(collect_constraint_parts(children[2], source, target_op));
                 return parts;
             }
         }
@@ -382,6 +429,31 @@ fn collect_constraint_parts(node: Node, source: &str) -> Vec<StringConstraint> {
     } else {
         vec![]
     }
+}
+
+/// Parse an equality constraint: `self == "value"`
+fn parse_equality_constraint(node: Node, source: &str) -> Option<StringConstraint> {
+    let children: Vec<_> = {
+        let mut cursor = node.walk();
+        node.children(&mut cursor).collect()
+    };
+    if children.len() < 3 {
+        return None;
+    }
+    // One side should be `self` or identifier, the other a string literal
+    let lhs = children[0].utf8_text(source.as_bytes()).unwrap_or("");
+    let rhs = children[2].utf8_text(source.as_bytes()).unwrap_or("");
+
+    // Check if either side is a string literal
+    if children[2].kind() == "string" || children[2].kind() == "string_literal" {
+        let val = rhs.trim_matches('"');
+        return Some(StringConstraint::Equals(val.to_string()));
+    }
+    if children[0].kind() == "string" || children[0].kind() == "string_literal" {
+        let val = lhs.trim_matches('"');
+        return Some(StringConstraint::Equals(val.to_string()));
+    }
+    None
 }
 
 /// Parse a call_expression like `String.matches(self, "pattern")`.

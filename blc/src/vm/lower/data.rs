@@ -14,15 +14,51 @@ impl<'a> super::Lowerer<'a> {
         }
 
         let body_node = &children[children.len() - 1];
-        let params: Vec<String> = children[..children.len() - 1]
-            .iter()
-            .map(|n| self.node_text(n))
-            .collect();
+        let mut params = Vec::new();
+        let mut param_lets = Vec::new();
+        let mut param_scope_names = HashSet::new();
 
-        let param_set: HashSet<String> = params.iter().cloned().collect();
-        self.scopes.push(param_set);
-        let body = self.lower_expression(body_node)?;
+        // The last child is the body. The preceding children are patterns.
+        let pattern_nodes = &children[..children.len() - 1];
+        
+        for (i, pat_node) in pattern_nodes.iter().enumerate() {
+            let pattern = self.lower_pattern(pat_node)?;
+            if let Pattern::Var(name) = pattern {
+                 params.push(name.clone());
+                 param_scope_names.insert(name);
+            } else {
+                 let synth_name = format!("$lparam{}", i);
+                 params.push(synth_name.clone());
+                 param_scope_names.insert(synth_name.clone());
+                 
+                 let bound = self.collect_bound_names(&pattern);
+                 for bn in bound {
+                     param_scope_names.insert(bn);
+                 }
+
+                 param_lets.push(Expr::Let {
+                     pattern: Box::new(pattern),
+                     value: Box::new(Expr::Var(synth_name, None)),
+                     ty: None,
+                 });
+            }
+        }
+
+        self.scopes.push(param_scope_names);
+        let mut body = self.lower_expression(body_node)?;
         self.scopes.pop();
+
+        if !param_lets.is_empty() {
+             if let Expr::Block(ref mut stmts, _) = body {
+                 let mut new_stmts = param_lets;
+                 new_stmts.append(stmts);
+                 *stmts = new_stmts;
+             } else {
+                 let mut stmts = param_lets;
+                 stmts.push(body);
+                 body = Expr::Block(stmts, None);
+             }
+        }
 
         Ok(Expr::Lambda {
             params,

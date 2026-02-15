@@ -1,0 +1,17 @@
+@prelude(core)
+
+// Negative test: trait default method errors
+// Expected errors: TRT_002
+
+// Missing required method (no default) should still trigger TRT_002
+trait Display {
+  show : Self -> String
+  fn format(x: Self) -> String = "formatted"
+}
+
+// Only implements the default, not the required method
+impl Display for Int {
+  fn format(x: Int) -> String = "custom"
+}
+
+fn main() -> Int = 0

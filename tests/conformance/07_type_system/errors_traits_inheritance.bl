@@ -1,0 +1,25 @@
+@prelude(core)
+
+// Negative test: trait inheritance errors
+// Expected errors: TRT_010, TRT_008
+
+// TRT_008: Unknown supertrait
+trait BadTrait : NonexistentTrait {
+  foo : Self -> Int
+}
+
+// TRT_010: Missing supertrait impl
+trait Eq {
+  eq : (Self, Self) -> Bool
+}
+
+trait Ord : Eq {
+  compare : (Self, Self) -> Int
+}
+
+// Implement Ord without implementing Eq first
+impl Ord for Bool {
+  fn compare(a: Bool, b: Bool) -> Int = 0
+}
+
+fn main() -> Int = 0
