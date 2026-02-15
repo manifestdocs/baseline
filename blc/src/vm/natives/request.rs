@@ -69,7 +69,8 @@ pub(super) fn native_request_method(args: &[NValue]) -> Result<NValue, NativeErr
     Ok(NValue::string("GET".into()))
 }
 
-/// Request.body_json(req) -> parsed JSON value (sugar for Json.parse(req.body)).
+/// Request.body_json(req) -> Result<Unknown, HttpError>
+/// Parses the request body as JSON. Returns HttpError.bad_request on failure.
 pub(super) fn native_request_body_json(args: &[NValue]) -> Result<NValue, NativeError> {
     let fields = match args[0].as_record() {
         Some(f) => f,
@@ -88,17 +89,27 @@ pub(super) fn native_request_body_json(args: &[NValue]) -> Result<NValue, Native
 
     let body_str = match body.as_string() {
         Some(s) => s.to_string(),
-        None => return Ok(NValue::enum_val("Err".into(), NValue::string("Request body is not a string".into()))),
+        None => {
+            return Ok(bad_request_err("Request body is not a string"));
+        }
     };
 
     if body_str.is_empty() {
-        return Ok(NValue::enum_val("Err".into(), NValue::string("Request body is empty".into())));
+        return Ok(bad_request_err("Request body is empty"));
     }
 
     match serde_json::from_str::<serde_json::Value>(&body_str) {
         Ok(value) => Ok(NValue::enum_val("Ok".into(), serde_to_nvalue(value))),
-        Err(e) => Ok(NValue::enum_val("Err".into(), NValue::string(format!("JSON parse error: {}", e).into()))),
+        Err(e) => Ok(bad_request_err(&format!("JSON parse error: {}", e))),
     }
+}
+
+/// Wrap error message in Err(HttpError.bad_request(msg))
+fn bad_request_err(msg: &str) -> NValue {
+    NValue::enum_val(
+        "Err".into(),
+        NValue::enum_val("BadRequest".into(), NValue::string(msg.into())),
+    )
 }
 
 /// Request.with_state(req, key, value) -> Request
@@ -165,6 +176,244 @@ pub(super) fn native_request_with_state(args: &[NValue]) -> Result<NValue, Nativ
     }
 
     Ok(NValue::record(new_fields))
+}
+
+/// Request.param(req, name) -> Result<String, String>
+/// Extract a required, non-empty path parameter by name.
+pub(super) fn native_request_param(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 2 {
+        return Err(NativeError(format!(
+            "Request.param expects 2 arguments (req, name), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.param: first arg must be Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let name = match args[1].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Request.param: second arg must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let params = fields
+        .iter()
+        .find(|(k, _)| &**k == "params")
+        .and_then(|(_, v)| v.as_record());
+
+    if let Some(param_fields) = params {
+        for (k, v) in param_fields {
+            if **k == *name {
+                if let Some(s) = v.as_string() {
+                    if s.is_empty() {
+                        return Ok(NValue::enum_val(
+                            "Err".into(),
+                            NValue::string(format!("Parameter '{}' is empty", name).into()),
+                        ));
+                    }
+                    return Ok(NValue::enum_val("Ok".into(), v.clone()));
+                }
+                return Ok(NValue::enum_val("Ok".into(), v.clone()));
+            }
+        }
+    }
+    Ok(NValue::enum_val(
+        "Err".into(),
+        NValue::string(format!("Parameter '{}' not found", name).into()),
+    ))
+}
+
+/// Request.param_int(req, name) -> Result<Int, String>
+/// Extract a path parameter and parse it as an integer.
+pub(super) fn native_request_param_int(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 2 {
+        return Err(NativeError(format!(
+            "Request.param_int expects 2 arguments (req, name), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.param_int: first arg must be Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let name = match args[1].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Request.param_int: second arg must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let params = fields
+        .iter()
+        .find(|(k, _)| &**k == "params")
+        .and_then(|(_, v)| v.as_record());
+
+    if let Some(param_fields) = params {
+        for (k, v) in param_fields {
+            if **k == *name {
+                if let Some(s) = v.as_string() {
+                    match s.parse::<i64>() {
+                        Ok(n) => return Ok(NValue::enum_val("Ok".into(), NValue::int(n))),
+                        Err(_) => {
+                            return Ok(NValue::enum_val(
+                                "Err".into(),
+                                NValue::string(
+                                    format!("Parameter '{}' is not a valid integer: '{}'", name, s)
+                                        .into(),
+                                ),
+                            ));
+                        }
+                    }
+                }
+                // If it's already an int
+                if v.is_any_int() {
+                    return Ok(NValue::enum_val("Ok".into(), v.clone()));
+                }
+                return Ok(NValue::enum_val(
+                    "Err".into(),
+                    NValue::string(
+                        format!("Parameter '{}' is not a valid integer", name).into(),
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(NValue::enum_val(
+        "Err".into(),
+        NValue::string(format!("Parameter '{}' not found", name).into()),
+    ))
+}
+
+/// Request.query(req, name) -> Option<String>
+/// Extract an optional query parameter by name.
+pub(super) fn native_request_query(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 2 {
+        return Err(NativeError(format!(
+            "Request.query expects 2 arguments (req, name), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.query: first arg must be Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let name = match args[1].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Request.query: second arg must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let query = fields
+        .iter()
+        .find(|(k, _)| &**k == "query")
+        .and_then(|(_, v)| v.as_record());
+
+    if let Some(query_fields) = query {
+        for (k, v) in query_fields {
+            if **k == *name {
+                return Ok(NValue::enum_val("Some".into(), v.clone()));
+            }
+        }
+    }
+    Ok(NValue::enum_val("None".into(), NValue::unit()))
+}
+
+/// Request.query_int(req, name) -> Result<Int, String>
+/// Extract a query parameter and parse it as an integer.
+pub(super) fn native_request_query_int(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 2 {
+        return Err(NativeError(format!(
+            "Request.query_int expects 2 arguments (req, name), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Request.query_int: first arg must be Request record, got {}",
+                args[0]
+            )));
+        }
+    };
+    let name = match args[1].as_string() {
+        Some(s) => s.clone(),
+        None => {
+            return Err(NativeError(format!(
+                "Request.query_int: second arg must be String, got {}",
+                args[1]
+            )));
+        }
+    };
+
+    let query = fields
+        .iter()
+        .find(|(k, _)| &**k == "query")
+        .and_then(|(_, v)| v.as_record());
+
+    if let Some(query_fields) = query {
+        for (k, v) in query_fields {
+            if **k == *name {
+                if let Some(s) = v.as_string() {
+                    match s.parse::<i64>() {
+                        Ok(n) => return Ok(NValue::enum_val("Ok".into(), NValue::int(n))),
+                        Err(_) => {
+                            return Ok(NValue::enum_val(
+                                "Err".into(),
+                                NValue::string(
+                                    format!(
+                                        "Query parameter '{}' is not a valid integer: '{}'",
+                                        name, s
+                                    )
+                                    .into(),
+                                ),
+                            ));
+                        }
+                    }
+                }
+                if v.is_any_int() {
+                    return Ok(NValue::enum_val("Ok".into(), v.clone()));
+                }
+                return Ok(NValue::enum_val(
+                    "Err".into(),
+                    NValue::string(
+                        format!("Query parameter '{}' is not a valid integer", name).into(),
+                    ),
+                ));
+            }
+        }
+    }
+    Ok(NValue::enum_val(
+        "Err".into(),
+        NValue::string(format!("Query parameter '{}' not found", name).into()),
+    ))
 }
 
 /// Request.state(req, key) -> Option<String>
