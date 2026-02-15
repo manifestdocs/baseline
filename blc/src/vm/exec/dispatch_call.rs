@@ -216,35 +216,10 @@ impl super::Vm {
                         let method = name[dot + 1..]
                             .strip_suffix('!')
                             .unwrap_or(&name[dot + 1..]);
-                        let mut found_handler = None;
-                        let mut found_boundary_idx = None;
-                        for (hs_idx, frame) in
-                            self.handler_stack.iter().enumerate().rev()
+                        if let Some((handler_fn, boundary_idx)) =
+                            self.find_handler(module, method)
                         {
-                            if let Some(handler_record) = frame.get(module) {
-                                if let HeapObject::Record(fields) =
-                                    handler_record.as_heap_ref()
-                                {
-                                    for (k, v) in fields {
-                                        if k.as_ref() == method {
-                                            found_handler = Some(v.clone());
-                                            for (bi, b) in
-                                                self.handler_boundaries.iter().enumerate()
-                                            {
-                                                if b.handler_stack_idx == hs_idx {
-                                                    found_boundary_idx = Some(bi);
-                                                    break;
-                                                }
-                                            }
-                                            break;
-                                        }
-                                    }
-                                }
-                                break;
-                            }
-                        }
-                        if let Some(handler_fn) = found_handler {
-                            if let Some(bi) = found_boundary_idx {
+                            if let Some(bi) = boundary_idx {
                                 // Resumable handler: capture continuation
                                 let boundary = &self.handler_boundaries[bi];
                                 let bd_stack = boundary.stack_depth;

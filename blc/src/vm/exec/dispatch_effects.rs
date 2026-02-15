@@ -87,7 +87,7 @@ impl super::Vm {
                     }
                 };
                 let n = *arg_count as usize;
-                eprintln!("[DEBUG] PerformEffect: key={}, n={}", key, n);
+
 
                 let (effect_name, method_name) = if let Some(dot) = key.find('.') {
                     (&key[..dot], &key[dot + 1..])
@@ -100,39 +100,13 @@ impl super::Vm {
                     ));
                 };
 
-                // Search handler_stack in reverse for matching effect
-                let mut found_handler = None;
-                let mut found_boundary_idx = None;
-                for (hs_idx, frame) in self.handler_stack.iter().enumerate().rev() {
-                    if let Some(handler_record) = frame.get(effect_name) {
-                        if let HeapObject::Record(fields) = handler_record.as_heap_ref() {
-                            for (k, v) in fields {
-                                if k.as_ref() == method_name {
-                                    found_handler = Some(v.clone());
-                                    for (bi, b) in self.handler_boundaries.iter().enumerate() {
-                                        if b.handler_stack_idx == hs_idx {
-                                            found_boundary_idx = Some(bi);
-                                            break;
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                        break;
-                    }
-                }
+                // Search handler_stack for matching effect handler
+                let handler_result = self.find_handler(effect_name, method_name);
 
-                eprintln!("[DEBUG] PerformEffect: handler_stack.len={}, boundaries.len={}", self.handler_stack.len(), self.handler_boundaries.len());
-                for (i, b) in self.handler_boundaries.iter().enumerate() {
-                    eprintln!("[DEBUG]   boundary[{}]: handler_stack_idx={}", i, b.handler_stack_idx);
-                }
-                eprintln!("[DEBUG]   found_handler={}, found_boundary_idx={:?}", found_handler.is_some(), found_boundary_idx);
-
-                if let Some(handler_fn) = found_handler {
-                    if let Some(bi) = found_boundary_idx {
+                if let Some((handler_fn, boundary_idx)) = handler_result {
+                    if let Some(bi) = boundary_idx {
                         // Resumable handler: capture continuation
-                        eprintln!("[DEBUG] PerformEffect: resumable handler found, boundary={bi}");
+
                         let boundary = &self.handler_boundaries[bi];
                         let bd_stack = boundary.stack_depth;
                         let bd_frame = boundary.frame_depth;
@@ -198,7 +172,7 @@ impl super::Vm {
                         self.stack.push(cont);
 
                         let total_args = n + 1;
-                        eprintln!("[DEBUG] PerformEffect: calling handler with {} total args, stack.len={}", total_args, self.stack.len());
+
                         if handler_fn.is_function() {
                             let fn_idx = handler_fn.as_function();
                             let new_base = (self.stack.len() - total_args) as u32;

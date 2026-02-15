@@ -92,22 +92,7 @@ impl<'a> Lowerer<'a> {
         let mut impl_func_nodes: Vec<(String, usize, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            let func = if child.kind() == "function_def" {
-                Some(child)
-            } else if child.kind() == "spec_block" {
-                let mut found = None;
-                for j in 0..child.named_child_count() {
-                    let sc = child.named_child(j).unwrap();
-                    if sc.kind() == "function_def" {
-                        found = Some(sc);
-                        break;
-                    }
-                }
-                found
-            } else {
-                None
-            };
-            if let Some(func_node) = func
+            if let Some(func_node) = Self::find_func_in_node(&child)
                 && let Some(name_node) = func_node.child_by_field_name("name")
             {
                 let name = self.node_text(&name_node);
@@ -142,20 +127,7 @@ impl<'a> Lowerer<'a> {
         let mut functions = Vec::new();
         for (name, child_idx) in &func_nodes {
             let child = root.named_child(*child_idx).unwrap();
-            // Unwrap spec_block to get to the function_def
-            let func_node = if child.kind() == "spec_block" {
-                let mut found = child;
-                for j in 0..child.named_child_count() {
-                    let sc = child.named_child(j).unwrap();
-                    if sc.kind() == "function_def" {
-                        found = sc;
-                        break;
-                    }
-                }
-                found
-            } else {
-                child
-            };
+            let func_node = Self::unwrap_spec_block(&child);
             let func = self.lower_function_def(&func_node, name)?;
             functions.push(func);
         }
@@ -193,22 +165,7 @@ impl<'a> Lowerer<'a> {
         let mut impl_func_nodes: Vec<(String, usize, usize)> = Vec::new();
         for i in 0..root.named_child_count() {
             let child = root.named_child(i).unwrap();
-            let func = if child.kind() == "function_def" {
-                Some(child)
-            } else if child.kind() == "spec_block" {
-                let mut found = None;
-                for j in 0..child.named_child_count() {
-                    let sc = child.named_child(j).unwrap();
-                    if sc.kind() == "function_def" {
-                        found = Some(sc);
-                        break;
-                    }
-                }
-                found
-            } else {
-                None
-            };
-            if let Some(func_node) = func
+            if let Some(func_node) = Self::find_func_in_node(&child)
                 && let Some(name_node) = func_node.child_by_field_name("name")
             {
                 let name = self.node_text(&name_node);
@@ -229,19 +186,7 @@ impl<'a> Lowerer<'a> {
         let mut functions = Vec::new();
         for (name, child_idx) in &func_nodes {
             let child = root.named_child(*child_idx).unwrap();
-            let func_node = if child.kind() == "spec_block" {
-                let mut found = child;
-                for j in 0..child.named_child_count() {
-                    let sc = child.named_child(j).unwrap();
-                    if sc.kind() == "function_def" {
-                        found = sc;
-                        break;
-                    }
-                }
-                found
-            } else {
-                child
-            };
+            let func_node = Self::unwrap_spec_block(&child);
             let func = self.lower_function_def(&func_node, name)?;
             functions.push(func);
         }
@@ -255,6 +200,37 @@ impl<'a> Lowerer<'a> {
         }
 
         Ok(functions)
+    }
+
+    /// Extract a `function_def` from a CST node, unwrapping `spec_block` if necessary.
+    /// Returns `None` if the node is neither a function_def nor a spec_block containing one.
+    fn find_func_in_node<'b>(node: &Node<'b>) -> Option<Node<'b>> {
+        match node.kind() {
+            "function_def" => Some(*node),
+            "spec_block" => {
+                for j in 0..node.named_child_count() {
+                    let sc = node.named_child(j).unwrap();
+                    if sc.kind() == "function_def" {
+                        return Some(sc);
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Unwrap a `spec_block` to its inner `function_def`, or return the node as-is.
+    fn unwrap_spec_block<'b>(node: &Node<'b>) -> Node<'b> {
+        if node.kind() == "spec_block" {
+            for j in 0..node.named_child_count() {
+                let sc = node.named_child(j).unwrap();
+                if sc.kind() == "function_def" {
+                    return sc;
+                }
+            }
+        }
+        *node
     }
 
     fn lower_function_def(&mut self, node: &Node, name: &str) -> Result<IrFunction, CompileError> {

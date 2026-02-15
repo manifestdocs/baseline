@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use super::chunk::{Chunk, CompileError, Op, Program};
 use super::natives::NativeRegistry;
-use super::nvalue::NValue;
+use super::nvalue::{HeapObject, NValue};
 use super::value::Value;
 
 
@@ -405,6 +405,7 @@ impl Vm {
 
                 Op::MakeRange | Op::ListGet | Op::ListLen | Op::MakeList(_)
                 | Op::ListConcat | Op::MakeRecord(_) | Op::GetField(_)
+                | Op::GetFieldIdx(_, _)
                 | Op::MakeTuple(_) | Op::TupleGet(_) | Op::MakeEnum(_)
                 | Op::MakeStruct(_) | Op::EnumTag | Op::EnumPayload
                 | Op::UpdateRecord(_) => {
@@ -474,6 +475,31 @@ impl Vm {
             self.stack.set_len(new_len);
             (b, a)
         }
+    }
+
+    /// Search the handler stack for an effect handler matching `effect_name` and `method_name`.
+    ///
+    /// Returns `(handler_fn, boundary_idx)` where `boundary_idx` is `Some` for
+    /// resumable handlers and `None` for tail-resumptive ones.
+    pub(crate) fn find_handler(
+        &self,
+        effect_name: &str,
+        method_name: &str,
+    ) -> Option<(NValue, Option<usize>)> {
+        for (hs_idx, frame) in self.handler_stack.iter().enumerate().rev() {
+            let handler_record = frame.get(effect_name)?;
+            if let HeapObject::Record(fields) = handler_record.as_heap_ref() {
+                for (k, v) in fields {
+                    if k.as_ref() == method_name {
+                        let boundary_idx = self.handler_boundaries.iter()
+                            .position(|b| b.handler_stack_idx == hs_idx);
+                        return Some((v.clone(), boundary_idx));
+                    }
+                }
+            }
+            return None;
+        }
+        None
     }
 
     pub(crate) fn error(&self, message: String, line: usize, col: usize) -> CompileError {
