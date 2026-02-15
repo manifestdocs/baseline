@@ -1,6 +1,7 @@
 mod console;
 mod crypto;
 mod datetime;
+mod db;
 mod env;
 pub use env::set_program_args;
 mod fs;
@@ -426,6 +427,14 @@ impl NativeRegistry {
         // -- Weak --
         self.register("Weak.downgrade", weak::native_weak_downgrade);
         self.register("Weak.upgrade", weak::native_weak_upgrade);
+
+        // -- Db --
+        self.register("Db.connect!", db::native_db_connect);
+        self.register("Db.connect", db::native_db_connect);
+        self.register("Db.execute!", db::native_db_execute);
+        self.register("Db.execute", db::native_db_execute);
+        self.register("Db.query!", db::native_db_query);
+        self.register("Db.query", db::native_db_query);
 
         // -- Fs (VM-side) --
         self.register("Fs.read_file!", native_fs_read_file);
@@ -991,6 +1000,17 @@ mod tests {
         assert_eq!(rps.1.as_any_int(), 50);
         let burst = fields.iter().find(|(k, _)| &**k == "burst_size").unwrap();
         assert_eq!(burst.1.as_any_int(), 100);
+    }
+
+    #[test]
+    fn db_functions_registered() {
+        let reg = NativeRegistry::new();
+        assert!(reg.lookup("Db.connect!").is_some());
+        assert!(reg.lookup("Db.connect").is_some());
+        assert!(reg.lookup("Db.execute!").is_some());
+        assert!(reg.lookup("Db.execute").is_some());
+        assert!(reg.lookup("Db.query!").is_some());
+        assert!(reg.lookup("Db.query").is_some());
     }
 
     // Compile-time assertion: NativeRegistry must be Send+Sync

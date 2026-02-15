@@ -1,0 +1,13 @@
+@prelude(server)
+
+// Db module type checking — positive tests
+
+fn main!() -> {Db, Console} () = {
+  Db.connect!(":memory:")
+  Db.execute!("CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+  Db.execute!("INSERT INTO users (name) VALUES (?1)", ["Alice"])
+  let users = Db.query!("SELECT id, name FROM users", [])
+  Console.println!("ok")
+}
+
+// expect: ok

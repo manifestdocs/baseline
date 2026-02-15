@@ -1046,5 +1046,33 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
+    // -- Db builtins (effect: Db) --
+    if builtin_modules.contains(&"Db") {
+        // Db.connect!(url: String) -> ()
+        sigs.insert(
+            "Db.connect!".into(),
+            Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        // Db.execute!(sql: String, params: List<String>) -> Int
+        sigs.insert(
+            "Db.execute!".into(),
+            Type::Function(
+                vec![Type::String, Type::List(Box::new(Type::String))],
+                Box::new(Type::Int),
+            ),
+        );
+        // Db.query!(sql: String, params: List<String>) -> List<Map<String, String>>
+        sigs.insert(
+            "Db.query!".into(),
+            Type::Function(
+                vec![Type::String, Type::List(Box::new(Type::String))],
+                Box::new(Type::List(Box::new(Type::Map(
+                    Box::new(Type::String),
+                    Box::new(Type::String),
+                )))),
+            ),
+        );
+    }
+
     sigs
 }

@@ -36,7 +36,7 @@ impl Prelude {
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Validate", "Middleware", "Router", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Request", "HttpError", "Validate", "Middleware", "Router", "Db", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }

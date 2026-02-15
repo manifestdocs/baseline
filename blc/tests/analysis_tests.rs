@@ -1841,3 +1841,42 @@ fn enum_payload_method_error() {
         "TYP_015",
     );
 }
+
+// ============================================================
+// Db Module Type Checking Tests
+// ============================================================
+
+#[test]
+fn db_connect_type_checks() {
+    check_no_errors(
+        "@prelude(server)\n\
+         fn init!() -> {Db} () = Db.connect!(\"test.db\")",
+    );
+}
+
+#[test]
+fn db_execute_type_checks() {
+    check_no_errors(
+        "@prelude(server)\n\
+         fn run!() -> {Db} Int = Db.execute!(\"CREATE TABLE t (id INT)\", [])",
+    );
+}
+
+#[test]
+fn db_query_type_checks() {
+    check_no_errors(
+        "@prelude(server)\n\
+         fn run!() -> {Db} () = {\n\
+           let rows = Db.query!(\"SELECT * FROM t\", [])\n\
+         }",
+    );
+}
+
+#[test]
+fn db_missing_effect_detected() {
+    check_has_error(
+        "@prelude(server)\n\
+         fn run!() -> {Console} () = Db.connect!(\"test.db\")",
+        "CAP_001",
+    );
+}
