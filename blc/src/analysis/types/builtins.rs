@@ -50,20 +50,23 @@ fn router_type() -> Type {
     Type::Record(fields, None)
 }
 
-/// HttpError sum type:
-/// BadRequest(String) | NotFound(String) | Unauthorized(String) |
-/// Forbidden(String) | Conflict(String) | Unprocessable(String) | Internal(String)
+/// HttpError sum type — all standard HTTP error variants.
 fn http_error_type() -> Type {
     Type::Enum(
         "HttpError".to_string(),
         vec![
             ("BadRequest".to_string(), vec![Type::String]),
-            ("NotFound".to_string(), vec![Type::String]),
             ("Unauthorized".to_string(), vec![Type::String]),
             ("Forbidden".to_string(), vec![Type::String]),
+            ("NotFound".to_string(), vec![Type::String]),
+            ("MethodNotAllowed".to_string(), vec![Type::String]),
             ("Conflict".to_string(), vec![Type::String]),
             ("Unprocessable".to_string(), vec![Type::String]),
+            ("TooManyRequests".to_string(), vec![Type::String]),
             ("Internal".to_string(), vec![Type::String]),
+            ("BadGateway".to_string(), vec![Type::String]),
+            ("ServiceUnavailable".to_string(), vec![Type::String]),
+            ("GatewayTimeout".to_string(), vec![Type::String]),
         ],
     )
 }
@@ -673,12 +676,17 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         let he = http_error_type();
         for method in &[
             "HttpError.bad_request",
-            "HttpError.not_found",
             "HttpError.unauthorized",
             "HttpError.forbidden",
+            "HttpError.not_found",
+            "HttpError.method_not_allowed",
             "HttpError.conflict",
             "HttpError.unprocessable",
+            "HttpError.too_many_requests",
             "HttpError.internal",
+            "HttpError.bad_gateway",
+            "HttpError.service_unavailable",
+            "HttpError.gateway_timeout",
         ] {
             sigs.insert(
                 (*method).into(),
@@ -701,7 +709,7 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Response.created".into(),
-            Type::Function(vec![Type::String], Box::new(resp.clone())),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.no_content".into(),
@@ -709,15 +717,15 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Response.bad_request".into(),
-            Type::Function(vec![Type::String], Box::new(resp.clone())),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.not_found".into(),
-            Type::Function(vec![Type::String], Box::new(resp.clone())),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.error".into(),
-            Type::Function(vec![Type::String], Box::new(resp.clone())),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.status".into(),
@@ -735,12 +743,195 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             Type::Function(vec![resp.clone(), headers_list], Box::new(resp.clone())),
         );
         sigs.insert(
+            "Response.unauthorized".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.forbidden".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.conflict".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.unprocessable".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.too_many_requests".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.method_not_allowed".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.bad_gateway".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.service_unavailable".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.gateway_timeout".into(),
+            Type::Function(vec![Type::Unknown], Box::new(resp.clone())),
+        );
+        sigs.insert(
             "Response.redirect".into(),
             Type::Function(vec![Type::String], Box::new(resp.clone())),
         );
         sigs.insert(
             "Response.redirect_permanent".into(),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.redirect_temporary".into(),
             Type::Function(vec![Type::String], Box::new(resp)),
+        );
+    }
+
+    // -- Validate module (pure) — runtime validation helpers --
+    if native_modules.contains(&"Validate") {
+        let he = http_error_type();
+        let result_unknown_he = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::Unknown]),
+                ("Err".to_string(), vec![he.clone()]),
+            ],
+        );
+        let result_string_he = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::String]),
+                ("Err".to_string(), vec![he.clone()]),
+            ],
+        );
+        let result_int_he = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::Int]),
+                ("Err".to_string(), vec![he.clone()]),
+            ],
+        );
+        let result_bool_he = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::Bool]),
+                ("Err".to_string(), vec![he]),
+            ],
+        );
+        sigs.insert(
+            "Validate.required".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String],
+                Box::new(result_unknown_he),
+            ),
+        );
+        sigs.insert(
+            "Validate.string".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String],
+                Box::new(result_string_he.clone()),
+            ),
+        );
+        sigs.insert(
+            "Validate.int".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String],
+                Box::new(result_int_he.clone()),
+            ),
+        );
+        sigs.insert(
+            "Validate.boolean".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String],
+                Box::new(result_bool_he),
+            ),
+        );
+        sigs.insert(
+            "Validate.min_length".into(),
+            Type::Function(
+                vec![Type::String, Type::Int, Type::String],
+                Box::new(result_string_he.clone()),
+            ),
+        );
+        sigs.insert(
+            "Validate.max_length".into(),
+            Type::Function(
+                vec![Type::String, Type::Int, Type::String],
+                Box::new(result_string_he.clone()),
+            ),
+        );
+        sigs.insert(
+            "Validate.min".into(),
+            Type::Function(
+                vec![Type::Int, Type::Int, Type::String],
+                Box::new(result_int_he.clone()),
+            ),
+        );
+        sigs.insert(
+            "Validate.max".into(),
+            Type::Function(
+                vec![Type::Int, Type::Int, Type::String],
+                Box::new(result_int_he),
+            ),
+        );
+        sigs.insert(
+            "Validate.one_of".into(),
+            Type::Function(
+                vec![
+                    Type::String,
+                    Type::List(Box::new(Type::String)),
+                    Type::String,
+                ],
+                Box::new(result_string_he),
+            ),
+        );
+    }
+
+    // -- Middleware helpers (pure) --
+    if native_modules.contains(&"Middleware") {
+        let he = http_error_type();
+        let req = request_type();
+        let result_string_he = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::String]),
+                ("Err".to_string(), vec![he.clone()]),
+            ],
+        );
+        let result_tuple_he = Type::Enum(
+            "Result".to_string(),
+            vec![
+                (
+                    "Ok".to_string(),
+                    vec![Type::Tuple(vec![Type::String, Type::String])],
+                ),
+                ("Err".to_string(), vec![he]),
+            ],
+        );
+        sigs.insert(
+            "Middleware.extract_bearer".into(),
+            Type::Function(vec![req.clone()], Box::new(result_string_he)),
+        );
+        sigs.insert(
+            "Middleware.extract_basic".into(),
+            Type::Function(vec![req], Box::new(result_tuple_he)),
+        );
+        // Config builders return open records (Unknown for flexibility)
+        sigs.insert(
+            "Middleware.cors_config".into(),
+            Type::Function(
+                vec![Type::List(Box::new(Type::String))],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Middleware.rate_limit_config".into(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Unknown)),
         );
     }
 
@@ -781,8 +972,27 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Router.group".into(),
             Type::Function(
                 vec![rtr.clone(), Type::String, rtr.clone()],
-                Box::new(rtr),
+                Box::new(rtr.clone()),
             ),
+        );
+        // Router.resources(router, path, { index, show, create, update, destroy }) -> Router
+        sigs.insert(
+            "Router.resources".into(),
+            Type::Function(
+                vec![rtr.clone(), Type::String, Type::Unknown],
+                Box::new(rtr.clone()),
+            ),
+        );
+        sigs.insert(
+            "Router.state".into(),
+            Type::Function(
+                vec![rtr.clone(), Type::String, Type::Unknown],
+                Box::new(rtr.clone()),
+            ),
+        );
+        sigs.insert(
+            "Router.docs_json".into(),
+            Type::Function(vec![rtr], Box::new(Type::String)),
         );
     }
 
@@ -798,7 +1008,7 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Request.header".into(),
-            Type::Function(vec![req.clone(), Type::String], Box::new(option_str)),
+            Type::Function(vec![req.clone(), Type::String], Box::new(option_str.clone())),
         );
         sigs.insert(
             "Request.method".into(),
@@ -812,9 +1022,51 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
                     "Result".to_string(),
                     vec![
                         ("Ok".to_string(), vec![Type::Unknown]),
-                        ("Err".to_string(), vec![Type::String]),
+                        ("Err".to_string(), vec![http_error_type()]),
                     ],
                 )),
+            ),
+        );
+        let result_string_string = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::String]),
+                ("Err".to_string(), vec![Type::String]),
+            ],
+        );
+        let result_int_string = Type::Enum(
+            "Result".to_string(),
+            vec![
+                ("Ok".to_string(), vec![Type::Int]),
+                ("Err".to_string(), vec![Type::String]),
+            ],
+        );
+        sigs.insert(
+            "Request.param".into(),
+            Type::Function(
+                vec![req.clone(), Type::String],
+                Box::new(result_string_string.clone()),
+            ),
+        );
+        sigs.insert(
+            "Request.param_int".into(),
+            Type::Function(
+                vec![req.clone(), Type::String],
+                Box::new(result_int_string.clone()),
+            ),
+        );
+        sigs.insert(
+            "Request.query".into(),
+            Type::Function(
+                vec![req.clone(), Type::String],
+                Box::new(option_str.clone()),
+            ),
+        );
+        sigs.insert(
+            "Request.query_int".into(),
+            Type::Function(
+                vec![req.clone(), Type::String],
+                Box::new(result_int_string),
             ),
         );
         sigs.insert(

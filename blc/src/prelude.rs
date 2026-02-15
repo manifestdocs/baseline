@@ -32,11 +32,11 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Request", "HttpError", "Validate", "Middleware", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Router", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Request", "HttpError", "Validate", "Middleware", "Router", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }
@@ -64,13 +64,13 @@ impl Prelude {
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "HttpError", "Cell", "Scope",
-                "DateTime", "Crypto",
+                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "HttpError", "Validate",
+                "Middleware", "Cell", "Scope", "DateTime", "Crypto",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Router", "Server", "Db",
-                "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Validate", "Middleware",
+                "Router", "Server", "Db", "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }

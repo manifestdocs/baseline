@@ -13,6 +13,7 @@ mod list;
 mod log;
 mod map;
 mod math;
+mod middleware;
 mod option;
 mod random;
 mod regex;
@@ -23,6 +24,7 @@ mod router;
 mod set;
 mod string;
 mod time;
+mod validate;
 mod weak;
 
 use std::collections::HashMap;
@@ -333,8 +335,18 @@ impl NativeRegistry {
         self.register("Response.status", native_response_status);
         self.register("Response.with_header", native_response_with_header);
         self.register("Response.with_headers", native_response_with_headers);
+        self.register("Response.unauthorized", native_response_unauthorized);
+        self.register("Response.forbidden", native_response_forbidden);
+        self.register("Response.conflict", native_response_conflict);
+        self.register("Response.unprocessable", native_response_unprocessable);
+        self.register("Response.too_many_requests", native_response_too_many_requests);
+        self.register("Response.method_not_allowed", native_response_method_not_allowed);
+        self.register("Response.bad_gateway", native_response_bad_gateway);
+        self.register("Response.service_unavailable", native_response_service_unavailable);
+        self.register("Response.gateway_timeout", native_response_gateway_timeout);
         self.register("Response.redirect", native_response_redirect);
         self.register("Response.redirect_permanent", native_response_redirect_permanent);
+        self.register("Response.redirect_temporary", native_response_redirect_temporary);
 
         // -- Router --
         self.register("Router.new", native_router_new);
@@ -349,6 +361,9 @@ impl NativeRegistry {
         self.register("Router.any", native_router_any);
         self.register("Router.use", native_router_use);
         self.register("Router.group", native_router_group);
+        self.register("Router.resources", native_router_resources);
+        self.register("Router.state", native_router_state);
+        self.register("Router.docs_json", native_router_docs_json);
 
         // -- HttpError --
         self.register("HttpError.bad_request", http_error::native_http_error_bad_request);
@@ -358,13 +373,39 @@ impl NativeRegistry {
         self.register("HttpError.conflict", http_error::native_http_error_conflict);
         self.register("HttpError.unprocessable", http_error::native_http_error_unprocessable);
         self.register("HttpError.internal", http_error::native_http_error_internal);
+        self.register("HttpError.method_not_allowed", http_error::native_http_error_method_not_allowed);
+        self.register("HttpError.too_many_requests", http_error::native_http_error_too_many_requests);
+        self.register("HttpError.bad_gateway", http_error::native_http_error_bad_gateway);
+        self.register("HttpError.service_unavailable", http_error::native_http_error_service_unavailable);
+        self.register("HttpError.gateway_timeout", http_error::native_http_error_gateway_timeout);
 
         // -- Request --
         self.register("Request.header", native_request_header);
         self.register("Request.method", native_request_method);
         self.register("Request.body_json", native_request_body_json);
+        self.register("Request.param", native_request_param);
+        self.register("Request.param_int", native_request_param_int);
+        self.register("Request.query", native_request_query);
+        self.register("Request.query_int", native_request_query_int);
         self.register("Request.with_state", native_request_with_state);
         self.register("Request.state", native_request_state);
+
+        // -- Validate --
+        self.register("Validate.required", validate::native_validate_required);
+        self.register("Validate.string", validate::native_validate_string);
+        self.register("Validate.int", validate::native_validate_int);
+        self.register("Validate.boolean", validate::native_validate_boolean);
+        self.register("Validate.min_length", validate::native_validate_min_length);
+        self.register("Validate.max_length", validate::native_validate_max_length);
+        self.register("Validate.min", validate::native_validate_min);
+        self.register("Validate.max", validate::native_validate_max);
+        self.register("Validate.one_of", validate::native_validate_one_of);
+
+        // -- Middleware --
+        self.register("Middleware.extract_bearer", middleware::native_middleware_extract_bearer);
+        self.register("Middleware.extract_basic", middleware::native_middleware_extract_basic);
+        self.register("Middleware.cors_config", middleware::native_middleware_cors_config);
+        self.register("Middleware.rate_limit_config", middleware::native_middleware_rate_limit_config);
 
         // -- Map --
         self.register("Map.empty", native_map_empty);
@@ -608,6 +649,98 @@ mod tests {
     }
 
     #[test]
+    fn response_unauthorized_registered() {
+        let reg = NativeRegistry::new();
+        assert!(reg.lookup("Response.unauthorized").is_some());
+        assert!(reg.lookup("Response.forbidden").is_some());
+        assert!(reg.lookup("Response.conflict").is_some());
+        assert!(reg.lookup("Response.unprocessable").is_some());
+        assert!(reg.lookup("Response.too_many_requests").is_some());
+        assert!(reg.lookup("Response.redirect_temporary").is_some());
+    }
+
+    #[test]
+    fn response_unauthorized_status_401() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Response.unauthorized").unwrap();
+        let result = reg.call(id, &[NValue::string("no auth".into())]).unwrap();
+        let fields = result.as_record().unwrap();
+        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        assert_eq!(status, 401);
+    }
+
+    #[test]
+    fn response_forbidden_status_403() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Response.forbidden").unwrap();
+        let result = reg.call(id, &[NValue::string("denied".into())]).unwrap();
+        let fields = result.as_record().unwrap();
+        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        assert_eq!(status, 403);
+    }
+
+    #[test]
+    fn response_conflict_status_409() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Response.conflict").unwrap();
+        let result = reg.call(id, &[NValue::string("dup".into())]).unwrap();
+        let fields = result.as_record().unwrap();
+        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        assert_eq!(status, 409);
+    }
+
+    #[test]
+    fn response_too_many_requests_status_429() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Response.too_many_requests").unwrap();
+        let result = reg.call(id, &[NValue::string("slow down".into())]).unwrap();
+        let fields = result.as_record().unwrap();
+        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        assert_eq!(status, 429);
+    }
+
+    #[test]
+    fn response_redirect_temporary_status_307() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Response.redirect_temporary").unwrap();
+        let result = reg.call(id, &[NValue::string("/new".into())]).unwrap();
+        let fields = result.as_record().unwrap();
+        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        assert_eq!(status, 307);
+    }
+
+    #[test]
+    fn response_created_auto_serializes_record() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Response.created").unwrap();
+        let record = NValue::record(vec![
+            ("id".into(), NValue::int(1)),
+            ("name".into(), NValue::string("test".into())),
+        ]);
+        let result = reg.call(id, &[record]).unwrap();
+        let fields = result.as_record().unwrap();
+        let body = fields.iter().find(|(k, _)| &**k == "body").unwrap().1.as_string().unwrap();
+        assert!(body.contains("\"id\""));
+        assert!(body.contains("\"name\""));
+        // Check Content-Type header was set
+        let headers = fields.iter().find(|(k, _)| &**k == "headers").unwrap().1.as_list().unwrap();
+        assert!(!headers.is_empty());
+    }
+
+    #[test]
+    fn response_bad_request_auto_serializes_record() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Response.bad_request").unwrap();
+        let record = NValue::record(vec![
+            ("error".into(), NValue::string("invalid".into())),
+        ]);
+        let result = reg.call(id, &[record]).unwrap();
+        let fields = result.as_record().unwrap();
+        let body = fields.iter().find(|(k, _)| &**k == "body").unwrap().1.as_string().unwrap();
+        assert!(body.contains("\"error\""));
+    }
+
+    #[test]
     fn http_error_constructors_registered() {
         let reg = NativeRegistry::new();
         assert!(reg.lookup("HttpError.bad_request").is_some());
@@ -647,6 +780,525 @@ mod tests {
         let (tag, payload) = result.as_enum().unwrap();
         assert_eq!(tag.as_ref(), "Unauthorized");
         assert_eq!(payload.as_string().unwrap().as_ref(), "bad token");
+    }
+
+    // -- Validate module tests --
+
+    #[test]
+    fn validate_string_with_string_returns_ok() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.string").unwrap();
+        let result = reg
+            .call(id, &[NValue::string("hello".into()), NValue::string("name".into())])
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "hello");
+    }
+
+    #[test]
+    fn validate_string_with_int_returns_err() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.string").unwrap();
+        let result = reg
+            .call(id, &[NValue::int(42), NValue::string("name".into())])
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        // Err payload should be HttpError.unprocessable
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_int_with_int_returns_ok() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.int").unwrap();
+        let result = reg
+            .call(id, &[NValue::int(42), NValue::string("age".into())])
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_any_int(), 42);
+    }
+
+    #[test]
+    fn validate_int_with_string_returns_err() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.int").unwrap();
+        let result = reg
+            .call(id, &[NValue::string("abc".into()), NValue::string("age".into())])
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_min_length_passes() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.min_length").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[
+                    NValue::string("hello".into()),
+                    NValue::int(3),
+                    NValue::string("name".into()),
+                ],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "hello");
+    }
+
+    #[test]
+    fn validate_min_length_fails() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.min_length").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[
+                    NValue::string("hi".into()),
+                    NValue::int(5),
+                    NValue::string("name".into()),
+                ],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_max_length_passes() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.max_length").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[
+                    NValue::string("hi".into()),
+                    NValue::int(10),
+                    NValue::string("name".into()),
+                ],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "hi");
+    }
+
+    #[test]
+    fn validate_max_length_fails() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.max_length").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[
+                    NValue::string("hello world".into()),
+                    NValue::int(5),
+                    NValue::string("name".into()),
+                ],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_min_passes() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.min").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[NValue::int(10), NValue::int(5), NValue::string("age".into())],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_any_int(), 10);
+    }
+
+    #[test]
+    fn validate_min_fails() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.min").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[NValue::int(3), NValue::int(5), NValue::string("age".into())],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_max_passes() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.max").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[NValue::int(3), NValue::int(10), NValue::string("age".into())],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_any_int(), 3);
+    }
+
+    #[test]
+    fn validate_max_fails() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.max").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[NValue::int(15), NValue::int(10), NValue::string("age".into())],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_one_of_passes() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.one_of").unwrap();
+        let options = NValue::list(vec![
+            NValue::string("pending".into()),
+            NValue::string("done".into()),
+        ]);
+        let result = reg
+            .call(
+                id,
+                &[
+                    NValue::string("pending".into()),
+                    options,
+                    NValue::string("status".into()),
+                ],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "pending");
+    }
+
+    #[test]
+    fn validate_one_of_fails() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.one_of").unwrap();
+        let options = NValue::list(vec![
+            NValue::string("pending".into()),
+            NValue::string("done".into()),
+        ]);
+        let result = reg
+            .call(
+                id,
+                &[
+                    NValue::string("invalid".into()),
+                    options,
+                    NValue::string("status".into()),
+                ],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_required_with_value_returns_ok() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.required").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[NValue::string("hello".into()), NValue::string("name".into())],
+            )
+            .unwrap();
+        let (tag, _) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+    }
+
+    #[test]
+    fn validate_required_with_none_returns_err() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.required").unwrap();
+        let none = NValue::enum_val("None".into(), NValue::unit());
+        let result = reg
+            .call(id, &[none, NValue::string("name".into())])
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    #[test]
+    fn validate_boolean_with_bool_returns_ok() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.boolean").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[NValue::bool(true), NValue::string("active".into())],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert!(payload.as_bool());
+    }
+
+    #[test]
+    fn validate_boolean_with_string_returns_err() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Validate.boolean").unwrap();
+        let result = reg
+            .call(
+                id,
+                &[NValue::string("yes".into()), NValue::string("active".into())],
+            )
+            .unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unprocessable");
+    }
+
+    // -- Request.body_json now returns HttpError --
+
+    #[test]
+    fn request_body_json_error_returns_http_error() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Request.body_json").unwrap();
+        let req = NValue::record(vec![
+            ("body".into(), NValue::string("not json".into())),
+            ("method".into(), NValue::string("POST".into())),
+        ]);
+        let result = reg.call(id, &[req]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        // Should be HttpError.bad_request, not a plain string
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "BadRequest");
+    }
+
+    #[test]
+    fn request_body_json_empty_returns_http_error() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Request.body_json").unwrap();
+        let req = NValue::record(vec![
+            ("body".into(), NValue::string("".into())),
+            ("method".into(), NValue::string("POST".into())),
+        ]);
+        let result = reg.call(id, &[req]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "BadRequest");
+    }
+
+    // -- Router.state tests --
+
+    #[test]
+    fn router_state_adds_state_to_router() {
+        let reg = NativeRegistry::new();
+        let new_id = reg.lookup("Router.new").unwrap();
+        let state_id = reg.lookup("Router.state").unwrap();
+        let router = reg.call(new_id, &[]).unwrap();
+        let updated = reg
+            .call(
+                state_id,
+                &[
+                    router,
+                    NValue::string("db_url".into()),
+                    NValue::string("postgres://localhost".into()),
+                ],
+            )
+            .unwrap();
+        let fields = updated.as_record().unwrap();
+        let state_field = fields.iter().find(|(k, _)| &**k == "state").unwrap();
+        let state_rec = state_field.1.as_record().unwrap();
+        let db_url = state_rec.iter().find(|(k, _)| &**k == "db_url").unwrap();
+        assert_eq!(
+            db_url.1.as_string().unwrap().as_ref(),
+            "postgres://localhost"
+        );
+    }
+
+    #[test]
+    fn router_state_multiple_keys() {
+        let reg = NativeRegistry::new();
+        let new_id = reg.lookup("Router.new").unwrap();
+        let state_id = reg.lookup("Router.state").unwrap();
+        let router = reg.call(new_id, &[]).unwrap();
+        let r1 = reg
+            .call(
+                state_id,
+                &[
+                    router,
+                    NValue::string("key1".into()),
+                    NValue::string("val1".into()),
+                ],
+            )
+            .unwrap();
+        let r2 = reg
+            .call(
+                state_id,
+                &[
+                    r1,
+                    NValue::string("key2".into()),
+                    NValue::int(42),
+                ],
+            )
+            .unwrap();
+        let fields = r2.as_record().unwrap();
+        let state_rec = fields
+            .iter()
+            .find(|(k, _)| &**k == "state")
+            .unwrap()
+            .1
+            .as_record()
+            .unwrap();
+        assert_eq!(state_rec.len(), 2);
+    }
+
+    // -- Middleware module tests --
+
+    #[test]
+    fn middleware_extract_bearer_valid() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Middleware.extract_bearer").unwrap();
+        let req = NValue::record(vec![
+            ("headers".into(), NValue::list(vec![
+                NValue::tuple(vec![
+                    NValue::string("Authorization".into()),
+                    NValue::string("Bearer abc123token".into()),
+                ]),
+            ])),
+            ("method".into(), NValue::string("GET".into())),
+        ]);
+        let result = reg.call(id, &[req]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "abc123token");
+    }
+
+    #[test]
+    fn middleware_extract_bearer_missing_header() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Middleware.extract_bearer").unwrap();
+        let req = NValue::record(vec![
+            ("headers".into(), NValue::list(vec![])),
+            ("method".into(), NValue::string("GET".into())),
+        ]);
+        let result = reg.call(id, &[req]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unauthorized");
+    }
+
+    #[test]
+    fn middleware_extract_bearer_wrong_scheme() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Middleware.extract_bearer").unwrap();
+        let req = NValue::record(vec![
+            ("headers".into(), NValue::list(vec![
+                NValue::tuple(vec![
+                    NValue::string("Authorization".into()),
+                    NValue::string("Basic dXNlcjpwYXNz".into()),
+                ]),
+            ])),
+            ("method".into(), NValue::string("GET".into())),
+        ]);
+        let result = reg.call(id, &[req]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unauthorized");
+    }
+
+    #[test]
+    fn middleware_extract_basic_valid() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Middleware.extract_basic").unwrap();
+        // "user:pass" base64 = "dXNlcjpwYXNz"
+        let req = NValue::record(vec![
+            ("headers".into(), NValue::list(vec![
+                NValue::tuple(vec![
+                    NValue::string("Authorization".into()),
+                    NValue::string("Basic dXNlcjpwYXNz".into()),
+                ]),
+            ])),
+            ("method".into(), NValue::string("GET".into())),
+        ]);
+        let result = reg.call(id, &[req]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Ok");
+        // Should return a tuple (username, password)
+        let elems = payload.as_tuple().unwrap();
+        assert_eq!(elems[0].as_string().unwrap().as_ref(), "user");
+        assert_eq!(elems[1].as_string().unwrap().as_ref(), "pass");
+    }
+
+    #[test]
+    fn middleware_extract_basic_missing() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Middleware.extract_basic").unwrap();
+        let req = NValue::record(vec![
+            ("headers".into(), NValue::list(vec![])),
+            ("method".into(), NValue::string("GET".into())),
+        ]);
+        let result = reg.call(id, &[req]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Err");
+        let (err_tag, _) = payload.as_enum().unwrap();
+        assert_eq!(err_tag.as_ref(), "Unauthorized");
+    }
+
+    #[test]
+    fn middleware_cors_config_returns_record() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Middleware.cors_config").unwrap();
+        let origins = NValue::list(vec![
+            NValue::string("http://localhost:3000".into()),
+        ]);
+        let result = reg.call(id, &[origins]).unwrap();
+        let fields = result.as_record().unwrap();
+        // Should have allowed_origins field
+        let origins_field = fields.iter().find(|(k, _)| &**k == "allowed_origins").unwrap();
+        let origins_list = origins_field.1.as_list().unwrap();
+        assert_eq!(origins_list.len(), 1);
+        assert_eq!(origins_list[0].as_string().unwrap().as_ref(), "http://localhost:3000");
+    }
+
+    #[test]
+    fn middleware_rate_limit_config_returns_record() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("Middleware.rate_limit_config").unwrap();
+        let result = reg.call(id, &[NValue::int(50), NValue::int(100)]).unwrap();
+        let fields = result.as_record().unwrap();
+        let rps = fields.iter().find(|(k, _)| &**k == "requests_per_second").unwrap();
+        assert_eq!(rps.1.as_any_int(), 50);
+        let burst = fields.iter().find(|(k, _)| &**k == "burst_size").unwrap();
+        assert_eq!(burst.1.as_any_int(), 100);
     }
 
     // Compile-time assertion: NativeRegistry must be Send+Sync
