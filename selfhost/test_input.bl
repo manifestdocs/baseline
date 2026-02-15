@@ -1,13 +1,8 @@
-// Test: nested function calls and conditionals
-// Expected exit code: 10
+// Test: recursive function
+// Expected exit code: 120
 
-fn max(a: Int, b: Int) -> Int =
-  if a > b then a else b
+fn factorial(n: Int) -> Int =
+  if n <= 1 then 1
+  else n * factorial(n - 1)
 
-fn min(a: Int, b: Int) -> Int =
-  if a < b then a else b
-
-fn main() -> Int = {
-  let a = max(0, min(100, 10))
-  a
-}
+fn main() -> Int = factorial(5)
