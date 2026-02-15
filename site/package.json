@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "generate:api": "cd .. && cargo run -p blc -- docs --json > site/src/lib/data/api.json"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.0",

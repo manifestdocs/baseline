@@ -3,6 +3,7 @@
     {
       "name": "Console",
       "description": "Print output to the terminal, read user input, and write errors to stderr.",
+      "category": "language",
       "functions": [
         {
           "name": "println!",
@@ -11,7 +12,8 @@
             "Console"
           ],
           "prelude_level": "script",
-          "description": "Print a string to stdout followed by a newline."
+          "description": "Print a string to stdout followed by a newline.",
+          "example": "Console.println!(\"Hello, world!\")"
         },
         {
           "name": "print!",
@@ -20,7 +22,8 @@
             "Console"
           ],
           "prelude_level": "script",
-          "description": "Print a string to stdout without a trailing newline."
+          "description": "Print a string to stdout without a trailing newline.",
+          "example": "Console.print!(\"Enter name: \")"
         },
         {
           "name": "error!",
@@ -29,7 +32,8 @@
             "Console"
           ],
           "prelude_level": "script",
-          "description": "Print a string to stderr."
+          "description": "Print a string to stderr.",
+          "example": "Console.error!(\"Something went wrong\")"
         },
         {
           "name": "read_line!",
@@ -38,13 +42,132 @@
             "Console"
           ],
           "prelude_level": "script",
-          "description": "Read a line of input from stdin."
+          "description": "Read a line of input from stdin.",
+          "example": "let name = Console.read_line!()"
+        }
+      ]
+    },
+    {
+      "name": "Crypto",
+      "description": "Hash data, compute HMACs, and perform constant-time comparisons.",
+      "category": "language",
+      "functions": [
+        {
+          "name": "sha256",
+          "signature": "fn sha256(String) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Compute the SHA-256 hash of a string.",
+          "example": "Crypto.sha256(\"hello\")"
+        },
+        {
+          "name": "hmac_sha256",
+          "signature": "fn hmac_sha256(String, String) -> String",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Compute an HMAC-SHA256 signature.",
+          "example": "Crypto.hmac_sha256(\"secret\", \"message\")"
+        },
+        {
+          "name": "constant_time_eq",
+          "signature": "fn constant_time_eq(String, String) -> Bool",
+          "effects": [],
+          "prelude_level": "pure",
+          "description": "Compare two strings in constant time to prevent timing attacks.",
+          "example": "Crypto.constant_time_eq(provided, expected)"
+        }
+      ]
+    },
+    {
+      "name": "DateTime",
+      "description": "Parse, format, and manipulate dates and times.",
+      "category": "language",
+      "functions": [
+        {
+          "name": "now!",
+          "signature": "fn now() -> <unknown>",
+          "effects": [
+            "DateTime"
+          ],
+          "prelude_level": "script",
+          "description": "Return the current date and time as a DateTime record.",
+          "example": "let now = DateTime.now!()"
+        },
+        {
+          "name": "parse",
+          "signature": "fn parse(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Parse a date string into a DateTime record.",
+          "example": "DateTime.parse(\"2025-01-15T10:30:00Z\")"
+        },
+        {
+          "name": "to_string",
+          "signature": "fn to_string(<unknown>) -> String",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Format a DateTime as an ISO 8601 string.",
+          "example": "DateTime.to_string(dt)"
+        },
+        {
+          "name": "add",
+          "signature": "fn add(<unknown>, String, Int) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Add a duration to a DateTime.",
+          "example": "DateTime.add(dt, \"hours\", 2)"
+        },
+        {
+          "name": "diff",
+          "signature": "fn diff(<unknown>, <unknown>, String) -> Int",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Calculate the difference between two DateTimes.",
+          "example": "DateTime.diff(end, start, \"seconds\")"
+        }
+      ]
+    },
+    {
+      "name": "Db",
+      "description": "Connect to SQLite and run queries with parameter binding.",
+      "category": "database",
+      "functions": [
+        {
+          "name": "connect!",
+          "signature": "fn connect(String) -> <unknown>",
+          "effects": [
+            "Db"
+          ],
+          "prelude_level": "server",
+          "description": "Open a connection to a SQLite database.",
+          "example": "let db = Db.connect!(\"app.db\")"
+        },
+        {
+          "name": "execute!",
+          "signature": "fn execute(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [
+            "Db"
+          ],
+          "prelude_level": "server",
+          "description": "Execute a SQL statement with parameter binding.",
+          "example": "Db.execute!(db, \"INSERT INTO users (name) VALUES (?)\", [name])"
+        },
+        {
+          "name": "query!",
+          "signature": "fn query(<unknown>, String, <unknown>) -> <unknown>",
+          "effects": [
+            "Db"
+          ],
+          "prelude_level": "server",
+          "description": "Run a SQL query and return matching rows.",
+          "example": "let users = Db.query!(db, \"SELECT * FROM users WHERE active = ?\", [1])"
         }
       ]
     },
     {
       "name": "Env",
       "description": "Read configuration from environment variables and set them for child processes.",
+      "category": "language",
       "functions": [
         {
           "name": "get!",
@@ -53,7 +176,8 @@
             "Env"
           ],
           "prelude_level": "script",
-          "description": "Read an environment variable, returning None if unset."
+          "description": "Read an environment variable, returning None if unset.",
+          "example": "let port = Env.get!(\"PORT\") |> Option.unwrap_or(\"3000\")"
         },
         {
           "name": "set!",
@@ -62,13 +186,15 @@
             "Env"
           ],
           "prelude_level": "script",
-          "description": "Set an environment variable."
+          "description": "Set an environment variable.",
+          "example": "Env.set!(\"NODE_ENV\", \"production\")"
         }
       ]
     },
     {
       "name": "Fs",
       "description": "Read files, write data to disk, and list directory contents.",
+      "category": "language",
       "functions": [
         {
           "name": "read!",
@@ -77,7 +203,8 @@
             "Fs"
           ],
           "prelude_level": "script",
-          "description": "Read a file's contents as a string."
+          "description": "Read a file's contents as a string.",
+          "example": "let config = Fs.read!(\"config.json\")"
         },
         {
           "name": "write!",
@@ -86,7 +213,8 @@
             "Fs"
           ],
           "prelude_level": "script",
-          "description": "Write a string to a file, creating or overwriting it."
+          "description": "Write a string to a file, creating or overwriting it.",
+          "example": "Fs.write!(\"output.txt\", \"Hello!\")"
         },
         {
           "name": "exists!",
@@ -95,7 +223,8 @@
             "Fs"
           ],
           "prelude_level": "script",
-          "description": "Check if a file path exists."
+          "description": "Check if a file path exists.",
+          "example": "if Fs.exists!(\"config.json\") then\n  Fs.read!(\"config.json\")\nelse\n  \"{}\""
         },
         {
           "name": "read_file!",
@@ -122,7 +251,8 @@
             "Fs"
           ],
           "prelude_level": "script",
-          "description": "List the entries in a directory."
+          "description": "List the entries in a directory.",
+          "example": "Fs.list_dir!(\"./src\")"
         },
         {
           "name": "with_file!",
@@ -138,6 +268,7 @@
     {
       "name": "Http",
       "description": "Make HTTP requests to external APIs and fetch remote data.",
+      "category": "language",
       "functions": [
         {
           "name": "get!",
@@ -146,7 +277,8 @@
             "Http"
           ],
           "prelude_level": "script",
-          "description": "Send an HTTP GET request to a URL."
+          "description": "Send an HTTP GET request to a URL.",
+          "example": "let resp = Http.get!(\"https://api.example.com/users\")?"
         },
         {
           "name": "post!",
@@ -155,7 +287,8 @@
             "Http"
           ],
           "prelude_level": "script",
-          "description": "Send an HTTP POST request with a body."
+          "description": "Send an HTTP POST request with a body.",
+          "example": "Http.post!(\"https://api.example.com/users\", body)?"
         },
         {
           "name": "put!",
@@ -187,145 +320,259 @@
       ]
     },
     {
+      "name": "HttpError",
+      "description": "Create structured HTTP error values for use with error middleware.",
+      "category": "web",
+      "functions": [
+        {
+          "name": "bad_request",
+          "signature": "fn bad_request(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 400 Bad Request error.",
+          "example": "HttpError.bad_request(\"Invalid email\")"
+        },
+        {
+          "name": "not_found",
+          "signature": "fn not_found(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 404 Not Found error.",
+          "example": "HttpError.not_found(\"User not found\")"
+        },
+        {
+          "name": "unauthorized",
+          "signature": "fn unauthorized(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 401 Unauthorized error."
+        },
+        {
+          "name": "forbidden",
+          "signature": "fn forbidden(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 403 Forbidden error."
+        },
+        {
+          "name": "conflict",
+          "signature": "fn conflict(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 409 Conflict error."
+        },
+        {
+          "name": "unprocessable",
+          "signature": "fn unprocessable(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 422 Unprocessable Entity error."
+        },
+        {
+          "name": "internal",
+          "signature": "fn internal(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 500 Internal Server Error."
+        },
+        {
+          "name": "method_not_allowed",
+          "signature": "fn method_not_allowed(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 405 Method Not Allowed error."
+        },
+        {
+          "name": "too_many_requests",
+          "signature": "fn too_many_requests(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 429 Too Many Requests error."
+        },
+        {
+          "name": "bad_gateway",
+          "signature": "fn bad_gateway(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 502 Bad Gateway error."
+        },
+        {
+          "name": "service_unavailable",
+          "signature": "fn service_unavailable(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 503 Service Unavailable error."
+        },
+        {
+          "name": "gateway_timeout",
+          "signature": "fn gateway_timeout(String) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a 504 Gateway Timeout error."
+        }
+      ]
+    },
+    {
       "name": "Int",
       "description": "Parse integers from strings and format numbers as text.",
+      "category": "language",
       "functions": [
         {
           "name": "to_string",
           "signature": "fn to_string(Int) -> String",
           "effects": [],
           "prelude_level": "core",
-          "description": "Convert an integer to its string representation."
+          "description": "Convert an integer to its string representation.",
+          "example": "Int.to_string(42)  // => \"42\""
         },
         {
           "name": "parse",
           "signature": "fn parse(String) -> Int",
           "effects": [],
           "prelude_level": "core",
-          "description": "Parse a string as an integer."
+          "description": "Parse a string as an integer.",
+          "example": "Int.parse(\"42\")  // => 42"
         }
       ]
     },
     {
       "name": "Json",
       "description": "Decode JSON from APIs and encode your data structures back to JSON.",
+      "category": "language",
       "functions": [
         {
           "name": "parse",
           "signature": "fn parse(String) -> <unknown>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Parse a JSON string into a value."
+          "description": "Parse a JSON string into a value.",
+          "example": "let data = Json.parse(\"{\\\"name\\\": \\\"Alice\\\"}\")"
         },
         {
           "name": "to_string",
           "signature": "fn to_string(<unknown>) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Serialize a value to a compact JSON string."
+          "description": "Serialize a value to a compact JSON string.",
+          "example": "Json.to_string({ name: \"Alice\", age: 30 })\n// => \"{\\\"name\\\":\\\"Alice\\\",\\\"age\\\":30}\""
         },
         {
           "name": "to_string_pretty",
           "signature": "fn to_string_pretty(<unknown>) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Serialize a value to a pretty-printed JSON string."
+          "description": "Serialize a value to a pretty-printed JSON string.",
+          "example": "Json.to_string_pretty({ name: \"Alice\" })"
         }
       ]
     },
     {
       "name": "List",
       "description": "Transform collections with map and filter, reduce values with fold, and search for elements.",
+      "category": "language",
       "functions": [
         {
           "name": "length",
           "signature": "fn length(<unknown>) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the number of elements in a list."
+          "description": "Return the number of elements in a list.",
+          "example": "List.length([1, 2, 3])  // => 3"
         },
         {
           "name": "head",
           "signature": "fn head(List<T>) -> T",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the first element, or None if the list is empty."
+          "description": "Return the first element, or None if the list is empty.",
+          "example": "List.head([1, 2, 3])  // => Some(1)"
         },
         {
           "name": "tail",
           "signature": "fn tail(List<T>) -> List<T>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return all elements except the first."
+          "description": "Return all elements except the first.",
+          "example": "List.tail([1, 2, 3])  // => [2, 3]"
         },
         {
           "name": "reverse",
           "signature": "fn reverse(List<T>) -> List<T>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the list in reverse order."
+          "description": "Return the list in reverse order.",
+          "example": "List.reverse([1, 2, 3])  // => [3, 2, 1]"
         },
         {
           "name": "sort",
           "signature": "fn sort(List<T>) -> List<T>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the list sorted in ascending order."
+          "description": "Return the list sorted in ascending order.",
+          "example": "List.sort([3, 1, 2])  // => [1, 2, 3]"
         },
         {
           "name": "concat",
           "signature": "fn concat(List<T>, List<T>) -> List<T>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Concatenate two lists."
+          "description": "Concatenate two lists.",
+          "example": "List.concat([1, 2], [3, 4])  // => [1, 2, 3, 4]"
         },
         {
           "name": "contains",
           "signature": "fn contains(<unknown>, <unknown>) -> Bool",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Check if a list contains a given element."
+          "description": "Check if a list contains a given element.",
+          "example": "List.contains([1, 2, 3], 2)  // => true"
         },
         {
           "name": "get",
           "signature": "fn get(List<T>, Int) -> Option<T>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the element at an index, or None if out of bounds."
+          "description": "Return the element at an index, or None if out of bounds.",
+          "example": "List.get([10, 20, 30], 1)  // => Some(20)"
         },
         {
           "name": "map",
           "signature": "fn map(List<T>, (T) -> U) -> List<U>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Apply a function to every element, returning a new list."
+          "description": "Apply a function to every element, returning a new list.",
+          "example": "[1, 2, 3] |> List.map(|x| x * 2)\n// => [2, 4, 6]"
         },
         {
           "name": "filter",
           "signature": "fn filter(List<T>, (T) -> Bool) -> List<T>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return elements that satisfy a predicate."
+          "description": "Return elements that satisfy a predicate.",
+          "example": "[1, 2, 3, 4] |> List.filter(|x| x > 2)\n// => [3, 4]"
         },
         {
           "name": "fold",
           "signature": "fn fold(List<T>, U, (U, T) -> U) -> U",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Reduce a list to a single value using an accumulator function."
+          "description": "Reduce a list to a single value using an accumulator function.",
+          "example": "[1, 2, 3] |> List.fold(0, |acc, x| acc + x)\n// => 6"
         },
         {
           "name": "find",
           "signature": "fn find(List<T>, (T) -> Bool) -> Option<T>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the first element that satisfies a predicate, or None."
+          "description": "Return the first element that satisfies a predicate, or None.",
+          "example": "[1, 2, 3] |> List.find(|x| x > 1)\n// => Some(2)"
         }
       ]
     },
     {
       "name": "Log",
       "description": "Record structured events at different severity levels for debugging and monitoring.",
+      "category": "language",
       "functions": [
         {
           "name": "info!",
@@ -334,7 +581,8 @@
             "Log"
           ],
           "prelude_level": "script",
-          "description": "Log a message at info level."
+          "description": "Log a message at info level.",
+          "example": "Log.info!(\"Server started on port 3000\")"
         },
         {
           "name": "warn!",
@@ -343,7 +591,8 @@
             "Log"
           ],
           "prelude_level": "script",
-          "description": "Log a message at warning level."
+          "description": "Log a message at warning level.",
+          "example": "Log.warn!(\"Cache miss for key: ${key}\")"
         },
         {
           "name": "error!",
@@ -352,7 +601,8 @@
             "Log"
           ],
           "prelude_level": "script",
-          "description": "Log a message at error level."
+          "description": "Log a message at error level.",
+          "example": "Log.error!(\"Failed to connect: ${msg}\")"
         },
         {
           "name": "debug!",
@@ -361,13 +611,15 @@
             "Log"
           ],
           "prelude_level": "script",
-          "description": "Log a message at debug level."
+          "description": "Log a message at debug level.",
+          "example": "Log.debug!(\"Request payload: ${body}\")"
         }
       ]
     },
     {
       "name": "Map",
       "description": "Store and retrieve values by key in immutable dictionaries.",
+      "category": "language",
       "functions": [
         {
           "name": "empty",
@@ -381,151 +633,210 @@
           "signature": "fn insert(Map<K, V>, K, V) -> Map<K, V>",
           "effects": [],
           "prelude_level": "core",
-          "description": "Insert a key-value pair, returning a new map."
+          "description": "Insert a key-value pair, returning a new map.",
+          "example": "Map.empty()\n|> Map.insert(\"name\", \"Alice\")\n|> Map.insert(\"age\", \"30\")"
         },
         {
           "name": "get",
           "signature": "fn get(Map<K, V>, K) -> Option<V>",
           "effects": [],
           "prelude_level": "core",
-          "description": "Look up a key, returning Some(value) or None."
+          "description": "Look up a key, returning Some(value) or None.",
+          "example": "map |> Map.get(\"name\")  // => Some(\"Alice\")"
         },
         {
           "name": "remove",
           "signature": "fn remove(Map<K, V>, K) -> Map<K, V>",
           "effects": [],
           "prelude_level": "core",
-          "description": "Remove a key, returning a new map."
+          "description": "Remove a key, returning a new map.",
+          "example": "map |> Map.remove(\"age\")"
         },
         {
           "name": "contains",
           "signature": "fn contains(Map<K, V>, K) -> Bool",
           "effects": [],
           "prelude_level": "core",
-          "description": "Check if a key exists in the map."
+          "description": "Check if a key exists in the map.",
+          "example": "Map.contains(map, \"name\")  // => true"
         },
         {
           "name": "keys",
           "signature": "fn keys(Map<K, V>) -> List<K>",
           "effects": [],
           "prelude_level": "core",
-          "description": "Return all keys as a list."
+          "description": "Return all keys as a list.",
+          "example": "Map.keys(map)  // => [\"age\", \"name\"]"
         },
         {
           "name": "values",
           "signature": "fn values(Map<K, V>) -> List<V>",
           "effects": [],
           "prelude_level": "core",
-          "description": "Return all values as a list."
+          "description": "Return all values as a list.",
+          "example": "Map.values(map)  // => [\"30\", \"Alice\"]"
         },
         {
           "name": "len",
           "signature": "fn len(Map<K, V>) -> Int",
           "effects": [],
           "prelude_level": "core",
-          "description": "Return the number of entries in the map."
+          "description": "Return the number of entries in the map.",
+          "example": "Map.len(map)  // => 2"
         },
         {
           "name": "from_list",
           "signature": "fn from_list(...)",
           "effects": [],
           "prelude_level": "core",
-          "description": "Create a map from a list of (key, value) pairs."
+          "description": "Create a map from a list of (key, value) pairs.",
+          "example": "Map.from_list([(\"a\", 1), (\"b\", 2)])"
         }
       ]
     },
     {
       "name": "Math",
       "description": "Perform common calculations like absolute value, min/max, and exponentiation.",
+      "category": "language",
       "functions": [
         {
           "name": "abs",
           "signature": "fn abs(Int) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the absolute value of an integer."
+          "description": "Return the absolute value of an integer.",
+          "example": "Math.abs(-5)  // => 5"
         },
         {
           "name": "min",
           "signature": "fn min(Int, Int) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the smaller of two integers."
+          "description": "Return the smaller of two integers.",
+          "example": "Math.min(3, 7)  // => 3"
         },
         {
           "name": "max",
           "signature": "fn max(Int, Int) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the larger of two integers."
+          "description": "Return the larger of two integers.",
+          "example": "Math.max(3, 7)  // => 7"
         },
         {
           "name": "clamp",
           "signature": "fn clamp(Int, Int, Int) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Constrain a value between a minimum and maximum."
+          "description": "Constrain a value between a minimum and maximum.",
+          "example": "Math.clamp(15, 0, 10)  // => 10"
         },
         {
           "name": "pow",
           "signature": "fn pow(Int, Int) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Raise a base to an exponent."
+          "description": "Raise a base to an exponent.",
+          "example": "Math.pow(2, 10)  // => 1024"
+        }
+      ]
+    },
+    {
+      "name": "Middleware",
+      "description": "Extract authentication credentials, configure CORS, and set up rate limiting.",
+      "category": "web",
+      "functions": [
+        {
+          "name": "extract_bearer",
+          "signature": "fn extract_bearer(<unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Extract a Bearer token from the Authorization header.",
+          "example": "let token = Middleware.extract_bearer(req)"
+        },
+        {
+          "name": "extract_basic",
+          "signature": "fn extract_basic(<unknown>) -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Extract Basic auth credentials from the Authorization header.",
+          "example": "let creds = Middleware.extract_basic(req)"
+        },
+        {
+          "name": "cors_config",
+          "signature": "fn cors_config() -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a CORS configuration record."
+        },
+        {
+          "name": "rate_limit_config",
+          "signature": "fn rate_limit_config() -> <unknown>",
+          "effects": [],
+          "prelude_level": "script",
+          "description": "Create a rate limiting configuration record."
         }
       ]
     },
     {
       "name": "Option",
       "description": "Represent values that might be missing without using null.",
+      "category": "language",
       "functions": [
         {
           "name": "unwrap",
           "signature": "fn unwrap(Option<T>) -> T",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Extract the value from Some, or panic on None."
+          "description": "Extract the value from Some, or panic on None.",
+          "example": "Some(42) |> Option.unwrap  // => 42"
         },
         {
           "name": "unwrap_or",
           "signature": "fn unwrap_or(Option<T>, T) -> T",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Extract the value from Some, or return a default."
+          "description": "Extract the value from Some, or return a default.",
+          "example": "None |> Option.unwrap_or(0)  // => 0"
         },
         {
           "name": "is_some",
           "signature": "fn is_some(<unknown>) -> Bool",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Return true if the option contains a value."
+          "description": "Return true if the option contains a value.",
+          "example": "Option.is_some(Some(1))  // => true"
         },
         {
           "name": "is_none",
           "signature": "fn is_none(<unknown>) -> Bool",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Return true if the option is None."
+          "description": "Return true if the option is None.",
+          "example": "Option.is_none(None)  // => true"
         },
         {
           "name": "map",
           "signature": "fn map(Option<T>, (T) -> U) -> Option<U>",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Apply a function to the contained value, if present."
+          "description": "Apply a function to the contained value, if present.",
+          "example": "Some(5) |> Option.map(|x| x * 2)\n// => Some(10)"
         },
         {
           "name": "flat_map",
           "signature": "fn flat_map(Option<T>, (T) -> Option<U>) -> Option<U>",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Apply a function that returns an Option, flattening the result."
+          "description": "Apply a function that returns an Option, flattening the result.",
+          "example": "Some(5) |> Option.flat_map(|x|\n  if x > 0 then Some(x) else None\n)\n// => Some(5)"
         }
       ]
     },
     {
       "name": "Random",
       "description": "Generate random numbers, booleans, and unique identifiers.",
+      "category": "language",
       "functions": [
         {
           "name": "int!",
@@ -534,7 +845,8 @@
             "Random"
           ],
           "prelude_level": "script",
-          "description": "Generate a random integer between min and max (inclusive)."
+          "description": "Generate a random integer between min and max (inclusive).",
+          "example": "Random.int!(1, 100)"
         },
         {
           "name": "bool!",
@@ -543,7 +855,8 @@
             "Random"
           ],
           "prelude_level": "script",
-          "description": "Generate a random boolean."
+          "description": "Generate a random boolean.",
+          "example": "if Random.bool!() then \"heads\" else \"tails\""
         },
         {
           "name": "uuid!",
@@ -552,117 +865,118 @@
             "Random"
           ],
           "prelude_level": "script",
-          "description": "Generate a random UUID v4 string."
+          "description": "Generate a random UUID v4 string.",
+          "example": "let id = Random.uuid!()"
         }
       ]
     },
     {
       "name": "Request",
-      "description": "Extract HTTP method, headers, body, and attached state from incoming requests.",
+      "description": "Extract HTTP method, headers, body, and parameters from incoming requests. Middleware can enrich the request with additional fields using record update syntax.",
+      "category": "web",
       "functions": [
         {
           "name": "header",
           "signature": "fn header(<unknown>, String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Read a header value from the request."
+          "description": "Read a header value from the request.",
+          "example": "let token = Request.header(req, \"Authorization\")"
         },
         {
           "name": "method",
           "signature": "fn method(<unknown>) -> String",
           "effects": [],
           "prelude_level": "script",
-          "description": "Return the HTTP method of the request."
+          "description": "Return the HTTP method of the request.",
+          "example": "let method = Request.method(req)"
         },
         {
           "name": "body_json",
           "signature": "fn body_json(<unknown>) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Parse the request body as JSON."
-        },
-        {
-          "name": "with_state",
-          "signature": "fn with_state(<unknown>, String, <unknown>) -> <unknown>",
-          "effects": [],
-          "prelude_level": "script",
-          "description": "Attach a named state value to the request."
-        },
-        {
-          "name": "state",
-          "signature": "fn state(<unknown>, String) -> <unknown>",
-          "effects": [],
-          "prelude_level": "script",
-          "description": "Retrieve a named state value from the request."
+          "description": "Parse the request body as JSON.",
+          "example": "let data = Request.body_json(req)"
         }
       ]
     },
     {
       "name": "Response",
       "description": "Build HTTP responses with custom status codes, headers, and JSON or text bodies.",
+      "category": "web",
       "functions": [
         {
           "name": "ok",
           "signature": "fn ok(String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 200 OK response with a text body."
+          "description": "Create a 200 OK response with a text body.",
+          "example": "Response.ok(\"Hello!\")"
         },
         {
           "name": "json",
           "signature": "fn json(<unknown>) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 200 OK response with a JSON body."
+          "description": "Create a 200 OK response with a JSON body.",
+          "example": "Response.json({ users: users, count: List.length(users) })"
         },
         {
           "name": "created",
           "signature": "fn created(String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 201 Created response with a text body."
+          "description": "Create a 201 Created response with a text body.",
+          "example": "Response.created(user)"
         },
         {
           "name": "no_content",
           "signature": "fn no_content() -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 204 No Content response."
+          "description": "Create a 204 No Content response.",
+          "example": "Response.no_content()"
         },
         {
           "name": "bad_request",
           "signature": "fn bad_request(String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 400 Bad Request response."
+          "description": "Create a 400 Bad Request response.",
+          "example": "Response.bad_request(\"Missing required field: name\")"
         },
         {
           "name": "not_found",
           "signature": "fn not_found(String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 404 Not Found response."
+          "description": "Create a 404 Not Found response.",
+          "example": "Response.not_found(\"User not found\")"
         },
         {
           "name": "error",
           "signature": "fn error(String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 500 Internal Server Error response."
+          "description": "Create a 500 Internal Server Error response.",
+          "example": "Response.error(\"Internal error\")"
         },
         {
           "name": "status",
           "signature": "fn status(Int, String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a response with a custom status code and body."
+          "description": "Create a response with a custom status code and body.",
+          "example": "Response.status(429, \"Rate limit exceeded\")"
         },
         {
           "name": "with_header",
           "signature": "fn with_header(<unknown>, String, String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Add a single header to a response."
+          "description": "Add a single header to a response.",
+          "example": "Response.ok(\"hi\")\n|> Response.with_header(\"X-Request-Id\", id)"
         },
         {
           "name": "with_headers",
@@ -676,7 +990,8 @@
           "signature": "fn redirect(String) -> <unknown>",
           "effects": [],
           "prelude_level": "script",
-          "description": "Create a 302 temporary redirect to a URL."
+          "description": "Create a 302 temporary redirect to a URL.",
+          "example": "Response.redirect(\"/login\")"
         },
         {
           "name": "redirect_permanent",
@@ -690,61 +1005,70 @@
     {
       "name": "Result",
       "description": "Handle operations that can fail with explicit error values instead of exceptions.",
+      "category": "language",
       "functions": [
         {
           "name": "unwrap",
           "signature": "fn unwrap(Result<T, E>) -> T",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Extract the Ok value, or panic on Err."
+          "description": "Extract the Ok value, or panic on Err.",
+          "example": "Ok(42) |> Result.unwrap  // => 42"
         },
         {
           "name": "unwrap_or",
           "signature": "fn unwrap_or(Result<T, E>, T) -> T",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Extract the Ok value, or return a default."
+          "description": "Extract the Ok value, or return a default.",
+          "example": "Err(\"fail\") |> Result.unwrap_or(0)  // => 0"
         },
         {
           "name": "is_ok",
           "signature": "fn is_ok(<unknown>) -> Bool",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Return true if the result is Ok."
+          "description": "Return true if the result is Ok.",
+          "example": "Result.is_ok(Ok(1))  // => true"
         },
         {
           "name": "is_err",
           "signature": "fn is_err(<unknown>) -> Bool",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Return true if the result is Err."
+          "description": "Return true if the result is Err.",
+          "example": "Result.is_err(Err(\"fail\"))  // => true"
         },
         {
           "name": "map",
           "signature": "fn map(Result<T, ?2>, (T) -> E) -> Result<E, ?2>",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Apply a function to the Ok value, if present."
+          "description": "Apply a function to the Ok value, if present.",
+          "example": "Ok(5) |> Result.map(|x| x * 2)\n// => Ok(10)"
         },
         {
           "name": "and_then",
           "signature": "fn and_then(Result<T, E>, (T) -> Result<U, E>) -> Result<U, E>",
           "effects": [],
           "prelude_level": "minimal",
-          "description": "Chain a function that returns a Result, flattening the result."
+          "description": "Chain a function that returns a Result, flattening the result.",
+          "example": "Ok(5) |> Result.and_then(|x|\n  if x > 0 then Ok(x) else Err(\"negative\")\n)\n// => Ok(5)"
         }
       ]
     },
     {
       "name": "Router",
       "description": "Define URL patterns, register handlers for HTTP methods, and organize routes into groups.",
+      "category": "web",
       "functions": [
         {
           "name": "new",
           "signature": "fn new() -> <unknown>",
           "effects": [],
           "prelude_level": "server",
-          "description": "Create a new empty router."
+          "description": "Create a new empty router.",
+          "example": "let app = Router.new()"
         },
         {
           "name": "routes",
@@ -758,14 +1082,16 @@
           "signature": "fn get(<unknown>, String, <unknown>) -> <unknown>",
           "effects": [],
           "prelude_level": "server",
-          "description": "Register a handler for GET requests at a path."
+          "description": "Register a handler for GET requests at a path.",
+          "example": "Router.new()\n|> Router.get(\"/hello\", |req| Response.ok(\"Hello!\"))"
         },
         {
           "name": "post",
           "signature": "fn post(<unknown>, String, <unknown>) -> <unknown>",
           "effects": [],
           "prelude_level": "server",
-          "description": "Register a handler for POST requests at a path."
+          "description": "Register a handler for POST requests at a path.",
+          "example": "router |> Router.post(\"/users\", create_user)"
         },
         {
           "name": "put",
@@ -814,20 +1140,23 @@
           "signature": "fn use(<unknown>, <unknown>) -> <unknown>",
           "effects": [],
           "prelude_level": "server",
-          "description": "Add middleware to the router."
+          "description": "Add middleware to the router.",
+          "example": "router |> Router.use(auth_middleware)"
         },
         {
           "name": "group",
           "signature": "fn group(<unknown>, String, <unknown>) -> <unknown>",
           "effects": [],
           "prelude_level": "server",
-          "description": "Group routes under a shared path prefix."
+          "description": "Group routes under a shared path prefix.",
+          "example": "router |> Router.group(\"/api\", |r|\n  r |> Router.get(\"/users\", list_users)\n    |> Router.post(\"/users\", create_user)\n)"
         }
       ]
     },
     {
       "name": "Server",
       "description": "Start an HTTP server listening on a specific port.",
+      "category": "web",
       "functions": [
         {
           "name": "listen!",
@@ -836,13 +1165,15 @@
             "Http"
           ],
           "prelude_level": "server",
-          "description": "Start the HTTP server on the given port."
+          "description": "Start the HTTP server on the given port.",
+          "example": "let app = Router.new()\n  |> Router.get(\"/\", |req| Response.ok(\"Hello!\"))\n\nServer.listen!(app, 3000)"
         }
       ]
     },
     {
       "name": "Set",
       "description": "Store unique elements and perform operations like union, intersection, and membership testing.",
+      "category": "language",
       "functions": [
         {
           "name": "empty",
@@ -856,7 +1187,8 @@
           "signature": "fn insert(Set<T>, T) -> Set<T>",
           "effects": [],
           "prelude_level": "core",
-          "description": "Add an element, returning a new set."
+          "description": "Add an element, returning a new set.",
+          "example": "Set.empty() |> Set.insert(1) |> Set.insert(2)"
         },
         {
           "name": "remove",
@@ -870,7 +1202,8 @@
           "signature": "fn contains(Set<T>, T) -> Bool",
           "effects": [],
           "prelude_level": "core",
-          "description": "Check if an element exists in the set."
+          "description": "Check if an element exists in the set.",
+          "example": "Set.contains(s, 1)  // => true"
         },
         {
           "name": "union",
@@ -898,138 +1231,158 @@
           "signature": "fn from_list(List<T>) -> Set<T>",
           "effects": [],
           "prelude_level": "core",
-          "description": "Create a set from a list of elements."
+          "description": "Create a set from a list of elements.",
+          "example": "Set.from_list([1, 2, 3, 2])  // duplicates removed"
         }
       ]
     },
     {
       "name": "String",
       "description": "Split, trim, search, replace, and convert between strings and individual characters.",
+      "category": "language",
       "functions": [
         {
           "name": "length",
           "signature": "fn length(String) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the number of characters in a string."
+          "description": "Return the number of characters in a string.",
+          "example": "String.length(\"hello\")  // => 5"
         },
         {
           "name": "to_upper",
           "signature": "fn to_upper(String) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Convert all characters to uppercase."
+          "description": "Convert all characters to uppercase.",
+          "example": "String.to_upper(\"hello\")  // => \"HELLO\""
         },
         {
           "name": "to_lower",
           "signature": "fn to_lower(String) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Convert all characters to lowercase."
+          "description": "Convert all characters to lowercase.",
+          "example": "String.to_lower(\"HELLO\")  // => \"hello\""
         },
         {
           "name": "trim",
           "signature": "fn trim(String) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Remove leading and trailing whitespace."
+          "description": "Remove leading and trailing whitespace.",
+          "example": "String.trim(\"  hi  \")  // => \"hi\""
         },
         {
           "name": "contains",
           "signature": "fn contains(String, String) -> Bool",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Check if a string contains a substring."
+          "description": "Check if a string contains a substring.",
+          "example": "String.contains(\"hello world\", \"world\")  // => true"
         },
         {
           "name": "starts_with",
           "signature": "fn starts_with(String, String) -> Bool",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Check if a string starts with a prefix."
+          "description": "Check if a string starts with a prefix.",
+          "example": "String.starts_with(\"hello\", \"hel\")  // => true"
         },
         {
           "name": "ends_with",
           "signature": "fn ends_with(String, String) -> Bool",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Check if a string ends with a suffix."
+          "description": "Check if a string ends with a suffix.",
+          "example": "String.ends_with(\"hello\", \"llo\")  // => true"
         },
         {
           "name": "split",
           "signature": "fn split(String, String) -> List<String>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Split a string by a delimiter into a list of strings."
+          "description": "Split a string by a delimiter into a list of strings.",
+          "example": "\"a,b,c\" |> String.split(\",\")  // => [\"a\", \"b\", \"c\"]"
         },
         {
           "name": "join",
           "signature": "fn join(List<String>, String) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Join a list of strings with a separator."
+          "description": "Join a list of strings with a separator.",
+          "example": "[\"a\", \"b\", \"c\"] |> String.join(\", \")  // => \"a, b, c\""
         },
         {
           "name": "slice",
           "signature": "fn slice(String, Int, Int) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Extract a substring by start and end index."
+          "description": "Extract a substring by start and end index.",
+          "example": "String.slice(\"hello\", 1, 4)  // => \"ell\""
         },
         {
           "name": "chars",
           "signature": "fn chars(String) -> List<String>",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Split a string into a list of single-character strings."
+          "description": "Split a string into a list of single-character strings.",
+          "example": "String.chars(\"hi\")  // => [\"h\", \"i\"]"
         },
         {
           "name": "char_at",
           "signature": "fn char_at(String, Int) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the character at a given index."
+          "description": "Return the character at a given index.",
+          "example": "String.char_at(\"hello\", 0)  // => \"h\""
         },
         {
           "name": "index_of",
           "signature": "fn index_of(String, String) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the index of the first occurrence of a substring, or -1."
+          "description": "Return the index of the first occurrence of a substring, or -1.",
+          "example": "String.index_of(\"hello\", \"ll\")  // => 2"
         },
         {
           "name": "to_int",
           "signature": "fn to_int(String) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Parse a string as an integer."
+          "description": "Parse a string as an integer.",
+          "example": "String.to_int(\"42\")  // => 42"
         },
         {
           "name": "from_char_code",
           "signature": "fn from_char_code(Int) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Create a single-character string from a Unicode code point."
+          "description": "Create a single-character string from a Unicode code point.",
+          "example": "String.from_char_code(65)  // => \"A\""
         },
         {
           "name": "char_code",
           "signature": "fn char_code(String) -> Int",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Return the Unicode code point of the first character."
+          "description": "Return the Unicode code point of the first character.",
+          "example": "String.char_code(\"A\")  // => 65"
         },
         {
           "name": "replace",
           "signature": "fn replace(String, String, String) -> String",
           "effects": [],
           "prelude_level": "pure",
-          "description": "Replace all occurrences of a pattern with a replacement."
+          "description": "Replace all occurrences of a pattern with a replacement.",
+          "example": "String.replace(\"hello world\", \"world\", \"there\")  // => \"hello there\""
         }
       ]
     },
     {
       "name": "Time",
       "description": "Get the current timestamp and pause execution for a specified duration.",
+      "category": "language",
       "functions": [
         {
           "name": "now!",
@@ -1038,7 +1391,8 @@
             "Time"
           ],
           "prelude_level": "script",
-          "description": "Return the current Unix timestamp in milliseconds."
+          "description": "Return the current Unix timestamp in milliseconds.",
+          "example": "let start = Time.now!()"
         },
         {
           "name": "sleep!",
@@ -1047,13 +1401,15 @@
             "Time"
           ],
           "prelude_level": "script",
-          "description": "Pause execution for the given number of milliseconds."
+          "description": "Pause execution for the given number of milliseconds.",
+          "example": "Time.sleep!(1000)  // wait 1 second"
         }
       ]
     },
     {
       "name": "Weak",
       "description": "Break reference cycles with weak pointers that don't prevent garbage collection.",
+      "category": "language",
       "functions": [
         {
           "name": "downgrade",

@@ -10,7 +10,7 @@
     />
 </svelte:head>
 
-<main class="spec-page">
+<main id="main-content" class="spec-page">
     <div class="spec-layout">
         <article class="spec-content">
             {@html data.html}
