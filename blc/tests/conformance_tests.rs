@@ -86,7 +86,7 @@ fn is_check_only(path: &Path) -> bool {
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    parent == "08_effects" || parent == "09_modules" || parent == "13_concurrency"
+    parent == "08_effects" || parent == "09_modules" || parent == "13_concurrency" || parent == "14_web"
 }
 
 /// Extract expected error codes from comments like:

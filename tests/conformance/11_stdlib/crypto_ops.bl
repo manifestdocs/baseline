@@ -1,0 +1,40 @@
+@prelude(script)
+
+// Conformance: Crypto module operations
+
+test "sha256 known hash" = {
+  let hash = Crypto.sha256("hello")
+  hash == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
+}
+
+test "sha256 empty string" = {
+  let hash = Crypto.sha256("")
+  hash == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}
+
+test "hmac_sha256" = {
+  let mac = Crypto.hmac_sha256("secret", "hello")
+  String.length(mac) == 64
+}
+
+test "constant_time_eq true" = {
+  Crypto.constant_time_eq("abc", "abc") == true
+}
+
+test "constant_time_eq false" = {
+  Crypto.constant_time_eq("abc", "xyz") == false
+}
+
+test "constant_time_eq length mismatch" = {
+  Crypto.constant_time_eq("abc", "ab") == false
+}
+
+test "random bytes length" = {
+  let bytes = Random.bytes!(16)
+  String.length(bytes) == 32
+}
+
+test "random bytes zero" = {
+  let bytes = Random.bytes!(0)
+  String.length(bytes) == 0
+}

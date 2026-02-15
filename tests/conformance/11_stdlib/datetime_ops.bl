@@ -1,0 +1,49 @@
+@prelude(script)
+
+// Conformance: DateTime module operations
+
+test "now returns positive ms" = {
+  let ts = DateTime.now!()
+  ts > 0
+}
+
+test "parse valid RFC3339" = {
+  let result = DateTime.parse("2024-01-15T12:00:00Z")
+  match result
+    Ok(ms) -> ms > 0
+    Err(_) -> false
+}
+
+test "parse invalid" = {
+  let result = DateTime.parse("not-a-date")
+  match result
+    Ok(_) -> false
+    Err(_) -> true
+}
+
+test "to_string roundtrip" = {
+  let result = DateTime.parse("2024-01-15T12:00:00+00:00")
+  match result
+    Ok(ms) -> {
+      let s = DateTime.to_string(ms)
+      String.contains(s, "2024-01-15")
+    }
+    Err(_) -> false
+}
+
+test "add seconds" = {
+  let result = DateTime.parse("2024-01-15T12:00:00Z")
+  match result
+    Ok(base) -> {
+      let later = DateTime.add(base, 3600)
+      let s = DateTime.to_string(later)
+      String.contains(s, "13:00:00")
+    }
+    Err(_) -> false
+}
+
+test "diff seconds" = {
+  let a = DateTime.add(DateTime.now!(), 0)
+  let b = DateTime.add(a, 60)
+  DateTime.diff(b, a) == 60
+}

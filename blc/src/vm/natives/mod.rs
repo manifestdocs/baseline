@@ -1,8 +1,11 @@
 mod console;
+mod crypto;
+mod datetime;
 mod env;
 pub use env::set_program_args;
 mod fs;
 pub(crate) mod fs_sandbox;
+pub(crate) mod http_error;
 pub use fs_sandbox::set_fs_sandbox;
 mod int_conv;
 pub(crate) mod json;
@@ -12,6 +15,7 @@ mod map;
 mod math;
 mod option;
 mod random;
+mod regex;
 mod request;
 mod response;
 mod result;
@@ -229,6 +233,11 @@ impl NativeRegistry {
         // -- String (additional) --
         self.register("String.replace", native_string_replace);
 
+        // -- String (regex) --
+        self.register("String.matches", regex::native_string_matches);
+        self.register("String.find_matches", regex::native_string_find_matches);
+        self.register("String.replace_regex", regex::native_string_replace_regex);
+
         // -- List (non-HOF) --
         self.register("List.length", native_list_length);
         self.register("List.head", native_list_head);
@@ -267,6 +276,14 @@ impl NativeRegistry {
         self.register("Time.sleep!", native_time_sleep);
         self.register("Time.sleep", native_time_sleep);
 
+        // -- DateTime --
+        self.register("DateTime.now!", datetime::native_datetime_now);
+        self.register("DateTime.now", datetime::native_datetime_now);
+        self.register("DateTime.parse", datetime::native_datetime_parse);
+        self.register("DateTime.to_string", datetime::native_datetime_to_string);
+        self.register("DateTime.add", datetime::native_datetime_add);
+        self.register("DateTime.diff", datetime::native_datetime_diff);
+
         // -- Random --
         self.register("Random.int!", native_random_int);
         self.register("Random.int", native_random_int);
@@ -274,6 +291,15 @@ impl NativeRegistry {
         self.register("Random.bool", native_random_bool);
         self.register("Random.uuid!", native_random_uuid);
         self.register("Random.uuid", native_random_uuid);
+
+        // -- Crypto --
+        self.register("Crypto.sha256", crypto::native_crypto_sha256);
+        self.register("Crypto.hmac_sha256", crypto::native_crypto_hmac_sha256);
+        self.register("Crypto.constant_time_eq", crypto::native_crypto_constant_time_eq);
+
+        // -- Random (additional) --
+        self.register("Random.bytes!", crypto::native_random_bytes);
+        self.register("Random.bytes", crypto::native_random_bytes);
 
         // -- Env --
         self.register("Env.get!", native_env_get);
@@ -323,6 +349,15 @@ impl NativeRegistry {
         self.register("Router.any", native_router_any);
         self.register("Router.use", native_router_use);
         self.register("Router.group", native_router_group);
+
+        // -- HttpError --
+        self.register("HttpError.bad_request", http_error::native_http_error_bad_request);
+        self.register("HttpError.not_found", http_error::native_http_error_not_found);
+        self.register("HttpError.unauthorized", http_error::native_http_error_unauthorized);
+        self.register("HttpError.forbidden", http_error::native_http_error_forbidden);
+        self.register("HttpError.conflict", http_error::native_http_error_conflict);
+        self.register("HttpError.unprocessable", http_error::native_http_error_unprocessable);
+        self.register("HttpError.internal", http_error::native_http_error_internal);
 
         // -- Request --
         self.register("Request.header", native_request_header);
@@ -570,6 +605,48 @@ mod tests {
         let list = NValue::list(vec![NValue::int(10)]);
         let result = native_test_contains(&[list, NValue::int(99)]).unwrap();
         assert!(!result.as_bool());
+    }
+
+    #[test]
+    fn http_error_constructors_registered() {
+        let reg = NativeRegistry::new();
+        assert!(reg.lookup("HttpError.bad_request").is_some());
+        assert!(reg.lookup("HttpError.not_found").is_some());
+        assert!(reg.lookup("HttpError.unauthorized").is_some());
+        assert!(reg.lookup("HttpError.forbidden").is_some());
+        assert!(reg.lookup("HttpError.conflict").is_some());
+        assert!(reg.lookup("HttpError.unprocessable").is_some());
+        assert!(reg.lookup("HttpError.internal").is_some());
+    }
+
+    #[test]
+    fn http_error_bad_request_creates_enum() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("HttpError.bad_request").unwrap();
+        let result = reg.call(id, &[NValue::string("invalid input".into())]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "BadRequest");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "invalid input");
+    }
+
+    #[test]
+    fn http_error_not_found_creates_enum() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("HttpError.not_found").unwrap();
+        let result = reg.call(id, &[NValue::string("user not found".into())]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "NotFound");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "user not found");
+    }
+
+    #[test]
+    fn http_error_unauthorized_creates_enum() {
+        let reg = NativeRegistry::new();
+        let id = reg.lookup("HttpError.unauthorized").unwrap();
+        let result = reg.call(id, &[NValue::string("bad token".into())]).unwrap();
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Unauthorized");
+        assert_eq!(payload.as_string().unwrap().as_ref(), "bad token");
     }
 
     // Compile-time assertion: NativeRegistry must be Send+Sync

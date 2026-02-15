@@ -50,7 +50,25 @@ fn router_type() -> Type {
     Type::Record(fields, None)
 }
 
-/// Handler type: (Request) -> {Http} Result<Response, String>
+/// HttpError sum type:
+/// BadRequest(String) | NotFound(String) | Unauthorized(String) |
+/// Forbidden(String) | Conflict(String) | Unprocessable(String) | Internal(String)
+fn http_error_type() -> Type {
+    Type::Enum(
+        "HttpError".to_string(),
+        vec![
+            ("BadRequest".to_string(), vec![Type::String]),
+            ("NotFound".to_string(), vec![Type::String]),
+            ("Unauthorized".to_string(), vec![Type::String]),
+            ("Forbidden".to_string(), vec![Type::String]),
+            ("Conflict".to_string(), vec![Type::String]),
+            ("Unprocessable".to_string(), vec![Type::String]),
+            ("Internal".to_string(), vec![Type::String]),
+        ],
+    )
+}
+
+/// Handler type: (Request) -> {Http} Result<Response, HttpError>
 fn handler_type() -> Type {
     Type::Function(
         vec![request_type()],
@@ -58,13 +76,13 @@ fn handler_type() -> Type {
             "Result".to_string(),
             vec![
                 ("Ok".to_string(), vec![response_type()]),
-                ("Err".to_string(), vec![Type::String]),
+                ("Err".to_string(), vec![http_error_type()]),
             ],
         )),
     )
 }
 
-/// Middleware type: (Request, (Request) -> Result<Response, String>) -> Result<Response, String>
+/// Middleware type: (Request, (Request) -> Result<Response, HttpError>) -> Result<Response, HttpError>
 fn middleware_type() -> Type {
     let next_fn = Type::Function(
         vec![request_type()],
@@ -72,7 +90,7 @@ fn middleware_type() -> Type {
             "Result".to_string(),
             vec![
                 ("Ok".to_string(), vec![response_type()]),
-                ("Err".to_string(), vec![Type::String]),
+                ("Err".to_string(), vec![http_error_type()]),
             ],
         )),
     );
@@ -82,7 +100,7 @@ fn middleware_type() -> Type {
             "Result".to_string(),
             vec![
                 ("Ok".to_string(), vec![response_type()]),
-                ("Err".to_string(), vec![Type::String]),
+                ("Err".to_string(), vec![http_error_type()]),
             ],
         )),
     )
@@ -162,6 +180,10 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Random.uuid!".into(),
             Type::Function(vec![], Box::new(Type::String)),
         );
+        sigs.insert(
+            "Random.bytes!".into(),
+            Type::Function(vec![Type::Int], Box::new(Type::String)),
+        );
     }
 
     // -- Env builtins (effect: Env) --
@@ -186,6 +208,55 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         sigs.insert(
             "Env.args!".into(),
             Type::Function(vec![], Box::new(Type::List(Box::new(Type::String)))),
+        );
+    }
+
+    // -- Crypto native methods (pure) --
+    if native_modules.contains(&"Crypto") {
+        sigs.insert(
+            "Crypto.sha256".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Crypto.hmac_sha256".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Crypto.constant_time_eq".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)),
+        );
+    }
+
+    // -- DateTime native methods (effectful: now!, pure: parse, to_string, add, diff) --
+    if native_modules.contains(&"DateTime") {
+        sigs.insert(
+            "DateTime.now!".into(),
+            Type::Function(vec![], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "DateTime.parse".into(),
+            Type::Function(
+                vec![Type::String],
+                Box::new(Type::Enum(
+                    "Result".to_string(),
+                    vec![
+                        ("Ok".to_string(), vec![Type::Int]),
+                        ("Err".to_string(), vec![Type::String]),
+                    ],
+                )),
+            ),
+        );
+        sigs.insert(
+            "DateTime.to_string".into(),
+            Type::Function(vec![Type::Int], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "DateTime.add".into(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "DateTime.diff".into(),
+            Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
         );
     }
 
@@ -497,6 +568,24 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
                 Box::new(Type::String),
             ),
         );
+        sigs.insert(
+            "String.matches".into(),
+            Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "String.find_matches".into(),
+            Type::Function(
+                vec![Type::String, Type::String],
+                Box::new(Type::List(Box::new(Type::String))),
+            ),
+        );
+        sigs.insert(
+            "String.replace_regex".into(),
+            Type::Function(
+                vec![Type::String, Type::String, Type::String],
+                Box::new(Type::String),
+            ),
+        );
     }
 
     // -- Int native methods --
@@ -577,6 +666,25 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "List.concat".into(),
             Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
         );
+    }
+
+    // -- HttpError constructors (pure) — return HttpError enum --
+    if native_modules.contains(&"HttpError") {
+        let he = http_error_type();
+        for method in &[
+            "HttpError.bad_request",
+            "HttpError.not_found",
+            "HttpError.unauthorized",
+            "HttpError.forbidden",
+            "HttpError.conflict",
+            "HttpError.unprocessable",
+            "HttpError.internal",
+        ] {
+            sigs.insert(
+                (*method).into(),
+                Type::Function(vec![Type::String], Box::new(he.clone())),
+            );
+        }
     }
 
     // -- Response builder (pure) — returns typed Response records --

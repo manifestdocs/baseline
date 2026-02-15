@@ -1,0 +1,27 @@
+@prelude(core)
+
+// Conformance: String regex operations
+
+test "matches true" = String.matches("hello123", "\\d+") == true
+test "matches false" = String.matches("hello", "\\d+") == false
+test "matches full" = String.matches("2024-01-15", "^\\d{4}-\\d{2}-\\d{2}$") == true
+
+test "find_matches" = {
+  let results = String.find_matches("foo42bar7baz", "\\d+")
+  List.length(results) == 2
+}
+
+test "find_matches empty" = {
+  let results = String.find_matches("hello", "\\d+")
+  List.length(results) == 0
+}
+
+test "replace_regex" = {
+  let result = String.replace_regex("hello 123 world 456", "\\d+", "NUM")
+  result == "hello NUM world NUM"
+}
+
+test "replace_regex no match" = {
+  let result = String.replace_regex("hello", "\\d+", "NUM")
+  result == "hello"
+}

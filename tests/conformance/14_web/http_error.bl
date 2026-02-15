@@ -1,0 +1,22 @@
+@prelude(server)
+
+// HttpError constructors create typed error values that auto-map to HTTP status codes
+
+fn handle_not_found!(req: Request) -> Result<Response, HttpError> =
+  Err(HttpError.not_found("User not found"))
+
+fn handle_bad_request!(req: Request) -> Result<Response, HttpError> =
+  Err(HttpError.bad_request("Invalid input"))
+
+fn handle_ok!(req: Request) -> Result<Response, HttpError> =
+  Ok(Response.ok("Hello"))
+
+fn main!() -> () = {
+  let r = Router.new()
+    |> Router.get("/missing", handle_not_found!)
+    |> Router.get("/bad", handle_bad_request!)
+    |> Router.get("/ok", handle_ok!)
+  Console.println!("ok")
+}
+
+// expect: ok

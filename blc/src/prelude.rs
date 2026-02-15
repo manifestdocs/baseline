@@ -26,17 +26,17 @@ impl Prelude {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure => &["Option", "Result", "String", "List", "Json"],
+            Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Crypto"],
             Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int"]
+                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Crypto"]
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "Fs", "Cell", "Scope",
+                "Request", "HttpError", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "Router", "Fs", "Cell", "Scope",
+                "Request", "HttpError", "Router", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }
@@ -58,18 +58,19 @@ impl Prelude {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Math"],
+            Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Math", "Crypto"],
             Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int"]
+                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Crypto"]
             }
             Prelude::Script => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "Cell", "Scope",
+                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "HttpError", "Cell", "Scope",
+                "DateTime", "Crypto",
             ],
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Env", "Http", "Response", "Request", "Router", "Server", "Db",
-                "Metrics", "Fs", "Cell", "Scope",
+                "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Router", "Server", "Db",
+                "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
             ],
         }
     }
@@ -99,6 +100,7 @@ pub fn module_alias(short: &str) -> Option<&'static str> {
         "rtr" => Some("Router"),
         "srv" => Some("Server"),
         "db" => Some("Db"),
+        "dt" => Some("DateTime"),
         _ => None,
     }
 }
@@ -127,6 +129,7 @@ pub fn reverse_module_alias(module: &str) -> Option<&'static str> {
         "Router" => Some("rtr"),
         "Server" => Some("srv"),
         "Db" => Some("db"),
+        "DateTime" => Some("dt"),
         _ => None,
     }
 }
@@ -239,12 +242,12 @@ mod tests {
         let p = Prelude::Pure;
         assert_eq!(
             p.native_modules(),
-            &["Option", "Result", "String", "List", "Json"]
+            &["Option", "Result", "String", "List", "Json", "Crypto"]
         );
         assert_eq!(p.builtin_modules(), &["Math"]);
         assert_eq!(
             p.type_modules(),
-            &["Option", "Result", "String", "List", "Json", "Math"]
+            &["Option", "Result", "String", "List", "Json", "Math", "Crypto"]
         );
     }
 
