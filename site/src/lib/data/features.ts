@@ -54,13 +54,13 @@ export const features: Feature[] = [
 			'The <code>?</code> operator propagates errors. <code>match</code> for explicit handling. No try/catch.'
 	},
 	{
-		title: 'JSON Diagnostics',
+		title: 'Structured Diagnostics',
 		description:
-			'All compiler output is structured JSON. LLMs self-correct against machine-readable errors.'
+			'Compiler errors come as structured JSON with source locations, suggestions, and fix hints. Useful for editor tooling and AI agents alike.'
 	},
 	{
-		title: 'LLM-Native Design',
+		title: 'AI-Friendly',
 		description:
-			'Unambiguous syntax, constrained solution space, structured errors. Built for machine generation.'
+			'Unambiguous syntax and structured error output make Baseline a natural fit for AI code generation and compiler-driven self-correction.'
 	}
 ];

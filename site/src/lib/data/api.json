@@ -2,6 +2,7 @@
   "modules": [
     {
       "name": "Console",
+      "description": "Print output to the terminal, read user input, and write errors to stderr.",
       "functions": [
         {
           "name": "println!",
@@ -43,6 +44,7 @@
     },
     {
       "name": "Env",
+      "description": "Read configuration from environment variables and set them for child processes.",
       "functions": [
         {
           "name": "get!",
@@ -66,6 +68,7 @@
     },
     {
       "name": "Fs",
+      "description": "Read files, write data to disk, and list directory contents.",
       "functions": [
         {
           "name": "read!",
@@ -134,6 +137,7 @@
     },
     {
       "name": "Http",
+      "description": "Make HTTP requests to external APIs and fetch remote data.",
       "functions": [
         {
           "name": "get!",
@@ -184,6 +188,7 @@
     },
     {
       "name": "Int",
+      "description": "Parse integers from strings and format numbers as text.",
       "functions": [
         {
           "name": "to_string",
@@ -203,6 +208,7 @@
     },
     {
       "name": "Json",
+      "description": "Decode JSON from APIs and encode your data structures back to JSON.",
       "functions": [
         {
           "name": "parse",
@@ -229,6 +235,7 @@
     },
     {
       "name": "List",
+      "description": "Transform collections with map and filter, reduce values with fold, and search for elements.",
       "functions": [
         {
           "name": "length",
@@ -318,6 +325,7 @@
     },
     {
       "name": "Log",
+      "description": "Record structured events at different severity levels for debugging and monitoring.",
       "functions": [
         {
           "name": "info!",
@@ -359,6 +367,7 @@
     },
     {
       "name": "Map",
+      "description": "Store and retrieve values by key in immutable dictionaries.",
       "functions": [
         {
           "name": "empty",
@@ -427,6 +436,7 @@
     },
     {
       "name": "Math",
+      "description": "Perform common calculations like absolute value, min/max, and exponentiation.",
       "functions": [
         {
           "name": "abs",
@@ -467,6 +477,7 @@
     },
     {
       "name": "Option",
+      "description": "Represent values that might be missing without using null.",
       "functions": [
         {
           "name": "unwrap",
@@ -514,6 +525,7 @@
     },
     {
       "name": "Random",
+      "description": "Generate random numbers, booleans, and unique identifiers.",
       "functions": [
         {
           "name": "int!",
@@ -546,6 +558,7 @@
     },
     {
       "name": "Request",
+      "description": "Extract HTTP method, headers, body, and attached state from incoming requests.",
       "functions": [
         {
           "name": "header",
@@ -586,6 +599,7 @@
     },
     {
       "name": "Response",
+      "description": "Build HTTP responses with custom status codes, headers, and JSON or text bodies.",
       "functions": [
         {
           "name": "ok",
@@ -675,6 +689,7 @@
     },
     {
       "name": "Result",
+      "description": "Handle operations that can fail with explicit error values instead of exceptions.",
       "functions": [
         {
           "name": "unwrap",
@@ -722,6 +737,7 @@
     },
     {
       "name": "Router",
+      "description": "Define URL patterns, register handlers for HTTP methods, and organize routes into groups.",
       "functions": [
         {
           "name": "new",
@@ -811,6 +827,7 @@
     },
     {
       "name": "Server",
+      "description": "Start an HTTP server listening on a specific port.",
       "functions": [
         {
           "name": "listen!",
@@ -825,6 +842,7 @@
     },
     {
       "name": "Set",
+      "description": "Store unique elements and perform operations like union, intersection, and membership testing.",
       "functions": [
         {
           "name": "empty",
@@ -886,6 +904,7 @@
     },
     {
       "name": "String",
+      "description": "Split, trim, search, replace, and convert between strings and individual characters.",
       "functions": [
         {
           "name": "length",
@@ -1010,6 +1029,7 @@
     },
     {
       "name": "Time",
+      "description": "Get the current timestamp and pause execution for a specified duration.",
       "functions": [
         {
           "name": "now!",
@@ -1033,6 +1053,7 @@
     },
     {
       "name": "Weak",
+      "description": "Break reference cycles with weak pointers that don't prevent garbage collection.",
       "functions": [
         {
           "name": "downgrade",

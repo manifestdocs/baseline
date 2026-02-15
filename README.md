@@ -1,14 +1,16 @@
 # Baseline
 
-**A strongly typed, effect-based programming language designed for AI coding agents.**
+**A programming language where the types catch your bugs, the compiler explains what went wrong, and side effects are always visible.**
 
-Baseline is a verification-first language where types encode correctness, side effects are explicit capabilities, and syntax is unambiguous. The compiler (`blc`) provides structured JSON diagnostics that LLM agents can deterministically apply to self-correct.
+Baseline is a typed functional language with an effect system. Functions declare what side effects they perform — reading files, making HTTP calls, printing to the console — and the compiler enforces those declarations. The result is code where you can tell what a function does by reading its signature.
 
-## Core Principles
+Baseline also works well with AI code generation tools. Its unambiguous syntax and structured JSON diagnostics make compiler-driven self-correction loops practical.
 
-1. **The Type Is The Spec** — Types encode enough information (via refinements) that correctness can be verified at compile time.
-2. **Effects Are Data** — Side effects (I/O, Network, DB) are managed as explicit capabilities. Pure functions are the default.
-3. **LLM-Native** — Designed for machine generation. Syntax is unambiguous, errors are structured JSON, and formatting is canonical.
+## Core Ideas
+
+1. **Types prove correctness** — Refinement types like `Int where self > 0` let the compiler verify constraints that would otherwise be runtime checks.
+2. **Effects are visible** — Side effects (I/O, network, filesystem) are declared in function signatures. Pure functions are the default. You see the blast radius before you call.
+3. **Readable by humans and machines** — One syntax for errors, one for effects, one for data pipelines. Whether a person or an AI agent wrote it, you can read it instantly.
 
 ## Quick Start
 

@@ -90,6 +90,12 @@ p {
   color: var(--fg-muted);
 }
 
+p:first-child,
+h1 + p, h2 + p, h3 + p {
+  margin-top: 0;
+  padding-top: 0;
+}
+
 .overline {
   font-size: 0.7rem;
   font-weight: 500;
@@ -444,6 +450,11 @@ code {
   margin-top: 0;
 }
 
+.example-code pre {
+  font-size: 0.92rem;
+  line-height: 1.45;
+}
+
 /* ================================================================
    FEATURE GRID -- Skeleton row/columns
    ================================================================ */
@@ -489,7 +500,12 @@ code {
   padding: var(--sp-3);
   display: flex;
   flex-direction: column;
-  gap: var(--sp-2);
+  gap: var(--sp-1);
+}
+
+.install-card pre,
+.install-card code {
+  font-size: 0.95rem;
 }
 
 .step-header {
@@ -846,7 +862,7 @@ code {
 
 .api-layout {
   display: grid;
-  grid-template-columns: 1fr 200px;
+  grid-template-columns: 1fr 240px;
   gap: var(--sp-5);
   align-items: start;
 }
@@ -858,7 +874,10 @@ code {
 
 .api-content h1 {
   font-size: clamp(1.8rem, 4vw, 2.618rem);
+  margin-top: 0;
   margin-bottom: var(--sp-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--fg-faint);
 }
 
 .api-intro {
@@ -875,6 +894,67 @@ code {
   border-radius: 2px;
 }
 
+.syntax-guide {
+  margin-bottom: var(--sp-6);
+  border-bottom: 1px solid var(--fg-faint);
+  padding-bottom: var(--sp-5);
+}
+
+.syntax-guide h2 {
+  font-size: 1.3rem;
+  margin-bottom: var(--sp-2);
+}
+
+.syntax-guide > .api-intro {
+  margin-bottom: var(--sp-3);
+}
+
+.syntax-patterns {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+  margin: 0;
+}
+
+.syntax-pattern {
+  display: grid;
+  grid-template-columns: 10em 1fr;
+  gap: var(--sp-2);
+  align-items: baseline;
+}
+
+.syntax-pattern dt {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.syntax-pattern dt code {
+  font-size: 0.95em;
+  background: var(--bg-muted);
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+.syntax-pattern dd {
+  font-size: 0.88rem;
+  color: var(--fg-muted);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.syntax-pattern dd code {
+  font-size: 0.85em;
+  background: var(--bg-muted);
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+@media (max-width: 768px) {
+  .syntax-pattern {
+    grid-template-columns: 1fr;
+  }
+}
+
 .api-module {
   margin-bottom: var(--sp-6);
 }
@@ -887,6 +967,13 @@ code {
   display: flex;
   align-items: baseline;
   gap: var(--sp-2);
+}
+
+.api-module-desc {
+  font-size: 0.88rem;
+  color: var(--fg-muted);
+  margin-bottom: var(--sp-3);
+  max-width: none;
 }
 
 .module-prelude {
@@ -995,7 +1082,7 @@ code {
 }
 
 .api-toc a {
-  font-size: 0.76rem;
+  font-size: 0.72rem;
   color: var(--fg-dim);
   text-decoration: none;
   display: block;
