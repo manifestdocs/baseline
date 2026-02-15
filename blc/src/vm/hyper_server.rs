@@ -1537,6 +1537,103 @@ async fn handle_request_with_timeout(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Request metadata and response helpers (extracted from dispatch pipeline)
+// ---------------------------------------------------------------------------
+
+/// Per-request metadata computed once and threaded through the pipeline.
+struct RequestMeta {
+    request_id: Option<String>,
+    request_id_hdr: Option<hyper::header::HeaderName>,
+    accepts_gzip: bool,
+    start: std::time::Instant,
+}
+
+impl RequestMeta {
+    /// Build from an incoming request and server config.
+    fn from_request(req: &Request<Incoming>, config: &ServerConfig) -> Self {
+        let accepts_gzip = config.compression && accepts_gzip(req.headers());
+
+        let request_id = config.request_id_header.as_ref().map(|header_name| {
+            req.headers()
+                .get(header_name.as_str())
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_else(generate_request_id)
+        });
+
+        let request_id_hdr = config
+            .request_id_header
+            .as_ref()
+            .and_then(|name| hyper::header::HeaderName::from_bytes(name.as_bytes()).ok());
+
+        Self {
+            request_id,
+            request_id_hdr,
+            accepts_gzip,
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+/// Insert the request ID header into a response, if configured.
+fn insert_request_id(resp: &mut Response<ServerBody>, meta: &RequestMeta) {
+    if let Some(ref id) = meta.request_id {
+        if let Some(ref hdr) = meta.request_id_hdr {
+            if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
+                resp.headers_mut().insert(hdr.clone(), val);
+            }
+        }
+    }
+}
+
+/// Apply all post-processing to a response: request ID, CORS, and compression.
+fn finalize_response(
+    mut resp: Response<ServerBody>,
+    meta: &RequestMeta,
+    config: &ServerConfig,
+) -> Response<ServerBody> {
+    insert_request_id(&mut resp, meta);
+    if let Some(ref cors) = config.cors {
+        apply_cors_headers(resp.headers_mut(), cors, &hyper::HeaderMap::new());
+    }
+    // Skip compression for SSE streams
+    let is_event_stream = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .map(|ct| ct.contains("text/event-stream"))
+        .unwrap_or(false);
+    if !is_event_stream {
+        resp = try_compress_response(resp, meta.accepts_gzip);
+    }
+    resp
+}
+
+/// Emit a structured access log line.
+fn log_access(
+    config: &ServerConfig,
+    method: &str,
+    path: &str,
+    resp: &Response<ServerBody>,
+    meta: &RequestMeta,
+    remote_addr: SocketAddr,
+) {
+    use hyper::body::Body as _;
+    if config.access_log {
+        eprintln!(
+            "[access] {} {} {} {}b {:.1}ms {}{}",
+            method,
+            path,
+            resp.status().as_u16(),
+            resp.body().size_hint().lower(),
+            meta.start.elapsed().as_secs_f64() * 1000.0,
+            remote_addr.ip(),
+            format_request_id(&meta.request_id),
+        );
+    }
+}
+
 async fn handle_request_with_context(
     req: Request<Incoming>,
     ctx: &AsyncServerContext,
@@ -1545,47 +1642,14 @@ async fn handle_request_with_context(
     use hyper::body::Body as _;
 
     let config = &ctx.config;
-    let start = std::time::Instant::now();
-
-    // Save Accept-Encoding before body parsing (for compression)
-    let client_accepts_gzip = config.compression && accepts_gzip(req.headers());
-
-    // Generate or extract request ID
-    let request_id = config.request_id_header.as_ref().map(|header_name| {
-        req.headers()
-            .get(header_name.as_str())
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_else(generate_request_id)
-    });
-
-    // Pre-parse request ID header name for reuse
-    let request_id_hdr = config
-        .request_id_header
-        .as_ref()
-        .and_then(|name| hyper::header::HeaderName::from_bytes(name.as_bytes()).ok());
+    let meta = RequestMeta::from_request(&req, config);
 
     // Health check — respond before body parsing to minimize overhead
     if let Some(ref health_path) = config.health_check_path {
         if req.method() == Method::GET && req.uri().path() == health_path.as_str() {
             let mut resp = AsyncResponse::json(r#"{"status":"ok"}"#).into_hyper();
-            if let Some(ref id) = request_id {
-                if let Some(ref hdr) = request_id_hdr {
-                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                        resp.headers_mut().insert(hdr.clone(), val);
-                    }
-                }
-            }
-            if config.access_log {
-                eprintln!(
-                    "[access] GET {} 200 {}b {:.1}ms {}{}",
-                    health_path,
-                    resp.body().size_hint().lower(),
-                    start.elapsed().as_secs_f64() * 1000.0,
-                    remote_addr.ip(),
-                    format_request_id(&request_id),
-                );
-            }
+            insert_request_id(&mut resp, &meta);
+            log_access(config, "GET", health_path, &resp, &meta, remote_addr);
             return Ok(resp);
         }
     }
@@ -1600,22 +1664,8 @@ async fn handle_request_with_context(
                 .header("content-type", "text/html; charset=utf-8")
                 .body(Full::new(Bytes::from(html)).boxed())
                 .unwrap();
-            if let Some(ref id) = request_id {
-                if let Some(ref hdr) = request_id_hdr {
-                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                        resp.headers_mut().insert(hdr.clone(), val);
-                    }
-                }
-            }
-            if config.access_log {
-                eprintln!(
-                    "[access] GET {} 200 {:.1}ms {}{}",
-                    docs_path,
-                    start.elapsed().as_secs_f64() * 1000.0,
-                    remote_addr.ip(),
-                    format_request_id(&request_id),
-                );
-            }
+            insert_request_id(&mut resp, &meta);
+            log_access(config, "GET", docs_path, &resp, &meta, remote_addr);
             return Ok(resp);
         }
 
@@ -1623,22 +1673,8 @@ async fn handle_request_with_context(
         if req.method() == Method::GET && req_path == openapi_path {
             let json = generate_openapi_json(&ctx.route_meta);
             let mut resp = AsyncResponse::json(&json).into_hyper();
-            if let Some(ref id) = request_id {
-                if let Some(ref hdr) = request_id_hdr {
-                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                        resp.headers_mut().insert(hdr.clone(), val);
-                    }
-                }
-            }
-            if config.access_log {
-                eprintln!(
-                    "[access] GET {} 200 {:.1}ms {}{}",
-                    openapi_path,
-                    start.elapsed().as_secs_f64() * 1000.0,
-                    remote_addr.ip(),
-                    format_request_id(&request_id),
-                );
-            }
+            insert_request_id(&mut resp, &meta);
+            log_access(config, "GET", &openapi_path, &resp, &meta, remote_addr);
             return Ok(resp);
         }
     }
@@ -1646,28 +1682,14 @@ async fn handle_request_with_context(
     // CORS preflight — respond to OPTIONS before body parsing
     if let Some(ref cors) = config.cors {
         if req.method() == Method::OPTIONS {
+            let path = req.uri().path().to_string();
             let mut resp = Response::builder()
                 .status(StatusCode::NO_CONTENT)
                 .body(Full::new(Bytes::new()).boxed())
                 .unwrap();
             apply_cors_headers(resp.headers_mut(), cors, req.headers());
-            if let Some(ref id) = request_id {
-                if let Some(ref hdr) = request_id_hdr {
-                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                        resp.headers_mut().insert(hdr.clone(), val);
-                    }
-                }
-            }
-            if config.access_log {
-                let path = req.uri().path().to_string();
-                eprintln!(
-                    "[access] OPTIONS {} 204 0b {:.1}ms {}{}",
-                    path,
-                    start.elapsed().as_secs_f64() * 1000.0,
-                    remote_addr.ip(),
-                    format_request_id(&request_id),
-                );
-            }
+            insert_request_id(&mut resp, &meta);
+            log_access(config, "OPTIONS", &path, &resp, &meta, remote_addr);
             return Ok(resp);
         }
     }
@@ -1675,28 +1697,13 @@ async fn handle_request_with_context(
     // Rate limiting check
     if let Some(ref limiter) = ctx.rate_limiter {
         if !limiter.check(remote_addr.ip()) {
+            let path = req.uri().path().to_string();
+            let method = req.method().to_string();
             let mut resp = AsyncResponse::text(429, "Too Many Requests").into_hyper();
             resp.headers_mut()
                 .insert("retry-after", hyper::header::HeaderValue::from_static("1"));
-            if let Some(ref id) = request_id {
-                if let Some(ref hdr) = request_id_hdr {
-                    if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                        resp.headers_mut().insert(hdr.clone(), val);
-                    }
-                }
-            }
-            if config.access_log {
-                let path = req.uri().path().to_string();
-                let method = req.method().to_string();
-                eprintln!(
-                    "[access] {} {} 429 0b {:.1}ms {}{}",
-                    method,
-                    path,
-                    start.elapsed().as_secs_f64() * 1000.0,
-                    remote_addr.ip(),
-                    format_request_id(&request_id),
-                );
-            }
+            insert_request_id(&mut resp, &meta);
+            log_access(config, &method, &path, &resp, &meta, remote_addr);
             return Ok(resp);
         }
     }
@@ -1706,27 +1713,12 @@ async fn handle_request_with_context(
         for (prefix, dir) in &config.static_dirs {
             let req_path = req.uri().path();
             if req_path.starts_with(prefix.as_str()) {
-                if let Some(mut file_resp) = serve_static_file(dir, prefix, req_path) {
-                    if let Some(ref id) = request_id {
-                        if let Some(ref hdr) = request_id_hdr {
-                            if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                                file_resp.headers_mut().insert(hdr.clone(), val);
-                            }
-                        }
+                if let Some((mut file_resp, compressible)) = serve_static_file(dir, prefix, req_path).await {
+                    insert_request_id(&mut file_resp, &meta);
+                    if compressible {
+                        file_resp = try_compress_response(file_resp, meta.accepts_gzip);
                     }
-                    let file_resp = try_compress_response(file_resp, client_accepts_gzip);
-                    if config.access_log {
-                        use hyper::body::Body as _;
-                        eprintln!(
-                            "[access] GET {} {} {}b {:.1}ms {}{}",
-                            req_path,
-                            file_resp.status().as_u16(),
-                            file_resp.body().size_hint().lower(),
-                            start.elapsed().as_secs_f64() * 1000.0,
-                            remote_addr.ip(),
-                            format_request_id(&request_id),
-                        );
-                    }
+                    log_access(config, "GET", req_path, &file_resp, &meta, remote_addr);
                     return Ok(file_resp);
                 }
             }
@@ -1737,15 +1729,9 @@ async fn handle_request_with_context(
     let mut async_req = match AsyncRequest::from_hyper(req, config.max_body_size).await {
         Ok(r) => r,
         Err(BodyError::TooLarge) => {
-            if config.access_log {
-                eprintln!(
-                    "[access] ?? ?? 413 0b {:.1}ms {}{}",
-                    start.elapsed().as_secs_f64() * 1000.0,
-                    remote_addr.ip(),
-                    format_request_id(&request_id),
-                );
-            }
-            return Ok(AsyncResponse::text(413, "Payload Too Large").into_hyper());
+            let resp = AsyncResponse::text(413, "Payload Too Large").into_hyper();
+            log_access(config, "??", "??", &resp, &meta, remote_addr);
+            return Ok(resp);
         }
         Err(BodyError::Hyper(_)) => {
             return Ok(AsyncResponse::text(500, "Failed to read request").into_hyper());
@@ -1756,7 +1742,7 @@ async fn handle_request_with_context(
     let path = async_req.path.clone();
 
     // Find handler — borrow method/path from async_req to avoid duplicate allocations
-    let mut resp = match ctx.routes.find(async_req.method.as_str(), &async_req.path) {
+    let resp = match ctx.routes.find(async_req.method.as_str(), &async_req.path) {
         Some((handler, params)) => {
             async_req.params = params;
 
@@ -1824,14 +1810,8 @@ async fn handle_request_with_context(
                         handler(async_req, tx);
                     });
                     let mut resp = AsyncResponse::sse(rx);
-                    // Add request ID and CORS headers to SSE response
-                    if let Some(ref id) = request_id {
-                        if let Some(ref hdr) = request_id_hdr {
-                            if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                                resp.headers_mut().insert(hdr.clone(), val);
-                            }
-                        }
-                    }
+                    // SSE: add request ID and CORS but skip compression
+                    insert_request_id(&mut resp, &meta);
                     if let Some(ref cors) = config.cors {
                         apply_cors_headers(resp.headers_mut(), cors, &hyper::HeaderMap::new());
                     }
@@ -1841,10 +1821,10 @@ async fn handle_request_with_context(
                             method,
                             path,
                             remote_addr.ip(),
-                            format_request_id(&request_id),
+                            format_request_id(&meta.request_id),
                         );
                     }
-                    // Return SSE response directly — skip compression and standard logging
+                    // Return SSE response directly — skip finalize_response
                     return Ok(resp);
                 }
             }
@@ -1852,48 +1832,9 @@ async fn handle_request_with_context(
         None => AsyncResponse::text(404, "Not Found").into_hyper(),
     };
 
-    // Append request ID header to response
-    if let Some(ref id) = request_id {
-        if let Some(ref hdr) = request_id_hdr {
-            if let Ok(val) = hyper::header::HeaderValue::from_str(id) {
-                resp.headers_mut().insert(hdr.clone(), val);
-            }
-        }
-    }
-
-    // Append CORS headers to all responses
-    if let Some(ref cors) = config.cors {
-        apply_cors_headers(resp.headers_mut(), cors, &hyper::HeaderMap::new());
-    }
-
-    // Response compression (skip for streaming/SSE responses)
-    let is_event_stream = resp
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .map(|ct| ct.contains("text/event-stream"))
-        .unwrap_or(false);
-    let resp = if is_event_stream {
-        resp
-    } else {
-        try_compress_response(resp, client_accepts_gzip)
-    };
-
-    // Structured access log
-    if config.access_log {
-        let status = resp.status().as_u16();
-        let body_len = resp.body().size_hint().lower();
-        eprintln!(
-            "[access] {} {} {} {}b {:.1}ms {}{}",
-            method,
-            path,
-            status,
-            body_len,
-            start.elapsed().as_secs_f64() * 1000.0,
-            remote_addr.ip(),
-            format_request_id(&request_id),
-        );
-    }
+    // Apply request ID, CORS, and compression
+    let resp = finalize_response(resp, &meta, config);
+    log_access(config, &method, &path, &resp, &meta, remote_addr);
 
     Ok(resp)
 }
@@ -1980,22 +1921,58 @@ fn generate_docs_html(routes: &[(String, String)], docs_path: &str) -> String {
 
 /// Generate an OpenAPI 3.0 JSON spec from route metadata.
 fn generate_openapi_json(routes: &[(String, String)]) -> String {
-    let mut paths: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    let mut paths: std::collections::BTreeMap<String, Vec<&str>> = std::collections::BTreeMap::new();
     for (method, path) in routes {
-        paths.entry(path.as_str()).or_default().push(method.as_str());
+        // Convert :param to {param} for OpenAPI spec
+        let openapi_path = path
+            .split('/')
+            .map(|seg| {
+                if let Some(name) = seg.strip_prefix(':') {
+                    format!("{{{}}}", name)
+                } else {
+                    seg.to_string()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("/");
+        paths.entry(openapi_path).or_default().push(method.as_str());
     }
 
     let mut path_entries = Vec::new();
     for (path, methods) in &paths {
+        // Extract path parameters from {param} segments
+        let params: Vec<&str> = path
+            .split('/')
+            .filter_map(|seg| {
+                seg.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
+            })
+            .collect();
+
+        let params_json = if params.is_empty() {
+            String::new()
+        } else {
+            let param_entries: Vec<String> = params
+                .iter()
+                .map(|name| {
+                    format!(
+                        r#"{{"name":"{}","in":"path","required":true,"schema":{{"type":"string"}}}}"#,
+                        name
+                    )
+                })
+                .collect();
+            format!(r#","parameters":[{}]"#, param_entries.join(","))
+        };
+
         let mut method_entries = Vec::new();
         for method in methods {
             method_entries.push(format!(
-                r#""{}": {{"responses": {{"200": {{"description": "Success"}}}}}}"#,
-                method.to_lowercase()
+                r#""{}":{{"responses":{{"200":{{"description":"Success"}}}}{}}}"#,
+                method.to_lowercase(),
+                params_json,
             ));
         }
         path_entries.push(format!(
-            r#""{}": {{{}}}"#,
+            r#""{}":{{{}}}"#,
             path,
             method_entries.join(",")
         ));
@@ -2251,12 +2228,18 @@ fn noop_waker() -> std::task::Waker {
 // Static File Serving
 // ---------------------------------------------------------------------------
 
+/// Maximum file size (in bytes) to buffer in memory for compression.
+/// Files larger than this are streamed directly.
+const STATIC_FILE_BUFFER_THRESHOLD: u64 = 64 * 1024;
+
 /// Serve a static file from the filesystem with security checks.
-fn serve_static_file(
+/// Files under 64KB are read into memory (suitable for compression).
+/// Larger files are streamed directly via tokio::fs.
+async fn serve_static_file(
     base_dir: &str,
     url_prefix: &str,
     request_path: &str,
-) -> Option<Response<ServerBody>> {
+) -> Option<(Response<ServerBody>, bool)> {
     // Strip the URL prefix to get the relative file path
     let relative = request_path.strip_prefix(url_prefix)?;
     let relative = relative.trim_start_matches('/');
@@ -2267,12 +2250,13 @@ fn serve_static_file(
 
     // Path traversal prevention
     if relative.contains("..") || relative.contains('\0') {
-        return Some(
+        return Some((
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Full::new(Bytes::from("Forbidden")).boxed())
                 .unwrap(),
-        );
+            false,
+        ));
     }
 
     let file_path = std::path::Path::new(base_dir).join(relative);
@@ -2281,71 +2265,120 @@ fn serve_static_file(
     let canonical_base = match std::fs::canonicalize(base_dir) {
         Ok(p) => p,
         Err(_) => {
-            return Some(
+            return Some((
                 Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .body(Full::new(Bytes::from("Not Found")).boxed())
                     .unwrap(),
-            );
+                false,
+            ));
         }
     };
     let canonical_file = match std::fs::canonicalize(&file_path) {
         Ok(p) => p,
         Err(_) => {
-            return Some(
+            return Some((
                 Response::builder()
                     .status(StatusCode::NOT_FOUND)
                     .body(Full::new(Bytes::from("Not Found")).boxed())
                     .unwrap(),
-            );
+                false,
+            ));
         }
     };
     if !canonical_file.starts_with(&canonical_base) {
-        return Some(
+        return Some((
             Response::builder()
                 .status(StatusCode::FORBIDDEN)
                 .body(Full::new(Bytes::from("Forbidden")).boxed())
                 .unwrap(),
-        );
+            false,
+        ));
     }
-
-    // Read file
-    let content = match std::fs::read(&canonical_file) {
-        Ok(c) => c,
-        Err(_) => {
-            return Some(
-                Response::builder()
-                    .status(StatusCode::NOT_FOUND)
-                    .body(Full::new(Bytes::from("Not Found")).boxed())
-                    .unwrap(),
-            );
-        }
-    };
 
     let content_type = guess_content_type(&canonical_file);
 
     // ETag based on file modification time + size
     let metadata = std::fs::metadata(&canonical_file).ok();
+    let file_size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
     let etag = metadata.as_ref().and_then(|m| {
         let modified = m.modified().ok()?;
         let duration = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
         Some(format!("\"{:x}-{:x}\"", duration.as_secs(), m.len()))
     });
 
-    let mut builder = Response::builder()
-        .status(StatusCode::OK)
-        .header("content-type", content_type);
+    // Decide: buffer small files (compressible), stream large files
+    if file_size <= STATIC_FILE_BUFFER_THRESHOLD {
+        let content = match std::fs::read(&canonical_file) {
+            Ok(c) => c,
+            Err(_) => {
+                return Some((
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Full::new(Bytes::from("Not Found")).boxed())
+                        .unwrap(),
+                    false,
+                ));
+            }
+        };
 
-    if let Some(ref tag) = etag {
-        builder = builder.header("etag", tag.as_str());
-        builder = builder.header("cache-control", "public, max-age=3600");
+        let mut builder = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", content_type);
+
+        if let Some(ref tag) = etag {
+            builder = builder.header("etag", tag.as_str());
+            builder = builder.header("cache-control", "public, max-age=3600");
+        }
+
+        Some((
+            builder
+                .body(Full::new(Bytes::from(content)).boxed())
+                .unwrap(),
+            true, // compressible
+        ))
+    } else {
+        // Stream large files via tokio::fs
+        let file = match tokio::fs::File::open(&canonical_file).await {
+            Ok(f) => f,
+            Err(_) => {
+                return Some((
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(Full::new(Bytes::from("Not Found")).boxed())
+                        .unwrap(),
+                    false,
+                ));
+            }
+        };
+
+        let stream = tokio_util::io::ReaderStream::new(file);
+        use tokio_stream::StreamExt;
+        let body = http_body_util::StreamBody::new(
+            stream.map(|result| {
+                result
+                    .map(hyper::body::Frame::data)
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+            }),
+        );
+
+        let mut builder = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", content_type)
+            .header("content-length", file_size.to_string());
+
+        if let Some(ref tag) = etag {
+            builder = builder.header("etag", tag.as_str());
+            builder = builder.header("cache-control", "public, max-age=3600");
+        }
+
+        Some((
+            builder
+                .body(body.boxed())
+                .unwrap(),
+            false, // not compressible (streaming)
+        ))
     }
-
-    Some(
-        builder
-            .body(Full::new(Bytes::from(content)).boxed())
-            .unwrap(),
-    )
 }
 
 /// Guess MIME content type from file extension.
@@ -2702,24 +2735,26 @@ mod tests {
     // Static File Serving Tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn test_static_file_path_traversal() {
+    #[tokio::test]
+    async fn test_static_file_path_traversal() {
         // Should return Forbidden for path traversal
-        let result = serve_static_file("/tmp", "/static", "/static/../etc/passwd");
+        let result = serve_static_file("/tmp", "/static", "/static/../etc/passwd").await;
         assert!(result.is_some());
-        assert_eq!(result.unwrap().status(), StatusCode::FORBIDDEN);
+        let (resp, _) = result.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
     }
 
-    #[test]
-    fn test_static_file_not_found() {
-        let result = serve_static_file("/tmp", "/static", "/static/nonexistent_file_xyz.txt");
+    #[tokio::test]
+    async fn test_static_file_not_found() {
+        let result = serve_static_file("/tmp", "/static", "/static/nonexistent_file_xyz.txt").await;
         assert!(result.is_some());
-        assert_eq!(result.unwrap().status(), StatusCode::NOT_FOUND);
+        let (resp, _) = result.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
-    #[test]
-    fn test_static_file_empty_relative() {
-        let result = serve_static_file("/tmp", "/static", "/static/");
+    #[tokio::test]
+    async fn test_static_file_empty_relative() {
+        let result = serve_static_file("/tmp", "/static", "/static/").await;
         assert!(result.is_none());
     }
 
@@ -2838,5 +2873,90 @@ mod tests {
 
         // SSE routes should not match other methods
         assert!(tree.find("POST", "/events").is_none());
+    }
+
+    #[test]
+    fn test_insert_request_id_adds_header() {
+        let meta = RequestMeta {
+            request_id: Some("req-abc-123".to_string()),
+            request_id_hdr: Some(
+                hyper::header::HeaderName::from_static("x-request-id"),
+            ),
+            accepts_gzip: false,
+            start: std::time::Instant::now(),
+        };
+        let mut resp = AsyncResponse::text(200, "ok").into_hyper();
+        insert_request_id(&mut resp, &meta);
+        assert_eq!(
+            resp.headers().get("x-request-id").unwrap().to_str().unwrap(),
+            "req-abc-123"
+        );
+    }
+
+    #[test]
+    fn test_insert_request_id_noop_when_not_configured() {
+        let meta = RequestMeta {
+            request_id: None,
+            request_id_hdr: None,
+            accepts_gzip: false,
+            start: std::time::Instant::now(),
+        };
+        let mut resp = AsyncResponse::text(200, "ok").into_hyper();
+        insert_request_id(&mut resp, &meta);
+        assert!(resp.headers().get("x-request-id").is_none());
+    }
+
+    #[test]
+    fn test_finalize_response_applies_request_id() {
+        let meta = RequestMeta {
+            request_id: Some("fin-001".to_string()),
+            request_id_hdr: Some(
+                hyper::header::HeaderName::from_static("x-req-id"),
+            ),
+            accepts_gzip: false,
+            start: std::time::Instant::now(),
+        };
+        let config = ServerConfig::default();
+        let resp = AsyncResponse::text(200, "hello").into_hyper();
+        let resp = finalize_response(resp, &meta, &config);
+        assert_eq!(
+            resp.headers().get("x-req-id").unwrap().to_str().unwrap(),
+            "fin-001"
+        );
+    }
+
+    #[test]
+    fn test_openapi_no_params() {
+        let routes = vec![
+            ("GET".to_string(), "/health".to_string()),
+        ];
+        let json = generate_openapi_json(&routes);
+        assert!(json.contains(r#""/health""#));
+        assert!(!json.contains("parameters"));
+    }
+
+    #[test]
+    fn test_openapi_extracts_path_params() {
+        let routes = vec![
+            ("GET".to_string(), "/users/:id".to_string()),
+        ];
+        let json = generate_openapi_json(&routes);
+        // :id should become {id} in the path
+        assert!(json.contains(r#"/users/{id}"#), "path param not converted: {}", json);
+        // Should include parameters array
+        assert!(json.contains(r#""name":"id""#), "param name missing: {}", json);
+        assert!(json.contains(r#""in":"path""#), "param in missing: {}", json);
+        assert!(json.contains(r#""required":true"#), "required missing: {}", json);
+    }
+
+    #[test]
+    fn test_openapi_multiple_params() {
+        let routes = vec![
+            ("GET".to_string(), "/orgs/:org_id/users/:user_id".to_string()),
+        ];
+        let json = generate_openapi_json(&routes);
+        assert!(json.contains(r#"/orgs/{org_id}/users/{user_id}"#));
+        assert!(json.contains(r#""name":"org_id""#));
+        assert!(json.contains(r#""name":"user_id""#));
     }
 }

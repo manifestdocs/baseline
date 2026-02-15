@@ -1,0 +1,23 @@
+@prelude(server)
+
+// Test Request param/query accessors type-check in handler context
+
+fn show_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let id = Request.param(req, "id")?
+  let page = Request.query(req, "page")
+  Ok(Response.ok("ok"))
+}
+
+fn int_handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
+  Ok(Response.ok("ok"))
+}
+
+fn main!() -> () = {
+  let r = Router.new()
+    |> Router.get("/items/:id", show_handler)
+    |> Router.get("/nums/:id", int_handler)
+  Console.println!("ok")
+}
+
+// expect: ok

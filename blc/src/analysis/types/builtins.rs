@@ -788,106 +788,33 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Response.redirect_temporary".into(),
-            Type::Function(vec![Type::String], Box::new(resp)),
+            Type::Function(vec![Type::String], Box::new(resp.clone())),
+        );
+        sigs.insert(
+            "Response.set_cookie".into(),
+            Type::Function(
+                vec![resp.clone(), Type::String, Type::String],
+                Box::new(resp),
+            ),
         );
     }
 
-    // -- Validate module (pure) — runtime validation helpers --
-    if native_modules.contains(&"Validate") {
-        let he = http_error_type();
-        let result_unknown_he = Type::Enum(
+    // -- Request.decode (type-driven validation) --
+    if native_modules.contains(&"Request") {
+        let req = request_type();
+        let resp = response_type();
+        let result_unknown_resp = Type::Enum(
             "Result".to_string(),
             vec![
                 ("Ok".to_string(), vec![Type::Unknown]),
-                ("Err".to_string(), vec![he.clone()]),
-            ],
-        );
-        let result_string_he = Type::Enum(
-            "Result".to_string(),
-            vec![
-                ("Ok".to_string(), vec![Type::String]),
-                ("Err".to_string(), vec![he.clone()]),
-            ],
-        );
-        let result_int_he = Type::Enum(
-            "Result".to_string(),
-            vec![
-                ("Ok".to_string(), vec![Type::Int]),
-                ("Err".to_string(), vec![he.clone()]),
-            ],
-        );
-        let result_bool_he = Type::Enum(
-            "Result".to_string(),
-            vec![
-                ("Ok".to_string(), vec![Type::Bool]),
-                ("Err".to_string(), vec![he]),
+                ("Err".to_string(), vec![resp]),
             ],
         );
         sigs.insert(
-            "Validate.required".into(),
+            "Request.decode".into(),
             Type::Function(
-                vec![Type::Unknown, Type::String],
-                Box::new(result_unknown_he),
-            ),
-        );
-        sigs.insert(
-            "Validate.string".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String],
-                Box::new(result_string_he.clone()),
-            ),
-        );
-        sigs.insert(
-            "Validate.int".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String],
-                Box::new(result_int_he.clone()),
-            ),
-        );
-        sigs.insert(
-            "Validate.boolean".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String],
-                Box::new(result_bool_he),
-            ),
-        );
-        sigs.insert(
-            "Validate.min_length".into(),
-            Type::Function(
-                vec![Type::String, Type::Int, Type::String],
-                Box::new(result_string_he.clone()),
-            ),
-        );
-        sigs.insert(
-            "Validate.max_length".into(),
-            Type::Function(
-                vec![Type::String, Type::Int, Type::String],
-                Box::new(result_string_he.clone()),
-            ),
-        );
-        sigs.insert(
-            "Validate.min".into(),
-            Type::Function(
-                vec![Type::Int, Type::Int, Type::String],
-                Box::new(result_int_he.clone()),
-            ),
-        );
-        sigs.insert(
-            "Validate.max".into(),
-            Type::Function(
-                vec![Type::Int, Type::Int, Type::String],
-                Box::new(result_int_he),
-            ),
-        );
-        sigs.insert(
-            "Validate.one_of".into(),
-            Type::Function(
-                vec![
-                    Type::String,
-                    Type::List(Box::new(Type::String)),
-                    Type::String,
-                ],
-                Box::new(result_string_he),
+                vec![req, Type::String],
+                Box::new(result_unknown_resp),
             ),
         );
     }

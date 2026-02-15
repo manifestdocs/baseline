@@ -1,0 +1,20 @@
+@prelude(server)
+
+// Test middleware composition via Router.use
+
+fn logger(req: Request, next: (Request) -> Result<Response, HttpError>) -> {Http} Result<Response, HttpError> = {
+  let result = next(req)
+  result
+}
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.ok("hello"))
+
+fn main!() -> () = {
+  let r = Router.new()
+    |> Router.use(logger)
+    |> Router.get("/", handler)
+  Console.println!("ok")
+}
+
+// expect: ok

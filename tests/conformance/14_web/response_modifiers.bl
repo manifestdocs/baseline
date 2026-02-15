@@ -1,0 +1,22 @@
+@prelude(server)
+
+// Test Response modifier functions type-check and compose
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let resp = Response.ok("hello")
+    |> Response.with_header("X-Custom", "value")
+    |> Response.with_headers([("X-A", "1"), ("X-B", "2")])
+  Ok(resp)
+}
+
+fn status_handler(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.status(201, "created"))
+
+fn main!() -> () = {
+  let r = Router.new()
+    |> Router.get("/test", handler)
+    |> Router.get("/status", status_handler)
+  Console.println!("ok")
+}
+
+// expect: ok

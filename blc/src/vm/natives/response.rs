@@ -290,3 +290,68 @@ pub(super) fn native_response_service_unavailable(args: &[NValue]) -> Result<NVa
 pub(super) fn native_response_gateway_timeout(args: &[NValue]) -> Result<NValue, NativeError> {
     make_response_auto(504, &args[0])
 }
+
+/// Response.set_cookie(resp, name, value) -> Response with Set-Cookie header.
+pub(super) fn native_response_set_cookie(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 3 {
+        return Err(NativeError(format!(
+            "Response.set_cookie expects 3 arguments (response, name, value), got {}",
+            args.len()
+        )));
+    }
+    let fields = match args[0].as_record() {
+        Some(f) => f,
+        None => {
+            return Err(NativeError(format!(
+                "Response.set_cookie: first arg must be Response, got {}",
+                args[0]
+            )));
+        }
+    };
+    let name = match args[1].as_string() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(NativeError(format!(
+                "Response.set_cookie: second arg must be String name, got {}",
+                args[1]
+            )));
+        }
+    };
+    let value = match args[2].as_string() {
+        Some(s) => s.to_string(),
+        None => {
+            return Err(NativeError(format!(
+                "Response.set_cookie: third arg must be String value, got {}",
+                args[2]
+            )));
+        }
+    };
+
+    let cookie_str = format!("{}={}; Path=/; HttpOnly", name, value);
+
+    // Append the Set-Cookie header tuple to the response's headers list
+    let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
+    for (k, v) in &mut new_fields {
+        if &**k == "headers" {
+            let mut headers = match v.as_list() {
+                Some(list) => list.clone(),
+                None => Vec::new(),
+            };
+            headers.push(NValue::tuple(vec![
+                NValue::string("Set-Cookie".into()),
+                NValue::string(cookie_str.into()),
+            ]));
+            *v = NValue::list(headers);
+            return Ok(NValue::record(new_fields));
+        }
+    }
+    // No headers field — add one
+    new_fields.push((
+        "headers".into(),
+        NValue::list(vec![NValue::tuple(vec![
+            NValue::string("Set-Cookie".into()),
+            NValue::string(cookie_str.into()),
+        ])]),
+    ));
+    Ok(NValue::record(new_fields))
+}

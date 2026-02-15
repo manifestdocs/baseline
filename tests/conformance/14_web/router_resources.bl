@@ -1,0 +1,24 @@
+@prelude(server)
+
+// Test Router.resources generates 5 RESTful CRUD routes
+
+fn index_handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.ok("list"))
+fn show_handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.ok("show"))
+fn create_handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.created("created"))
+fn update_handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.ok("updated"))
+fn destroy_handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.no_content())
+
+fn main!() -> () = {
+  let r = Router.new()
+    |> Router.resources("/todos", {
+      index: index_handler,
+      show: show_handler,
+      create: create_handler,
+      update: update_handler,
+      destroy: destroy_handler
+    })
+  let docs = Router.docs_json(r)
+  Console.println!(docs)
+}
+
+// expect: [{"method":"GET","path":"/todos"},{"method":"GET","path":"/todos/:id"},{"method":"POST","path":"/todos"},{"method":"PUT","path":"/todos/:id"},{"method":"DELETE","path":"/todos/:id"}]

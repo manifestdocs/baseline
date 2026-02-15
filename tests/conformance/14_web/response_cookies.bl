@@ -1,0 +1,17 @@
+@prelude(server)
+
+// Test Response.set_cookie appends Set-Cookie header to a response
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let resp = Response.ok("hello")
+    |> Response.set_cookie("session", "abc123")
+  Ok(resp)
+}
+
+fn main!() -> () = {
+  let r = Router.new()
+    |> Router.get("/login", handler)
+  Console.println!("ok")
+}
+
+// expect: ok

@@ -1,0 +1,20 @@
+@prelude(server)
+
+// Test Router.group mounts sub-router routes with a prefix
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.ok("ok"))
+
+fn main!() -> () = {
+  let sub = Router.new()
+    |> Router.get("/users", handler)
+    |> Router.post("/users", handler)
+
+  let r = Router.new()
+    |> Router.get("/health", handler)
+    |> Router.group("/api/v1", sub)
+
+  let docs = Router.docs_json(r)
+  Console.println!(docs)
+}
+
+// expect: [{"method":"GET","path":"/health"},{"method":"GET","path":"/api/v1/users"},{"method":"POST","path":"/api/v1/users"}]

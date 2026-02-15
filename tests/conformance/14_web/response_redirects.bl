@@ -1,0 +1,22 @@
+@prelude(server)
+
+// Test Response redirect constructors type-check correctly
+
+fn redirect_handler(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.redirect("/new-location"))
+
+fn permanent_handler(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.redirect_permanent("/moved"))
+
+fn temporary_handler(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.redirect_temporary("/temp"))
+
+fn main!() -> () = {
+  let r = Router.new()
+    |> Router.get("/r1", redirect_handler)
+    |> Router.get("/r2", permanent_handler)
+    |> Router.get("/r3", temporary_handler)
+  Console.println!("ok")
+}
+
+// expect: ok

@@ -51,7 +51,7 @@ hyper = { version = "1", features = ["http1", "http2", "server"], optional = tru
 hyper-util = { version = "0.1", features = ["tokio", "http1", "http2", "server-auto"], optional = true }
 http-body-util = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
-tokio-util = { version = "0.7", optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
 flate2 = { version = "1", optional = true }
 tokio-stream = { version = "0.1", optional = true }
 
