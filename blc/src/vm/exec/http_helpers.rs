@@ -1,4 +1,4 @@
-use crate::vm::natives::http_error::http_error_status_code;
+use crate::vm::natives::http_error::{http_error_status_code, http_error_title};
 use crate::vm::nvalue::{HeapObject, NValue};
 use crate::vm::value::RcStr;
 
@@ -51,6 +51,23 @@ pub(crate) fn inject_params_nv(req: &NValue, params: &[(String, String)]) -> NVa
     NValue::record(new_fields)
 }
 
+/// Inject router-level state into a request record as a `state` field.
+pub(crate) fn inject_state_nv(req: &NValue, state: &NValue) -> NValue {
+    let fields = match req.as_record() {
+        Some(f) => f,
+        None => return req.clone(),
+    };
+    let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
+    for (k, v) in &mut new_fields {
+        if &**k == "state" {
+            *v = state.clone();
+            return NValue::record(new_fields);
+        }
+    }
+    new_fields.push(("state".into(), state.clone()));
+    NValue::record(new_fields)
+}
+
 pub(crate) fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>, String) {
     if value.is_heap() {
         match value.as_heap_ref() {
@@ -67,9 +84,11 @@ pub(crate) fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>
                                 Some(s) => s.to_string(),
                                 None => format!("{}", err_msg),
                             };
+                            let title = http_error_title(err_tag);
                             let body = format!(
-                                "{{\"error\":\"{}\",\"message\":\"{}\"}}",
-                                err_tag,
+                                "{{\"errors\":[{{\"status\":\"{}\",\"title\":\"{}\",\"detail\":\"{}\"}}]}}",
+                                status,
+                                title,
                                 msg.replace('\\', "\\\\").replace('"', "\\\"")
                             );
                             return (status, vec![("Content-Type".to_string(), "application/json".to_string())], body);
@@ -156,9 +175,12 @@ mod tests {
             "Err".into(),
             NValue::enum_val("BadRequest".into(), NValue::string("invalid".into())),
         );
-        let (status, _, body) = extract_response_nv(&err);
+        let (status, headers, body) = extract_response_nv(&err);
         assert_eq!(status, 400);
+        assert!(body.contains("\"errors\""));
+        assert!(body.contains("\"Bad Request\""));
         assert!(body.contains("invalid"));
+        assert!(headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
     }
 
     #[test]
@@ -169,6 +191,7 @@ mod tests {
         );
         let (status, _, body) = extract_response_nv(&err);
         assert_eq!(status, 404);
+        assert!(body.contains("\"Not Found\""));
         assert!(body.contains("missing"));
     }
 
@@ -225,6 +248,35 @@ mod tests {
         let (status, _, body) = extract_response_nv(&err);
         assert_eq!(status, 500);
         assert!(body.contains("oops"));
+    }
+
+    #[test]
+    fn extract_http_error_new_variants() {
+        // MethodNotAllowed
+        let err = NValue::enum_val("Err".into(), NValue::enum_val("MethodNotAllowed".into(), NValue::string("POST not allowed".into())));
+        let (status, _, body) = extract_response_nv(&err);
+        assert_eq!(status, 405);
+        assert!(body.contains("\"Method Not Allowed\""));
+
+        // TooManyRequests
+        let err = NValue::enum_val("Err".into(), NValue::enum_val("TooManyRequests".into(), NValue::string("rate limited".into())));
+        let (status, _, _) = extract_response_nv(&err);
+        assert_eq!(status, 429);
+
+        // BadGateway
+        let err = NValue::enum_val("Err".into(), NValue::enum_val("BadGateway".into(), NValue::string("upstream down".into())));
+        let (status, _, _) = extract_response_nv(&err);
+        assert_eq!(status, 502);
+
+        // ServiceUnavailable
+        let err = NValue::enum_val("Err".into(), NValue::enum_val("ServiceUnavailable".into(), NValue::string("maintenance".into())));
+        let (status, _, _) = extract_response_nv(&err);
+        assert_eq!(status, 503);
+
+        // GatewayTimeout
+        let err = NValue::enum_val("Err".into(), NValue::enum_val("GatewayTimeout".into(), NValue::string("timed out".into())));
+        let (status, _, _) = extract_response_nv(&err);
+        assert_eq!(status, 504);
     }
 
     #[test]
