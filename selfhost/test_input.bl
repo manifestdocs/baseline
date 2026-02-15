@@ -1,8 +1,12 @@
-// Test: recursive function
-// Expected exit code: 120
+// Test: arithmetic and function calls
+// Expected exit code: 42
 
-fn factorial(n: Int) -> Int =
-  if n <= 1 then 1
-  else n * factorial(n - 1)
+fn square(x: Int) -> Int = x * x
 
-fn main() -> Int = factorial(5)
+fn sum_squares(a: Int, b: Int) -> Int = square(a) + square(b)
+
+fn main() -> Int = {
+  let a = sum_squares(3, 4)
+  let b = a + 42 - 25
+  b
+}
