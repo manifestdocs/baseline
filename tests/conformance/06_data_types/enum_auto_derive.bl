@@ -1,0 +1,26 @@
+@prelude(core)
+
+// Conformance: enum auto-derived to_string and parse methods
+
+type Color = | Red | Green | Blue
+type Status = | Active | InProgress | Done
+
+fn main() -> Unit = ()
+
+// to_string
+test "to_string red" = Color.to_string(Red) == "red"
+test "to_string green" = Color.to_string(Green) == "green"
+test "to_string blue" = Color.to_string(Blue) == "blue"
+test "to_string active" = Status.to_string(Active) == "active"
+test "to_string multi-word" = Status.to_string(InProgress) == "in_progress"
+test "to_string done" = Status.to_string(Done) == "done"
+
+// parse
+test "parse active" = Status.parse("active") == Ok(Active)
+test "parse in_progress" = Status.parse("in_progress") == Ok(InProgress)
+test "parse done" = Status.parse("done") == Ok(Done)
+test "parse invalid" = Status.parse("nope") == Err("invalid Status value")
+
+// round-trip
+test "round-trip done" = Status.parse(Status.to_string(Done)) == Ok(Done)
+test "round-trip red" = Color.parse(Color.to_string(Red)) == Ok(Red)

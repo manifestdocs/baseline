@@ -27,6 +27,53 @@ impl<'a> super::Lowerer<'a> {
         }
     }
 
+    /// Collect a simple enum definition (all variants nullary) into `enum_defs`.
+    pub(super) fn collect_enum_def(&mut self, node: &Node) {
+        let name_node = match node.child_by_field_name("name") {
+            Some(n) => n,
+            None => return,
+        };
+        let def_node = match node.child_by_field_name("def") {
+            Some(n) => n,
+            None => return,
+        };
+        if def_node.kind() != "variant_list" {
+            return;
+        }
+        let name = self.node_text(&name_node);
+        let mut variants = Vec::new();
+        let mut all_nullary = true;
+        let mut cursor = def_node.walk();
+        for child in def_node.children(&mut cursor) {
+            if child.kind() == "variant" {
+                if let Some(vname_node) = child.child_by_field_name("name") {
+                    let vname = self.node_text(&vname_node);
+                    // A variant is nullary if the only type_identifier child is its name
+                    let payload_count = (0..child.child_count())
+                        .filter(|&i| {
+                            let c = child.child(i).unwrap();
+                            (c.kind() != "type_identifier" || c.id() != vname_node.id())
+                                && c.kind() != "|"
+                                && c.kind() != "("
+                                && c.kind() != ")"
+                                && c.kind() != ","
+                                && c.kind() != "line_comment"
+                                && c.kind() != "block_comment"
+                        })
+                        .count();
+                    if payload_count > 0 {
+                        all_nullary = false;
+                        break;
+                    }
+                    variants.push(vname);
+                }
+            }
+        }
+        if all_nullary && !variants.is_empty() {
+            self.enum_defs.insert(name, variants);
+        }
+    }
+
     /// Extract parameter names from a function_def node.
     pub(super) fn extract_param_names(&self, func_def: &Node) -> Vec<String> {
         let mut params = Vec::new();
@@ -47,6 +94,83 @@ impl<'a> super::Lowerer<'a> {
 // ---------------------------------------------------------------------------
 // Standalone helpers (used across multiple files)
 // ---------------------------------------------------------------------------
+
+pub(super) fn to_snake_case(name: &str) -> String {
+    let mut result = String::with_capacity(name.len() + 4);
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(ch.to_lowercase().next().unwrap());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+/// Generate inline IR for auto-derived enum methods (to_string, parse).
+/// Returns `None` if the method is not recognized.
+pub(super) fn generate_enum_method(
+    enum_name: &str,
+    method: &str,
+    variants: &[String],
+    args: Vec<Expr>,
+) -> Option<Expr> {
+    match method {
+        "to_string" => {
+            // Match on the enum value and return the snake_case string
+            let subject = args.into_iter().next().unwrap_or(Expr::Unit);
+            let arms: Vec<MatchArm> = variants
+                .iter()
+                .map(|v| MatchArm {
+                    pattern: Pattern::Constructor(v.clone(), vec![]),
+                    body: Expr::String(to_snake_case(v)),
+                })
+                .collect();
+            Some(Expr::Match {
+                subject: Box::new(subject),
+                arms,
+                ty: Some(crate::analysis::types::Type::String),
+            })
+        }
+        "parse" => {
+            // Chain of if-else comparing the string to each variant's snake_case name
+            let input = args.into_iter().next().unwrap_or(Expr::Unit);
+            // Build from last variant backwards
+            let err_expr = Expr::MakeEnum {
+                tag: "Err".to_string(),
+                payload: Box::new(Expr::String(format!("invalid {} value", enum_name))),
+                ty: None,
+            };
+            let result = variants.iter().rev().fold(err_expr, |else_branch, v| {
+                let ok_expr = Expr::MakeEnum {
+                    tag: "Ok".to_string(),
+                    payload: Box::new(Expr::MakeEnum {
+                        tag: v.clone(),
+                        payload: Box::new(Expr::Unit),
+                        ty: None,
+                    }),
+                    ty: None,
+                };
+                Expr::If {
+                    condition: Box::new(Expr::BinOp {
+                        op: BinOp::Eq,
+                        lhs: Box::new(input.clone()),
+                        rhs: Box::new(Expr::String(to_snake_case(v))),
+                        ty: None,
+                    }),
+                    then_branch: Box::new(ok_expr),
+                    else_branch: Some(Box::new(else_branch)),
+                    ty: None,
+                }
+            });
+            Some(result)
+        }
+        _ => None,
+    }
+}
 
 pub(super) fn unescape(s: &str) -> String {
     match s {

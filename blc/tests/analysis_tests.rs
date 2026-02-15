@@ -471,8 +471,9 @@ fn effect_check_no_effect_needed() {
 
 #[test]
 fn effect_check_missing_capability() {
+    // Function explicitly declares {Console} but uses Http — CAP_001
     check_has_error(
-        "fn fetch!() -> String = Http.get!(\"http://example.com\")",
+        "fn fetch!() -> {Console} String = Http.get!(\"http://example.com\")",
         "CAP_001",
     );
 }
@@ -1647,21 +1648,42 @@ fn generic_err_produces_concrete_result() {
 
 #[test]
 fn transitive_effect_direct_still_works() {
-    // Direct ! call without declared effect still produces CAP_001
+    // Direct ! call with explicit declaration that doesn't cover Http → CAP_001
     check_has_error(
-        "fn fetch!() -> String = Http.get!(\"http://example.com\")",
+        "fn fetch!() -> {Console} String = Http.get!(\"http://example.com\")",
         "CAP_001",
     );
 }
 
 #[test]
+fn effect_inference_no_annotation() {
+    // Without explicit declaration, effects are inferred — no error
+    check_ok("fn fetch!() -> String = Http.get!(\"http://example.com\")");
+}
+
+#[test]
+fn effect_pure_annotation_violation() {
+    // @pure function that uses effects should error
+    check_has_error(
+        "@pure\nfn bad!() -> () = Console.println!(\"oops\")",
+        "CAP_001",
+    );
+}
+
+#[test]
+fn effect_ambient_no_declaration_needed() {
+    // Log, Time, Random are ambient — no declaration needed even with explicit effects
+    check_ok("fn logged() -> {Console} () = {\n  Log.info!(\"test\")\n  Console.println!(\"hi\")\n}");
+}
+
+#[test]
 fn transitive_effect_via_helper() {
     // helper calls Console.println! (direct effect), foo calls helper (transitive)
-    // foo should get CAP_001 for missing {Console}
+    // foo declares {Http} but not {Console} — should get transitive CAP_001
     let source = "\
         fn helper() -> {Console} () = Console.println!(\"hi\")\n\
         \n\
-        fn foo() -> () = helper()";
+        fn foo() -> {Http} () = helper()";
     check_has_error(source, "CAP_001");
     // Verify the transitive diagnostic mentions 'transitively'
     let result = parse_source(source, "<test>");
@@ -1682,6 +1704,16 @@ fn transitive_effect_via_helper() {
 }
 
 #[test]
+fn transitive_effect_inferred_no_error() {
+    // Without explicit declarations, effects are inferred transitively — no error
+    let source = "\
+        fn helper() -> {Console} () = Console.println!(\"hi\")\n\
+        \n\
+        fn foo() -> () = helper()";
+    check_ok(source);
+}
+
+#[test]
 fn transitive_effect_declared_ok() {
     // foo calls helper which needs Console, but foo declares {Console} — no error
     check_ok(
@@ -1693,14 +1725,14 @@ fn transitive_effect_declared_ok() {
 
 #[test]
 fn transitive_effect_chain() {
-    // a calls b (pure), b calls c, c calls Console.println!
-    // Effect should propagate: c -> b -> a
+    // a calls b, b calls c, c calls Console.println!
+    // a and b have explicit declarations without Console — should get transitive CAP_001
     let source = "\
         fn c() -> {Console} () = Console.println!(\"deep\")\n\
         \n\
-        fn b() -> () = c()\n\
+        fn b() -> {Http} () = c()\n\
         \n\
-        fn a() -> () = b()";
+        fn a() -> {Http} () = b()";
     // Both a and b should get transitive CAP_001
     let result = parse_source(source, "<test>");
     let transitive_diags: Vec<_> = result
@@ -1769,5 +1801,43 @@ fn record_update_nonexistent_field() {
         "type Point = { x: Int, y: Int }\n\
          fn update(p: Point) -> Point = { ..p, z: 42 }",
         "TYP_029",
+    );
+}
+
+// -----------------------------------------------------------------------
+// Enum auto-derived methods
+// -----------------------------------------------------------------------
+
+#[test]
+fn enum_to_string_type_checks() {
+    check_no_errors(
+        "type Color = | Red | Green | Blue\n\
+         fn main() -> String = Color.to_string(Red)",
+    );
+}
+
+#[test]
+fn enum_parse_type_checks() {
+    check_no_errors(
+        "type Color = | Red | Green | Blue\n\
+         fn main() -> Result<Color, String> = Color.parse(\"red\")",
+    );
+}
+
+#[test]
+fn enum_unknown_method_error() {
+    check_has_error(
+        "type Color = | Red | Green | Blue\n\
+         fn main() -> Unit = Color.foo(Red)",
+        "TYP_015",
+    );
+}
+
+#[test]
+fn enum_payload_method_error() {
+    check_has_error(
+        "type Expr = | Lit(Int) | Add(Int, Int)\n\
+         fn main() -> String = Expr.to_string(Lit(1))",
+        "TYP_015",
     );
 }
