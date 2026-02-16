@@ -323,6 +323,7 @@ pub enum UnaryOp {
 #[derive(Debug, Clone)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    pub guard: Option<Expr>,
     pub body: Expr,
 }
 
