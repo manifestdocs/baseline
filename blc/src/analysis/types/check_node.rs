@@ -1724,10 +1724,31 @@ fn check_node_inner(
             for i in 1..count {
                 let arm = node.named_child(i).unwrap();
                 let pat = arm.child(0).unwrap();
-                let body = arm.child(2).unwrap();
+                // Body is always the last child (after optional guard and ->)
+                let body = arm.child(arm.child_count() - 1).unwrap();
 
                 symbols.enter_scope();
                 check_pattern(&pat, &expr_type, source, symbols, diagnostics);
+
+                // Type-check guard expression if present
+                let mut arm_cursor = arm.walk();
+                for arm_child in arm.children(&mut arm_cursor) {
+                    if arm_child.kind() == "match_guard" {
+                        if let Some(guard_expr) = arm_child.named_child(0) {
+                            let guard_type = check_node(&guard_expr, source, file, symbols, diagnostics);
+                            if guard_type != Type::Bool && guard_type != Type::Unknown {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_003".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &guard_expr),
+                                    message: format!("Match guard must be Boolean, found {}", guard_type),
+                                    context: "Guard expressions must evaluate to true or false.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        }
+                    }
+                }
 
                 let body_type = check_node(&body, source, file, symbols, diagnostics);
                 symbols.exit_scope();
@@ -1739,7 +1760,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_017".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&body),
+                        location: Location::from_node(file, &body),
                         message: format!(
                             "Match arm mismatch: expected {}, found {}",
                             ret_type, body_type

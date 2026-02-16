@@ -1,0 +1,88 @@
+@prelude(core)
+
+// Conformance: match guard expressions
+
+fn classify(x: Int) -> String = {
+  match x
+    n if n > 0 -> "positive"
+    n if n < 0 -> "negative"
+    _ -> "zero"
+}
+
+test "guard positive" = classify(5) == "positive"
+test "guard negative" = classify(-3) == "negative"
+test "guard zero" = classify(0) == "zero"
+
+// Guard with constructor pattern
+fn describe_option(opt: Option<Int>) -> String = {
+  match opt
+    Some(x) if x > 10 -> "big"
+    Some(x) if x > 0 -> "small"
+    Some(_) -> "non-positive"
+    None -> "nothing"
+}
+
+test "guard constructor big" = describe_option(Some(42)) == "big"
+test "guard constructor small" = describe_option(Some(5)) == "small"
+test "guard constructor non-positive" = describe_option(Some(-1)) == "non-positive"
+test "guard constructor none" = describe_option(None) == "nothing"
+
+// Guard with literal and wildcard
+fn grade(score: Int) -> String = {
+  match score
+    100 -> "perfect"
+    x if x >= 90 -> "A"
+    x if x >= 80 -> "B"
+    x if x >= 70 -> "C"
+    _ -> "F"
+}
+
+test "guard grade perfect" = grade(100) == "perfect"
+test "guard grade A" = grade(95) == "A"
+test "guard grade B" = grade(85) == "B"
+test "guard grade C" = grade(70) == "C"
+test "guard grade F" = grade(50) == "F"
+
+// Guard fallthrough: multiple guarded var arms exercise the
+// guard-failure stack cleanup path (binding must be popped when
+// the guard is false before trying the next arm).
+fn fizzbuzz(n: Int) -> String = {
+  match n
+    x if x % 15 == 0 -> "fizzbuzz"
+    x if x % 3 == 0  -> "fizz"
+    x if x % 5 == 0  -> "buzz"
+    _ -> "other"
+}
+
+test "guard fallthrough fizzbuzz" = fizzbuzz(15) == "fizzbuzz"
+test "guard fallthrough fizz" = fizzbuzz(9) == "fizz"
+test "guard fallthrough buzz" = fizzbuzz(10) == "buzz"
+test "guard fallthrough other" = fizzbuzz(7) == "other"
+
+// Guard with wildcard pattern (no binding, simplest case)
+fn abs_category(x: Int) -> String = {
+  match x
+    _ if x > 100 -> "huge"
+    _ if x > 0 -> "small"
+    _ -> "non-positive"
+}
+
+test "guard wildcard huge" = abs_category(200) == "huge"
+test "guard wildcard small" = abs_category(5) == "small"
+test "guard wildcard non-positive" = abs_category(-1) == "non-positive"
+
+// Multiple constructor guards falling through (stack cleanup for bindings)
+fn option_classify(opt: Option<Int>) -> String = {
+  match opt
+    Some(x) if x > 100 -> "huge"
+    Some(x) if x > 50 -> "large"
+    Some(x) if x > 0 -> "small"
+    Some(_) -> "non-positive"
+    None -> "empty"
+}
+
+test "guard constructor fallthrough huge" = option_classify(Some(200)) == "huge"
+test "guard constructor fallthrough large" = option_classify(Some(75)) == "large"
+test "guard constructor fallthrough small" = option_classify(Some(10)) == "small"
+test "guard constructor fallthrough non-positive" = option_classify(Some(-5)) == "non-positive"
+test "guard constructor fallthrough none" = option_classify(None) == "empty"

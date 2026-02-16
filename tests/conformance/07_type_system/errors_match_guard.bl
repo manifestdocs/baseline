@@ -1,0 +1,12 @@
+@prelude(core)
+
+// Negative test: match guard must be Boolean
+// Expected errors: TYP_003
+
+type Color = | Red | Blue
+
+fn bad_guard(c: Color) -> String = {
+  match c
+    Red if "yes" -> "red"
+    Blue -> "blue"
+}

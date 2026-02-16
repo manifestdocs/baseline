@@ -635,16 +635,39 @@ impl<'a> Codegen<'a> {
         for arm in arms {
             match &arm.pattern {
                 Pattern::Wildcard => {
-                    self.gen_expr(&arm.body, span)?;
-                    end_jumps.push(self.emit(Op::Jump(0), span));
+                    if let Some(ref guard) = arm.guard {
+                        self.gen_expr(guard, span)?;
+                        let skip_jump = self.emit(Op::JumpIfFalse(0), span);
+                        self.gen_expr(&arm.body, span)?;
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                        self.chunk.patch_jump(skip_jump);
+                    } else {
+                        self.gen_expr(&arm.body, span)?;
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
                 }
                 Pattern::Var(name) => {
                     self.emit(Op::GetLocal(subject_slot), span);
+                    let scope_start = self.locals.len();
                     self.begin_scope();
                     self.declare_local(name);
-                    self.gen_expr(&arm.body, span)?;
-                    self.end_scope(span);
-                    end_jumps.push(self.emit(Op::Jump(0), span));
+                    if let Some(ref guard) = arm.guard {
+                        let num_bindings = self.locals.len() - scope_start;
+                        self.gen_expr(guard, span)?;
+                        let skip_jump = self.emit(Op::JumpIfFalse(0), span);
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                        self.chunk.patch_jump(skip_jump);
+                        // Clean up bindings on guard-failure path
+                        for _ in 0..num_bindings {
+                            self.emit(Op::Pop, span);
+                        }
+                    } else {
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
                 }
                 Pattern::Literal(lit_expr) => {
                     self.emit(Op::GetLocal(subject_slot), span);
@@ -652,8 +675,16 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::Eq, span);
                     let skip_jump = self.emit(Op::JumpIfFalse(0), span);
 
-                    self.gen_expr(&arm.body, span)?;
-                    end_jumps.push(self.emit(Op::Jump(0), span));
+                    if let Some(ref guard) = arm.guard {
+                        self.gen_expr(guard, span)?;
+                        let guard_skip = self.emit(Op::JumpIfFalse(0), span);
+                        self.gen_expr(&arm.body, span)?;
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                        self.chunk.patch_jump(guard_skip);
+                    } else {
+                        self.gen_expr(&arm.body, span)?;
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
 
                     self.chunk.patch_jump(skip_jump);
                 }
@@ -666,6 +697,7 @@ impl<'a> Codegen<'a> {
                     self.emit(Op::Eq, span);
                     let skip_jump = self.emit(Op::JumpIfFalse(0), span);
 
+                    let scope_start = self.locals.len();
                     self.begin_scope();
                     if sub_patterns.len() == 1 {
                         // Single binding: Some(v)
@@ -694,13 +726,28 @@ impl<'a> Codegen<'a> {
                         }
                     }
 
-                    self.gen_expr(&arm.body, span)?;
-                    self.end_scope(span);
-                    end_jumps.push(self.emit(Op::Jump(0), span));
+                    if let Some(ref guard) = arm.guard {
+                        let num_bindings = self.locals.len() - scope_start;
+                        self.gen_expr(guard, span)?;
+                        let guard_skip = self.emit(Op::JumpIfFalse(0), span);
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                        self.chunk.patch_jump(guard_skip);
+                        // Clean up bindings on guard-failure path
+                        for _ in 0..num_bindings {
+                            self.emit(Op::Pop, span);
+                        }
+                    } else {
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
 
                     self.chunk.patch_jump(skip_jump);
                 }
                 Pattern::Tuple(sub_patterns) => {
+                    let scope_start = self.locals.len();
                     self.begin_scope();
                     for (i, pat) in sub_patterns.iter().enumerate() {
                         self.emit(Op::GetLocal(subject_slot), span);
@@ -711,12 +758,27 @@ impl<'a> Codegen<'a> {
                             _ => {}
                         }
                     }
-                    self.gen_expr(&arm.body, span)?;
-                    self.end_scope(span);
-                    end_jumps.push(self.emit(Op::Jump(0), span));
+                    if let Some(ref guard) = arm.guard {
+                        let num_bindings = self.locals.len() - scope_start;
+                        self.gen_expr(guard, span)?;
+                        let skip_jump = self.emit(Op::JumpIfFalse(0), span);
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                        self.chunk.patch_jump(skip_jump);
+                        // Clean up bindings on guard-failure path
+                        for _ in 0..num_bindings {
+                            self.emit(Op::Pop, span);
+                        }
+                    } else {
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
                 }
                 Pattern::Record(fields) => {
                     // Record patterns always match structurally
+                    let scope_start = self.locals.len();
                     self.begin_scope();
                     for (field_name, sub_pattern) in fields {
                         self.emit(Op::GetLocal(subject_slot), span);
@@ -730,9 +792,23 @@ impl<'a> Codegen<'a> {
                             _ => {}
                         }
                     }
-                    self.gen_expr(&arm.body, span)?;
-                    self.end_scope(span);
-                    end_jumps.push(self.emit(Op::Jump(0), span));
+                    if let Some(ref guard) = arm.guard {
+                        let num_bindings = self.locals.len() - scope_start;
+                        self.gen_expr(guard, span)?;
+                        let skip_jump = self.emit(Op::JumpIfFalse(0), span);
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                        self.chunk.patch_jump(skip_jump);
+                        // Clean up bindings on guard-failure path
+                        for _ in 0..num_bindings {
+                            self.emit(Op::Pop, span);
+                        }
+                    } else {
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
                 }
             }
         }

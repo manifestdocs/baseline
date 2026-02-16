@@ -135,9 +135,22 @@ impl<'a> super::Lowerer<'a> {
             }
 
             let pattern = self.lower_pattern(&arm_children[0])?;
-            let body = self.lower_expression(&arm_children[arm_children.len() - 1])?;
 
-            arms.push(MatchArm { pattern, body });
+            // Check for optional guard: match_guard node between pattern and body
+            let mut guard = None;
+            let body_idx = arm_children.len() - 1;
+            for child in &arm_children[1..body_idx] {
+                if child.kind() == "match_guard" {
+                    // The guard expression is the named child of match_guard
+                    let guard_expr_node = child.named_child(0)
+                        .ok_or_else(|| self.error("Match guard missing expression".into(), child))?;
+                    guard = Some(self.lower_expression(&guard_expr_node)?);
+                }
+            }
+
+            let body = self.lower_expression(&arm_children[body_idx])?;
+
+            arms.push(MatchArm { pattern, guard, body });
         }
 
         Ok(Expr::Match {
