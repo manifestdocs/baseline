@@ -187,20 +187,28 @@ pub(super) fn check_match_exhaustiveness(
             continue;
         }
 
-        let pat = arm.child(0).unwrap();
-        if let Some(coverage) = extract_pattern_coverage(&pat, source) {
-            match coverage {
-                PatternCoverage::CatchAll => {
-                    has_catch_all = true;
-                }
-                PatternCoverage::Variant(name) => {
-                    covered_variants.insert(name);
-                }
-                PatternCoverage::BoolLiteral(val) => {
-                    if val {
-                        covered_true = true;
-                    } else {
-                        covered_false = true;
+        // Collect all pattern nodes in this arm (or-patterns have multiple)
+        let body = arm.child(arm.child_count() - 1).unwrap();
+        let mut pat_cursor = arm.walk();
+        let pat_nodes: Vec<Node> = arm.named_children(&mut pat_cursor)
+            .filter(|c| c.kind() != "match_guard" && c.id() != body.id())
+            .collect();
+
+        for pat in &pat_nodes {
+            if let Some(coverage) = extract_pattern_coverage(pat, source) {
+                match coverage {
+                    PatternCoverage::CatchAll => {
+                        has_catch_all = true;
+                    }
+                    PatternCoverage::Variant(name) => {
+                        covered_variants.insert(name);
+                    }
+                    PatternCoverage::BoolLiteral(val) => {
+                        if val {
+                            covered_true = true;
+                        } else {
+                            covered_false = true;
+                        }
                     }
                 }
             }

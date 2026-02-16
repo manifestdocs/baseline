@@ -306,7 +306,7 @@ module.exports = grammar({
 
     // match x ...
     match_expression: $ => prec.right(seq('match', $._expression, repeat1($.match_arm))),
-    match_arm: $ => seq($._pattern, optional($.match_guard), '->', $._expression),
+    match_arm: $ => seq($._pattern, repeat(seq('|', $._pattern)), optional($.match_guard), '->', $._expression),
     match_guard: $ => seq('if', $._expression),
 
     // if cond then x else y
