@@ -833,30 +833,55 @@ impl<'a> Codegen<'a> {
                     self.chunk.patch_jump(skip_jump);
                 }
                 Pattern::Record(fields) => {
-                    // Record patterns always match structurally
+                    // Check literal sub-patterns first (they may cause match failure)
+                    let mut literal_skip_jumps: Vec<usize> = Vec::new();
+                    for (field_name, sub_pattern) in fields {
+                        if let Pattern::Literal(lit_expr) = sub_pattern {
+                            self.emit(Op::GetLocal(subject_slot), span);
+                            let name_idx = self
+                                .chunk
+                                .add_constant(NValue::string(field_name.as_str().into()));
+                            self.emit(Op::GetField(name_idx), span);
+                            self.gen_expr(lit_expr, span)?;
+                            self.emit(Op::Eq, span);
+                            literal_skip_jumps.push(self.emit(Op::JumpIfFalse(0), span));
+                        }
+                    }
+
                     let scope_start = self.locals.len();
                     self.begin_scope();
                     for (field_name, sub_pattern) in fields {
-                        self.emit(Op::GetLocal(subject_slot), span);
-                        let name_idx = self
-                            .chunk
-                            .add_constant(NValue::string(field_name.as_str().into()));
-                        self.emit(Op::GetField(name_idx), span);
                         match sub_pattern {
-                            Pattern::Var(name) => self.declare_local(name),
-                            Pattern::Wildcard => self.declare_local("_"),
+                            Pattern::Var(name) => {
+                                self.emit(Op::GetLocal(subject_slot), span);
+                                let name_idx = self
+                                    .chunk
+                                    .add_constant(NValue::string(field_name.as_str().into()));
+                                self.emit(Op::GetField(name_idx), span);
+                                self.declare_local(name);
+                            }
+                            Pattern::Wildcard => {
+                                self.emit(Op::GetLocal(subject_slot), span);
+                                let name_idx = self
+                                    .chunk
+                                    .add_constant(NValue::string(field_name.as_str().into()));
+                                self.emit(Op::GetField(name_idx), span);
+                                self.declare_local("_");
+                            }
+                            Pattern::Literal(_) => {
+                                // Already checked above
+                            }
                             _ => {}
                         }
                     }
                     if let Some(ref guard) = arm.guard {
                         let num_bindings = self.locals.len() - scope_start;
                         self.gen_expr(guard, span)?;
-                        let skip_jump = self.emit(Op::JumpIfFalse(0), span);
+                        let guard_skip = self.emit(Op::JumpIfFalse(0), span);
                         self.gen_expr(&arm.body, span)?;
                         self.end_scope(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
-                        self.chunk.patch_jump(skip_jump);
-                        // Clean up bindings on guard-failure path
+                        self.chunk.patch_jump(guard_skip);
                         for _ in 0..num_bindings {
                             self.emit(Op::Pop, span);
                         }
@@ -864,6 +889,11 @@ impl<'a> Codegen<'a> {
                         self.gen_expr(&arm.body, span)?;
                         self.end_scope(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
+
+                    // Patch all literal check skip jumps to here
+                    for skip in &literal_skip_jumps {
+                        self.chunk.patch_jump(*skip);
                     }
                 }
             }

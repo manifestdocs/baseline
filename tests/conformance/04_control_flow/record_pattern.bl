@@ -1,0 +1,45 @@
+@prelude(core)
+
+// Conformance: record patterns in match expressions
+
+// --- Shorthand field binding ---
+
+fn get_name(user: { name: String, age: Int }) -> String =
+  match user
+    { name, age } -> name
+
+// --- Partial record pattern with .. ---
+
+fn get_name_partial(user: { name: String, age: Int }) -> String =
+  match user
+    { name, .. } -> name
+
+// --- Literal field pattern ---
+
+fn is_admin(user: { name: String, age: Int }) -> Boolean =
+  match user
+    { name: "admin", .. } -> true
+    _ -> false
+
+// --- Record pattern with guard ---
+
+fn can_vote(user: { name: String, age: Int }) -> Boolean =
+  match user
+    { age, .. } if age >= 18 -> true
+    _ -> false
+
+// --- Tests ---
+
+// Shorthand
+test "record shorthand" = get_name({ name: "Alice", age: 30 }) == "Alice"
+
+// Partial
+test "record partial" = get_name_partial({ name: "Bob", age: 25 }) == "Bob"
+
+// Literal field
+test "record literal match" = is_admin({ name: "admin", age: 0 })
+test "record literal no match" = not is_admin({ name: "user", age: 0 })
+
+// Guard
+test "record guard true" = can_vote({ name: "Eve", age: 21 })
+test "record guard false" = not can_vote({ name: "Eve", age: 16 })

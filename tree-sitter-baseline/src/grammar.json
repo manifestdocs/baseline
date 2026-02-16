@@ -3480,8 +3480,17 @@
               "type": "SEQ",
               "members": [
                 {
-                  "type": "SYMBOL",
-                  "name": "record_pattern_field"
+                  "type": "CHOICE",
+                  "members": [
+                    {
+                      "type": "SYMBOL",
+                      "name": "record_rest_pattern"
+                    },
+                    {
+                      "type": "SYMBOL",
+                      "name": "record_pattern_field"
+                    }
+                  ]
                 },
                 {
                   "type": "REPEAT",
@@ -3493,8 +3502,17 @@
                         "value": ","
                       },
                       {
-                        "type": "SYMBOL",
-                        "name": "record_pattern_field"
+                        "type": "CHOICE",
+                        "members": [
+                          {
+                            "type": "SYMBOL",
+                            "name": "record_rest_pattern"
+                          },
+                          {
+                            "type": "SYMBOL",
+                            "name": "record_pattern_field"
+                          }
+                        ]
                       }
                     ]
                   }
@@ -3523,6 +3541,10 @@
           "value": "}"
         }
       ]
+    },
+    "record_rest_pattern": {
+      "type": "STRING",
+      "value": ".."
     },
     "list_pattern": {
       "type": "SEQ",

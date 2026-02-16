@@ -5407,6 +5407,10 @@
         {
           "type": "record_pattern_field",
           "named": true
+        },
+        {
+          "type": "record_rest_pattern",
+          "named": true
         }
       ]
     }
@@ -5464,6 +5468,11 @@
         ]
       }
     }
+  },
+  {
+    "type": "record_rest_pattern",
+    "named": true,
+    "fields": {}
   },
   {
     "type": "record_type",
