@@ -2125,6 +2125,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         if arms.is_empty() {
             return false;
         }
+        // Guards require fallthrough to next arm on failure, incompatible with switch
+        if arms.iter().any(|arm| arm.guard.is_some()) {
+            return false;
+        }
         let mut has_constructor = false;
         for (i, arm) in arms.iter().enumerate() {
             let is_last = i == arms.len() - 1;
@@ -2285,6 +2289,27 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             if self.rc_enabled {
                 self.push_rc_scope();
                 self.bind_pattern_vars_rc(&arm.pattern, subj_again)?;
+                // Guard check: if guard fails, jump to next arm
+                if let Some(ref guard) = arm.guard {
+                    let guard_val = self.compile_expr(guard)?;
+                    let true_val = self.builder.ins().iconst(types::I64, NV_TRUE as i64);
+                    let cmp = self.builder.ins().icmp(IntCC::Equal, guard_val, true_val);
+                    let guard_fail = self.builder.create_block();
+                    let guard_pass = self.builder.create_block();
+                    self.builder.ins().brif(cmp, guard_pass, &[], guard_fail, &[]);
+                    // Guard fail: clean up scope and fall through to next
+                    self.builder.switch_to_block(guard_fail);
+                    self.builder.seal_block(guard_fail);
+                    self.pop_rc_scope(None);
+                    if let Some(next) = next_test {
+                        self.builder.ins().jump(next, &[]);
+                    } else {
+                        let unit = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                        self.builder.ins().jump(merge_block, &[BlockArg::Value(unit)]);
+                    }
+                    self.builder.switch_to_block(guard_pass);
+                    self.builder.seal_block(guard_pass);
+                }
                 let mut body_val = self.compile_expr(&arm.body)?;
                 let ret_var = self.new_var();
                 self.builder.def_var(ret_var, body_val);
@@ -2295,6 +2320,26 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     .jump(merge_block, &[BlockArg::Value(body_val)]);
             } else {
                 self.bind_pattern_vars(&arm.pattern, subj_again)?;
+                // Guard check: if guard fails, jump to next arm
+                if let Some(ref guard) = arm.guard {
+                    let guard_val = self.compile_expr(guard)?;
+                    let true_val = self.builder.ins().iconst(types::I64, NV_TRUE as i64);
+                    let cmp = self.builder.ins().icmp(IntCC::Equal, guard_val, true_val);
+                    let guard_fail = self.builder.create_block();
+                    let guard_pass = self.builder.create_block();
+                    self.builder.ins().brif(cmp, guard_pass, &[], guard_fail, &[]);
+                    // Guard fail: fall through to next arm
+                    self.builder.switch_to_block(guard_fail);
+                    self.builder.seal_block(guard_fail);
+                    if let Some(next) = next_test {
+                        self.builder.ins().jump(next, &[]);
+                    } else {
+                        let unit = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                        self.builder.ins().jump(merge_block, &[BlockArg::Value(unit)]);
+                    }
+                    self.builder.switch_to_block(guard_pass);
+                    self.builder.seal_block(guard_pass);
+                }
                 let body_val = self.compile_expr(&arm.body)?;
                 self.builder
                     .ins()

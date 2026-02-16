@@ -1,0 +1,11 @@
+@prelude(core)
+
+// Negative test: guarded catch-all does not count as exhaustive
+// Expected errors: TYP_022
+
+type Color = | Red | Blue
+
+fn guarded_only(c: Color) -> String = {
+  match c
+    x if true -> "yes"
+}

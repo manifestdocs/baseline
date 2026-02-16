@@ -174,6 +174,19 @@ pub(super) fn check_match_exhaustiveness(
 
     for i in 1..count {
         let arm = node.named_child(i).unwrap();
+
+        // Guarded arms don't count for exhaustiveness — the compiler
+        // cannot prove a guard will be true, so a guarded catch-all
+        // (e.g. `_ if cond -> ...`) does not cover the pattern.
+        let has_guard = {
+            let mut cursor = arm.walk();
+            arm.children(&mut cursor)
+                .any(|c| c.kind() == "match_guard")
+        };
+        if has_guard {
+            continue;
+        }
+
         let pat = arm.child(0).unwrap();
         if let Some(coverage) = extract_pattern_coverage(&pat, source) {
             match coverage {

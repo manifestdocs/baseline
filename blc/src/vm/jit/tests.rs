@@ -607,6 +607,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     subject: Box::new(make_int(42)),
                     arms: vec![MatchArm {
                         pattern: Pattern::Wildcard,
+                        guard: None,
                         body: make_int(99),
                     }],
                     ty: Some(Type::Int),
@@ -630,6 +631,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     subject: Box::new(make_int(42)),
                     arms: vec![MatchArm {
                         pattern: Pattern::Var("x".into()),
+                        guard: None,
                         body: make_binop(BinOp::Add, make_var("x"), make_int(1)),
                     }],
                     ty: Some(Type::Int),
@@ -659,6 +661,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
+                            guard: None,
                                 "Some".into(),
                                 vec![Pattern::Var("v".into())],
                             ),
@@ -666,6 +669,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                         },
                         MatchArm {
                             pattern: Pattern::Constructor("None".into(), vec![]),
+                            guard: None,
                             body: make_int(0),
                         },
                     ],
@@ -692,14 +696,17 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Literal(Box::new(make_int(1))),
+                            guard: None,
                             body: make_int(10),
                         },
                         MatchArm {
                             pattern: Pattern::Literal(Box::new(make_int(2))),
+                            guard: None,
                             body: make_int(20),
                         },
                         MatchArm {
                             pattern: Pattern::Wildcard,
+                            guard: None,
                             body: make_int(30),
                         },
                     ],
@@ -828,6 +835,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
+                            guard: None,
                                 "Some".into(),
                                 vec![Pattern::Var("x".into())],
                             ),
@@ -835,6 +843,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                         },
                         MatchArm {
                             pattern: Pattern::Constructor("None".into(), vec![]),
+                            guard: None,
                             body: make_int(0),
                         },
                     ],
@@ -865,6 +874,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
+                            guard: None,
                                 "Some".into(),
                                 vec![Pattern::Var("x".into())],
                             ),
@@ -872,6 +882,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                         },
                         MatchArm {
                             pattern: Pattern::Constructor("None".into(), vec![]),
+                            guard: None,
                             body: make_int(99),
                         },
                     ],
@@ -902,6 +913,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
+                            guard: None,
                                 "Ok".into(),
                                 vec![Pattern::Var("x".into())],
                             ),
@@ -909,6 +921,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                         },
                         MatchArm {
                             pattern: Pattern::Constructor(
+                            guard: None,
                                 "Err".into(),
                                 vec![Pattern::Var("e".into())],
                             ),
@@ -916,6 +929,7 @@ use crate::vm::nvalue::{HeapObject, NValue};
                         },
                         MatchArm {
                             pattern: Pattern::Wildcard,
+                            guard: None,
                             body: make_int(-1),
                         },
                     ],
@@ -1857,10 +1871,12 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor("Some".into(), vec![Pattern::Var("x".into())]),
+                            guard: None,
                             body: make_int(1),
                         },
                         MatchArm {
                             pattern: Pattern::Constructor("None".into(), vec![]),
+                            guard: None,
                             body: make_int(0),
                         },
                     ],

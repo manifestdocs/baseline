@@ -108,6 +108,9 @@ fn free_vars_inner(
             for arm in arms {
                 let mut arm_bound = bound.clone();
                 collect_pattern_names(&arm.pattern, &mut arm_bound);
+                if let Some(guard) = &arm.guard {
+                    free_vars_inner(guard, &arm_bound, top_level, out);
+                }
                 free_vars_inner(&arm.body, &arm_bound, top_level, out);
             }
         }
@@ -330,6 +333,7 @@ fn walk_expr_children(expr: Expr, mut f: impl FnMut(Expr) -> Expr) -> Expr {
             subject: Box::new(f(*subject)),
             arms: arms.into_iter().map(|arm| MatchArm {
                 pattern: arm.pattern,
+                guard: arm.guard.map(&mut f),
                 body: f(arm.body),
             }).collect(),
             ty,
@@ -517,6 +521,9 @@ fn visit_expr_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
         Expr::Match { subject, arms, .. } => {
             visit_expr(subject, f);
             for arm in arms {
+                if let Some(guard) = &arm.guard {
+                    visit_expr(guard, f);
+                }
                 visit_expr(&arm.body, f);
             }
         }
@@ -1660,10 +1667,12 @@ mod tests {
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor("Some".into(), vec![Pattern::Var("v".into())]),
+                            guard: None,
                             body: Expr::Int(1),
                         },
                         MatchArm {
                             pattern: Pattern::Constructor("None".into(), vec![]),
+                            guard: None,
                             body: Expr::Int(0),
                         },
                     ],

@@ -187,6 +187,7 @@ pub(super) fn generate_enum_method(
                 .iter()
                 .map(|v| MatchArm {
                     pattern: Pattern::Constructor(v.clone(), vec![]),
+                    guard: None,
                     body: Expr::String(to_snake_case(v)),
                 })
                 .collect();
