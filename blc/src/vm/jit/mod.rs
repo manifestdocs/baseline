@@ -202,6 +202,7 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_make_some",
     "jit_make_none",
     "jit_make_ok",
+    "jit_make_err",
     "jit_is_truthy",
     // Reference counting helpers
     "jit_rc_incref",
@@ -294,6 +295,7 @@ fn compile_inner(
     builder.symbol("jit_make_some", jit_make_some as *const u8);
     builder.symbol("jit_make_none", jit_make_none as *const u8);
     builder.symbol("jit_make_ok", jit_make_ok as *const u8);
+    builder.symbol("jit_make_err", jit_make_err as *const u8);
     builder.symbol("jit_is_truthy", jit_is_truthy as *const u8);
     builder.symbol("jit_rc_incref", jit_rc_incref as *const u8);
     builder.symbol("jit_rc_decref", jit_rc_decref as *const u8);
@@ -735,7 +737,7 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "jit_make_some" | "jit_make_ok" | "jit_is_truthy" => {
+        "jit_make_some" | "jit_make_ok" | "jit_make_err" | "jit_is_truthy" => {
             // (val) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

@@ -1688,6 +1688,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 | "List.find"
                 | "Option.map"
                 | "Result.map"
+                | "Result.map_err"
         )
     }
 
@@ -1704,6 +1705,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             "List.find" => self.compile_hof_list_find(args),
             "Option.map" => self.compile_hof_option_map(args),
             "Result.map" => self.compile_hof_result_map(args),
+            "Result.map_err" => self.compile_hof_result_map_err(args),
             _ => Err(format!("Unknown inline HOF: {}", qualified)),
         }
     }
@@ -2078,6 +2080,52 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
         // RC: decref input result and function after map completes
+        if self.rc_enabled {
+            self.emit_decref(res_val);
+            self.emit_decref(fn_val);
+        }
+        Ok(self.builder.block_params(merge_block)[0])
+    }
+
+    /// Result.map_err(res, fn) — if Err: call fn(payload) → Err(result); else pass-through
+    fn compile_hof_result_map_err(&mut self, args: &[Expr]) -> Result<CValue, String> {
+        if args.len() != 2 {
+            return Err("Result.map_err requires 2 arguments".into());
+        }
+        let res_val = self.compile_expr(&args[0])?;
+        let fn_val = self.compile_expr(&args[1])?;
+
+        let is_err = self.call_helper("jit_is_err", &[res_val]);
+        let cmp = self.is_truthy(is_err);
+
+        let err_block = self.builder.create_block();
+        let ok_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        self.builder
+            .ins()
+            .brif(cmp, err_block, &[], ok_block, &[]);
+
+        // Ok path: pass through as-is
+        self.builder.switch_to_block(ok_block);
+        self.builder.seal_block(ok_block);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(res_val)]);
+
+        // Err path: extract payload, call fn, wrap in Err
+        self.builder.switch_to_block(err_block);
+        self.builder.seal_block(err_block);
+        let payload = self.call_helper("jit_enum_payload", &[res_val]);
+        let mapped = self.compile_call_value(fn_val, &[payload])?;
+        let err_result = self.call_helper("jit_make_err", &[mapped]);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(err_result)]);
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
         if self.rc_enabled {
             self.emit_decref(res_val);
             self.emit_decref(fn_val);
@@ -2469,6 +2517,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 // Record patterns always match structurally
                 self.builder.ins().jump(body_block, &[]);
             }
+            Pattern::List(_, _) => {
+                return Err("List patterns not supported in JIT".into());
+            }
         }
         Ok(())
     }
@@ -2512,6 +2563,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let elem = self.call_helper("jit_get_field", &[subject, field_val]);
                     self.bind_pattern_vars(sub_pat, elem)?;
                 }
+            }
+            Pattern::List(_, _) => {
+                return Err("List patterns not supported in JIT".into());
             }
         }
         Ok(())
@@ -2563,6 +2617,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let elem = self.call_helper("jit_get_field", &[subject, field_val]);
                     self.bind_pattern_vars_rc(sub_pat, elem)?;
                 }
+            }
+            Pattern::List(_, _) => {
+                return Err("List patterns not supported in JIT".into());
             }
         }
         Ok(())
@@ -2890,7 +2947,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         &mut self,
         expr: &Expr,
         sra_names: &std::collections::HashSet<&str>,
-    ) -> Result<bool, CompileError> {
+    ) -> Result<bool, String> {
         let Expr::Let { pattern, value, .. } = expr else {
             return Ok(false);
         };

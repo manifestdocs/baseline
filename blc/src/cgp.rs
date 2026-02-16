@@ -593,7 +593,7 @@ fn add_module_methods(tokens: &mut Vec<String>, module: &str, ctx: &SessionConte
         }
         "Result" => {
             tokens.extend(
-                ["map", "unwrap", "unwrap_or", "is_ok", "is_err", "map_err"]
+                ["map", "unwrap", "unwrap_or", "is_ok", "is_err", "map_err", "context", "and_then"]
                     .iter()
                     .map(|s| s.to_string()),
             );

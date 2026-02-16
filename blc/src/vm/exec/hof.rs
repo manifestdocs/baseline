@@ -314,6 +314,47 @@ impl super::Vm {
                     }
                 }
             }
+            "Result.map_err" => {
+                if arg_count != 2 {
+                    return Err(self.error(
+                        "Result.map_err: expected 2 arguments".into(),
+                        line,
+                        col,
+                    ));
+                }
+                let func = self.pop(line, col)?;
+                let res = self.pop(line, col)?;
+                if !res.is_heap() {
+                    return Err(self.error(
+                        "Result.map_err: first arg must be Result".into(),
+                        line,
+                        col,
+                    ));
+                }
+                match res.as_heap_ref() {
+                    HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
+                        let result = self.call_nvalue(
+                            &func,
+                            std::slice::from_ref(payload),
+                            chunks,
+                            line,
+                            col,
+                        )?;
+                        self.stack.push(NValue::enum_val("Err".into(), result));
+                    }
+                    HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
+                        self.stack
+                            .push(NValue::enum_val("Ok".into(), payload.clone()));
+                    }
+                    _ => {
+                        return Err(self.error(
+                            "Result.map_err: first arg must be Result".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                }
+            }
             "Fs.with_file!" | "Fs.with_file" => {
                 if arg_count != 2 {
                     return Err(self.error(

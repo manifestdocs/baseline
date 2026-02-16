@@ -650,6 +650,75 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
+    // Result.map_err : (Result<A,E>, (E) -> F) -> Result<A,F>
+    schemas.insert(
+        "Result.map_err".into(),
+        GenericSchema {
+            type_params: 3,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                let f = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::Enum(
+                            "Result".to_string(),
+                            vec![
+                                ("Ok".to_string(), vec![a.clone()]),
+                                ("Err".to_string(), vec![e.clone()]),
+                            ],
+                        ),
+                        Type::Function(vec![e], Box::new(f.clone())),
+                    ],
+                    Box::new(Type::Enum(
+                        "Result".to_string(),
+                        vec![
+                            ("Ok".to_string(), vec![a]),
+                            ("Err".to_string(), vec![f]),
+                        ],
+                    )),
+                )
+            },
+        },
+    );
+
+    // Result.context : (Result<A,E>, String) -> Result<A, { error: E, context: String }>
+    schemas.insert(
+        "Result.context".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                let mut err_fields = HashMap::new();
+                err_fields.insert("error".to_string(), e.clone());
+                err_fields.insert("context".to_string(), Type::String);
+                Type::Function(
+                    vec![
+                        Type::Enum(
+                            "Result".to_string(),
+                            vec![
+                                ("Ok".to_string(), vec![a.clone()]),
+                                ("Err".to_string(), vec![e]),
+                            ],
+                        ),
+                        Type::String,
+                    ],
+                    Box::new(Type::Enum(
+                        "Result".to_string(),
+                        vec![
+                            ("Ok".to_string(), vec![a]),
+                            (
+                                "Err".to_string(),
+                                vec![Type::Record(err_fields, None)],
+                            ),
+                        ],
+                    )),
+                )
+            },
+        },
+    );
+
     // -- Constructors: produce concrete generic types via inference --
 
     // Some : (A) -> Option<A>

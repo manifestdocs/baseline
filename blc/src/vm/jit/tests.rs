@@ -661,10 +661,10 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
-                            guard: None,
                                 "Some".into(),
                                 vec![Pattern::Var("v".into())],
                             ),
+                            guard: None,
                             body: Expr::Var("v".into(), Some(Type::Int)),
                         },
                         MatchArm {
@@ -835,10 +835,10 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
-                            guard: None,
                                 "Some".into(),
                                 vec![Pattern::Var("x".into())],
                             ),
+                            guard: None,
                             body: Expr::Var("x".into(), Some(Type::Int)),
                         },
                         MatchArm {
@@ -874,10 +874,10 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
-                            guard: None,
                                 "Some".into(),
                                 vec![Pattern::Var("x".into())],
                             ),
+                            guard: None,
                             body: Expr::Var("x".into(), Some(Type::Int)),
                         },
                         MatchArm {
@@ -913,18 +913,18 @@ use crate::vm::nvalue::{HeapObject, NValue};
                     arms: vec![
                         MatchArm {
                             pattern: Pattern::Constructor(
-                            guard: None,
                                 "Ok".into(),
                                 vec![Pattern::Var("x".into())],
                             ),
+                            guard: None,
                             body: Expr::Var("x".into(), Some(Type::Int)),
                         },
                         MatchArm {
                             pattern: Pattern::Constructor(
-                            guard: None,
                                 "Err".into(),
                                 vec![Pattern::Var("e".into())],
                             ),
+                            guard: None,
                             body: make_int(0),
                         },
                         MatchArm {

@@ -276,6 +276,10 @@ fn known_functions() -> Vec<(&'static str, &'static str, &'static str, Option<&'
          Some("Ok(5) |> Result.map(|x| x * 2)\n// => Ok(10)")),
         ("Result", "and_then", "Chain a function that returns a Result, flattening the result.",
          Some("Ok(5) |> Result.and_then(|x|\n  if x > 0 then Ok(x) else Err(\"negative\")\n)\n// => Ok(5)")),
+        ("Result", "map_err", "Apply a function to the Err value, if present.",
+         Some("Err(\"fail\") |> Result.map_err(|e| \"wrapped: \" ++ e)\n// => Err(\"wrapped: fail\")")),
+        ("Result", "context", "Add context to an error, wrapping it in a record.",
+         Some("Err(\"db fail\") |> Result.context(\"loading user\")\n// => Err({ error: \"db fail\", context: \"loading user\" })")),
         // -- Int --
         ("Int", "to_string", "Convert an integer to its string representation.",
          Some("Int.to_string(42)  // => \"42\"")),
