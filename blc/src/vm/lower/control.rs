@@ -264,6 +264,22 @@ impl<'a> super::Lowerer<'a> {
                 }
                 Ok(Pattern::Record(fields))
             }
+            "list_pattern" => {
+                let mut pat_cursor = node.walk();
+                let children: Vec<Node> = node.named_children(&mut pat_cursor).collect();
+                let mut element_pats = Vec::new();
+                let mut rest = None;
+                for child in &children {
+                    if child.kind() == "rest_pattern" {
+                        let id_node = child.named_child(0)
+                            .ok_or_else(|| self.error("Rest pattern missing identifier".into(), child))?;
+                        rest = Some(self.node_text(&id_node));
+                    } else {
+                        element_pats.push(self.lower_pattern(child)?);
+                    }
+                }
+                Ok(Pattern::List(element_pats, rest))
+            }
             _ => Err(self.error(format!("Unsupported pattern kind: {}", node.kind()), node)),
         }
     }

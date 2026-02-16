@@ -146,6 +146,14 @@ impl<'a> super::Lowerer<'a> {
                     names.extend(self.collect_bound_names(sub_pat));
                 }
             }
+            Pattern::List(sub_pats, rest) => {
+                for sub_pat in sub_pats {
+                    names.extend(self.collect_bound_names(sub_pat));
+                }
+                if let Some(rest_name) = rest {
+                    names.push(rest_name.clone());
+                }
+            }
             Pattern::Wildcard | Pattern::Literal(_) => {}
         }
         names

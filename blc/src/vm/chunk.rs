@@ -86,6 +86,8 @@ pub enum Op {
     MakeList(u16),
     /// Pop two lists from stack, push concatenation.
     ListConcat,
+    /// Pop list from stack, push list[n..] (tail from index n).
+    ListTailFrom(u16),
     /// Pop N key-value pairs from stack, push as Record.
     /// Keys are Value::String constants from the pool. Stack: [key0, val0, key1, val1, ...] → Record
     MakeRecord(u16),
@@ -435,6 +437,7 @@ impl Chunk {
                 | Op::EnumPayload
                 | Op::Concat
                 | Op::ListConcat
+                | Op::ListTailFrom(_)
                 | Op::TupleGet(_)
                 | Op::GetField(_)
                 | Op::GetFieldIdx(_, _)

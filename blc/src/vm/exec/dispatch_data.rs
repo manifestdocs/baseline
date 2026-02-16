@@ -126,6 +126,21 @@ impl super::Vm {
                 result.extend_from_slice(r_items);
                 self.stack.push(NValue::list(result));
             }
+            Op::ListTailFrom(n) => {
+                let list_val = self.pop_fast();
+                if let Some(items) = list_val.as_list() {
+                    let from = *n as usize;
+                    let tail: Vec<NValue> = items[from..].to_vec();
+                    self.stack.push(NValue::list(tail));
+                } else {
+                    let (line, col) = chunk.source_map[ip - 1];
+                    return Err(self.error(
+                        format!("ListTailFrom requires List, got {}", list_val),
+                        line,
+                        col,
+                    ));
+                }
+            }
             Op::MakeRecord(n) => {
                 let count = *n as usize;
                 let start = self.stack.len() - count * 2;

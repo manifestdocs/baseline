@@ -1,0 +1,54 @@
+@prelude(core)
+
+// Conformance: list patterns in match expressions
+
+// --- Empty list pattern ---
+
+fn is_empty(xs: List<Int>) -> Boolean =
+  match xs
+    [] -> true
+    _ -> false
+
+// --- Fixed-length patterns ---
+
+fn first_or_zero(xs: List<Int>) -> Int =
+  match xs
+    [x] -> x
+    _ -> 0
+
+fn sum_pair(xs: List<Int>) -> Int =
+  match xs
+    [a, b] -> a + b
+    _ -> 0
+
+// --- Rest patterns (head/tail decomposition) ---
+
+fn head_or_zero(xs: List<Int>) -> Int =
+  match xs
+    [h, ..rest] -> h
+    _ -> 0
+
+fn list_length(xs: List<Int>) -> Int =
+  match xs
+    [] -> 0
+    [_, ..tail] -> 1 + list_length(tail)
+
+// --- Tests ---
+
+// Empty list
+test "empty list matches []" = is_empty([])
+test "non-empty list not []" = not is_empty([1, 2])
+
+// Fixed-length
+test "singleton pattern" = first_or_zero([42]) == 42
+test "singleton fallback" = first_or_zero([]) == 0
+test "singleton fallback multi" = first_or_zero([1, 2]) == 0
+test "pair sum" = sum_pair([3, 4]) == 7
+test "pair fallback" = sum_pair([1]) == 0
+
+// Rest patterns
+test "head from list" = head_or_zero([10, 20, 30]) == 10
+test "head from singleton" = head_or_zero([5]) == 5
+test "head fallback" = head_or_zero([]) == 0
+test "recursive length" = list_length([1, 2, 3, 4]) == 4
+test "recursive length empty" = list_length([]) == 0

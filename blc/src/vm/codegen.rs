@@ -776,6 +776,62 @@ impl<'a> Codegen<'a> {
                         end_jumps.push(self.emit(Op::Jump(0), span));
                     }
                 }
+                Pattern::List(element_pats, rest) => {
+                    // Check list length: == N (exact) or >= N (with rest)
+                    self.emit(Op::GetLocal(subject_slot), span);
+                    self.emit(Op::ListLen, span);
+                    let expected_len = element_pats.len() as i64;
+                    let len_const = self.chunk.add_constant(NValue::int(expected_len));
+                    self.emit(Op::LoadConst(len_const), span);
+                    if rest.is_some() {
+                        self.emit(Op::Ge, span); // length >= N
+                    } else {
+                        self.emit(Op::Eq, span); // length == N
+                    }
+                    let skip_jump = self.emit(Op::JumpIfFalse(0), span);
+
+                    let scope_start = self.locals.len();
+                    self.begin_scope();
+
+                    // Extract each element by index
+                    for (i, pat) in element_pats.iter().enumerate() {
+                        self.emit(Op::GetLocal(subject_slot), span);
+                        let idx_const = self.chunk.add_constant(NValue::int(i as i64));
+                        self.emit(Op::LoadConst(idx_const), span);
+                        self.emit(Op::ListGet, span);
+                        match pat {
+                            Pattern::Var(name) => self.declare_local(name),
+                            Pattern::Wildcard => self.declare_local("_"),
+                            _ => {}
+                        }
+                    }
+
+                    // Bind rest variable if present
+                    if let Some(rest_name) = rest {
+                        self.emit(Op::GetLocal(subject_slot), span);
+                        self.emit(Op::ListTailFrom(element_pats.len() as u16), span);
+                        self.declare_local(rest_name);
+                    }
+
+                    if let Some(ref guard) = arm.guard {
+                        let num_bindings = self.locals.len() - scope_start;
+                        self.gen_expr(guard, span)?;
+                        let guard_skip = self.emit(Op::JumpIfFalse(0), span);
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                        self.chunk.patch_jump(guard_skip);
+                        for _ in 0..num_bindings {
+                            self.emit(Op::Pop, span);
+                        }
+                    } else {
+                        self.gen_expr(&arm.body, span)?;
+                        self.end_scope(span);
+                        end_jumps.push(self.emit(Op::Jump(0), span));
+                    }
+
+                    self.chunk.patch_jump(skip_jump);
+                }
                 Pattern::Record(fields) => {
                     // Record patterns always match structurally
                     let scope_start = self.locals.len();

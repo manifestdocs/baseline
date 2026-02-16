@@ -346,6 +346,7 @@ pub enum Pattern {
     Constructor(String, Vec<Pattern>),
     Tuple(Vec<Pattern>),
     Record(Vec<(String, Pattern)>),  // field_name → sub_pattern
+    List(Vec<Pattern>, Option<String>), // element patterns, optional rest binding
 }
 
 // ---------------------------------------------------------------------------
