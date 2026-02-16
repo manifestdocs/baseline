@@ -20,6 +20,7 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets
+      - run: cargo check -p blc --features mcp
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo fmt --all -- --check
 
@@ -31,6 +32,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo test -p blc
+      - run: cargo test -p blc --features mcp --test mcp_tests
 
   grammar:
     name: Grammar Up-to-date

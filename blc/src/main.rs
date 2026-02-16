@@ -107,6 +107,10 @@ enum Commands {
     /// Start an interactive REPL session
     Repl,
 
+    /// Start the MCP (Model Context Protocol) server over stdio
+    #[cfg(feature = "mcp")]
+    Mcp,
+
     /// Generate standard library documentation
     Docs {
         /// Output as JSON (default: markdown)
@@ -271,6 +275,11 @@ fn main() {
         }
         Commands::Repl => {
             blc::repl::run();
+        }
+        #[cfg(feature = "mcp")]
+        Commands::Mcp => {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+            rt.block_on(blc::mcp::run_server());
         }
         Commands::Docs { json, search, query } => {
             let docs = blc::docs::generate_docs();

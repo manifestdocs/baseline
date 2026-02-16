@@ -11,4 +11,6 @@ pub mod prelude;
 pub mod repl;
 pub mod resolver;
 pub mod test_runner;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod vm;
