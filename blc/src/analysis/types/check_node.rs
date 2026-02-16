@@ -1723,12 +1723,19 @@ fn check_node_inner(
             let count = node.named_child_count();
             for i in 1..count {
                 let arm = node.named_child(i).unwrap();
-                let pat = arm.child(0).unwrap();
                 // Body is always the last child (after optional guard and ->)
                 let body = arm.child(arm.child_count() - 1).unwrap();
 
+                // Collect all pattern nodes (or-patterns have multiple separated by |)
+                let mut arm_cursor2 = arm.walk();
+                let pat_nodes: Vec<tree_sitter::Node> = arm.named_children(&mut arm_cursor2)
+                    .filter(|c| c.kind() != "match_guard" && c.id() != body.id())
+                    .collect();
+
                 symbols.enter_scope();
-                check_pattern(&pat, &expr_type, source, symbols, diagnostics);
+                for pat in &pat_nodes {
+                    check_pattern(pat, &expr_type, source, symbols, diagnostics);
+                }
 
                 // Type-check guard expression if present
                 let mut arm_cursor = arm.walk();

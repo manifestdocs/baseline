@@ -1,0 +1,63 @@
+@prelude(core)
+
+// Conformance: or-patterns in match expressions
+
+// --- Literal or-patterns ---
+
+fn classify(x: Int) -> String =
+  match x
+    1 | 2 | 3 -> "small"
+    4 | 5 -> "medium"
+    _ -> "other"
+
+// --- Boolean or-patterns (exhaustive) ---
+
+fn check_bool(b: Boolean) -> String =
+  match b
+    true | false -> "any"
+
+// --- Constructor or-patterns ---
+
+type Color = | Red | Green | Blue
+
+fn color_group(c: Color) -> String =
+  match c
+    Red | Green -> "warm-ish"
+    Blue -> "cool"
+
+fn describe(opt: Option<Int>) -> String =
+  match opt
+    None -> "empty"
+    Some(_) -> "has value"
+
+// --- Or-pattern with guard ---
+
+fn guarded(x: Int) -> String =
+  match x
+    1 | 2 | 3 if x > 1 -> "big small"
+    _ -> "other"
+
+// Literal or-patterns
+test "or pattern matches first alt" = classify(1) == "small"
+test "or pattern matches second alt" = classify(2) == "small"
+test "or pattern matches third alt" = classify(3) == "small"
+test "or pattern matches medium first" = classify(4) == "medium"
+test "or pattern matches medium second" = classify(5) == "medium"
+test "or pattern fallback" = classify(10) == "other"
+
+// Boolean or-patterns
+test "bool or-pattern true" = check_bool(true) == "any"
+test "bool or-pattern false" = check_bool(false) == "any"
+
+// Constructor or-patterns
+test "color or red" = color_group(Red) == "warm-ish"
+test "color or green" = color_group(Green) == "warm-ish"
+test "color or blue" = color_group(Blue) == "cool"
+test "option none" = describe(None) == "empty"
+test "option some" = describe(Some(5)) == "has value"
+
+// Or-pattern with guard
+test "or with guard matches" = guarded(2) == "big small"
+test "or with guard matches 3" = guarded(3) == "big small"
+test "or with guard fails" = guarded(1) == "other"
+test "or with guard fallback" = guarded(99) == "other"

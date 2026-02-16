@@ -134,23 +134,36 @@ impl<'a> super::Lowerer<'a> {
                 return Err(self.error("Match arm missing pattern or body".into(), arm_node));
             }
 
-            let pattern = self.lower_pattern(&arm_children[0])?;
-
-            // Check for optional guard: match_guard node between pattern and body
-            let mut guard = None;
+            // Separate patterns, optional guard, and body.
+            // The body is always the last child. The guard (if present) is the
+            // second-to-last child with kind "match_guard". Everything before
+            // the guard/body is a pattern (or-pattern arms have multiple).
             let body_idx = arm_children.len() - 1;
+            let mut guard = None;
+            let mut pattern_end = body_idx;
             for child in &arm_children[1..body_idx] {
                 if child.kind() == "match_guard" {
-                    // The guard expression is the named child of match_guard
                     let guard_expr_node = child.named_child(0)
                         .ok_or_else(|| self.error("Match guard missing expression".into(), child))?;
                     guard = Some(self.lower_expression(&guard_expr_node)?);
+                    pattern_end = arm_children.iter().position(|c| c.id() == child.id()).unwrap();
                 }
             }
 
             let body = self.lower_expression(&arm_children[body_idx])?;
 
-            arms.push(MatchArm { pattern, guard, body });
+            // Collect all pattern nodes (or-patterns have multiple)
+            let pattern_nodes: Vec<&Node> = arm_children[..pattern_end]
+                .iter()
+                .filter(|c| c.kind() != "match_guard")
+                .collect();
+
+            // Desugar or-patterns: each alternative becomes a separate IR arm
+            // sharing the same guard and body.
+            for pat_node in &pattern_nodes {
+                let pattern = self.lower_pattern(pat_node)?;
+                arms.push(MatchArm { pattern, guard: guard.clone(), body: body.clone() });
+            }
         }
 
         Ok(Expr::Match {
