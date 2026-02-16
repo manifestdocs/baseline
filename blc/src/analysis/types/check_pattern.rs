@@ -125,6 +125,26 @@ pub(super) fn check_pattern(
         "integer_literal" => {
             // Basic check
         }
+        "list_pattern" => {
+            // Extract element type from List<T>
+            let elem_type = match expected_type {
+                Type::List(inner) => inner.as_ref().clone(),
+                _ => Type::Unknown,
+            };
+            let count = node.named_child_count();
+            for i in 0..count {
+                let child = node.named_child(i).unwrap();
+                if child.kind() == "rest_pattern" {
+                    // ..rest binds to List<T>
+                    if let Some(id_node) = child.named_child(0) {
+                        let name = id_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                        symbols.insert(name, expected_type.clone());
+                    }
+                } else {
+                    check_pattern(&child, &elem_type, source, symbols, diagnostics);
+                }
+            }
+        }
         _ => {}
     }
 }

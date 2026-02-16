@@ -405,7 +405,7 @@ impl Vm {
                 }
 
                 Op::MakeRange | Op::ListGet | Op::ListLen | Op::MakeList(_)
-                | Op::ListConcat | Op::MakeRecord(_) | Op::GetField(_)
+                | Op::ListConcat | Op::ListTailFrom(_) | Op::MakeRecord(_) | Op::GetField(_)
                 | Op::GetFieldIdx(_, _)
                 | Op::MakeTuple(_) | Op::TupleGet(_) | Op::MakeEnum(_)
                 | Op::MakeStruct(_) | Op::EnumTag | Op::EnumPayload

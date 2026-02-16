@@ -71,6 +71,8 @@ module.exports = grammar({
     [$.record_expression, $.record_pattern],
     // record_pattern_field shorthand (identifier) could be pattern or field init
     [$.record_pattern_field, $.record_field_init],
+    // [ could start list_expression or list_pattern
+    [$.list_expression, $.list_pattern],
   ],
 
   rules: {
@@ -428,12 +430,15 @@ module.exports = grammar({
       $.literal,
       $.tuple_pattern,
       $.wildcard_pattern,
-      $.record_pattern
+      $.record_pattern,
+      $.list_pattern
     ),
     constructor_pattern: $ => seq($.type_identifier, '(', commaSep($._pattern), ')'),
     tuple_pattern: $ => seq('(', commaSep($._pattern), ')'),
     wildcard_pattern: $ => '_',
     record_pattern: $ => seq('{', commaSep($.record_pattern_field), '}'),
+    list_pattern: $ => seq('[', commaSep(choice($.rest_pattern, $._pattern)), ']'),
+    rest_pattern: $ => seq('..', $.identifier),
     record_pattern_field: $ => choice(
       seq(field('name', $.identifier), ':', field('pattern', $._pattern)),  // renamed: { x: pat }
       field('name', $.identifier),                                          // shorthand: { x }

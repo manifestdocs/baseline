@@ -137,6 +137,14 @@ fn collect_pattern_names(pattern: &Pattern, names: &mut HashSet<String>) {
                 collect_pattern_names(sub_pat, names);
             }
         }
+        Pattern::List(sub_pats, rest) => {
+            for p in sub_pats {
+                collect_pattern_names(p, names);
+            }
+            if let Some(rest_name) = rest {
+                names.insert(rest_name.clone());
+            }
+        }
         Pattern::Wildcard | Pattern::Literal(_) => {}
     }
 }
