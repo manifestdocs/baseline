@@ -995,6 +995,44 @@ fn check_node_inner(
                         let remaining = arg_types[..offset].to_vec();
                         return Type::Function(remaining, ret_type);
                     }
+
+                    // Allow builtins with optional extra args (e.g. Log.info! accepts
+                    // an optional record for structured fields).
+                    let is_variadic_builtin = fn_name.as_ref().map_or(false, |n| {
+                        matches!(n.as_str(),
+                            "Log.info!" | "Log.warn!" | "Log.error!" | "Log.debug!"
+                            | "Log.info" | "Log.warn" | "Log.error" | "Log.debug"
+                        )
+                    });
+                    if is_variadic_builtin && params_provided > arg_types.len() {
+                        // Type-check the declared args, ignore extras (handled at runtime)
+                        for (i, expected) in arg_types.iter().enumerate() {
+                            let raw_arg = node.named_child(i + 1).unwrap();
+                            let arg_expr = call_arg_expr(&raw_arg);
+                            let arg_type = check_node(&arg_expr, source, file, symbols, diagnostics);
+                            if !types_compatible(&arg_type, expected) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_008".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &arg_expr),
+                                    message: format!(
+                                        "Argument {} mismatch: expected {}, found {}",
+                                        i + 1, expected, arg_type
+                                    ),
+                                    context: "Argument type must match function signature.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        }
+                        // Type-check extra args without type constraints
+                        for i in arg_types.len()..params_provided {
+                            let raw_arg = node.named_child(i + 1).unwrap();
+                            let arg_expr = call_arg_expr(&raw_arg);
+                            check_node(&arg_expr, source, file, symbols, diagnostics);
+                        }
+                        return *ret_type;
+                    }
+
                     diagnostics.push(Diagnostic {
                         code: "TYP_007".to_string(),
                         severity: Severity::Error,
