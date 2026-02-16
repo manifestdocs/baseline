@@ -115,7 +115,11 @@ select {
   --sans: 'Helvetica Neue', Helvetica, Arial, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', Menlo, Consolas, 'Liberation Mono', monospace;
 
-  --nav-width: 10.5rem;
+  --nav-width: 12rem;
+
+  /* Header band: shared height for baseline alignment across columns */
+  --header-band: 4rem;
+  --header-band-home: calc(var(--sp-5) + clamp(4.95rem, 12.1vw, 8.8rem));
 }
 
 /* ================================================================
@@ -227,12 +231,22 @@ h3+p {
   position: sticky;
   top: 0;
   height: 100vh;
-  padding: calc(var(--sp-6) + var(--sp-3) + var(--sp-6)) var(--sp-4) var(--sp-4) var(--sp-4);
+  padding: var(--sp-4) var(--sp-4) var(--sp-4) var(--sp-4);
   border-right: 1px solid var(--fg-faint);
   display: flex;
   flex-direction: column;
   gap: calc(var(--sp-5) - 1.7rem);
   overflow-y: auto;
+}
+
+.nav-header {
+  min-height: var(--header-band-home);
+  display: flex;
+  align-items: flex-end;
+}
+
+.site-nav.interior .nav-header {
+  min-height: var(--header-band);
 }
 
 .wordmark {
@@ -277,6 +291,28 @@ h3+p {
   outline-offset: 0.25rem;
 }
 
+.nav-links a.active {
+  color: var(--fg);
+}
+
+.nav-sub {
+  list-style: none;
+  margin: 0;
+  padding: var(--sp-1) 0 0 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-sub a {
+  font-size: 0.72rem;
+  font-weight: 400;
+}
+
+.nav-sub a.active {
+  font-weight: 550;
+}
+
 .nav-footer {
   margin-top: auto;
   display: flex;
@@ -299,10 +335,11 @@ h3+p {
    ================================================================ */
 
 .site-main {
-  padding: calc(var(--sp-4) - 1.4rem) var(--sp-5) var(--sp-6) var(--sp-6);
+  padding: var(--sp-4) var(--sp-5) var(--sp-6) var(--sp-6);
 }
 
 section {
+  padding-top: var(--sp-3);
   margin-bottom: var(--sp-6);
 }
 
@@ -383,7 +420,8 @@ button.button-primary {
    ================================================================ */
 
 .hero {
-  margin-top: var(--sp-6);
+  margin-top: 0;
+  padding-top: 0;
   margin-bottom: var(--sp-6);
 }
 
@@ -414,10 +452,16 @@ button.button-primary {
   padding-top: 5px;
 }
 
+.hero-header {
+  min-height: var(--header-band-home);
+  display: flex;
+  align-items: flex-end;
+  margin-bottom: var(--sp-3);
+}
+
 .hero .wordmark {
   font-size: clamp(4.95rem, 12.1vw, 8.8rem);
   line-height: 0.95;
-  margin-bottom: var(--sp-3);
   margin-left: -0.04em;
 }
 
@@ -787,7 +831,7 @@ code {
   display: grid;
   grid-template-columns: 1fr 14rem;
   gap: var(--sp-5);
-  align-items: start;
+  align-items: baseline;
 }
 
 /* -- Spec content typography -- */
@@ -1021,7 +1065,7 @@ code {
   display: grid;
   grid-template-columns: 1fr 14rem;
   gap: var(--sp-5);
-  align-items: start;
+  align-items: baseline;
 }
 
 .api-content {
@@ -1528,7 +1572,7 @@ code {
   display: grid;
   grid-template-columns: 1fr 14rem;
   gap: var(--sp-5);
-  align-items: start;
+  align-items: baseline;
 }
 
 .guide-content {
@@ -1537,7 +1581,7 @@ code {
 }
 
 .guide-content h1 {
-  font-size: clamp(1.8rem, 4vw, 2.618rem);
+  font-size: clamp(1.98rem, 4.4vw, 2.88rem);
   margin-bottom: var(--sp-3);
 }
 
@@ -1593,7 +1637,7 @@ code {
 }
 
 .guide-content h2 {
-  font-size: 1.4rem;
+  font-size: 1.65rem;
   margin-bottom: var(--sp-2);
 }
 
@@ -1637,6 +1681,11 @@ code {
 
 .guide-index {
   max-width: 42em;
+}
+
+.guide-index h1 {
+  font-size: clamp(1.98rem, 4.4vw, 2.88rem);
+  margin-bottom: var(--sp-3);
 }
 
 .guide-index-intro {
