@@ -138,22 +138,40 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
     }
 
     // -- Log builtins (effect: Log) --
+    // Single-arg: Log.info!("msg")
+    // Two-arg with structured fields: Log.info!("msg", { key: "val" })
     if builtin_modules.contains(&"Log") {
         sigs.insert(
             "Log.info!".into(),
             Type::Function(vec![Type::String], Box::new(Type::Unit)),
         );
         sigs.insert(
+            "Log.info_with!".into(),
+            Type::Function(vec![Type::String, Type::Unknown], Box::new(Type::Unit)),
+        );
+        sigs.insert(
             "Log.warn!".into(),
             Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Log.warn_with!".into(),
+            Type::Function(vec![Type::String, Type::Unknown], Box::new(Type::Unit)),
         );
         sigs.insert(
             "Log.error!".into(),
             Type::Function(vec![Type::String], Box::new(Type::Unit)),
         );
         sigs.insert(
+            "Log.error_with!".into(),
+            Type::Function(vec![Type::String, Type::Unknown], Box::new(Type::Unit)),
+        );
+        sigs.insert(
             "Log.debug!".into(),
             Type::Function(vec![Type::String], Box::new(Type::Unit)),
+        );
+        sigs.insert(
+            "Log.debug_with!".into(),
+            Type::Function(vec![Type::String, Type::Unknown], Box::new(Type::Unit)),
         );
     }
 

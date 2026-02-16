@@ -212,12 +212,20 @@ impl NativeRegistry {
         // -- Log --
         self.register("Log.info!", native_log_info);
         self.register("Log.info", native_log_info);
+        self.register("Log.info_with!", native_log_info);
+        self.register("Log.info_with", native_log_info);
         self.register("Log.warn!", native_log_warn);
         self.register("Log.warn", native_log_warn);
+        self.register("Log.warn_with!", native_log_warn);
+        self.register("Log.warn_with", native_log_warn);
         self.register("Log.error!", native_log_error);
         self.register("Log.error", native_log_error);
+        self.register("Log.error_with!", native_log_error);
+        self.register("Log.error_with", native_log_error);
         self.register("Log.debug!", native_log_debug);
         self.register("Log.debug", native_log_debug);
+        self.register("Log.debug_with!", native_log_debug);
+        self.register("Log.debug_with", native_log_debug);
 
         // -- Math --
         self.register("Math.abs", native_math_abs);

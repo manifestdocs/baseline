@@ -1,0 +1,20 @@
+@prelude(script)
+
+// Conformance: semantic logging with Log module.
+// Exercises all 4 levels and structured fields via _with variants.
+
+fn main!() -> {Console} () = {
+  // Basic leveled logging (1-arg form)
+  Log.info!("server starting")
+  Log.debug!("loading config")
+  Log.warn!("cache miss")
+  Log.error!("connection failed")
+
+  // Structured logging (2-arg _with form with record)
+  Log.info_with!("user login", { user_id: 42, role: "admin" })
+  Log.debug_with!("query executed", { table: "users", rows: 10 })
+  Log.warn_with!("slow query", { duration_ms: 1500, query: "SELECT *" })
+  Log.error_with!("auth failure", { ip: "192.168.1.1", attempts: 5 })
+
+  Console.println!("log tests passed")
+}
