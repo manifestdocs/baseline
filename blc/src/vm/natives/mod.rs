@@ -16,11 +16,13 @@ pub(crate) mod http_error;
 pub use fs_sandbox::set_fs_sandbox;
 mod int_conv;
 pub(crate) mod json;
+mod jwt;
 mod list;
 mod log;
 mod map;
 mod math;
 mod middleware;
+mod multipart;
 mod option;
 mod random;
 mod regex;
@@ -29,6 +31,7 @@ mod response;
 mod result;
 mod router;
 pub mod schema;
+mod session;
 mod set;
 mod string;
 mod time;
@@ -334,6 +337,22 @@ impl NativeRegistry {
         self.register("Json.to_camel_case", native_json_to_camel_case);
         self.register("Json.to_snake_case", native_json_to_snake_case);
 
+        // -- Jwt --
+        self.register("Jwt.sign", jwt::native_jwt_sign);
+        self.register("Jwt.sign_with", jwt::native_jwt_sign_with);
+        self.register("Jwt.verify", jwt::native_jwt_verify);
+        self.register("Jwt.decode", jwt::native_jwt_decode);
+
+        // -- Session --
+        self.register("Session.create!", session::native_session_create);
+        self.register("Session.create", session::native_session_create);
+        self.register("Session.get!", session::native_session_get);
+        self.register("Session.get", session::native_session_get);
+        self.register("Session.delete!", session::native_session_delete);
+        self.register("Session.delete", session::native_session_delete);
+        self.register("Session.set!", session::native_session_set);
+        self.register("Session.set", session::native_session_set);
+
         // -- Response --
         self.register("Response.ok", native_response_ok);
         self.register("Response.json", native_response_json);
@@ -398,6 +417,9 @@ impl NativeRegistry {
         self.register("HttpError.bad_gateway", http_error::native_http_error_bad_gateway);
         self.register("HttpError.service_unavailable", http_error::native_http_error_service_unavailable);
         self.register("HttpError.gateway_timeout", http_error::native_http_error_gateway_timeout);
+        self.register("HttpError.with_context", http_error::native_http_error_with_context);
+        self.register("HttpError.with_code", http_error::native_http_error_with_code);
+        self.register("HttpError.to_response", http_error::native_http_error_to_response);
 
         // -- Request --
         self.register("Request.header", native_request_header);
@@ -408,6 +430,7 @@ impl NativeRegistry {
         self.register("Request.query", native_request_query);
         self.register("Request.query_int", native_request_query_int);
         self.register("Request.decode", schema::native_request_decode);
+        self.register("Request.multipart", multipart::native_request_multipart);
 
         // -- Middleware --
         self.register("Middleware.extract_bearer", middleware::native_middleware_extract_bearer);
