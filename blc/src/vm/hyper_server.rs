@@ -618,6 +618,15 @@ impl AsyncResponse {
                             return Self::from_nvalue(payload);
                         }
                     }
+                    // If the Err payload is an HttpError enum variant (e.g. NotFound("..."))
+                    if payload.is_heap() {
+                        if let super::nvalue::HeapObject::Enum { tag: err_tag, payload: err_payload, .. } = payload.as_heap_ref() {
+                            if super::natives::http_error::http_error_status_code(err_tag).is_some() {
+                                let resp = super::natives::http_error::http_error_to_response_record(err_tag, err_payload);
+                                return Self::from_nvalue(&resp);
+                            }
+                        }
+                    }
                     let msg = payload.as_str().unwrap_or("Internal Server Error");
                     return Self::text(500, msg.to_string());
                 }
@@ -691,6 +700,15 @@ impl AsyncResponse {
                 if let SendableValue::Record(fields) = payload.as_ref() {
                     if fields.iter().any(|(k, _)| k == "status") {
                         return Self::from_sendable_val(payload);
+                    }
+                }
+                // If the Err payload is an HttpError enum variant
+                if let SendableValue::Enum { tag: ref err_tag, payload: ref err_payload } = *payload.as_ref() {
+                    if super::natives::http_error::http_error_status_code(err_tag).is_some() {
+                        // Convert to NValue to use shared rendering
+                        let nval = err_payload.to_nvalue();
+                        let resp = super::natives::http_error::http_error_to_response_record(err_tag, &nval);
+                        return Self::from_nvalue(&resp);
                     }
                 }
                 let msg = match payload.as_ref() {

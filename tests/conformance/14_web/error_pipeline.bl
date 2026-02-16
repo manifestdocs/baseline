@@ -1,0 +1,15 @@
+@prelude(server)
+
+// Test HttpError enrichment: with_context, with_code, to_response
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> = {
+  let err = HttpError.bad_request("invalid email")
+  let err2 = HttpError.with_code(err, "VALIDATION_ERROR")
+  let err3 = HttpError.with_context(err2, "field", "email")
+  let resp = HttpError.to_response(err3)
+  Ok(resp)
+}
+
+fn main!() -> () = {
+  Console.println!("ok")
+}
