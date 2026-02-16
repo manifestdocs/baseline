@@ -38,6 +38,17 @@
                     >Sqlite · Postgres · Mysql · Sql</span
                 >
             </a>
+
+            <a href="/guides/ai-tooling" class="guide-card">
+                <h2>AI Agent Tooling</h2>
+                <p>
+                    Use structured diagnostics, built-in docs, and verification levels
+                    to build effective AI coding workflows.
+                </p>
+                <span class="guide-card-modules"
+                    >blc check · blc docs · blc test · blc cgp</span
+                >
+            </a>
         </div>
     </div>
 </main>
