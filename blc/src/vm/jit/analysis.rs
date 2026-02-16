@@ -95,6 +95,7 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
                             | "List.find"
                             | "Option.map"
                             | "Result.map"
+                            | "Result.map_err"
                     );
                     if !is_hof && super::aot::aot_native_symbol(&qualified).is_none() {
                         return false;
@@ -116,6 +117,7 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
                     | "List.find"
                     | "Option.map"
                     | "Result.map"
+                    | "Result.map_err"
             );
             if is_hof {
                 return args.iter().all(|a| expr_can_jit(a, natives));
@@ -186,6 +188,8 @@ fn pattern_can_jit(pattern: &Pattern) -> bool {
         Pattern::Record(fields) => {
             fields.iter().all(|(_, sub)| pattern_can_jit(sub))
         }
+        // List patterns not yet supported in JIT — fall back to VM
+        Pattern::List(_, _) => false,
     }
 }
 

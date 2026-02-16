@@ -649,6 +649,20 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Result.is_err".into(),
             Type::Function(vec![Type::Unknown], Box::new(Type::Bool)),
         );
+        sigs.insert(
+            "Result.map_err".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Result.context".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::String],
+                Box::new(Type::Unknown),
+            ),
+        );
     }
 
     // -- List native methods (generic — use Unknown for element type) --

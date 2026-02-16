@@ -120,6 +120,7 @@ impl NativeRegistry {
                         | "Option.map"
                         | "Option.flat_map"
                         | "Result.map"
+                        | "Result.map_err"
                         | "Result.and_then"
                 )
             })
@@ -281,7 +282,9 @@ impl NativeRegistry {
         self.register("Result.is_ok", native_result_is_ok);
         self.register("Result.is_err", native_result_is_err);
         self.register("Result.map", native_hof_placeholder);
+        self.register("Result.map_err", native_hof_placeholder);
         self.register("Result.and_then", native_hof_placeholder);
+        self.register("Result.context", native_result_context);
 
         // -- Time --
         self.register("Time.now!", native_time_now);

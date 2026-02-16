@@ -1,0 +1,44 @@
+@prelude(core)
+
+// Conformance: Result.map_err and Result.context
+
+// --- Result.map_err ---
+
+fn wrap_error(res: Result<Int, String>) -> Result<Int, String> =
+  Result.map_err(res, |e| "wrapped: ${e}")
+
+// --- Result.map_err passes Ok through ---
+
+fn map_err_ok(res: Result<Int, String>) -> Result<Int, String> =
+  Result.map_err(res, |e| "should not run: ${e}")
+
+// --- Result.context ---
+
+fn add_context(res: Result<Int, String>) -> Result<Int, { error: String, context: String }> =
+  Result.context(res, "loading user")
+
+// --- Tests ---
+
+// map_err transforms Err
+test "map_err on Err" =
+  match wrap_error(Err("fail"))
+    Err(msg) -> msg == "wrapped: fail"
+    _ -> false
+
+// map_err passes Ok through
+test "map_err on Ok" =
+  match map_err_ok(Ok(42))
+    Ok(n) -> n == 42
+    _ -> false
+
+// context wraps Err with record
+test "context on Err" =
+  match add_context(Err("db fail"))
+    Err(ctx) -> ctx.context == "loading user"
+    _ -> false
+
+// context passes Ok through
+test "context on Ok" =
+  match add_context(Ok(42))
+    Ok(n) -> n == 42
+    _ -> false

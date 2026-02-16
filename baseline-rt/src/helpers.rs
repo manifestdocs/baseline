@@ -658,6 +658,14 @@ pub extern "C" fn jit_make_ok(payload: u64) -> u64 {
     jit_own(result)
 }
 
+/// Construct Err(payload) enum value (tag_id=3, matching TagRegistry).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_err(payload: u64) -> u64 {
+    let p = unsafe { jit_take_arg(payload) };
+    let result = NValue::enum_val_with_id("Err".into(), 3, p);
+    jit_own(result)
+}
+
 /// Check if a NaN-boxed value is truthy. Returns raw 1 or 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_is_truthy(val_bits: u64) -> u64 {
