@@ -2,21 +2,75 @@
 
 > Baseline: strongly typed, effect-tracked functional language. Extension: `.bl`, compiler: `blc`.
 
+## Rosetta Stone (Python → Baseline)
+
+### Variable Declaration
+Python:    `x = 10`
+Baseline:  `let x = 10`
+
+### Function Definition
+Python:    `def add(a: int, b: int) -> int: return a + b`
+Baseline:  `fn add(a: Int, b: Int) -> Int = a + b`
+
+### Side Effects (Print)
+Python:    `print("hello")`
+Baseline:  `Console.println!("hello")`
+
+### List Operations
+Python:    `[x * 2 for x in items if x > 0]`
+Baseline:  `items |> List.filter(|x| x > 0) |> List.map(|x| x * 2)`
+
+### Error Handling
+Python:    `try: val = risky() / except: val = default`
+Baseline:  `match risky() { Ok(v) -> v, Err(_) -> default }`
+
+### Null Handling
+Python:    `if x is not None: use(x)`
+Baseline:  `match x { Some(v) -> use(v), None -> fallback }`
+
+### String Concatenation
+Python:    `greeting = "Hello, " + name + "!"`
+Baseline:  `let greeting = "Hello, ${name}!"`
+
+### Classes → Records + Sum Types
+Python:    `class User: def __init__(self, name, age): ...`
+Baseline:  `type User = { name: String, age: Int }`
+
+### Method Calls
+Python:    `name.upper()`
+Baseline:  `String.to_upper(name)`
+
+### Boolean Negation
+Python:    `if not valid:`
+Baseline:  `if not valid then ...`
+
+### HTTP Handler
+Python:    `@app.get("/health") / def health(): return "ok"`
+Baseline:  `fn health(req: {...}) -> Result<{...}, String> = Ok(Response.ok("healthy"))`
+
+### Lambda / Anonymous Function
+Python:    `lambda x: x + 1`
+Baseline:  `|x| x + 1`
+
 ## Syntax
 
 ### Functions
 ```
 fn add(a: Int, b: Int) -> Int = a + b
-fn effectful!(x: Int) -> {Console} () = Console.println!("${x}")
+fn effectful!(x: Int) -> () = Console.println!("${x}")
 ```
 
 ### Effects
-Effectful functions end with `!` and declare effects in `{...}`:
+Effectful functions end with `!`. Effect annotations are optional — the compiler infers them:
 ```
-fn fetch!(url: String) -> {Http, Log} Result<String, String> = {
+fn fetch!(url: String) -> Result<String, String> = {
   Log.info!("Fetching ${url}")
   Http.get!(url)
 }
+```
+Explicit annotations are allowed for documentation or to restrict effects:
+```
+fn fetch!(url: String) -> {Http, Log} Result<String, String> = ...
 ```
 Pure functions (no `!`) cannot call effectful functions.
 
@@ -123,7 +177,7 @@ import Math *                      // Wildcard
 ## Key Rules
 
 1. Pure functions have NO `!` suffix and CANNOT use effects
-2. Effectful functions end with `!` and declare effects: `-> {Http, Fs} Result<T, E>`
+2. Effectful functions end with `!` — effect annotations are optional (inferred by compiler)
 3. Effects are called with `!`: `Console.println!("hello")`
 4. Pattern matching must be exhaustive
 5. `not` is a keyword for logical negation (not `!`)
@@ -142,11 +196,24 @@ import Math *                      // Wildcard
 - No mutable variables, no `return` keyword, no semicolons
 - No backward pipe `<|` or composition `>>`, `<<`
 
+## Common Agent Mistakes
+
+WRONG: `user.to_string()`   → RIGHT: `String.from(user)` — no method calls on values
+WRONG: `!valid`             → RIGHT: `not valid` — `!` is for effects, `not` is for negation
+WRONG: `"a" + "b"`          → RIGHT: `"${a}${b}"` — no `+` for string concatenation
+WRONG: `return x`           → RIGHT: `x` — last expression is the return value
+WRONG: `let mut x = 0`      → RIGHT: restructure with recursion or `List.fold`
+WRONG: `try { risky() }`    → RIGHT: `match risky() { Ok(v) -> v, Err(e) -> handle(e) }`
+WRONG: `async fn fetch()`   → RIGHT: `fn fetch!()` — effects replace async/await
+WRONG: `x; y; z`            → RIGHT: `{ let _ = x  let _ = y  z }` — no semicolons
+WRONG: `fn foo { ... }`     → RIGHT: `fn foo() -> Type = expr` — signature required
+WRONG: `import { foo }`     → RIGHT: `import Foo { bar }` — module names are PascalCase
+
 ## Common Patterns
 
 ```
 // Effectful entry point
-fn main!() -> {Console} () =
+fn main!() =
   Console.println!("Hello, Baseline!")
 
 // Data transformation
@@ -173,10 +240,10 @@ fn area(s: Shape) -> Float =
 ```
 @prelude(server)
 
-fn health(req: { method: String }) -> {Http} Result<{ status: Int, headers: List<(String, String)>, body: String }, String> =
+fn health(req: { method: String }) -> Result<{ status: Int, headers: List<(String, String)>, body: String }, String> =
   Ok(Response.ok("healthy"))
 
-fn main!() -> {Http} () =
+fn main!() =
   Router.new()
     |> Router.get("/health", health)
     |> Server.listen!(8080)
