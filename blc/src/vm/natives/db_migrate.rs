@@ -79,9 +79,11 @@ fn ensure_migrations_table() -> Result<(), NativeError> {
 fn get_applied_migrations() -> Result<Vec<String>, NativeError> {
     let rows = db_backend::active_query("SELECT name FROM _migrations ORDER BY id", &[])?;
     Ok(rows.into_iter().filter_map(|row| {
-        row.into_iter()
-            .find(|(k, _)| k == "name")
-            .map(|(_, v)| v)
+        row.columns.iter().position(|c: &super::RcStr| c.as_ref() == "name")
+            .and_then(|i| match &row.values[i] {
+                db_backend::SqlValue::Text(s) => Some(s.as_ref().to_string()),
+                _ => None,
+            })
     }).collect())
 }
 

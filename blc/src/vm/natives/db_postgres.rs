@@ -9,7 +9,9 @@ use std::cell::RefCell;
 
 use tokio_postgres::{Client, NoTls};
 
-use super::db_backend::{self, Row};
+use std::sync::Arc;
+
+use super::db_backend::{self, ColumnNames, Row, SqlValue};
 use super::{NValue, NativeError, RcStr};
 
 // ---------------------------------------------------------------------------
@@ -84,19 +86,31 @@ pub fn postgres_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeEr
             .block_on(client.query(sql, &pg_params))
             .map_err(|e| NativeError(format!("Postgres.query!: {}", e)))?;
 
+        // Build shared column names from first row (or empty query)
+        let columns: ColumnNames = if let Some(first) = rows.first() {
+            Arc::new(first.columns().iter().map(|c| RcStr::from(c.name())).collect())
+        } else {
+            Arc::new(Vec::new())
+        };
+
         let mut result = Vec::with_capacity(rows.len());
         for row in &rows {
-            let mut entries = Vec::new();
-            for (i, column) in row.columns().iter().enumerate() {
-                let val: String = row
-                    .try_get::<_, String>(i)
-                    .or_else(|_| row.try_get::<_, i64>(i).map(|v| v.to_string()))
-                    .or_else(|_| row.try_get::<_, f64>(i).map(|v| v.to_string()))
-                    .or_else(|_| row.try_get::<_, bool>(i).map(|v| v.to_string()))
-                    .unwrap_or_default();
-                entries.push((column.name().to_string(), val));
+            let mut values = Vec::with_capacity(columns.len());
+            for i in 0..row.columns().len() {
+                let val = if let Ok(v) = row.try_get::<_, i64>(i) {
+                    SqlValue::Int(v)
+                } else if let Ok(v) = row.try_get::<_, f64>(i) {
+                    SqlValue::Float(v)
+                } else if let Ok(v) = row.try_get::<_, String>(i) {
+                    SqlValue::Text(RcStr::from(v.as_str()))
+                } else if let Ok(v) = row.try_get::<_, bool>(i) {
+                    SqlValue::Int(if v { 1 } else { 0 })
+                } else {
+                    SqlValue::Null
+                };
+                values.push(val);
             }
-            result.push(entries);
+            result.push(Row { columns: columns.clone(), values });
         }
 
         Ok(result)
@@ -133,7 +147,7 @@ pub fn native_postgres_execute(args: &[NValue]) -> Result<NValue, NativeError> {
     Ok(NValue::int(affected))
 }
 
-/// Postgres.query!(sql: String, params: List<String>) -> List<Map<String, String>>
+/// Postgres.query!(sql: String, params: List<String>) -> List<Row>
 pub fn native_postgres_query(args: &[NValue]) -> Result<NValue, NativeError> {
     let sql = args
         .first()
@@ -170,18 +184,7 @@ fn extract_params(arg: Option<&NValue>) -> Result<Vec<String>, NativeError> {
 fn rows_to_nvalue(rows: Vec<Row>) -> NValue {
     let nvalue_rows: Vec<NValue> = rows
         .into_iter()
-        .map(|row| {
-            let entries: Vec<(NValue, NValue)> = row
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        NValue::string(RcStr::from(k.as_str())),
-                        NValue::string(RcStr::from(v.as_str())),
-                    )
-                })
-                .collect();
-            NValue::map(entries)
-        })
+        .map(|row| NValue::row(row.columns, row.values))
         .collect();
     NValue::list(nvalue_rows)
 }

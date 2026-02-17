@@ -10,7 +10,9 @@ use std::cell::RefCell;
 use mysql_async::prelude::*;
 use mysql_async::{Conn, Opts, Pool};
 
-use super::db_backend::{self, Row};
+use std::sync::Arc;
+
+use super::db_backend::{self, ColumnNames, Row, SqlValue};
 use super::{NValue, NativeError, RcStr};
 
 // ---------------------------------------------------------------------------
@@ -94,27 +96,32 @@ pub fn mysql_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeError
         let result = rt
             .block_on(async {
                 let stmt = conn.prep(sql).await?;
-                let columns: Vec<String> = stmt
-                    .columns()
-                    .iter()
-                    .map(|c| c.name_str().to_string())
-                    .collect();
+                let columns: ColumnNames = Arc::new(
+                    stmt.columns()
+                        .iter()
+                        .map(|c| RcStr::from(c.name_str().as_ref()))
+                        .collect(),
+                );
 
                 let rows: Vec<mysql_async::Row> =
                     conn.exec(stmt, mysql_params).await?;
 
                 let mut result = Vec::with_capacity(rows.len());
                 for row in rows {
-                    let mut entries = Vec::new();
-                    for (i, col_name) in columns.iter().enumerate() {
-                        let val: String = row
-                            .get::<String, _>(i)
-                            .or_else(|| row.get::<i64, _>(i).map(|v| v.to_string()))
-                            .or_else(|| row.get::<f64, _>(i).map(|v| v.to_string()))
-                            .unwrap_or_default();
-                        entries.push((col_name.clone(), val));
+                    let mut values = Vec::with_capacity(columns.len());
+                    for i in 0..columns.len() {
+                        let val = if let Some(v) = row.get::<i64, _>(i) {
+                            SqlValue::Int(v)
+                        } else if let Some(v) = row.get::<f64, _>(i) {
+                            SqlValue::Float(v)
+                        } else if let Some(v) = row.get::<String, _>(i) {
+                            SqlValue::Text(RcStr::from(v.as_str()))
+                        } else {
+                            SqlValue::Null
+                        };
+                        values.push(val);
                     }
-                    result.push(entries);
+                    result.push(Row { columns: columns.clone(), values });
                 }
                 Ok::<_, mysql_async::Error>(result)
             })
@@ -154,7 +161,7 @@ pub fn native_mysql_execute(args: &[NValue]) -> Result<NValue, NativeError> {
     Ok(NValue::int(affected))
 }
 
-/// Mysql.query!(sql: String, params: List<String>) -> List<Map<String, String>>
+/// Mysql.query!(sql: String, params: List<String>) -> List<Row>
 pub fn native_mysql_query(args: &[NValue]) -> Result<NValue, NativeError> {
     let sql = args
         .first()
@@ -191,18 +198,7 @@ fn extract_params(arg: Option<&NValue>) -> Result<Vec<String>, NativeError> {
 fn rows_to_nvalue(rows: Vec<Row>) -> NValue {
     let nvalue_rows: Vec<NValue> = rows
         .into_iter()
-        .map(|row| {
-            let entries: Vec<(NValue, NValue)> = row
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        NValue::string(RcStr::from(k.as_str())),
-                        NValue::string(RcStr::from(v.as_str())),
-                    )
-                })
-                .collect();
-            NValue::map(entries)
-        })
+        .map(|row| NValue::row(row.columns, row.values))
         .collect();
     NValue::list(nvalue_rows)
 }

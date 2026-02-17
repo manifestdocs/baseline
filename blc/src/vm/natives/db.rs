@@ -2,7 +2,9 @@ use std::cell::RefCell;
 
 use rusqlite::{Connection, params_from_iter};
 
-use super::db_backend::{self, Row};
+use std::sync::Arc;
+
+use super::db_backend::{self, ColumnNames, Row, SqlValue};
 use super::{NValue, NativeError, RcStr};
 
 // ---------------------------------------------------------------------------
@@ -65,31 +67,28 @@ pub fn sqlite_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeErro
             .prepare(sql)
             .map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
 
-        let column_names: Vec<String> = stmt
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
+        let columns: ColumnNames = Arc::new(
+            stmt.column_names()
+                .iter()
+                .map(|s| RcStr::from(*s))
+                .collect(),
+        );
 
         let rows = stmt
             .query_map(params_from_iter(params.iter()), |row| {
-                let mut entries = Vec::with_capacity(column_names.len());
-                for (i, col_name) in column_names.iter().enumerate() {
-                    let val: rusqlite::Result<rusqlite::types::Value> = row.get(i);
-                    let val_str = match val {
-                        Ok(v) => value_to_string(&v),
-                        Err(_) => String::new(),
-                    };
-                    entries.push((col_name.clone(), val_str));
+                let mut values = Vec::with_capacity(columns.len());
+                for i in 0..columns.len() {
+                    let val = rusqlite_to_sqlvalue(row, i);
+                    values.push(val);
                 }
-                Ok(entries)
+                Ok(values)
             })
             .map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
 
         let mut result = Vec::new();
         for row in rows {
-            let row_val = row.map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
-            result.push(row_val);
+            let values = row.map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
+            result.push(Row { columns: columns.clone(), values });
         }
 
         Ok(result)
@@ -97,35 +96,25 @@ pub fn sqlite_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeErro
 }
 
 // ---------------------------------------------------------------------------
-// Helper: convert rusqlite Value to String
+// Helper: convert rusqlite Value to SqlValue
 // ---------------------------------------------------------------------------
 
-fn value_to_string(val: &rusqlite::types::Value) -> String {
-    match val {
-        rusqlite::types::Value::Null => String::new(),
-        rusqlite::types::Value::Integer(i) => i.to_string(),
-        rusqlite::types::Value::Real(f) => f.to_string(),
-        rusqlite::types::Value::Text(s) => s.clone(),
-        rusqlite::types::Value::Blob(b) => format!("<blob:{} bytes>", b.len()),
+fn rusqlite_to_sqlvalue(row: &rusqlite::Row<'_>, i: usize) -> SqlValue {
+    match row.get::<_, rusqlite::types::Value>(i) {
+        Ok(rusqlite::types::Value::Null) => SqlValue::Null,
+        Ok(rusqlite::types::Value::Integer(n)) => SqlValue::Int(n),
+        Ok(rusqlite::types::Value::Real(f)) => SqlValue::Float(f),
+        Ok(rusqlite::types::Value::Text(s)) => SqlValue::Text(RcStr::from(s.as_str())),
+        Ok(rusqlite::types::Value::Blob(b)) => SqlValue::Blob(b),
+        Err(_) => SqlValue::Null,
     }
 }
 
-/// Convert raw rows to NValue list of maps.
+/// Convert typed rows to NValue list of Row values.
 fn rows_to_nvalue(rows: Vec<Row>) -> NValue {
     let nvalue_rows: Vec<NValue> = rows
         .into_iter()
-        .map(|row| {
-            let entries: Vec<(NValue, NValue)> = row
-                .into_iter()
-                .map(|(k, v)| {
-                    (
-                        NValue::string(RcStr::from(k.as_str())),
-                        NValue::string(RcStr::from(v.as_str())),
-                    )
-                })
-                .collect();
-            NValue::map(entries)
-        })
+        .map(|row| NValue::row(row.columns, row.values))
         .collect();
     NValue::list(nvalue_rows)
 }
@@ -181,7 +170,7 @@ pub fn native_sqlite_execute(args: &[NValue]) -> Result<NValue, NativeError> {
     Ok(NValue::int(affected))
 }
 
-/// Sqlite.query!(sql: String, params: List<String>) -> List<Map<String, String>>
+/// Sqlite.query!(sql: String, params: List<String>) -> List<Row>
 pub fn native_sqlite_query(args: &[NValue]) -> Result<NValue, NativeError> {
     let sql = args
         .first()
@@ -192,6 +181,40 @@ pub fn native_sqlite_query(args: &[NValue]) -> Result<NValue, NativeError> {
     let rows = sqlite_query(sql.as_ref(), &params)?;
 
     Ok(rows_to_nvalue(rows))
+}
+
+/// Sqlite.query_one!(sql: String, params: List<String>) -> Option<Row>
+pub fn native_sqlite_query_one(args: &[NValue]) -> Result<NValue, NativeError> {
+    let sql = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("Sqlite.query_one!: expected SQL string as first argument".into()))?;
+
+    let params = extract_params(args.get(1))?;
+    let rows = sqlite_query(sql.as_ref(), &params)?;
+
+    match rows.into_iter().next() {
+        Some(row) => Ok(NValue::enum_val("Some".into(), NValue::row(row.columns, row.values))),
+        None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+    }
+}
+
+/// Generic query_one — uses active backend dispatch.
+/// Used by Postgres.query_one! and Mysql.query_one! (feature-gated).
+#[allow(dead_code)]
+pub fn native_query_one(args: &[NValue]) -> Result<NValue, NativeError> {
+    let sql = args
+        .first()
+        .and_then(|v| v.as_string())
+        .ok_or_else(|| NativeError("query_one!: expected SQL string as first argument".into()))?;
+
+    let params = extract_params(args.get(1))?;
+    let rows = db_backend::active_query(sql.as_ref(), &params)?;
+
+    match rows.into_iter().next() {
+        Some(row) => Ok(NValue::enum_val("Some".into(), NValue::row(row.columns, row.values))),
+        None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+    }
 }
 
 #[cfg(test)]
@@ -351,7 +374,7 @@ mod tests {
     }
 
     #[test]
-    fn query_integer_values_as_strings() {
+    fn query_preserves_integer_types() {
         native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
         native_sqlite_execute(&[
             NValue::string("CREATE TABLE nums (val INTEGER)".into()),
@@ -372,7 +395,51 @@ mod tests {
 
         let rows = result.as_list().unwrap();
         assert_eq!(rows.len(), 1);
-        // The integer 42 should be returned as the string "42"
+        let (cols, vals) = rows[0].as_row().unwrap();
+        assert_eq!(cols[0].as_ref(), "val");
+        assert_eq!(vals[0], SqlValue::Int(42));
+    }
+
+    #[test]
+    fn query_one_returns_some() {
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
+            NValue::string("CREATE TABLE qo (id INTEGER, name TEXT)".into()),
+            NValue::list(vec![]),
+        ]).unwrap();
+        native_sqlite_execute(&[
+            NValue::string("INSERT INTO qo VALUES (1, 'Alice')".into()),
+            NValue::list(vec![]),
+        ]).unwrap();
+
+        let result = native_sqlite_query_one(&[
+            NValue::string("SELECT * FROM qo WHERE id = ?1".into()),
+            NValue::list(vec![NValue::string("1".into())]),
+        ]).unwrap();
+
+        let (tag, payload) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "Some");
+        let (cols, vals) = payload.as_row().unwrap();
+        assert_eq!(cols.len(), 2);
+        assert_eq!(vals[0], SqlValue::Int(1));
+        assert_eq!(vals[1], SqlValue::Text("Alice".into()));
+    }
+
+    #[test]
+    fn query_one_returns_none() {
+        native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
+        native_sqlite_execute(&[
+            NValue::string("CREATE TABLE qo2 (id INTEGER)".into()),
+            NValue::list(vec![]),
+        ]).unwrap();
+
+        let result = native_sqlite_query_one(&[
+            NValue::string("SELECT * FROM qo2 WHERE id = ?1".into()),
+            NValue::list(vec![NValue::string("999".into())]),
+        ]).unwrap();
+
+        let (tag, _) = result.as_enum().unwrap();
+        assert_eq!(tag.as_ref(), "None");
     }
 
     #[test]
