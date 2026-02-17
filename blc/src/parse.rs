@@ -194,6 +194,47 @@ pub(crate) fn collect_errors(
     if node.is_error() {
         let text = node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
 
+        // Check if this error follows a match expression (common gotcha:
+        // match arms are greedy and consume tokens that look like patterns).
+        let after_match = has_preceding_match(&node);
+
+        // Check for common gotcha: @test { ... } (braces not allowed)
+        let after_test_annotation = (text.starts_with('{') || text.starts_with('}'))
+            && has_preceding_test_annotation(&node);
+
+        let (context, suggestions) = if after_test_annotation {
+            (
+                "`@test` sections do not use braces. Remove the `{` and `}` — just write \
+                 `@test` followed by `test \"name\" = expr` lines."
+                    .to_string(),
+                vec![Suggestion {
+                    strategy: "remove".to_string(),
+                    description: "Remove `{` and `}` around the test block".to_string(),
+                    confidence: None,
+                    patch: None,
+                }],
+            )
+        } else if after_match {
+            (
+                "Match arms are greedy — the parser consumed this as part of the match. \
+                 Use `let _ = expr` for the next statement, or make the match the last expression in the block."
+                    .to_string(),
+                vec![Suggestion {
+                    strategy: "rewrite".to_string(),
+                    description:
+                        "Wrap the following expression: `let _ = <expr>` (statements after match must start with `let`)"
+                            .to_string(),
+                    confidence: None,
+                    patch: None,
+                }],
+            )
+        } else {
+            (
+                "The parser encountered unexpected tokens.".to_string(),
+                vec![],
+            )
+        };
+
         diagnostics.push(Diagnostic {
             code: "SYN_001".to_string(),
             severity: Severity::Error,
@@ -202,8 +243,8 @@ pub(crate) fn collect_errors(
                 "Syntax error: unexpected `{}`",
                 text.chars().take(20).collect::<String>()
             ),
-            context: "The parser encountered unexpected tokens.".to_string(),
-            suggestions: vec![],
+            context,
+            suggestions,
         });
     } else if node.is_missing() {
         diagnostics.push(Diagnostic {
@@ -226,4 +267,54 @@ pub(crate) fn collect_errors(
     for child in node.children(&mut cursor) {
         collect_errors(child, source, file, diagnostics);
     }
+}
+
+/// Check whether an ERROR node appears as a sibling after a `match_expression`.
+/// This detects the common gotcha where match arms greedily consume tokens
+/// that look like patterns (literals, identifiers, tuples).
+fn has_preceding_match(node: &tree_sitter::Node) -> bool {
+    if let Some(parent) = node.parent() {
+        let mut cursor = parent.walk();
+        let mut saw_match = false;
+        for child in parent.children(&mut cursor) {
+            if child.id() == node.id() {
+                return saw_match;
+            }
+            // A match_expression or a let binding whose value is a match
+            if child.kind() == "match_expression" {
+                saw_match = true;
+            } else if child.kind() == "let_declaration" {
+                // Check if the let's value expression is a match
+                let mut inner = child.walk();
+                for grandchild in child.children(&mut inner) {
+                    if grandchild.kind() == "match_expression" {
+                        saw_match = true;
+                    }
+                }
+            } else {
+                // Any non-match statement resets — the error isn't related to the match
+                saw_match = false;
+            }
+        }
+    }
+    false
+}
+
+/// Check whether an ERROR node containing `{` is inside or immediately after a `@test` section.
+/// Tree-sitter parses `@test {` as: test_section → ERROR("{"), so the ERROR is a child of test_section.
+/// The closing `}` is a sibling ERROR after test_section.
+fn has_preceding_test_annotation(node: &tree_sitter::Node) -> bool {
+    // Case 1: ERROR is a child of test_section (the opening `{`)
+    if let Some(parent) = node.parent() {
+        if parent.kind() == "test_section" {
+            return true;
+        }
+    }
+    // Case 2: ERROR is a sibling after test_section (the closing `}`)
+    if let Some(prev) = node.prev_named_sibling() {
+        if prev.kind() == "test_section" {
+            return true;
+        }
+    }
+    false
 }

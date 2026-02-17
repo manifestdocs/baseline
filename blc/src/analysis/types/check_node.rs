@@ -1823,44 +1823,221 @@ fn check_node_inner(
             let right_node = node.named_child(1).unwrap();
 
             let left_type = check_node(&left_node, source, file, symbols, diagnostics);
-            let right_type = check_node(&right_node, source, file, symbols, diagnostics);
 
-            if let Type::Function(args, ret) = right_type {
-                if args.len() != 1 {
-                    diagnostics.push(Diagnostic {
-                        code: "TYP_018".to_string(),
-                        severity: Severity::Error,
-                        location: Location::from_node(file,&right_node),
-                        message: format!("Pipe function expects 1 argument, found {}", args.len()),
-                        context: "Pipe operator expects a unary function.".to_string(),
-                        suggestions: vec![],
-                    });
-                } else if !types_compatible(&left_type, &args[0]) {
-                    diagnostics.push(Diagnostic {
-                        code: "TYP_019".to_string(),
-                        severity: Severity::Error,
-                        location: Location::from_node(file,&left_node),
-                        message: format!(
-                            "Pipe argument mismatch: expected {}, found {}",
-                            args[0], left_type
-                        ),
-                        context: "Argument type must match function signature.".to_string(),
-                        suggestions: vec![],
-                    });
-                }
-                *ret
-            } else if right_type == Type::Unknown {
-                Type::Unknown
-            } else {
-                diagnostics.push(Diagnostic {
-                    code: "TYP_020".to_string(),
-                    severity: Severity::Error,
-                    location: Location::from_node(file,&right_node),
-                    message: format!("Pipe target is not a function, it is {}", right_type),
-                    context: "Left side must be piped into a function.".to_string(),
-                    suggestions: vec![],
+            // When RHS is a call_expression like `List.filter(pred)`, treat the
+            // piped value as the first argument: `items |> List.filter(pred)` becomes
+            // `List.filter(items, pred)`.
+            if right_node.kind() == "call_expression" {
+                let func_node = right_node.named_child(0).unwrap();
+                let explicit_arg_count = right_node.named_child_count() - 1;
+
+                // Resolve function name for schema lookup
+                let func_name = extract_qualified_name(&func_node, source).or_else(|| {
+                    let k = func_node.kind();
+                    if k == "identifier" || k == "effect_identifier" {
+                        func_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+                    } else {
+                        None
+                    }
                 });
-                Type::Unknown
+
+                // Try generic schema first (covers List.map, List.filter, etc.)
+                let schema = func_name.as_ref()
+                    .and_then(|n| symbols.lookup_generic_schema(n));
+                let user_schema = if schema.is_none() {
+                    func_name.as_ref()
+                        .and_then(|n| symbols.lookup_user_generic_schema(n))
+                } else {
+                    None
+                };
+
+                if schema.is_some() || user_schema.is_some() {
+                    let mut ctx = InferCtx::new();
+                    let instantiated = if let Some(s) = schema {
+                        (s.build)(&mut ctx)
+                    } else {
+                        let us = user_schema.unwrap();
+                        let mut mapping = std::collections::HashMap::new();
+                        for name in &us.type_param_names {
+                            mapping.insert(name.clone(), ctx.fresh_var());
+                        }
+                        crate::analysis::infer::substitute_type_params(&us.fn_type, &mapping)
+                    };
+                    if let Type::Function(params, ret) = instantiated {
+                        let expected_total = params.len();
+                        if explicit_arg_count + 1 != expected_total {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_007".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, &right_node),
+                                message: format!(
+                                    "Pipe call expects {} arguments (including piped value), found {}",
+                                    expected_total, explicit_arg_count + 1
+                                ),
+                                context: "Argument count mismatch in pipe call.".to_string(),
+                                suggestions: vec![],
+                            });
+                            Type::Unknown
+                        } else {
+                            // Unify piped value with first param
+                            let _ = ctx.unify(&left_type, &params[0]);
+                            // Unify explicit args with remaining params
+                            for i in 0..explicit_arg_count {
+                                let arg_node = right_node.named_child(i + 1).unwrap();
+                                let arg_expr = call_arg_expr(&arg_node);
+                                // For lambda args, use expected type for inference
+                                let expected = &params[i + 1];
+                                let arg_type = if arg_expr.kind() == "lambda" {
+                                    let expected_applied = ctx.apply(expected);
+                                    if let Type::Function(ref exp_params, ref exp_ret) = expected_applied {
+                                        check_lambda_with_expected(
+                                            &arg_expr, exp_params, exp_ret,
+                                            source, file, symbols, diagnostics,
+                                        )
+                                    } else {
+                                        check_node(&arg_expr, source, file, symbols, diagnostics)
+                                    }
+                                } else {
+                                    check_node(&arg_expr, source, file, symbols, diagnostics)
+                                };
+                                let _ = ctx.unify(&arg_type, expected);
+                            }
+                            ctx.apply(&ret)
+                        }
+                    } else {
+                        Type::Unknown
+                    }
+                } else {
+                    // Non-generic function: look up type directly
+                    let func_type = check_node(&func_node, source, file, symbols, diagnostics);
+                    if let Type::Function(params, ret) = func_type {
+                        let expected_total = params.len();
+                        if explicit_arg_count + 1 == expected_total {
+                            // Validate piped value against first param
+                            if !types_compatible(&left_type, &params[0]) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_019".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &left_node),
+                                    message: format!(
+                                        "Pipe argument mismatch: expected {}, found {}",
+                                        params[0], left_type
+                                    ),
+                                    context: "Piped value type must match first parameter.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                            // Type-check explicit args
+                            for i in 0..explicit_arg_count {
+                                let arg_node = right_node.named_child(i + 1).unwrap();
+                                let arg_expr = call_arg_expr(&arg_node);
+                                let arg_type = check_node(&arg_expr, source, file, symbols, diagnostics);
+                                if !types_compatible(&arg_type, &params[i + 1]) {
+                                    diagnostics.push(Diagnostic {
+                                        code: "TYP_019".to_string(),
+                                        severity: Severity::Error,
+                                        location: Location::from_node(file, &arg_expr),
+                                        message: format!(
+                                            "Argument mismatch: expected {}, found {}",
+                                            params[i + 1], arg_type
+                                        ),
+                                        context: "Argument type must match function signature.".to_string(),
+                                        suggestions: vec![],
+                                    });
+                                }
+                            }
+                            *ret
+                        } else if explicit_arg_count == 0 && params.len() == 1 {
+                            // `x |> f()` — same as `x |> f`
+                            if !types_compatible(&left_type, &params[0]) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_019".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &left_node),
+                                    message: format!(
+                                        "Pipe argument mismatch: expected {}, found {}",
+                                        params[0], left_type
+                                    ),
+                                    context: "Argument type must match function signature.".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                            *ret
+                        } else {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_007".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, &right_node),
+                                message: format!(
+                                    "Pipe call expects {} arguments (including piped value), found {}",
+                                    params.len(), explicit_arg_count + 1
+                                ),
+                                context: "Argument count mismatch in pipe call.".to_string(),
+                                suggestions: vec![],
+                            });
+                            Type::Unknown
+                        }
+                    } else if func_type == Type::Unknown {
+                        // Type-check explicit args for side effects
+                        for i in 0..explicit_arg_count {
+                            let arg_node = right_node.named_child(i + 1).unwrap();
+                            let arg_expr = call_arg_expr(&arg_node);
+                            check_node(&arg_expr, source, file, symbols, diagnostics);
+                        }
+                        Type::Unknown
+                    } else {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_020".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &right_node),
+                            message: format!("Pipe target is not a function, it is {}", func_type),
+                            context: "Left side must be piped into a function.".to_string(),
+                            suggestions: vec![],
+                        });
+                        Type::Unknown
+                    }
+                }
+            } else {
+                // RHS is a bare function reference (no call): x |> f
+                let right_type = check_node(&right_node, source, file, symbols, diagnostics);
+
+                if let Type::Function(args, ret) = right_type {
+                    if args.len() != 1 {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_018".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &right_node),
+                            message: format!("Pipe function expects 1 argument, found {}", args.len()),
+                            context: "Bare pipe target must be a unary function. Use `|> f(arg)` for multi-arg functions.".to_string(),
+                            suggestions: vec![],
+                        });
+                    } else if !types_compatible(&left_type, &args[0]) {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_019".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &left_node),
+                            message: format!(
+                                "Pipe argument mismatch: expected {}, found {}",
+                                args[0], left_type
+                            ),
+                            context: "Argument type must match function signature.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
+                    *ret
+                } else if right_type == Type::Unknown {
+                    Type::Unknown
+                } else {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_020".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &right_node),
+                        message: format!("Pipe target is not a function, it is {}", right_type),
+                        context: "Left side must be piped into a function.".to_string(),
+                        suggestions: vec![],
+                    });
+                    Type::Unknown
+                }
             }
         }
         "type_identifier" => {

@@ -340,14 +340,23 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
-    // List.head : (List<A>) -> A
+    // List.head : (List<A>) -> Option<A>
     schemas.insert(
         "List.head".into(),
         GenericSchema {
             type_params: 1,
             build: |ctx| {
                 let a = ctx.fresh_var();
-                Type::Function(vec![Type::List(Box::new(a.clone()))], Box::new(a))
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone()))],
+                    Box::new(Type::Enum(
+                        "Option".to_string(),
+                        vec![
+                            ("Some".to_string(), vec![a]),
+                            ("None".to_string(), vec![]),
+                        ],
+                    )),
+                )
             },
         },
     );
