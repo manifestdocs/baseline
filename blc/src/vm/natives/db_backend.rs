@@ -6,14 +6,22 @@
 
 use std::cell::RefCell;
 
+pub use baseline_rt::nvalue::{ColumnNames, SqlValue};
 use super::NativeError;
+
+/// A typed database row: column names (shared) + typed values.
+#[derive(Debug, Clone)]
+pub struct TypedRow {
+    pub columns: ColumnNames,
+    pub values: Vec<SqlValue>,
+}
+
+/// A row from a query result.
+pub type Row = TypedRow;
 
 // ---------------------------------------------------------------------------
 // SqlBackend trait
 // ---------------------------------------------------------------------------
-
-/// A row from a query: list of (column_name, string_value) pairs.
-pub type Row = Vec<(String, String)>;
 
 /// Trait that all database backends implement.
 #[allow(dead_code)]
@@ -21,7 +29,7 @@ pub trait SqlBackend {
     /// Execute DDL/DML SQL. Returns number of affected rows.
     fn execute(&self, sql: &str, params: &[String]) -> Result<i64, NativeError>;
 
-    /// Execute a SELECT query. Returns rows as list of (column, value) pairs.
+    /// Execute a SELECT query. Returns typed rows.
     fn query(&self, sql: &str, params: &[String]) -> Result<Vec<Row>, NativeError>;
 }
 

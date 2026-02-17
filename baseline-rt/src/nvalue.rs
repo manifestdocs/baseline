@@ -18,6 +18,23 @@ use std::sync::Arc;
 use crate::value::{RcStr, Value};
 
 // ---------------------------------------------------------------------------
+// SqlValue — typed column value preserving native DB types
+// ---------------------------------------------------------------------------
+
+/// A typed SQL column value, preserving native database types.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SqlValue {
+    Null,
+    Int(i64),
+    Float(f64),
+    Text(RcStr),
+    Blob(Vec<u8>),
+}
+
+/// Shared column names across all rows from a single query.
+pub type ColumnNames = Arc<Vec<RcStr>>;
+
+// ---------------------------------------------------------------------------
 // Tag constants
 // ---------------------------------------------------------------------------
 
@@ -166,6 +183,11 @@ pub enum HeapObject {
         /// Chunk index for the resume point.
         resume_chunk_idx: u32,
     },
+    /// Typed database row: column names (shared Arc) + typed SqlValues.
+    Row {
+        columns: ColumnNames,
+        values: Vec<SqlValue>,
+    },
 }
 
 impl PartialEq for HeapObject {
@@ -188,6 +210,8 @@ impl PartialEq for HeapObject {
             (HeapObject::BigInt(a), HeapObject::BigInt(b)) => a == b,
             (HeapObject::NativeObject { tag: t1, data: d1 },
              HeapObject::NativeObject { tag: t2, data: d2 }) => t1 == t2 && Arc::ptr_eq(d1, d2),
+            (HeapObject::Row { columns: c1, values: v1 },
+             HeapObject::Row { columns: c2, values: v2 }) => Arc::ptr_eq(c1, c2) && v1 == v2,
             _ => false,
         }
     }
@@ -357,6 +381,11 @@ impl NValue {
     /// Create a native object NValue (Scope handle, Cell handle, etc.).
     pub fn native_object(tag: &'static str, data: Arc<dyn std::any::Any + Send + Sync>) -> Self {
         Self::from_heap(HeapObject::NativeObject { tag, data })
+    }
+
+    /// Create a typed database row NValue.
+    pub fn row(columns: ColumnNames, values: Vec<SqlValue>) -> Self {
+        Self::from_heap(HeapObject::Row { columns, values })
     }
 
     /// Public constructor for HeapObject variants (used by middleware chain builder).
@@ -581,6 +610,18 @@ impl NValue {
             _ => None,
         }
     }
+
+    /// Extract column names and typed values from a Row.
+    #[inline]
+    pub fn as_row(&self) -> Option<(&ColumnNames, &Vec<SqlValue>)> {
+        if !self.is_heap() {
+            return None;
+        }
+        match self.as_heap_ref() {
+            HeapObject::Row { columns, values } => Some((columns, values)),
+            _ => None,
+        }
+    }
 }
 
 // -- Clone: bump Arc for heap, copy bits for inline --
@@ -708,6 +749,23 @@ impl fmt::Display for NValue {
                 HeapObject::BigInt(i) => write!(f, "{}", i),
                 HeapObject::Continuation { .. } => write!(f, "<continuation>"),
                 HeapObject::NativeObject { tag, .. } => write!(f, "<{}>", tag),
+                HeapObject::Row { columns, values } => {
+                    let pairs: Vec<String> = columns
+                        .iter()
+                        .zip(values.iter())
+                        .map(|(col, val)| {
+                            let v = match val {
+                                SqlValue::Null => "null".to_string(),
+                                SqlValue::Int(i) => i.to_string(),
+                                SqlValue::Float(fl) => fl.to_string(),
+                                SqlValue::Text(s) => s.to_string(),
+                                SqlValue::Blob(b) => format!("<blob:{} bytes>", b.len()),
+                            };
+                            format!("{}: {}", col, v)
+                        })
+                        .collect();
+                    write!(f, "Row({})", pairs.join(", "))
+                }
             }
         }
     }
@@ -785,6 +843,23 @@ impl NValue {
                 Value::Set(Arc::new(elems.iter().map(|v| v.to_value()).collect()))
             }
             HeapObject::NativeObject { .. } => Value::Unit,
+            HeapObject::Row { columns, values } => {
+                let entries: Vec<(Value, Value)> = columns
+                    .iter()
+                    .zip(values.iter())
+                    .map(|(col, val)| {
+                        let v = match val {
+                            SqlValue::Null => Value::Unit,
+                            SqlValue::Int(i) => Value::Int(*i),
+                            SqlValue::Float(f) => Value::Float(*f),
+                            SqlValue::Text(s) => Value::String(s.clone()),
+                            SqlValue::Blob(_) => Value::String("<blob>".into()),
+                        };
+                        (Value::String(col.clone()), v)
+                    })
+                    .collect();
+                Value::Map(Arc::new(entries))
+            }
         }
     }
 }

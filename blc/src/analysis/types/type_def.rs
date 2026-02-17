@@ -32,6 +32,7 @@ pub enum Type {
     TypeParam(String),                      // Named type parameter (e.g., T, A, K)
     Refined(Box<Type>, String),             // Refined type: base type + alias name
     Scoped(Box<Type>),                      // Scoped resource handle (cannot escape closure)
+    Row,                                    // Typed database row
     Unknown,
 }
 
@@ -108,6 +109,7 @@ impl std::fmt::Display for Type {
             Type::TypeParam(name) => write!(f, "{}", name),
             Type::Refined(_, name) => write!(f, "{}", name),
             Type::Scoped(inner) => write!(f, "Scoped<{}>", inner),
+            Type::Row => write!(f, "Row"),
             Type::Unknown => write!(f, "<unknown>"),
         }
     }
