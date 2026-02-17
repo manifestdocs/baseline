@@ -3,6 +3,7 @@ mod crypto;
 mod datetime;
 mod db;
 pub(crate) mod db_backend;
+mod db_helpers;
 mod db_migrate;
 #[cfg(feature = "postgres")]
 mod db_postgres;
@@ -122,6 +123,14 @@ impl NativeRegistry {
                         | "Result.map"
                         | "Result.map_err"
                         | "Result.and_then"
+                        | "Fs.with_file!"
+                        | "Fs.with_file"
+                        | "Sqlite.query_map!"
+                        | "Sqlite.query_map"
+                        | "Postgres.query_map!"
+                        | "Postgres.query_map"
+                        | "Mysql.query_map!"
+                        | "Mysql.query_map"
                 )
             })
             .unwrap_or(false)
@@ -477,6 +486,18 @@ impl NativeRegistry {
         self.register("Sqlite.execute", db::native_sqlite_execute);
         self.register("Sqlite.query!", db::native_sqlite_query);
         self.register("Sqlite.query", db::native_sqlite_query);
+        self.register("Sqlite.query_one!", db::native_sqlite_query_one);
+        self.register("Sqlite.query_one", db::native_sqlite_query_one);
+        self.register("Sqlite.query_map!", db::native_sqlite_query);  // HOF placeholder
+        self.register("Sqlite.query_map", db::native_sqlite_query);   // HOF placeholder
+
+        // -- Row accessors --
+        self.register("Row.string", db_helpers::native_row_string);
+        self.register("Row.int", db_helpers::native_row_int);
+        self.register("Row.float", db_helpers::native_row_float);
+        self.register("Row.bool", db_helpers::native_row_bool);
+        self.register("Row.optional_string", db_helpers::native_row_optional_string);
+        self.register("Row.optional_int", db_helpers::native_row_optional_int);
 
         // -- Postgres (behind feature flag) --
         #[cfg(feature = "postgres")]
@@ -487,6 +508,10 @@ impl NativeRegistry {
             self.register("Postgres.execute", db_postgres::native_postgres_execute);
             self.register("Postgres.query!", db_postgres::native_postgres_query);
             self.register("Postgres.query", db_postgres::native_postgres_query);
+            self.register("Postgres.query_one!", db::native_query_one);
+            self.register("Postgres.query_one", db::native_query_one);
+            self.register("Postgres.query_map!", db_postgres::native_postgres_query);  // HOF placeholder
+            self.register("Postgres.query_map", db_postgres::native_postgres_query);   // HOF placeholder
         }
 
         // -- Mysql (behind feature flag) --
@@ -498,6 +523,10 @@ impl NativeRegistry {
             self.register("Mysql.execute", db_mysql::native_mysql_execute);
             self.register("Mysql.query!", db_mysql::native_mysql_query);
             self.register("Mysql.query", db_mysql::native_mysql_query);
+            self.register("Mysql.query_one!", db::native_query_one);
+            self.register("Mysql.query_one", db::native_query_one);
+            self.register("Mysql.query_map!", db_mysql::native_mysql_query);  // HOF placeholder
+            self.register("Mysql.query_map", db_mysql::native_mysql_query);   // HOF placeholder
         }
 
         // -- Sql.migrate! (generic migration runner) --

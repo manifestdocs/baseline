@@ -37,6 +37,7 @@ impl Prelude {
             Prelude::Server => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
                 "Request", "HttpError", "Middleware", "Router", "Sqlite", "Postgres", "Mysql", "Ws", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Row",
             ],
         }
     }
@@ -71,6 +72,7 @@ impl Prelude {
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
                 "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Middleware",
                 "Router", "Server", "Sqlite", "Postgres", "Mysql", "Ws", "Sql", "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Row",
             ],
         }
     }
@@ -104,6 +106,7 @@ pub fn module_alias(short: &str) -> Option<&'static str> {
         "my" => Some("Mysql"),
         "dt" => Some("DateTime"),
         "ws" => Some("Ws"),
+        "row" => Some("Row"),
         _ => None,
     }
 }
@@ -136,6 +139,7 @@ pub fn reverse_module_alias(module: &str) -> Option<&'static str> {
         "Mysql" => Some("my"),
         "DateTime" => Some("dt"),
         "Ws" => Some("ws"),
+        "Row" => Some("row"),
         _ => None,
     }
 }

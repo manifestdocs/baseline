@@ -1108,26 +1108,36 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         let query_ty = Type::Function(
             vec![Type::String, Type::List(Box::new(Type::String))],
-            Box::new(Type::List(Box::new(Type::Map(
-                Box::new(Type::String),
-                Box::new(Type::String),
-            )))),
+            Box::new(Type::List(Box::new(Type::Row))),
+        );
+        let query_one_ty = Type::Function(
+            vec![Type::String, Type::List(Box::new(Type::String))],
+            Box::new(Type::Enum(
+                "Option".to_string(),
+                vec![
+                    ("Some".to_string(), vec![Type::Row]),
+                    ("None".to_string(), vec![]),
+                ],
+            )),
         );
 
         // Sqlite.*
         sigs.insert("Sqlite.connect!".into(), connect_ty.clone());
         sigs.insert("Sqlite.execute!".into(), execute_ty.clone());
         sigs.insert("Sqlite.query!".into(), query_ty.clone());
+        sigs.insert("Sqlite.query_one!".into(), query_one_ty.clone());
 
         // Postgres.*
         sigs.insert("Postgres.connect!".into(), connect_ty.clone());
         sigs.insert("Postgres.execute!".into(), execute_ty.clone());
         sigs.insert("Postgres.query!".into(), query_ty.clone());
+        sigs.insert("Postgres.query_one!".into(), query_one_ty.clone());
 
         // Mysql.*
         sigs.insert("Mysql.connect!".into(), connect_ty);
         sigs.insert("Mysql.execute!".into(), execute_ty);
         sigs.insert("Mysql.query!".into(), query_ty);
+        sigs.insert("Mysql.query_one!".into(), query_one_ty);
 
         // Sql.migrate!(dir: String) -> Result<Int, String>
         sigs.insert(
@@ -1145,8 +1155,50 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
+    // -- Row accessors (typed column extraction) --
+    if native_modules.contains(&"Row") {
+        let option_string = Type::Enum(
+            "Option".to_string(),
+            vec![
+                ("Some".to_string(), vec![Type::String]),
+                ("None".to_string(), vec![]),
+            ],
+        );
+        let option_int = Type::Enum(
+            "Option".to_string(),
+            vec![
+                ("Some".to_string(), vec![Type::Int]),
+                ("None".to_string(), vec![]),
+            ],
+        );
+        sigs.insert(
+            "Row.string".into(),
+            Type::Function(vec![Type::Row, Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
+            "Row.int".into(),
+            Type::Function(vec![Type::Row, Type::String], Box::new(Type::Int)),
+        );
+        sigs.insert(
+            "Row.float".into(),
+            Type::Function(vec![Type::Row, Type::String], Box::new(Type::Float)),
+        );
+        sigs.insert(
+            "Row.bool".into(),
+            Type::Function(vec![Type::Row, Type::String], Box::new(Type::Bool)),
+        );
+        sigs.insert(
+            "Row.optional_string".into(),
+            Type::Function(vec![Type::Row, Type::String], Box::new(option_string)),
+        );
+        sigs.insert(
+            "Row.optional_int".into(),
+            Type::Function(vec![Type::Row, Type::String], Box::new(option_int)),
+        );
+    }
+
     // -- Db helpers (pure row-parsing functions) --
-    if builtin_modules.contains(&"Db") {
+    if native_modules.contains(&"Db") {
         let row_ty = Type::Map(Box::new(Type::String), Box::new(Type::String));
         let rows_ty = Type::List(Box::new(row_ty.clone()));
         let option_string = Type::Enum(

@@ -1080,6 +1080,115 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
+    // --- Database query_map! HOFs ---
+
+    // Sqlite.query_map! : (String, List<String>, (Row) -> T) -> List<T>
+    let query_map_schema = GenericSchema {
+        type_params: 1,
+        build: |ctx| {
+            let t = ctx.fresh_var();
+            Type::Function(
+                vec![
+                    Type::String,
+                    Type::List(Box::new(Type::String)),
+                    Type::Function(vec![Type::Row], Box::new(t.clone())),
+                ],
+                Box::new(Type::List(Box::new(t))),
+            )
+        },
+    };
+    schemas.insert("Sqlite.query_map!".into(), query_map_schema);
+
+    schemas.insert(
+        "Sqlite.query_map".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::String,
+                        Type::List(Box::new(Type::String)),
+                        Type::Function(vec![Type::Row], Box::new(t.clone())),
+                    ],
+                    Box::new(Type::List(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    schemas.insert(
+        "Postgres.query_map!".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::String,
+                        Type::List(Box::new(Type::String)),
+                        Type::Function(vec![Type::Row], Box::new(t.clone())),
+                    ],
+                    Box::new(Type::List(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    schemas.insert(
+        "Postgres.query_map".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::String,
+                        Type::List(Box::new(Type::String)),
+                        Type::Function(vec![Type::Row], Box::new(t.clone())),
+                    ],
+                    Box::new(Type::List(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    schemas.insert(
+        "Mysql.query_map!".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::String,
+                        Type::List(Box::new(Type::String)),
+                        Type::Function(vec![Type::Row], Box::new(t.clone())),
+                    ],
+                    Box::new(Type::List(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    schemas.insert(
+        "Mysql.query_map".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::String,
+                        Type::List(Box::new(Type::String)),
+                        Type::Function(vec![Type::Row], Box::new(t.clone())),
+                    ],
+                    Box::new(Type::List(Box::new(t))),
+                )
+            },
+        },
+    );
+
     // --- Scoped resource HOFs ---
 
     // Fs.with_file! : (String, (Scoped<String>) -> T) -> T

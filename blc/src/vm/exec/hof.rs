@@ -355,6 +355,55 @@ impl super::Vm {
                     }
                 }
             }
+            "Sqlite.query_map!" | "Sqlite.query_map"
+            | "Postgres.query_map!" | "Postgres.query_map"
+            | "Mysql.query_map!" | "Mysql.query_map" => {
+                if arg_count != 3 {
+                    return Err(self.error("query_map!: expected 3 arguments (sql, params, mapper)".into(), line, col));
+                }
+                let mapper = self.pop(line, col)?;
+                let params_val = self.pop(line, col)?;
+                let sql_val = self.pop(line, col)?;
+
+                let sql_str = if sql_val.is_heap() {
+                    match sql_val.as_heap_ref() {
+                        HeapObject::String(s) => s.as_ref().to_string(),
+                        _ => return Err(self.error("query_map!: first arg must be String".into(), line, col)),
+                    }
+                } else {
+                    return Err(self.error("query_map!: first arg must be String".into(), line, col));
+                };
+
+                let params: Vec<String> = if params_val.is_heap() {
+                    match params_val.as_heap_ref() {
+                        HeapObject::List(items) => {
+                            items.iter().map(|v| {
+                                if v.is_heap() {
+                                    if let HeapObject::String(s) = v.as_heap_ref() {
+                                        return s.as_ref().to_string();
+                                    }
+                                }
+                                format!("{}", v)
+                            }).collect()
+                        }
+                        _ => vec![],
+                    }
+                } else {
+                    vec![]
+                };
+
+                use crate::vm::natives::db_backend;
+                let rows = db_backend::active_query(&sql_str, &params)
+                    .map_err(|e| self.error(format!("query_map!: {}", e.0), line, col))?;
+
+                let mut results = Vec::with_capacity(rows.len());
+                for row in rows {
+                    let row_val = NValue::row(row.columns, row.values);
+                    let result = self.call_nvalue(&mapper, &[row_val], chunks, line, col)?;
+                    results.push(result);
+                }
+                self.stack.push(NValue::list(results));
+            }
             "Fs.with_file!" | "Fs.with_file" => {
                 if arg_count != 2 {
                     return Err(self.error(

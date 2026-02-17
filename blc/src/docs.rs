@@ -76,6 +76,8 @@ fn module_descriptions() -> HashMap<&'static str, &'static str> {
     m.insert("String", "Split, trim, search, replace, and convert between strings and individual characters.");
     m.insert("Time", "Get the current timestamp and pause execution for a specified duration.");
     m.insert("Weak", "Break reference cycles with weak pointers that don't prevent garbage collection.");
+    m.insert("Sqlite", "Connect to SQLite databases, execute statements, and run typed queries.");
+    m.insert("Row", "Extract typed values from database query result rows without string parsing.");
     m
 }
 
@@ -95,6 +97,7 @@ fn module_categories() -> HashMap<&'static str, &'static str> {
     m.insert("Postgres", "database");
     m.insert("Mysql", "database");
     m.insert("Sql", "database");
+    m.insert("Row", "database");
     // Everything else is "language"
     m
 }
@@ -457,6 +460,30 @@ fn known_functions() -> Vec<(&'static str, &'static str, &'static str, Option<&'
          Some("Db.execute!(db, \"INSERT INTO users (name) VALUES (?)\", [name])")),
         ("Db", "query!", "Run a SQL query and return matching rows.",
          Some("let users = Db.query!(db, \"SELECT * FROM users WHERE active = ?\", [1])")),
+        // -- Sqlite --
+        ("Sqlite", "connect!", "Open a connection to a SQLite database file.",
+         Some("Sqlite.connect!(\"app.db\")")),
+        ("Sqlite", "execute!", "Execute a SQL statement with parameter binding. Returns affected row count.",
+         Some("Sqlite.execute!(\"INSERT INTO users (name) VALUES (?1)\", [name])")),
+        ("Sqlite", "query!", "Run a SQL query and return all matching rows as typed Row values.",
+         Some("let rows = Sqlite.query!(\"SELECT * FROM users WHERE active = ?1\", [\"1\"])")),
+        ("Sqlite", "query_one!", "Run a SQL query and return the first row as Option<Row>.",
+         Some("let user = Sqlite.query_one!(\"SELECT * FROM users WHERE id = ?1\", [id])")),
+        ("Sqlite", "query_map!", "Run a SQL query and map each row with a function, returning a typed list.",
+         Some("Sqlite.query_map!(\"SELECT * FROM users\", [], |row|\n  User { name: Row.string(row, \"name\"), age: Row.int(row, \"age\") }\n)")),
+        // -- Row --
+        ("Row", "string", "Extract a column value as a String.",
+         Some("Row.string(row, \"name\")  // => \"Alice\"")),
+        ("Row", "int", "Extract a column value as an Int (no string parsing).",
+         Some("Row.int(row, \"id\")  // => 42")),
+        ("Row", "float", "Extract a column value as a Float.",
+         Some("Row.float(row, \"price\")  // => 9.99")),
+        ("Row", "bool", "Extract a column value as a Boolean (Int 1 = true, 0 = false).",
+         Some("Row.bool(row, \"active\")  // => true")),
+        ("Row", "optional_string", "Extract a column value as Option<String> (Null becomes None).",
+         Some("Row.optional_string(row, \"email\")  // => Some(\"alice@example.com\")")),
+        ("Row", "optional_int", "Extract a column value as Option<Int> (Null becomes None).",
+         Some("Row.optional_int(row, \"age\")  // => Some(30)")),
         // -- Server --
         ("Server", "listen!", "Start the HTTP server on the given port.",
          Some("let app = Router.new()\n  |> Router.get(\"/\", |req| Response.ok(\"Hello!\"))\n\nServer.listen!(app, 3000)")),
@@ -640,6 +667,23 @@ fn build_type_signatures() -> HashMap<String, Type> {
     sigs.insert("Db.connect!".into(), Type::Function(vec![Type::String], Box::new(Type::Unknown)));
     sigs.insert("Db.execute!".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
     sigs.insert("Db.query!".into(), Type::Function(vec![Type::Unknown, Type::String, Type::Unknown], Box::new(Type::Unknown)));
+
+    // Sqlite
+    let query_row_ty = Type::List(Box::new(Type::Row));
+    let option_row = Type::Enum(
+        "Option".to_string(),
+        vec![("Some".to_string(), vec![Type::Row]), ("None".to_string(), vec![])],
+    );
+    sigs.insert("Sqlite.connect!".into(), Type::Function(vec![Type::String], Box::new(Type::Unit)));
+    sigs.insert("Sqlite.execute!".into(), Type::Function(vec![Type::String, Type::List(Box::new(Type::String))], Box::new(Type::Int)));
+    sigs.insert("Sqlite.query!".into(), Type::Function(vec![Type::String, Type::List(Box::new(Type::String))], Box::new(query_row_ty)));
+    sigs.insert("Sqlite.query_one!".into(), Type::Function(vec![Type::String, Type::List(Box::new(Type::String))], Box::new(option_row)));
+
+    // Row accessors
+    sigs.insert("Row.string".into(), Type::Function(vec![Type::Row, Type::String], Box::new(Type::String)));
+    sigs.insert("Row.int".into(), Type::Function(vec![Type::Row, Type::String], Box::new(Type::Int)));
+    sigs.insert("Row.float".into(), Type::Function(vec![Type::Row, Type::String], Box::new(Type::Float)));
+    sigs.insert("Row.bool".into(), Type::Function(vec![Type::Row, Type::String], Box::new(Type::Bool)));
 
     // Server
     sigs.insert("Server.listen!".into(), Type::Function(vec![Type::Unknown, Type::Int], Box::new(Type::Unit)));
