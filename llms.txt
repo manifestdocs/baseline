@@ -1,8 +1,16 @@
-# Baseline Language Quick Reference
+# Baseline v0.2
 
-> Baseline: strongly typed, effect-tracked functional language. Extension: `.bl`, compiler: `blc`.
+> Baseline is a strongly typed, effect-tracked functional programming language. Extension: `.bl`, compiler: `blc`. Design philosophy: "The type is the spec" (refinements encode correctness), "Effects are data" (side effects are explicit capabilities tracked by the compiler).
 
-## Rosetta Stone (Python → Baseline)
+Important — LLMs commonly get these wrong:
+- `!` means EFFECTS, not negation. Use `not` for boolean negation. `!valid` is a parse error.
+- NO method syntax. Write `String.to_upper(name)`, never `name.to_upper()`.
+- NO `+` for strings. Write `"Hello, ${name}!"`, never `"Hello, " + name`.
+- NO semicolons. Statements are separated by newlines.
+- NO `return` keyword. The last expression is the return value.
+- All bindings are immutable. No `var`, no mutation, no reassignment.
+
+## Rosetta Stone (Python -> Baseline)
 
 ### Variable Declaration
 Python:    `x = 10`
@@ -32,7 +40,7 @@ Baseline:  `match x { Some(v) -> use(v), None -> fallback }`
 Python:    `greeting = "Hello, " + name + "!"`
 Baseline:  `let greeting = "Hello, ${name}!"`
 
-### Classes → Records + Sum Types
+### Classes -> Records + Sum Types
 Python:    `class User: def __init__(self, name, age): ...`
 Baseline:  `type User = { name: String, age: Int }`
 
@@ -46,7 +54,7 @@ Baseline:  `if not valid then ...`
 
 ### HTTP Handler
 Python:    `@app.get("/health") / def health(): return "ok"`
-Baseline:  `fn health(req: {...}) -> Result<{...}, String> = Ok(Response.ok("healthy"))`
+Baseline:  `fn health(req: Request) -> Result<Response, String> = Ok(Response.ok("healthy"))`
 
 ### Lambda / Anonymous Function
 Python:    `lambda x: x + 1`
@@ -84,7 +92,7 @@ type HasName = { name: String, ..r }               // Open record (row polymorph
 ```
 
 ### Built-in Types
-`Int`, `String`, `Bool`, `Float`, `Unit`, `List<T>`, `Option<T>`, `Result<T, E>`
+`Int`, `Float`, `String`, `Bool`, `Unit`, `List<T>`, `Option<T>`, `Result<T, E>`, `Map<K, V>`, `Set<T>`, `Tuple`
 
 ### Let Bindings
 ```
@@ -198,16 +206,51 @@ import Math *                      // Wildcard
 
 ## Common Agent Mistakes
 
-WRONG: `user.to_string()`   → RIGHT: `String.from(user)` — no method calls on values
-WRONG: `!valid`             → RIGHT: `not valid` — `!` is for effects, `not` is for negation
-WRONG: `"a" + "b"`          → RIGHT: `"${a}${b}"` — no `+` for string concatenation
-WRONG: `return x`           → RIGHT: `x` — last expression is the return value
-WRONG: `let mut x = 0`      → RIGHT: restructure with recursion or `List.fold`
-WRONG: `try { risky() }`    → RIGHT: `match risky() { Ok(v) -> v, Err(e) -> handle(e) }`
-WRONG: `async fn fetch()`   → RIGHT: `fn fetch!()` — effects replace async/await
-WRONG: `x; y; z`            → RIGHT: `{ let _ = x  let _ = y  z }` — no semicolons
-WRONG: `fn foo { ... }`     → RIGHT: `fn foo() -> Type = expr` — signature required
-WRONG: `import { foo }`     → RIGHT: `import Foo { bar }` — module names are PascalCase
+WRONG: `user.to_string()`   -> RIGHT: `String.from(user)` — no method calls on values
+WRONG: `!valid`             -> RIGHT: `not valid` — `!` is for effects, `not` is for negation
+WRONG: `"a" + "b"`          -> RIGHT: `"${a}${b}"` — no `+` for string concatenation
+WRONG: `return x`           -> RIGHT: `x` — last expression is the return value
+WRONG: `let mut x = 0`      -> RIGHT: restructure with recursion or `List.fold`
+WRONG: `try { risky() }`    -> RIGHT: `match risky() { Ok(v) -> v, Err(e) -> handle(e) }`
+WRONG: `async fn fetch()`   -> RIGHT: `fn fetch!()` — effects replace async/await
+WRONG: `x; y; z`            -> RIGHT: `{ let _ = x  let _ = y  z }` — no semicolons
+WRONG: `fn foo { ... }`     -> RIGHT: `fn foo() -> Type = expr` — signature required
+WRONG: `import { foo }`     -> RIGHT: `import Foo { bar }` — module names are PascalCase
+
+## Standard Library
+
+### Core (`@prelude(core)`)
+- **Int**: `to_string(Int) -> String`, `parse(String) -> Int`
+- **Option**: `unwrap`, `unwrap_or`, `is_some`, `is_none`, `map`, `flat_map`
+- **Result**: `unwrap`, `unwrap_or`, `is_ok`, `is_err`, `map`, `and_then`, `map_err`, `context`
+- **Map**: `empty`, `insert`, `get`, `remove`, `contains`, `keys`, `values`, `len`, `from_list`
+- **Set**: `empty`, `insert`, `remove`, `contains`, `union`, `intersection`, `len`, `from_list`
+
+### Pure (`@prelude(pure)`) — adds data processing
+- **List**: `length`, `head`, `tail`, `reverse`, `sort`, `concat`, `contains`, `get`, `map`, `filter`, `fold`, `find`
+- **String**: `length`, `to_upper`, `to_lower`, `trim`, `contains`, `starts_with`, `ends_with`, `split`, `join`, `slice`, `chars`, `char_at`, `index_of`, `replace`, `to_int`, `char_code`, `from_char_code`
+- **Math**: `abs`, `min`, `max`, `clamp`, `pow`
+- **Crypto**: `sha256`, `hmac_sha256`, `constant_time_eq`
+- **Json**: `parse`, `to_string`, `to_string_pretty`
+
+### Script (`@prelude(script)`) — adds I/O and system
+- **Console**: `println!`, `print!`, `error!`, `read_line!`
+- **Fs**: `read!`, `write!`, `exists!`, `list_dir!`
+- **Env**: `get!`, `set!`
+- **Http**: `get!`, `post!`, `put!`, `delete!`, `request!`
+- **Log**: `info!`, `warn!`, `error!`, `debug!`
+- **Time**: `now!`, `sleep!`
+- **DateTime**: `now!`, `parse`, `to_string`, `add`, `diff`
+- **Random**: `int!`, `bool!`, `uuid!`
+
+### Server (`@prelude(server)`) — adds web framework
+- **Router**: `new`, `get`, `post`, `put`, `delete`, `patch`, `any`, `group`, `use`
+- **Server**: `listen!`
+- **Response**: `ok`, `json`, `created`, `no_content`, `bad_request`, `not_found`, `error`, `status`, `with_header`, `redirect`
+- **Request**: `header`, `method`, `body_json`
+- **Middleware**: `extract_bearer`, `extract_basic`, `cors_config`, `rate_limit_config`
+- **HttpError**: `bad_request`, `not_found`, `unauthorized`, `forbidden`, `internal`, and more
+- **Db**: `connect!`, `execute!`, `query!`, `require`, `optional`, `int_field`, `bool_field`, `first_row`, `has_rows`
 
 ## Common Patterns
 
@@ -216,11 +259,11 @@ WRONG: `import { foo }`     → RIGHT: `import Foo { bar }` — module names are
 fn main!() =
   Console.println!("Hello, Baseline!")
 
-// Data transformation
-fn process(items: List<Int>) -> List<Int> = {
-  let positive = List.filter(items, |x| x > 0)
-  List.map(positive, |x| x * 2)
-}
+// Data transformation pipeline
+fn process(items: List<Int>) -> List<Int> =
+  items
+    |> List.filter(|x| x > 0)
+    |> List.map(|x| x * 2)
 
 // Error propagation
 fn safe_divide(a: Int, b: Int) -> Result<Int, String> =
@@ -240,7 +283,7 @@ fn area(s: Shape) -> Float =
 ```
 @prelude(server)
 
-fn health(req: { method: String }) -> Result<{ status: Int, headers: List<(String, String)>, body: String }, String> =
+fn health(req: Request) -> Result<Response, String> =
   Ok(Response.ok("healthy"))
 
 fn main!() =
@@ -248,14 +291,32 @@ fn main!() =
     |> Router.get("/health", health)
     |> Server.listen!(8080)
 ```
+
+## Database
+
+```
+@prelude(server)
+
+fn main!() = {
+  let db = Db.connect!("app.db")
+  let _ = Db.execute!(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)", [])
+  let _ = Db.execute!(db, "INSERT INTO users (name) VALUES (?)", ["Alice"])
+  let rows = Db.query!(db, "SELECT * FROM users", [])
+  let _ = List.map(rows, |row| {
+    let name = Db.require(row, "name")
+    Console.println!("User: ${name}")
+  })
+}
+```
+
 ## Preludes
 
 | Level | Use Case | Includes |
 |-------|----------|---------|
-| `core` | Pure computation | Types, Option, Result |
-| `pure` | Data processing | + String, List, Int, Math |
-| `script` | CLI scripting | + Console, Env, Fs |
-| `server` | HTTP services | + Http, Response, Router, Server |
+| `core` | Pure computation | Types, Option, Result, Map, Set |
+| `pure` | Data processing | + String, List, Int, Math, Json, Crypto |
+| `script` | CLI scripting | + Console, Env, Fs, Http, Log, Time, DateTime, Random |
+| `server` | HTTP services | + Router, Server, Response, Request, Middleware, Db |
 
 ## Compiler
 ```
