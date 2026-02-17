@@ -913,6 +913,49 @@ pub fn generate_docs() -> DocsOutput {
 }
 
 // ---------------------------------------------------------------------------
+// Module index (lightweight summary)
+// ---------------------------------------------------------------------------
+
+#[derive(Serialize, Clone)]
+pub struct ModuleIndexEntry {
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    pub function_count: usize,
+    pub functions: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+pub struct ModuleIndex {
+    pub modules: Vec<ModuleIndexEntry>,
+    pub total_functions: usize,
+}
+
+/// Return a lightweight index of all modules — names, descriptions, categories,
+/// and function name lists — without full signatures, examples, or descriptions.
+pub fn module_index(docs: &DocsOutput) -> ModuleIndex {
+    let mut total = 0;
+    let modules = docs
+        .modules
+        .iter()
+        .map(|m| {
+            total += m.functions.len();
+            ModuleIndexEntry {
+                name: m.name.clone(),
+                description: m.description.clone(),
+                category: m.category.clone(),
+                function_count: m.functions.len(),
+                functions: m.functions.iter().map(|f| f.name.clone()).collect(),
+            }
+        })
+        .collect();
+    ModuleIndex {
+        modules,
+        total_functions: total,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Search / filter
 // ---------------------------------------------------------------------------
 

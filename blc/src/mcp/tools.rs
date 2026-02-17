@@ -49,7 +49,7 @@ pub struct TestRequest {
 #[derive(Deserialize, JsonSchema)]
 pub struct DocsRequest {
     #[schemars(
-        description = "Search query to find functions in the standard library. Matches against function names, module names, and descriptions. Examples: 'List.map', 'filter', 'Http', 'read'. Omit to return all modules."
+        description = "Search query to find functions in the standard library. Matches against function names, module names, and descriptions. Examples: 'List.map', 'filter', 'Http', 'read'. Omit both query and module to get a lightweight module index."
     )]
     pub query: Option<String>,
 
@@ -174,10 +174,18 @@ impl BaselineMcp {
 
     #[tool(
         name = "baseline/docs",
-        description = "LEARN: Search the Baseline standard library documentation. Returns JSON with `modules` array, each containing `name`, `functions` (with signature, description, examples). Use `query` to search across all modules (e.g., 'map', 'filter', 'read'). Use `module` to browse a specific module (e.g., 'List', 'Http', 'Console'). Combine both to search within a module. Call this when you need to know what functions are available, what arguments they take, or how to use a specific API."
+        description = "LEARN: Search the Baseline standard library documentation. Use `query` to search across all modules (e.g., 'map', 'filter', 'read'). Use `module` to browse a specific module (e.g., 'List', 'Http', 'Console'). Combine both to search within a module. With no arguments, returns a lightweight module index (names, descriptions, function counts) — use this to discover available modules, then drill into a specific module. Call this when you need to know what functions are available, what arguments they take, or how to use a specific API."
     )]
     async fn docs(&self, params: Parameters<DocsRequest>) -> Result<CallToolResult, McpError> {
         let docs = crate::docs::generate_docs();
+
+        // No query and no module → return lightweight index
+        if params.0.query.is_none() && params.0.module.is_none() {
+            let index = crate::docs::module_index(&docs);
+            let json = serde_json::to_string_pretty(&index)
+                .map_err(|e| McpError::internal_error(format!("JSON error: {}", e), None))?;
+            return Ok(CallToolResult::success(vec![Content::text(json)]));
+        }
 
         // Apply query filter
         let docs = match &params.0.query {
@@ -341,6 +349,7 @@ WRITING CODE:
 
 REFERENCE:
 - baseline/reference — full language reference or specific sections
+- baseline/docs — module index (names, descriptions, function lists) for discovery
 - baseline/docs with module="List" — browse a specific module's functions
 - baseline/docs with query="map" — search across all modules
 
