@@ -283,13 +283,21 @@ fn main!() -> {Console} () = {
 
 ### Pipes
 
-The pipe operator `|>` chains transformations:
+The pipe operator `|>` passes the left-hand value as the first argument to the right-hand function:
 
 ```baseline
-let result = 10
+let result = [1, 2, 3, 4, 5]
+  |> List.filter(|x| x > 2)
+  |> List.map(|x| x * 10)
+// result == [30, 40, 50]
+```
+
+You can also pipe into lambdas:
+
+```baseline
+let doubled = 10
   |> |x| x * 2
-  |> |x| x + 1
-// result == 21
+// doubled == 20
 ```
 
 ### Refinement Types

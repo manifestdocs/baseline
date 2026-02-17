@@ -65,7 +65,7 @@ fn main!() -> {Console} Unit = {
 - **Option and Result** — Safe error handling with `?` propagation, pattern matching, and `map`/`unwrap_or`.
 - **Inline tests** — Tests live next to the code they verify, run with `blc test`.
 - **Effect handlers** — `with Console.println! { body }` captures effect calls for testing.
-- **Pipes** — `data |> transform |> format` for readable data pipelines.
+- **Pipes** — `data |> List.filter(pred) |> List.map(f)` for readable data pipelines.
 - **Pattern matching** — Exhaustive `match` on sum types, tuples, and literals.
 - **Module system** — `import Math` (qualified), `from Math import {abs, max}` (selective), `from Math import *` (wildcard).
 - **String interpolation** — `"Hello, ${name}!"` with arbitrary expressions.

@@ -129,7 +129,7 @@
     },
     {
       "name": "Db",
-      "description": "Connect to SQLite and run queries with parameter binding.",
+      "description": "Connect to SQLite, run queries, and parse result rows into typed values.",
       "category": "database",
       "functions": [
         {
@@ -161,6 +161,54 @@
           "prelude_level": "server",
           "description": "Run a SQL query and return matching rows.",
           "example": "let users = Db.query!(db, \"SELECT * FROM users WHERE active = ?\", [1])"
+        },
+        {
+          "name": "require",
+          "signature": "fn require(Map<String, String>, String) -> String",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Get a required string field from a row. Returns \"\" if the key is missing.",
+          "example": "let name = Db.require(row, \"name\")"
+        },
+        {
+          "name": "optional",
+          "signature": "fn optional(Map<String, String>, String) -> Option<String>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Get an optional string field. Returns None if the key is missing or the value is empty.",
+          "example": "let email = Db.optional(row, \"email\")"
+        },
+        {
+          "name": "int_field",
+          "signature": "fn int_field(Map<String, String>, String) -> Int",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Parse an integer field from a row. Returns 0 if the key is missing or unparseable.",
+          "example": "let age = Db.int_field(row, \"age\")"
+        },
+        {
+          "name": "bool_field",
+          "signature": "fn bool_field(Map<String, String>, String) -> Bool",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Parse a boolean field from a row. Returns true only if the value is \"1\".",
+          "example": "let active = Db.bool_field(row, \"active\")"
+        },
+        {
+          "name": "first_row",
+          "signature": "fn first_row(List<Map<String, String>>) -> Option<Map<String, String>>",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Return the first row from a query result, or None if empty.",
+          "example": "let user = Db.first_row(Db.query!(db, \"SELECT * FROM users WHERE id = ?\", [id]))"
+        },
+        {
+          "name": "has_rows",
+          "signature": "fn has_rows(List<Map<String, String>>) -> Bool",
+          "effects": [],
+          "prelude_level": "server",
+          "description": "Check whether a query result contains any rows.",
+          "example": "let exists = Db.has_rows(Db.query!(db, \"SELECT 1 FROM users WHERE email = ?\", [email]))"
         }
       ]
     },
@@ -481,7 +529,7 @@
         },
         {
           "name": "head",
-          "signature": "fn head(List<T>) -> T",
+          "signature": "fn head(List<T>) -> Option<T>",
           "effects": [],
           "prelude_level": "pure",
           "description": "Return the first element, or None if the list is empty.",
@@ -872,7 +920,7 @@
     },
     {
       "name": "Request",
-      "description": "Extract HTTP method, headers, body, and parameters from incoming requests. Middleware can enrich the request with additional fields using record update syntax.",
+      "description": "Extract HTTP method, headers, body, and attached state from incoming requests.",
       "category": "web",
       "functions": [
         {
@@ -1054,6 +1102,22 @@
           "prelude_level": "minimal",
           "description": "Chain a function that returns a Result, flattening the result.",
           "example": "Ok(5) |> Result.and_then(|x|\n  if x > 0 then Ok(x) else Err(\"negative\")\n)\n// => Ok(5)"
+        },
+        {
+          "name": "map_err",
+          "signature": "fn map_err(Result<T, U>, (U) -> E) -> Result<T, E>",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Apply a function to the Err value, if present.",
+          "example": "Err(\"fail\") |> Result.map_err(|e| \"wrapped: \" ++ e)\n// => Err(\"wrapped: fail\")"
+        },
+        {
+          "name": "context",
+          "signature": "fn context(Result<T, E>, String) -> Result<T, { context: String, error: ?1 }>",
+          "effects": [],
+          "prelude_level": "minimal",
+          "description": "Add context to an error, wrapping it in a record.",
+          "example": "Err(\"db fail\") |> Result.context(\"loading user\")\n// => Err({ error: \"db fail\", context: \"loading user\" })"
         }
       ]
     },
