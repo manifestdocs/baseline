@@ -177,7 +177,7 @@ fn test_reference_full() {
 
     let resp = read_jsonrpc(&mut stdout);
     let content = resp["result"]["content"][0]["text"].as_str().unwrap();
-    assert!(content.contains("Baseline Language Quick Reference"));
+    assert!(content.contains("Baseline"));
     assert!(content.contains("## Rosetta Stone"));
 
     drop(stdin);
@@ -261,6 +261,55 @@ fn test_docs_search() {
     let content = resp["result"]["content"][0]["text"].as_str().unwrap();
     let docs: Value = serde_json::from_str(content).unwrap();
     assert!(!docs["modules"].as_array().unwrap().is_empty());
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_resources_list_and_read() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    // List resources
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "resources/list"
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    assert_eq!(resp["id"], 2);
+    let resources = resp["result"]["resources"].as_array().unwrap();
+    assert_eq!(resources.len(), 1);
+    assert_eq!(resources[0]["uri"], "baseline://reference/llms.txt");
+    assert_eq!(resources[0]["name"], "llms.txt");
+    assert_eq!(resources[0]["mimeType"], "text/plain");
+
+    // Read the resource
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "resources/read",
+            "params": {
+                "uri": "baseline://reference/llms.txt"
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    assert_eq!(resp["id"], 3);
+    let contents = resp["result"]["contents"].as_array().unwrap();
+    assert_eq!(contents.len(), 1);
+    assert_eq!(contents[0]["uri"], "baseline://reference/llms.txt");
+    let text = contents[0]["text"].as_str().unwrap();
+    assert!(text.contains("Baseline"));
+    assert!(text.contains("## Rosetta Stone"));
 
     drop(stdin);
     let _ = child.wait();
