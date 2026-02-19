@@ -1,6 +1,9 @@
 use rmcp::{
     handler::server::{tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, Content, ServerInfo},
+    model::{
+        CallToolResult, Content, ListResourcesResult, PaginatedRequestParam,
+        RawResource, ReadResourceRequestParam, ReadResourceResult, ResourceContents, ServerInfo,
+    },
     tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use schemars::JsonSchema;
@@ -285,10 +288,55 @@ impl ServerHandler for BaselineMcp {
             },
             capabilities: rmcp::model::ServerCapabilities::builder()
                 .enable_tools()
+                .enable_resources()
                 .build(),
             instructions: Some(INSTRUCTIONS.into()),
             ..Default::default()
         }
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        std::future::ready(Ok(ListResourcesResult {
+            meta: None,
+            resources: vec![rmcp::model::Annotated {
+                raw: RawResource {
+                    uri: "baseline://reference/llms.txt".into(),
+                    name: "llms.txt".into(),
+                    title: None,
+                    description: Some("Baseline language quick reference for AI agents".into()),
+                    mime_type: Some("text/plain".into()),
+                    size: None,
+                    icons: None,
+                    meta: None,
+                },
+                annotations: None,
+            }],
+            next_cursor: None,
+        }))
+    }
+
+    fn read_resource(
+        &self,
+        request: ReadResourceRequestParam,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> impl std::future::Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        std::future::ready(if request.uri == "baseline://reference/llms.txt" {
+            Ok(ReadResourceResult {
+                contents: vec![ResourceContents::text(
+                    LLMS_TXT,
+                    "baseline://reference/llms.txt",
+                )],
+            })
+        } else {
+            Err(McpError::resource_not_found(
+                format!("Unknown resource: {}", request.uri),
+                None,
+            ))
+        })
     }
 }
 
