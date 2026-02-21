@@ -160,6 +160,8 @@ pub enum HeapObject {
         frame_segment: Vec<(u32, u32, u32, u32)>,
         upvalue_segment: Vec<Vec<NValue>>,
         handler_stack_depth: usize,
+        /// Stack depth captured at the handler boundary.
+        base_stack_depth: usize,
         /// Handler stack entries captured between boundary and perform site.
         handler_stack_segment: Vec<std::collections::HashMap<String, NValue>>,
         /// Handler boundaries captured between boundary index and current.
@@ -373,6 +375,7 @@ impl NValue {
         frame_segment: Vec<(u32, u32, u32, u32)>,
         upvalue_segment: Vec<Vec<NValue>>,
         handler_stack_depth: usize,
+        base_stack_depth: usize,
         handler_stack_segment: Vec<std::collections::HashMap<String, NValue>>,
         handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)>,
         resume_ip: u32,
@@ -383,6 +386,7 @@ impl NValue {
             frame_segment,
             upvalue_segment,
             handler_stack_depth,
+            base_stack_depth,
             handler_stack_segment,
             handler_boundary_segment,
             resume_ip,

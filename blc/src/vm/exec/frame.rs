@@ -34,6 +34,14 @@ impl Default for CallFrame {
 /// function value slot below args). Clear for `CallDirect` frames.
 pub(crate) const FRAME_HAS_FUNC: u32 = 0x8000_0000;
 
+/// Bit flag in `base_slot` indicating the frame acts as the boundary for a
+/// resumed continuation. When this frame pops (or hits PopHandler), it returns
+/// control to the handler function that invoked `resume()`.
+pub(crate) const FRAME_IS_CONT: u32 = 0x4000_0000;
+
+/// Combined mask for all frame flags.
+pub(crate) const FRAME_FLAGS_MASK: u32 = FRAME_HAS_FUNC | FRAME_IS_CONT;
+
 // ---------------------------------------------------------------------------
 // Frame Stack
 // ---------------------------------------------------------------------------

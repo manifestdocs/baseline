@@ -62,7 +62,7 @@ const MAX_STRING_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 #[allow(dead_code)]
 const MAX_LIST_SIZE: usize = 10_000_000; // 10M elements
 
-use frame::{CallFrame, FrameStack, FRAME_HAS_FUNC};
+use frame::{CallFrame, FrameStack, FRAME_HAS_FUNC, FRAME_FLAGS_MASK};
 
 // ---------------------------------------------------------------------------
 // VM
@@ -260,7 +260,7 @@ impl Vm {
         let frame = self.frames.last();
         let mut ip = frame.ip as usize;
         let mut chunk_idx = frame.chunk_idx as usize;
-        let mut base_slot = (frame.base_slot & !FRAME_HAS_FUNC) as usize;
+        let mut base_slot = (frame.base_slot & !FRAME_FLAGS_MASK) as usize;
         let mut chunk = &chunks[chunk_idx];
 
         // SAFETY: Every chunk is guaranteed to end with Op::Return (see
@@ -277,6 +277,7 @@ impl Vm {
         let has_limit = self.instruction_limit > 0;
 
         loop {
+            let op = unsafe { *chunk.code.get_unchecked(ip) };
             // Periodic safety checks (instruction limit + stack size)
             local_count += 1;
             if local_count >= check_interval {
