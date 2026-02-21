@@ -5,10 +5,10 @@ mod db;
 pub(crate) mod db_backend;
 pub(crate) mod db_helpers;
 mod db_migrate;
-#[cfg(feature = "postgres")]
-mod db_postgres;
 #[cfg(feature = "mysql")]
 mod db_mysql;
+#[cfg(feature = "postgres")]
+mod db_postgres;
 mod env;
 pub use env::set_program_args;
 mod fs;
@@ -107,7 +107,9 @@ impl NativeRegistry {
         {
             return Err(NativeError(format!(
                 "{}: expected {} argument(s), got {}",
-                entry.name, arity, args.len()
+                entry.name,
+                arity,
+                args.len()
             )));
         }
         (entry.func)(args)
@@ -167,36 +169,67 @@ impl NativeRegistry {
         let mut flags = 0u8;
         if matches!(
             name,
-            "List.map" | "List.filter" | "List.fold" | "List.find"
-                | "Option.map" | "Option.flat_map"
-                | "Result.map" | "Result.map_err" | "Result.and_then"
-                | "Fs.with_file!" | "Fs.with_file"
-                | "Sqlite.query_map!" | "Sqlite.query_map"
-                | "Postgres.query_map!" | "Postgres.query_map"
-                | "Mysql.query_map!" | "Mysql.query_map"
-                | "Sqlite.query_as!" | "Sqlite.query_as"
-                | "Postgres.query_as!" | "Postgres.query_as"
-                | "Mysql.query_as!" | "Mysql.query_as"
-                | "Sqlite.query_one_as!" | "Sqlite.query_one_as"
-                | "Postgres.query_one_as!" | "Postgres.query_one_as"
-                | "Mysql.query_one_as!" | "Mysql.query_one_as"
+            "List.map"
+                | "List.filter"
+                | "List.fold"
+                | "List.find"
+                | "Option.map"
+                | "Option.flat_map"
+                | "Result.map"
+                | "Result.map_err"
+                | "Result.and_then"
+                | "Fs.with_file!"
+                | "Fs.with_file"
+                | "Sqlite.query_map!"
+                | "Sqlite.query_map"
+                | "Postgres.query_map!"
+                | "Postgres.query_map"
+                | "Mysql.query_map!"
+                | "Mysql.query_map"
+                | "Sqlite.query_as!"
+                | "Sqlite.query_as"
+                | "Postgres.query_as!"
+                | "Postgres.query_as"
+                | "Mysql.query_as!"
+                | "Mysql.query_as"
+                | "Sqlite.query_one_as!"
+                | "Sqlite.query_one_as"
+                | "Postgres.query_one_as!"
+                | "Postgres.query_one_as"
+                | "Mysql.query_one_as!"
+                | "Mysql.query_one_as"
         ) {
             flags |= FLAG_HOF;
         }
         if matches!(
             name,
-            "scope!" | "scope"
-                | "Scope.spawn!" | "Scope.spawn"
-                | "Cell.await!" | "Cell.await"
-                | "Cell.cancel!" | "Cell.cancel"
-                | "Async.parallel!" | "Async.parallel"
-                | "Async.race!" | "Async.race"
-                | "Async.scatter_gather!" | "Async.scatter_gather"
-                | "Async.delay!" | "Async.delay"
-                | "Async.interval!" | "Async.interval"
-                | "Async.timeout!" | "Async.timeout"
-                | "Channel.bounded" | "Channel.send!" | "Channel.send"
-                | "Channel.recv!" | "Channel.recv" | "Channel.close!" | "Channel.close"
+            "scope!"
+                | "scope"
+                | "Scope.spawn!"
+                | "Scope.spawn"
+                | "Cell.await!"
+                | "Cell.await"
+                | "Cell.cancel!"
+                | "Cell.cancel"
+                | "Async.parallel!"
+                | "Async.parallel"
+                | "Async.race!"
+                | "Async.race"
+                | "Async.scatter_gather!"
+                | "Async.scatter_gather"
+                | "Async.delay!"
+                | "Async.delay"
+                | "Async.interval!"
+                | "Async.interval"
+                | "Async.timeout!"
+                | "Async.timeout"
+                | "Channel.bounded"
+                | "Channel.send!"
+                | "Channel.send"
+                | "Channel.recv!"
+                | "Channel.recv"
+                | "Channel.close!"
+                | "Channel.close"
         ) {
             flags |= FLAG_ASYNC;
         }
@@ -342,7 +375,10 @@ impl NativeRegistry {
         // -- Crypto --
         self.register("Crypto.sha256", crypto::native_crypto_sha256);
         self.register("Crypto.hmac_sha256", crypto::native_crypto_hmac_sha256);
-        self.register("Crypto.constant_time_eq", crypto::native_crypto_constant_time_eq);
+        self.register(
+            "Crypto.constant_time_eq",
+            crypto::native_crypto_constant_time_eq,
+        );
 
         // -- Random (additional) --
         self.register("Random.bytes!", crypto::native_random_bytes);
@@ -402,14 +438,29 @@ impl NativeRegistry {
         self.register("Response.forbidden", native_response_forbidden);
         self.register("Response.conflict", native_response_conflict);
         self.register("Response.unprocessable", native_response_unprocessable);
-        self.register("Response.too_many_requests", native_response_too_many_requests);
-        self.register("Response.method_not_allowed", native_response_method_not_allowed);
+        self.register(
+            "Response.too_many_requests",
+            native_response_too_many_requests,
+        );
+        self.register(
+            "Response.method_not_allowed",
+            native_response_method_not_allowed,
+        );
         self.register("Response.bad_gateway", native_response_bad_gateway);
-        self.register("Response.service_unavailable", native_response_service_unavailable);
+        self.register(
+            "Response.service_unavailable",
+            native_response_service_unavailable,
+        );
         self.register("Response.gateway_timeout", native_response_gateway_timeout);
         self.register("Response.redirect", native_response_redirect);
-        self.register("Response.redirect_permanent", native_response_redirect_permanent);
-        self.register("Response.redirect_temporary", native_response_redirect_temporary);
+        self.register(
+            "Response.redirect_permanent",
+            native_response_redirect_permanent,
+        );
+        self.register(
+            "Response.redirect_temporary",
+            native_response_redirect_temporary,
+        );
         self.register("Response.set_cookie", native_response_set_cookie);
 
         // -- Router --
@@ -439,21 +490,60 @@ impl NativeRegistry {
         self.register("Ws.close", ws::native_ws_close);
 
         // -- HttpError --
-        self.register("HttpError.bad_request", http_error::native_http_error_bad_request);
-        self.register("HttpError.not_found", http_error::native_http_error_not_found);
-        self.register("HttpError.unauthorized", http_error::native_http_error_unauthorized);
-        self.register("HttpError.forbidden", http_error::native_http_error_forbidden);
+        self.register(
+            "HttpError.bad_request",
+            http_error::native_http_error_bad_request,
+        );
+        self.register(
+            "HttpError.not_found",
+            http_error::native_http_error_not_found,
+        );
+        self.register(
+            "HttpError.unauthorized",
+            http_error::native_http_error_unauthorized,
+        );
+        self.register(
+            "HttpError.forbidden",
+            http_error::native_http_error_forbidden,
+        );
         self.register("HttpError.conflict", http_error::native_http_error_conflict);
-        self.register("HttpError.unprocessable", http_error::native_http_error_unprocessable);
+        self.register(
+            "HttpError.unprocessable",
+            http_error::native_http_error_unprocessable,
+        );
         self.register("HttpError.internal", http_error::native_http_error_internal);
-        self.register("HttpError.method_not_allowed", http_error::native_http_error_method_not_allowed);
-        self.register("HttpError.too_many_requests", http_error::native_http_error_too_many_requests);
-        self.register("HttpError.bad_gateway", http_error::native_http_error_bad_gateway);
-        self.register("HttpError.service_unavailable", http_error::native_http_error_service_unavailable);
-        self.register("HttpError.gateway_timeout", http_error::native_http_error_gateway_timeout);
-        self.register("HttpError.with_context", http_error::native_http_error_with_context);
-        self.register("HttpError.with_code", http_error::native_http_error_with_code);
-        self.register("HttpError.to_response", http_error::native_http_error_to_response);
+        self.register(
+            "HttpError.method_not_allowed",
+            http_error::native_http_error_method_not_allowed,
+        );
+        self.register(
+            "HttpError.too_many_requests",
+            http_error::native_http_error_too_many_requests,
+        );
+        self.register(
+            "HttpError.bad_gateway",
+            http_error::native_http_error_bad_gateway,
+        );
+        self.register(
+            "HttpError.service_unavailable",
+            http_error::native_http_error_service_unavailable,
+        );
+        self.register(
+            "HttpError.gateway_timeout",
+            http_error::native_http_error_gateway_timeout,
+        );
+        self.register(
+            "HttpError.with_context",
+            http_error::native_http_error_with_context,
+        );
+        self.register(
+            "HttpError.with_code",
+            http_error::native_http_error_with_code,
+        );
+        self.register(
+            "HttpError.to_response",
+            http_error::native_http_error_to_response,
+        );
 
         // -- Request --
         self.register("Request.header", native_request_header);
@@ -478,10 +568,22 @@ impl NativeRegistry {
         self.register("Validate.one_of", validate::native_validate_one_of);
 
         // -- Middleware --
-        self.register("Middleware.extract_bearer", middleware::native_middleware_extract_bearer);
-        self.register("Middleware.extract_basic", middleware::native_middleware_extract_basic);
-        self.register("Middleware.cors_config", middleware::native_middleware_cors_config);
-        self.register("Middleware.rate_limit_config", middleware::native_middleware_rate_limit_config);
+        self.register(
+            "Middleware.extract_bearer",
+            middleware::native_middleware_extract_bearer,
+        );
+        self.register(
+            "Middleware.extract_basic",
+            middleware::native_middleware_extract_basic,
+        );
+        self.register(
+            "Middleware.cors_config",
+            middleware::native_middleware_cors_config,
+        );
+        self.register(
+            "Middleware.rate_limit_config",
+            middleware::native_middleware_rate_limit_config,
+        );
 
         // -- Map --
         self.register("Map.empty", native_map_empty);
@@ -521,15 +623,18 @@ impl NativeRegistry {
         self.register("Sqlite.query", db::native_sqlite_query);
         self.register("Sqlite.query_one!", db::native_sqlite_query_one);
         self.register("Sqlite.query_one", db::native_sqlite_query_one);
-        self.register("Sqlite.query_map!", db::native_sqlite_query);  // HOF placeholder
-        self.register("Sqlite.query_map", db::native_sqlite_query);   // HOF placeholder
+        self.register("Sqlite.query_map!", db::native_sqlite_query); // HOF placeholder
+        self.register("Sqlite.query_map", db::native_sqlite_query); // HOF placeholder
 
         // -- Row accessors --
         self.register("Row.string", db_helpers::native_row_string);
         self.register("Row.int", db_helpers::native_row_int);
         self.register("Row.float", db_helpers::native_row_float);
         self.register("Row.bool", db_helpers::native_row_bool);
-        self.register("Row.optional_string", db_helpers::native_row_optional_string);
+        self.register(
+            "Row.optional_string",
+            db_helpers::native_row_optional_string,
+        );
         self.register("Row.optional_int", db_helpers::native_row_optional_int);
         self.register("Row.decode", db_helpers::native_row_decode);
 
@@ -550,8 +655,8 @@ impl NativeRegistry {
             self.register("Postgres.query", db_postgres::native_postgres_query);
             self.register("Postgres.query_one!", db::native_query_one);
             self.register("Postgres.query_one", db::native_query_one);
-            self.register("Postgres.query_map!", db_postgres::native_postgres_query);  // HOF placeholder
-            self.register("Postgres.query_map", db_postgres::native_postgres_query);   // HOF placeholder
+            self.register("Postgres.query_map!", db_postgres::native_postgres_query); // HOF placeholder
+            self.register("Postgres.query_map", db_postgres::native_postgres_query); // HOF placeholder
             self.register("Postgres.query_as!", db_postgres::native_postgres_query);
             self.register("Postgres.query_as", db_postgres::native_postgres_query);
             self.register("Postgres.query_one_as!", db::native_query_one);
@@ -569,8 +674,8 @@ impl NativeRegistry {
             self.register("Mysql.query", db_mysql::native_mysql_query);
             self.register("Mysql.query_one!", db::native_query_one);
             self.register("Mysql.query_one", db::native_query_one);
-            self.register("Mysql.query_map!", db_mysql::native_mysql_query);  // HOF placeholder
-            self.register("Mysql.query_map", db_mysql::native_mysql_query);   // HOF placeholder
+            self.register("Mysql.query_map!", db_mysql::native_mysql_query); // HOF placeholder
+            self.register("Mysql.query_map", db_mysql::native_mysql_query); // HOF placeholder
             self.register("Mysql.query_as!", db_mysql::native_mysql_query);
             self.register("Mysql.query_as", db_mysql::native_mysql_query);
             self.register("Mysql.query_one_as!", db::native_query_one);
@@ -793,11 +898,9 @@ mod tests {
 
     #[test]
     fn test_contains_string_not_found() {
-        let result = native_test_contains(&[
-            NValue::string("hello".into()),
-            NValue::string("xyz".into()),
-        ])
-        .unwrap();
+        let result =
+            native_test_contains(&[NValue::string("hello".into()), NValue::string("xyz".into())])
+                .unwrap();
         assert!(!result.as_bool());
     }
 
@@ -832,7 +935,12 @@ mod tests {
         let id = reg.lookup("Response.unauthorized").unwrap();
         let result = reg.call(id, &[NValue::string("no auth".into())]).unwrap();
         let fields = result.as_record().unwrap();
-        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        let status = fields
+            .iter()
+            .find(|(k, _)| &**k == "status")
+            .unwrap()
+            .1
+            .as_any_int();
         assert_eq!(status, 401);
     }
 
@@ -842,7 +950,12 @@ mod tests {
         let id = reg.lookup("Response.forbidden").unwrap();
         let result = reg.call(id, &[NValue::string("denied".into())]).unwrap();
         let fields = result.as_record().unwrap();
-        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        let status = fields
+            .iter()
+            .find(|(k, _)| &**k == "status")
+            .unwrap()
+            .1
+            .as_any_int();
         assert_eq!(status, 403);
     }
 
@@ -852,7 +965,12 @@ mod tests {
         let id = reg.lookup("Response.conflict").unwrap();
         let result = reg.call(id, &[NValue::string("dup".into())]).unwrap();
         let fields = result.as_record().unwrap();
-        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        let status = fields
+            .iter()
+            .find(|(k, _)| &**k == "status")
+            .unwrap()
+            .1
+            .as_any_int();
         assert_eq!(status, 409);
     }
 
@@ -862,7 +980,12 @@ mod tests {
         let id = reg.lookup("Response.too_many_requests").unwrap();
         let result = reg.call(id, &[NValue::string("slow down".into())]).unwrap();
         let fields = result.as_record().unwrap();
-        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        let status = fields
+            .iter()
+            .find(|(k, _)| &**k == "status")
+            .unwrap()
+            .1
+            .as_any_int();
         assert_eq!(status, 429);
     }
 
@@ -872,7 +995,12 @@ mod tests {
         let id = reg.lookup("Response.redirect_temporary").unwrap();
         let result = reg.call(id, &[NValue::string("/new".into())]).unwrap();
         let fields = result.as_record().unwrap();
-        let status = fields.iter().find(|(k, _)| &**k == "status").unwrap().1.as_any_int();
+        let status = fields
+            .iter()
+            .find(|(k, _)| &**k == "status")
+            .unwrap()
+            .1
+            .as_any_int();
         assert_eq!(status, 307);
     }
 
@@ -886,11 +1014,23 @@ mod tests {
         ]);
         let result = reg.call(id, &[record]).unwrap();
         let fields = result.as_record().unwrap();
-        let body = fields.iter().find(|(k, _)| &**k == "body").unwrap().1.as_string().unwrap();
+        let body = fields
+            .iter()
+            .find(|(k, _)| &**k == "body")
+            .unwrap()
+            .1
+            .as_string()
+            .unwrap();
         assert!(body.contains("\"id\""));
         assert!(body.contains("\"name\""));
         // Check Content-Type header was set
-        let headers = fields.iter().find(|(k, _)| &**k == "headers").unwrap().1.as_list().unwrap();
+        let headers = fields
+            .iter()
+            .find(|(k, _)| &**k == "headers")
+            .unwrap()
+            .1
+            .as_list()
+            .unwrap();
         assert!(!headers.is_empty());
     }
 
@@ -898,12 +1038,16 @@ mod tests {
     fn response_bad_request_auto_serializes_record() {
         let reg = NativeRegistry::new();
         let id = reg.lookup("Response.bad_request").unwrap();
-        let record = NValue::record(vec![
-            ("error".into(), NValue::string("invalid".into())),
-        ]);
+        let record = NValue::record(vec![("error".into(), NValue::string("invalid".into()))]);
         let result = reg.call(id, &[record]).unwrap();
         let fields = result.as_record().unwrap();
-        let body = fields.iter().find(|(k, _)| &**k == "body").unwrap().1.as_string().unwrap();
+        let body = fields
+            .iter()
+            .find(|(k, _)| &**k == "body")
+            .unwrap()
+            .1
+            .as_string()
+            .unwrap();
         assert!(body.contains("\"error\""));
     }
 
@@ -923,7 +1067,9 @@ mod tests {
     fn http_error_bad_request_creates_enum() {
         let reg = NativeRegistry::new();
         let id = reg.lookup("HttpError.bad_request").unwrap();
-        let result = reg.call(id, &[NValue::string("invalid input".into())]).unwrap();
+        let result = reg
+            .call(id, &[NValue::string("invalid input".into())])
+            .unwrap();
         let (tag, payload) = result.as_enum().unwrap();
         assert_eq!(tag.as_ref(), "BadRequest");
         assert_eq!(payload.as_string().unwrap().as_ref(), "invalid input");
@@ -933,7 +1079,9 @@ mod tests {
     fn http_error_not_found_creates_enum() {
         let reg = NativeRegistry::new();
         let id = reg.lookup("HttpError.not_found").unwrap();
-        let result = reg.call(id, &[NValue::string("user not found".into())]).unwrap();
+        let result = reg
+            .call(id, &[NValue::string("user not found".into())])
+            .unwrap();
         let (tag, payload) = result.as_enum().unwrap();
         assert_eq!(tag.as_ref(), "NotFound");
         assert_eq!(payload.as_string().unwrap().as_ref(), "user not found");
@@ -1029,11 +1177,7 @@ mod tests {
         let r2 = reg
             .call(
                 state_id,
-                &[
-                    r1,
-                    NValue::string("key2".into()),
-                    NValue::int(42),
-                ],
+                &[r1, NValue::string("key2".into()), NValue::int(42)],
             )
             .unwrap();
         let fields = r2.as_record().unwrap();
@@ -1054,12 +1198,13 @@ mod tests {
         let reg = NativeRegistry::new();
         let id = reg.lookup("Middleware.extract_bearer").unwrap();
         let req = NValue::record(vec![
-            ("headers".into(), NValue::list(vec![
-                NValue::tuple(vec![
+            (
+                "headers".into(),
+                NValue::list(vec![NValue::tuple(vec![
                     NValue::string("Authorization".into()),
                     NValue::string("Bearer abc123token".into()),
-                ]),
-            ])),
+                ])]),
+            ),
             ("method".into(), NValue::string("GET".into())),
         ]);
         let result = reg.call(id, &[req]).unwrap();
@@ -1088,12 +1233,13 @@ mod tests {
         let reg = NativeRegistry::new();
         let id = reg.lookup("Middleware.extract_bearer").unwrap();
         let req = NValue::record(vec![
-            ("headers".into(), NValue::list(vec![
-                NValue::tuple(vec![
+            (
+                "headers".into(),
+                NValue::list(vec![NValue::tuple(vec![
                     NValue::string("Authorization".into()),
                     NValue::string("Basic dXNlcjpwYXNz".into()),
-                ]),
-            ])),
+                ])]),
+            ),
             ("method".into(), NValue::string("GET".into())),
         ]);
         let result = reg.call(id, &[req]).unwrap();
@@ -1109,12 +1255,13 @@ mod tests {
         let id = reg.lookup("Middleware.extract_basic").unwrap();
         // "user:pass" base64 = "dXNlcjpwYXNz"
         let req = NValue::record(vec![
-            ("headers".into(), NValue::list(vec![
-                NValue::tuple(vec![
+            (
+                "headers".into(),
+                NValue::list(vec![NValue::tuple(vec![
                     NValue::string("Authorization".into()),
                     NValue::string("Basic dXNlcjpwYXNz".into()),
-                ]),
-            ])),
+                ])]),
+            ),
             ("method".into(), NValue::string("GET".into())),
         ]);
         let result = reg.call(id, &[req]).unwrap();
@@ -1145,16 +1292,20 @@ mod tests {
     fn middleware_cors_config_returns_record() {
         let reg = NativeRegistry::new();
         let id = reg.lookup("Middleware.cors_config").unwrap();
-        let origins = NValue::list(vec![
-            NValue::string("http://localhost:3000".into()),
-        ]);
+        let origins = NValue::list(vec![NValue::string("http://localhost:3000".into())]);
         let result = reg.call(id, &[origins]).unwrap();
         let fields = result.as_record().unwrap();
         // Should have allowed_origins field
-        let origins_field = fields.iter().find(|(k, _)| &**k == "allowed_origins").unwrap();
+        let origins_field = fields
+            .iter()
+            .find(|(k, _)| &**k == "allowed_origins")
+            .unwrap();
         let origins_list = origins_field.1.as_list().unwrap();
         assert_eq!(origins_list.len(), 1);
-        assert_eq!(origins_list[0].as_string().unwrap().as_ref(), "http://localhost:3000");
+        assert_eq!(
+            origins_list[0].as_string().unwrap().as_ref(),
+            "http://localhost:3000"
+        );
     }
 
     #[test]
@@ -1163,7 +1314,10 @@ mod tests {
         let id = reg.lookup("Middleware.rate_limit_config").unwrap();
         let result = reg.call(id, &[NValue::int(50), NValue::int(100)]).unwrap();
         let fields = result.as_record().unwrap();
-        let rps = fields.iter().find(|(k, _)| &**k == "requests_per_second").unwrap();
+        let rps = fields
+            .iter()
+            .find(|(k, _)| &**k == "requests_per_second")
+            .unwrap();
         assert_eq!(rps.1.as_any_int(), 50);
         let burst = fields.iter().find(|(k, _)| &**k == "burst_size").unwrap();
         assert_eq!(burst.1.as_any_int(), 100);

@@ -777,7 +777,8 @@ mod tests {
         let tree = AsyncRouteTreeBuilder::new()
             .get("/test", |_req| {
                 let mut resp = AsyncResponse::text(200, "hello");
-                resp.headers.push(("X-Handler".to_string(), "true".to_string()));
+                resp.headers
+                    .push(("X-Handler".to_string(), "true".to_string()));
                 resp
             })
             .build();
@@ -788,9 +789,9 @@ mod tests {
             request_id_header: None,
             ..ServerConfig::default()
         };
-        let ctx = std::sync::Arc::new(
-            crate::vm::hyper_server::AsyncServerContext::native_only(tree, config),
-        );
+        let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::native_only(
+            tree, config,
+        ));
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();

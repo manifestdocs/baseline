@@ -152,7 +152,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             let data_id = aot_strings
                 .get(s)
                 .ok_or_else(|| format!("String not in AOT data: {:?}", s))?;
-            let gv = self.module.declare_data_in_func(*data_id, self.builder.func);
+            let gv = self
+                .module
+                .declare_data_in_func(*data_id, self.builder.func);
             let addr = self.builder.ins().global_value(self.ptr_type, gv);
             let len = self.builder.ins().iconst(types::I64, s.len() as i64);
             Ok(self.call_helper("jit_make_string", &[addr, len]))
@@ -192,17 +194,23 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, types::I64);
 
-        self.builder.ins().brif(fits, inline_block, &[], overflow_block, &[]);
+        self.builder
+            .ins()
+            .brif(fits, inline_block, &[], overflow_block, &[]);
 
         self.builder.switch_to_block(inline_block);
         self.builder.seal_block(inline_block);
         let fast = self.tag_int(val);
-        self.builder.ins().jump(merge_block, &[BlockArg::Value(fast)]);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(fast)]);
 
         self.builder.switch_to_block(overflow_block);
         self.builder.seal_block(overflow_block);
         let slow = self.call_helper("jit_int_from_i64", &[val]);
-        self.builder.ins().jump(merge_block, &[BlockArg::Value(slow)]);
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(slow)]);
 
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
@@ -848,9 +856,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         BinOp::Mul => Ok(self.call_helper("jit_int_mul", &[lhs_val, rhs_val])),
                         BinOp::Div => Ok(self.call_helper("jit_int_div", &[lhs_val, rhs_val])),
                         BinOp::Mod => Ok(self.call_helper("jit_int_mod", &[lhs_val, rhs_val])),
-                        BinOp::Eq => {
-                            Ok(self.call_helper("jit_values_equal", &[lhs_val, rhs_val]))
-                        }
+                        BinOp::Eq => Ok(self.call_helper("jit_values_equal", &[lhs_val, rhs_val])),
                         BinOp::Ne => {
                             let eq = self.call_helper("jit_values_equal", &[lhs_val, rhs_val]);
                             let one = self.builder.ins().iconst(types::I64, 1);
@@ -909,7 +915,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         BinOp::Ge => {
                             let a = self.untag_int(lhs_val);
                             let b = self.untag_int(rhs_val);
-                            let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, b);
+                            let cmp =
+                                self.builder
+                                    .ins()
+                                    .icmp(IntCC::SignedGreaterThanOrEqual, a, b);
                             Ok(self.tag_bool(cmp))
                         }
                         BinOp::ListConcat => {
@@ -922,9 +931,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Expr::UnaryOp { op, operand, .. } => {
                 let val = self.compile_expr(operand)?;
                 match op {
-                    UnaryOp::Neg => {
-                        Ok(self.call_helper("jit_int_neg", &[val]))
-                    }
+                    UnaryOp::Neg => Ok(self.call_helper("jit_int_neg", &[val])),
                     UnaryOp::Not => {
                         // Check bit 0 (truthy check), invert
                         let one = self.builder.ins().iconst(types::I64, 1);
@@ -999,10 +1006,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let is_last = idx == exprs.len() - 1;
                     // SRA: intercept Let bindings to MakeRecord for candidates
                     if self.try_compile_sra_let(e, &sra_names)? {
-                        result = self.builder.ins().iconst(
-                            types::I64,
-                            NV_UNIT as i64,
-                        );
+                        result = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
                         continue;
                     }
                     result = self.compile_expr(e)?;
@@ -1220,7 +1224,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let args_addr = self.spill_to_stack(&arg_vals);
                     let count_val = self.builder.ins().iconst(types::I64, arg_vals.len() as i64);
 
-                    let func_ref = self.module.declare_func_in_func(*func_id, self.builder.func);
+                    let func_ref = self
+                        .module
+                        .declare_func_in_func(*func_id, self.builder.func);
                     let call = self.builder.ins().call(func_ref, &[args_addr, count_val]);
                     return Ok(self.builder.inst_results(call)[0]);
                 }
@@ -1457,7 +1463,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
                 let closure_block = self.builder.create_block();
                 let function_block = self.builder.create_block();
-                self.builder.ins().brif(cmp, closure_block, &[], function_block, &[]);
+                self.builder
+                    .ins()
+                    .brif(cmp, closure_block, &[], function_block, &[]);
 
                 if use_tail {
                     // Tail CC: use return_call_indirect for proper tail calls
@@ -1469,7 +1477,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
                     let call_closure_block = self.builder.create_block();
                     let null_closure_block = self.builder.create_block();
-                    self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
+                    self.builder.ins().brif(
+                        ptr_ok_c,
+                        call_closure_block,
+                        &[],
+                        null_closure_block,
+                        &[],
+                    );
 
                     self.builder.switch_to_block(null_closure_block);
                     self.builder.seal_block(null_closure_block);
@@ -1482,7 +1496,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     cargs.extend(&compiled_args);
                     let closure_sig = self.build_indirect_sig(args.len() + 1);
                     let sig_ref_c = self.builder.import_signature(closure_sig);
-                    self.builder.ins().return_call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+                    self.builder
+                        .ins()
+                        .return_call_indirect(sig_ref_c, fn_ptr_c, &cargs);
 
                     // Function path
                     self.builder.switch_to_block(function_block);
@@ -1495,7 +1511,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
                     let call_func_block = self.builder.create_block();
                     let null_func_block = self.builder.create_block();
-                    self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
+                    self.builder
+                        .ins()
+                        .brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
 
                     self.builder.switch_to_block(null_func_block);
                     self.builder.seal_block(null_func_block);
@@ -1506,7 +1524,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     self.builder.seal_block(call_func_block);
                     let func_sig = self.build_indirect_sig(args.len());
                     let sig_ref_f = self.builder.import_signature(func_sig);
-                    self.builder.ins().return_call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
+                    self.builder
+                        .ins()
+                        .return_call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
 
                     let dead_block = self.builder.create_block();
                     self.builder.switch_to_block(dead_block);
@@ -1525,12 +1545,20 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let ptr_ok_c = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_c, zero_c);
                     let call_closure_block = self.builder.create_block();
                     let null_closure_block = self.builder.create_block();
-                    self.builder.ins().brif(ptr_ok_c, call_closure_block, &[], null_closure_block, &[]);
+                    self.builder.ins().brif(
+                        ptr_ok_c,
+                        call_closure_block,
+                        &[],
+                        null_closure_block,
+                        &[],
+                    );
 
                     self.builder.switch_to_block(null_closure_block);
                     self.builder.seal_block(null_closure_block);
                     let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                    self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_c)]);
+                    self.builder
+                        .ins()
+                        .jump(merge_block, &[BlockArg::Value(unit_c)]);
 
                     self.builder.switch_to_block(call_closure_block);
                     self.builder.seal_block(call_closure_block);
@@ -1538,9 +1566,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     cargs.extend(&compiled_args);
                     let closure_sig = self.build_indirect_sig(args.len() + 1);
                     let sig_ref_c = self.builder.import_signature(closure_sig);
-                    let inst_c = self.builder.ins().call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+                    let inst_c = self
+                        .builder
+                        .ins()
+                        .call_indirect(sig_ref_c, fn_ptr_c, &cargs);
                     let result_c = self.builder.inst_results(inst_c)[0];
-                    self.builder.ins().jump(merge_block, &[BlockArg::Value(result_c)]);
+                    self.builder
+                        .ins()
+                        .jump(merge_block, &[BlockArg::Value(result_c)]);
 
                     // Function path
                     self.builder.switch_to_block(function_block);
@@ -1553,20 +1586,29 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let ptr_ok_f = self.builder.ins().icmp(IntCC::NotEqual, fn_ptr_f, zero_f);
                     let call_func_block = self.builder.create_block();
                     let null_func_block = self.builder.create_block();
-                    self.builder.ins().brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
+                    self.builder
+                        .ins()
+                        .brif(ptr_ok_f, call_func_block, &[], null_func_block, &[]);
 
                     self.builder.switch_to_block(null_func_block);
                     self.builder.seal_block(null_func_block);
                     let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                    self.builder.ins().jump(merge_block, &[BlockArg::Value(unit_f)]);
+                    self.builder
+                        .ins()
+                        .jump(merge_block, &[BlockArg::Value(unit_f)]);
 
                     self.builder.switch_to_block(call_func_block);
                     self.builder.seal_block(call_func_block);
                     let func_sig = self.build_indirect_sig(args.len());
                     let sig_ref_f = self.builder.import_signature(func_sig);
-                    let inst_f = self.builder.ins().call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
+                    let inst_f =
+                        self.builder
+                            .ins()
+                            .call_indirect(sig_ref_f, fn_ptr_f, &compiled_args);
                     let result_f = self.builder.inst_results(inst_f)[0];
-                    self.builder.ins().jump(merge_block, &[BlockArg::Value(result_f)]);
+                    self.builder
+                        .ins()
+                        .jump(merge_block, &[BlockArg::Value(result_f)]);
 
                     // Merge
                     self.builder.switch_to_block(merge_block);
@@ -1643,7 +1685,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         cargs.extend(args);
         let closure_sig = self.build_indirect_sig(args.len() + 1);
         let sig_ref_c = self.builder.import_signature(closure_sig);
-        let result_c = self.builder.ins().call_indirect(sig_ref_c, fn_ptr_c, &cargs);
+        let result_c = self
+            .builder
+            .ins()
+            .call_indirect(sig_ref_c, fn_ptr_c, &cargs);
         let ret_c = self.builder.inst_results(result_c)[0];
         self.builder
             .ins()
@@ -1672,10 +1717,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.seal_block(call_func_block);
         let func_sig = self.build_indirect_sig(args.len());
         let sig_ref_f = self.builder.import_signature(func_sig);
-        let result_f = self
-            .builder
-            .ins()
-            .call_indirect(sig_ref_f, fn_ptr_f, args);
+        let result_f = self.builder.ins().call_indirect(sig_ref_f, fn_ptr_f, args);
         let ret_f = self.builder.inst_results(result_f)[0];
         self.builder
             .ins()
@@ -1704,11 +1746,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Compile a HOF call inline (no ABI bridging needed).
-    fn compile_hof(
-        &mut self,
-        qualified: &str,
-        args: &[Expr],
-    ) -> Result<CValue, String> {
+    fn compile_hof(&mut self, qualified: &str, args: &[Expr]) -> Result<CValue, String> {
         match qualified {
             "List.map" => self.compile_hof_list_map(args),
             "List.filter" => self.compile_hof_list_filter(args),
@@ -1759,12 +1797,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let i = self.builder.use_var(i_var);
         let offset = self.builder.ins().imul_imm(i, 8);
         let addr = self.builder.ins().iadd(buf, offset);
-        self.builder.ins().store(
-            cranelift_codegen::ir::MemFlags::new(),
-            result,
-            addr,
-            0,
-        );
+        self.builder
+            .ins()
+            .store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
 
         // i++
         let i = self.builder.use_var(i_var);
@@ -1835,12 +1870,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let out_idx = self.builder.use_var(out_var);
         let offset = self.builder.ins().imul_imm(out_idx, 8);
         let addr = self.builder.ins().iadd(buf, offset);
-        self.builder.ins().store(
-            cranelift_codegen::ir::MemFlags::new(),
-            item,
-            addr,
-            0,
-        );
+        self.builder
+            .ins()
+            .store(cranelift_codegen::ir::MemFlags::new(), item, addr, 0);
         let one = self.builder.ins().iconst(types::I64, 1);
         let next_out = self.builder.ins().iadd(out_idx, one);
         self.builder.def_var(out_var, next_out);
@@ -1951,13 +1983,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
         // If not found, jump to done with None
         let none_val = self.call_helper("jit_make_none", &[]);
-        self.builder.ins().brif(
-            cmp,
-            body,
-            &[],
-            done,
-            &[BlockArg::Value(none_val)],
-        );
+        self.builder
+            .ins()
+            .brif(cmp, body, &[], done, &[BlockArg::Value(none_val)]);
 
         self.builder.switch_to_block(body);
         self.builder.seal_block(body);
@@ -1978,9 +2006,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.switch_to_block(found_block);
         self.builder.seal_block(found_block);
         let some_val = self.call_helper("jit_make_some", &[item]);
-        self.builder
-            .ins()
-            .jump(done, &[BlockArg::Value(some_val)]);
+        self.builder.ins().jump(done, &[BlockArg::Value(some_val)]);
 
         // Continue loop
         self.builder.switch_to_block(cont_block);
@@ -2067,9 +2093,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, types::I64);
 
-        self.builder
-            .ins()
-            .brif(cmp, err_block, &[], ok_block, &[]);
+        self.builder.ins().brif(cmp, err_block, &[], ok_block, &[]);
 
         // Err path: pass through as-is
         self.builder.switch_to_block(err_block);
@@ -2114,9 +2138,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, types::I64);
 
-        self.builder
-            .ins()
-            .brif(cmp, err_block, &[], ok_block, &[]);
+        self.builder.ins().brif(cmp, err_block, &[], ok_block, &[]);
 
         // Ok path: pass through as-is
         self.builder.switch_to_block(ok_block);
@@ -2355,7 +2377,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let cmp = self.builder.ins().icmp(IntCC::Equal, guard_val, true_val);
                     let guard_fail = self.builder.create_block();
                     let guard_pass = self.builder.create_block();
-                    self.builder.ins().brif(cmp, guard_pass, &[], guard_fail, &[]);
+                    self.builder
+                        .ins()
+                        .brif(cmp, guard_pass, &[], guard_fail, &[]);
                     // Guard fail: clean up scope and fall through to next
                     self.builder.switch_to_block(guard_fail);
                     self.builder.seal_block(guard_fail);
@@ -2364,7 +2388,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         self.builder.ins().jump(next, &[]);
                     } else {
                         let unit = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                        self.builder.ins().jump(merge_block, &[BlockArg::Value(unit)]);
+                        self.builder
+                            .ins()
+                            .jump(merge_block, &[BlockArg::Value(unit)]);
                     }
                     self.builder.switch_to_block(guard_pass);
                     self.builder.seal_block(guard_pass);
@@ -2386,7 +2412,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let cmp = self.builder.ins().icmp(IntCC::Equal, guard_val, true_val);
                     let guard_fail = self.builder.create_block();
                     let guard_pass = self.builder.create_block();
-                    self.builder.ins().brif(cmp, guard_pass, &[], guard_fail, &[]);
+                    self.builder
+                        .ins()
+                        .brif(cmp, guard_pass, &[], guard_fail, &[]);
                     // Guard fail: fall through to next arm
                     self.builder.switch_to_block(guard_fail);
                     self.builder.seal_block(guard_fail);
@@ -2394,7 +2422,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         self.builder.ins().jump(next, &[]);
                     } else {
                         let unit = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                        self.builder.ins().jump(merge_block, &[BlockArg::Value(unit)]);
+                        self.builder
+                            .ins()
+                            .jump(merge_block, &[BlockArg::Value(unit)]);
                     }
                     self.builder.switch_to_block(guard_pass);
                     self.builder.seal_block(guard_pass);
@@ -2894,11 +2924,17 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 if base_escapes {
                     return true;
                 }
-                updates.iter().any(|(_, v)| Self::var_escapes_in_expr(v, name))
+                updates
+                    .iter()
+                    .any(|(_, v)| Self::var_escapes_in_expr(v, name))
             }
             // Recurse into all children
-            Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_)
-            | Expr::Unit | Expr::Hole => false,
+            Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::String(_)
+            | Expr::Bool(_)
+            | Expr::Unit
+            | Expr::Hole => false,
             Expr::Var(_, _) => false, // different name
             Expr::BinOp { lhs, rhs, .. } => {
                 Self::var_escapes_in_expr(lhs, name) || Self::var_escapes_in_expr(rhs, name)
@@ -2907,14 +2943,22 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Expr::And(l, r) | Expr::Or(l, r) => {
                 Self::var_escapes_in_expr(l, name) || Self::var_escapes_in_expr(r, name)
             }
-            Expr::If { condition, then_branch, else_branch, .. } => {
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 Self::var_escapes_in_expr(condition, name)
                     || Self::var_escapes_in_expr(then_branch, name)
-                    || else_branch.as_ref().is_some_and(|e| Self::var_escapes_in_expr(e, name))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| Self::var_escapes_in_expr(e, name))
             }
             Expr::Block(exprs, _) => exprs.iter().any(|e| Self::var_escapes_in_expr(e, name)),
             Expr::Let { value, .. } => Self::var_escapes_in_expr(value, name),
-            Expr::CallDirect { args, .. } | Expr::CallNative { args, .. }
+            Expr::CallDirect { args, .. }
+            | Expr::CallNative { args, .. }
             | Expr::TailCall { args, .. } => {
                 args.iter().any(|a| Self::var_escapes_in_expr(a, name))
             }
@@ -2924,9 +2968,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     || args.iter().any(|a| Self::var_escapes_in_expr(a, name))
             }
             Expr::MakeEnum { payload, .. } => Self::var_escapes_in_expr(payload, name),
-            Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
-                fields.iter().any(|(_, v)| Self::var_escapes_in_expr(v, name))
-            }
+            Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => fields
+                .iter()
+                .any(|(_, v)| Self::var_escapes_in_expr(v, name)),
             Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
                 items.iter().any(|e| Self::var_escapes_in_expr(e, name))
             }
@@ -2935,7 +2979,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
             Expr::Match { subject, arms, .. } => {
                 Self::var_escapes_in_expr(subject, name)
-                    || arms.iter().any(|a| Self::var_escapes_in_expr(&a.body, name))
+                    || arms
+                        .iter()
+                        .any(|a| Self::var_escapes_in_expr(&a.body, name))
             }
             Expr::For { iterable, body, .. } => {
                 Self::var_escapes_in_expr(iterable, name) || Self::var_escapes_in_expr(body, name)

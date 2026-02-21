@@ -143,21 +143,13 @@ impl<H: Clone> RadixTree<H> {
                 }
                 node = node.param.as_mut().unwrap().1.as_mut();
             } else {
-                node = node
-                    .children
-                    .entry(seg.to_string())
-                    .or_default();
+                node = node.children.entry(seg.to_string()).or_default();
             }
         }
         node.handlers.entry(method.to_string()).or_insert(handler);
     }
 
-    pub fn find<P: ParamCollector>(
-        &self,
-        method: &str,
-        path: &str,
-        params: &mut P,
-    ) -> Option<&H> {
+    pub fn find<P: ParamCollector>(&self, method: &str, path: &str, params: &mut P) -> Option<&H> {
         let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
         find_in_node(&self.root, &segments, method, params)
     }

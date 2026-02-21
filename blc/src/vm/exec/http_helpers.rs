@@ -77,30 +77,37 @@ pub(crate) fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>
             HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
                 // Check if the Err payload is an HttpError variant (e.g., BadRequest, NotFound).
                 // Map it to the correct HTTP status code with a JSON error body.
-                if payload.is_heap() {
-                    if let HeapObject::Enum { tag: err_tag, payload: err_msg, .. } = payload.as_heap_ref() {
-                        if let Some(status) = http_error_status_code(err_tag) {
-                            let msg = match err_msg.as_string() {
-                                Some(s) => s.to_string(),
-                                None => format!("{}", err_msg),
-                            };
-                            let title = http_error_title(err_tag);
-                            let body = format!(
-                                "{{\"errors\":[{{\"status\":\"{}\",\"title\":\"{}\",\"detail\":\"{}\"}}]}}",
-                                status,
-                                title,
-                                msg.replace('\\', "\\\\").replace('"', "\\\"")
-                            );
-                            return (status, vec![("Content-Type".to_string(), "application/json".to_string())], body);
-                        }
-                    }
+                if payload.is_heap()
+                    && let HeapObject::Enum {
+                        tag: err_tag,
+                        payload: err_msg,
+                        ..
+                    } = payload.as_heap_ref()
+                    && let Some(status) = http_error_status_code(err_tag)
+                {
+                    let msg = match err_msg.as_string() {
+                        Some(s) => s.to_string(),
+                        None => format!("{}", err_msg),
+                    };
+                    let title = http_error_title(err_tag);
+                    let body = format!(
+                        "{{\"errors\":[{{\"status\":\"{}\",\"title\":\"{}\",\"detail\":\"{}\"}}]}}",
+                        status,
+                        title,
+                        msg.replace('\\', "\\\\").replace('"', "\\\"")
+                    );
+                    return (
+                        status,
+                        vec![("Content-Type".to_string(), "application/json".to_string())],
+                        body,
+                    );
                 }
                 // If the Err payload is a Response record (has status field),
                 // extract it as a proper HTTP response instead of returning 500.
-                if let Some(fields) = payload.as_record() {
-                    if fields.iter().any(|(k, _)| &**k == "status") {
-                        return extract_response_nv(payload);
-                    }
+                if let Some(fields) = payload.as_record()
+                    && fields.iter().any(|(k, _)| &**k == "status")
+                {
+                    return extract_response_nv(payload);
                 }
                 return (500, Vec::new(), format!("{}", payload));
             }
@@ -180,7 +187,11 @@ mod tests {
         assert!(body.contains("\"errors\""));
         assert!(body.contains("\"Bad Request\""));
         assert!(body.contains("invalid"));
-        assert!(headers.iter().any(|(k, v)| k == "Content-Type" && v == "application/json"));
+        assert!(
+            headers
+                .iter()
+                .any(|(k, v)| k == "Content-Type" && v == "application/json")
+        );
     }
 
     #[test]
@@ -253,28 +264,52 @@ mod tests {
     #[test]
     fn extract_http_error_new_variants() {
         // MethodNotAllowed
-        let err = NValue::enum_val("Err".into(), NValue::enum_val("MethodNotAllowed".into(), NValue::string("POST not allowed".into())));
+        let err = NValue::enum_val(
+            "Err".into(),
+            NValue::enum_val(
+                "MethodNotAllowed".into(),
+                NValue::string("POST not allowed".into()),
+            ),
+        );
         let (status, _, body) = extract_response_nv(&err);
         assert_eq!(status, 405);
         assert!(body.contains("\"Method Not Allowed\""));
 
         // TooManyRequests
-        let err = NValue::enum_val("Err".into(), NValue::enum_val("TooManyRequests".into(), NValue::string("rate limited".into())));
+        let err = NValue::enum_val(
+            "Err".into(),
+            NValue::enum_val(
+                "TooManyRequests".into(),
+                NValue::string("rate limited".into()),
+            ),
+        );
         let (status, _, _) = extract_response_nv(&err);
         assert_eq!(status, 429);
 
         // BadGateway
-        let err = NValue::enum_val("Err".into(), NValue::enum_val("BadGateway".into(), NValue::string("upstream down".into())));
+        let err = NValue::enum_val(
+            "Err".into(),
+            NValue::enum_val("BadGateway".into(), NValue::string("upstream down".into())),
+        );
         let (status, _, _) = extract_response_nv(&err);
         assert_eq!(status, 502);
 
         // ServiceUnavailable
-        let err = NValue::enum_val("Err".into(), NValue::enum_val("ServiceUnavailable".into(), NValue::string("maintenance".into())));
+        let err = NValue::enum_val(
+            "Err".into(),
+            NValue::enum_val(
+                "ServiceUnavailable".into(),
+                NValue::string("maintenance".into()),
+            ),
+        );
         let (status, _, _) = extract_response_nv(&err);
         assert_eq!(status, 503);
 
         // GatewayTimeout
-        let err = NValue::enum_val("Err".into(), NValue::enum_val("GatewayTimeout".into(), NValue::string("timed out".into())));
+        let err = NValue::enum_val(
+            "Err".into(),
+            NValue::enum_val("GatewayTimeout".into(), NValue::string("timed out".into())),
+        );
         let (status, _, _) = extract_response_nv(&err);
         assert_eq!(status, 504);
     }
@@ -296,10 +331,7 @@ mod tests {
 
     #[test]
     fn extract_err_string_still_works() {
-        let err = NValue::enum_val(
-            "Err".into(),
-            NValue::string("something failed".into()),
-        );
+        let err = NValue::enum_val("Err".into(), NValue::string("something failed".into()));
         let (status, _, body) = extract_response_nv(&err);
         assert_eq!(status, 500);
         assert!(body.contains("something failed"));

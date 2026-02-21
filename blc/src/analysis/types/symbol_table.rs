@@ -1,7 +1,7 @@
+use super::super::infer::{GenericSchema, UserGenericSchema, builtin_generic_schemas};
 use super::builtins::builtin_type_signatures;
 use super::type_def::{Type, TypeMap};
 use crate::prelude::{self, Prelude};
-use super::super::infer::{GenericSchema, UserGenericSchema, builtin_generic_schemas};
 use std::collections::{HashMap, HashSet};
 
 /// A trait definition: trait name + method signatures.
@@ -53,7 +53,7 @@ pub struct SymbolTable {
 /// Dictionary entry for a single trait bound at a call site.
 pub struct DictEntry {
     pub trait_name: String,
-    pub methods: Vec<(String, String)>,  // (method_name, mangled_impl_name)
+    pub methods: Vec<(String, String)>, // (method_name, mangled_impl_name)
 }
 
 /// Dictionary map: call_expression start_byte -> dictionary entries for hidden args.
@@ -213,7 +213,8 @@ impl SymbolTable {
     }
 
     pub(super) fn lookup_trait_impl(&self, trait_name: &str, type_key: &str) -> Option<&TraitImpl> {
-        self.trait_impls.get(&(trait_name.to_string(), type_key.to_string()))
+        self.trait_impls
+            .get(&(trait_name.to_string(), type_key.to_string()))
     }
 
     /// All supertraits transitively (flattened, deduplicated).
@@ -224,7 +225,12 @@ impl SymbolTable {
         result
     }
 
-    fn collect_supertraits(&self, trait_name: &str, result: &mut Vec<String>, visited: &mut HashSet<String>) {
+    fn collect_supertraits(
+        &self,
+        trait_name: &str,
+        result: &mut Vec<String>,
+        visited: &mut HashSet<String>,
+    ) {
         if let Some(td) = self.trait_defs.get(trait_name) {
             for st in &td.supertraits {
                 if visited.insert(st.clone()) {

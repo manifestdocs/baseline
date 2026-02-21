@@ -92,7 +92,10 @@ impl<'a> super::Lowerer<'a> {
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
             if child.kind().contains("content") {
-                return child.utf8_text(self.source.as_bytes()).unwrap_or("").to_string();
+                return child
+                    .utf8_text(self.source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
             }
         }
         String::new()

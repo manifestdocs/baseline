@@ -101,7 +101,11 @@ fn check_block_for_cycles(
 
         // Only emit if the value is a lambda
         if value.kind() == "lambda" {
-            lambda_lets.push(LambdaLet { name, name_node: pattern, lambda: value });
+            lambda_lets.push(LambdaLet {
+                name,
+                name_node: pattern,
+                lambda: value,
+            });
         }
     }
 
@@ -182,10 +186,11 @@ fn collect_identifiers_inner(
     out: &mut HashSet<String>,
 ) {
     if node.kind() == "identifier" {
-        if let Ok(name) = node.utf8_text(source.as_bytes()) {
-            if !bound.contains(name) && !top_level.contains(name) {
-                out.insert(name.to_string());
-            }
+        if let Ok(name) = node.utf8_text(source.as_bytes())
+            && !bound.contains(name)
+            && !top_level.contains(name)
+        {
+            out.insert(name.to_string());
         }
         return;
     }
@@ -251,10 +256,9 @@ fn collect_top_level_names(root: &Node, source: &str) -> HashSet<String> {
             if let Some(name_node) = child
                 .named_children(&mut child.walk())
                 .find(|n| n.kind() == "identifier")
+                && let Ok(name) = name_node.utf8_text(source.as_bytes())
             {
-                if let Ok(name) = name_node.utf8_text(source.as_bytes()) {
-                    names.insert(name.to_string());
-                }
+                names.insert(name.to_string());
             }
         }
     }
@@ -336,27 +340,24 @@ mod tests {
     #[test]
     fn no_warning_for_simple_functions() {
         // No mutual capture — no warning
-        let diags = parse_and_check(
-            "fn test() = {\n  let f = |x| x + 1\n  let g = |x| x * 2\n  f(1)\n}",
-        );
+        let diags =
+            parse_and_check("fn test() = {\n  let f = |x| x + 1\n  let g = |x| x * 2\n  f(1)\n}");
         assert!(diags.is_empty(), "expected no warnings, got: {:?}", diags);
     }
 
     #[test]
     fn no_warning_for_one_sided_capture() {
         // g captures f, but f does not capture g — one-directional, no cycle
-        let diags = parse_and_check(
-            "fn test() = {\n  let f = |x| x + 1\n  let g = |x| f(x)\n  g(1)\n}",
-        );
+        let diags =
+            parse_and_check("fn test() = {\n  let f = |x| x + 1\n  let g = |x| f(x)\n  g(1)\n}");
         assert!(diags.is_empty(), "expected no warnings, got: {:?}", diags);
     }
 
     #[test]
     fn warns_for_mutual_capture() {
         // f captures g AND g captures f → W_CYCLE_001
-        let diags = parse_and_check(
-            "fn test() = {\n  let f = |x| g(x)\n  let g = |x| f(x)\n  f(0)\n}",
-        );
+        let diags =
+            parse_and_check("fn test() = {\n  let f = |x| g(x)\n  let g = |x| f(x)\n  f(0)\n}");
         assert_eq!(diags.len(), 1, "expected 1 warning, got: {:?}", diags);
         assert_eq!(diags[0].code, "W_CYCLE_001");
         assert!(diags[0].message.contains('f'));
@@ -370,6 +371,9 @@ mod tests {
         let diags = parse_and_check(
             "fn top_fn(x: Int) -> Int = x + 1\nfn test() = {\n  let handler = |x| top_fn(x)\n  handler(1)\n}",
         );
-        assert!(diags.is_empty(), "top-level fn calls should not trigger warning");
+        assert!(
+            diags.is_empty(),
+            "top-level fn calls should not trigger warning"
+        );
     }
 }

@@ -22,7 +22,10 @@ pub fn native_sql_migrate(args: &[NValue]) -> Result<NValue, NativeError> {
 
     match run_migrations(dir.as_ref()) {
         Ok(count) => Ok(NValue::enum_val("Ok".into(), NValue::int(count as i64))),
-        Err(e) => Ok(NValue::enum_val("Err".into(), NValue::string(RcStr::from(e.as_str())))),
+        Err(e) => Ok(NValue::enum_val(
+            "Err".into(),
+            NValue::string(RcStr::from(e.as_str())),
+        )),
     }
 }
 
@@ -58,7 +61,7 @@ fn run_migrations(dir: &str) -> Result<usize, String> {
         // Record in _migrations table
         db_backend::active_execute(
             "INSERT INTO _migrations (name, applied_at) VALUES (?1, datetime('now'))",
-            &[name.clone()],
+            std::slice::from_ref(name),
         )
         .map_err(|e| format!("Failed to record migration {}: {}", name, e.0))?;
 
@@ -78,13 +81,18 @@ fn ensure_migrations_table() -> Result<(), NativeError> {
 
 fn get_applied_migrations() -> Result<Vec<String>, NativeError> {
     let rows = db_backend::active_query("SELECT name FROM _migrations ORDER BY id", &[])?;
-    Ok(rows.into_iter().filter_map(|row| {
-        row.columns.iter().position(|c: &super::RcStr| c.as_ref() == "name")
-            .and_then(|i| match &row.values[i] {
-                db_backend::SqlValue::Text(s) => Some(s.as_ref().to_string()),
-                _ => None,
-            })
-    }).collect())
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| {
+            row.columns
+                .iter()
+                .position(|c: &super::RcStr| c.as_ref() == "name")
+                .and_then(|i| match &row.values[i] {
+                    db_backend::SqlValue::Text(s) => Some(s.as_ref().to_string()),
+                    _ => None,
+                })
+        })
+        .collect())
 }
 
 /// Scan a directory for files matching `NNN_description.sql` pattern.
@@ -97,15 +105,15 @@ fn scan_migration_files(dir: &str) -> Result<Vec<(String, String)>, String> {
     for entry in entries {
         let entry = entry.map_err(|e| format!("Error reading directory entry: {}", e))?;
         let path = entry.path();
-        if let Some(ext) = path.extension() {
-            if ext == "sql" {
-                let name = path
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_string_lossy()
-                    .to_string();
-                files.push((name, path.to_string_lossy().to_string()));
-            }
+        if let Some(ext) = path.extension()
+            && ext == "sql"
+        {
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+            files.push((name, path.to_string_lossy().to_string()));
         }
     }
 
@@ -150,11 +158,8 @@ mod tests {
         assert_eq!(count, 2);
 
         // Verify the table has the email column
-        let rows = db_backend::active_query(
-            "SELECT name FROM _migrations ORDER BY id",
-            &[],
-        )
-        .unwrap();
+        let rows =
+            db_backend::active_query("SELECT name FROM _migrations ORDER BY id", &[]).unwrap();
         assert_eq!(rows.len(), 2);
     }
 
@@ -199,11 +204,7 @@ mod tests {
         setup_memory_db();
         let dir = tempfile::tempdir().unwrap();
 
-        std::fs::write(
-            dir.path().join("001_bad.sql"),
-            "THIS IS NOT VALID SQL;",
-        )
-        .unwrap();
+        std::fs::write(dir.path().join("001_bad.sql"), "THIS IS NOT VALID SQL;").unwrap();
 
         let result = run_migrations(dir.path().to_str().unwrap());
         assert!(result.is_err());
@@ -226,10 +227,9 @@ mod tests {
         )
         .unwrap();
 
-        let result = native_sql_migrate(&[
-            NValue::string(RcStr::from(dir.path().to_str().unwrap())),
-        ])
-        .unwrap();
+        let result =
+            native_sql_migrate(&[NValue::string(RcStr::from(dir.path().to_str().unwrap()))])
+                .unwrap();
 
         let (tag, payload) = result.as_enum().unwrap();
         assert_eq!(tag.as_ref(), "Ok");
@@ -239,10 +239,8 @@ mod tests {
     #[test]
     fn native_sql_migrate_returns_err_on_bad_dir() {
         setup_memory_db();
-        let result = native_sql_migrate(&[
-            NValue::string(RcStr::from("/nonexistent/migrations")),
-        ])
-        .unwrap();
+        let result =
+            native_sql_migrate(&[NValue::string(RcStr::from("/nonexistent/migrations"))]).unwrap();
 
         let (tag, _) = result.as_enum().unwrap();
         assert_eq!(tag.as_ref(), "Err");

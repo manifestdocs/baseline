@@ -35,11 +35,7 @@ impl super::Vm {
                     self.stack.push(NValue::float(a.as_f64() - b.as_f64()));
                 } else {
                     let (line, col) = chunk.source_map[ip - 1];
-                    return Err(self.error(
-                        format!("Cannot subtract {} from {}", b, a),
-                        line,
-                        col,
-                    ));
+                    return Err(self.error(format!("Cannot subtract {} from {}", b, a), line, col));
                 }
             }
             Op::Mul => {
@@ -51,11 +47,7 @@ impl super::Vm {
                     self.stack.push(NValue::float(a.as_f64() * b.as_f64()));
                 } else {
                     let (line, col) = chunk.source_map[ip - 1];
-                    return Err(self.error(
-                        format!("Cannot multiply {} and {}", a, b),
-                        line,
-                        col,
-                    ));
+                    return Err(self.error(format!("Cannot multiply {} and {}", a, b), line, col));
                 }
             }
             Op::Div => {

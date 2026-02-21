@@ -188,7 +188,7 @@ impl ModuleLoader {
                 return Err(Diagnostic {
                     code: "IMP_001".to_string(),
                     severity: Severity::Error,
-                    location: Location::from_node(file,import_node),
+                    location: Location::from_node(file, import_node),
                     message: format!("Cannot resolve import `{}`: no base directory", module_name),
                     context: "Imports require a file-based context.".to_string(),
                     suggestions: vec![],
@@ -249,7 +249,7 @@ impl ModuleLoader {
         Err(Diagnostic {
             code: "IMP_001".to_string(),
             severity: Severity::Error,
-            location: Location::from_node(file,import_node),
+            location: Location::from_node(file, import_node),
             message: format!("Module `{}` not found", module_name),
             context: format!("Searched: {}", tried),
             suggestions: vec![],
@@ -279,7 +279,7 @@ impl ModuleLoader {
             return Err(Diagnostic {
                 code: "IMP_002".to_string(),
                 severity: Severity::Error,
-                location: Location::from_node(file,import_node),
+                location: Location::from_node(file, import_node),
                 message: format!(
                     "Circular import detected: {} -> {}",
                     cycle,
@@ -299,7 +299,7 @@ impl ModuleLoader {
         let source = std::fs::read_to_string(path).map_err(|e| Diagnostic {
             code: "IMP_001".to_string(),
             severity: Severity::Error,
-            location: Location::from_node(file,import_node),
+            location: Location::from_node(file, import_node),
             message: format!("Failed to read module `{}`: {}", path.display(), e),
             context: "Check that the file exists and is readable.".to_string(),
             suggestions: vec![],
@@ -314,7 +314,7 @@ impl ModuleLoader {
         let tree = parser.parse(&source, None).ok_or_else(|| Diagnostic {
             code: "IMP_003".to_string(),
             severity: Severity::Error,
-            location: Location::from_node(file,import_node),
+            location: Location::from_node(file, import_node),
             message: format!("Failed to parse module `{}`", path.display()),
             context: "The imported module has syntax errors.".to_string(),
             suggestions: vec![],
@@ -325,7 +325,7 @@ impl ModuleLoader {
             return Err(Diagnostic {
                 code: "IMP_003".to_string(),
                 severity: Severity::Error,
-                location: Location::from_node(file,import_node),
+                location: Location::from_node(file, import_node),
                 message: format!("Imported module `{}` has syntax errors", path.display()),
                 context: "Fix the errors in the imported module first.".to_string(),
                 suggestions: vec![],
@@ -425,7 +425,6 @@ impl ModuleLoader {
     }
 }
 
-
 /// Check if a CST node (function_def, type_def, effect_def) has the `export` keyword.
 pub fn has_export_keyword(node: &tree_sitter::Node, source: &str) -> bool {
     let mut cursor = node.walk();
@@ -447,15 +446,16 @@ pub fn exported_function_names(root: &tree_sitter::Node, source: &str) -> HashSe
     let mut names = HashSet::new();
     let mut cursor = root.walk();
     for child in root.children(&mut cursor) {
-        if child.kind() == "function_def" && has_export_keyword(&child, source) {
-            if let Some(name_node) = child.child_by_field_name("name") {
-                names.insert(
-                    name_node
-                        .utf8_text(source.as_bytes())
-                        .unwrap_or("")
-                        .to_string(),
-                );
-            }
+        if child.kind() == "function_def"
+            && has_export_keyword(&child, source)
+            && let Some(name_node) = child.child_by_field_name("name")
+        {
+            names.insert(
+                name_node
+                    .utf8_text(source.as_bytes())
+                    .unwrap_or("")
+                    .to_string(),
+            );
         }
     }
     names

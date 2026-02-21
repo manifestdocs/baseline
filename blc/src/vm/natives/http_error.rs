@@ -54,7 +54,9 @@ pub(super) fn native_http_error_bad_gateway(args: &[NValue]) -> Result<NValue, N
     make_http_error("BadGateway", args)
 }
 
-pub(super) fn native_http_error_service_unavailable(args: &[NValue]) -> Result<NValue, NativeError> {
+pub(super) fn native_http_error_service_unavailable(
+    args: &[NValue],
+) -> Result<NValue, NativeError> {
     make_http_error("ServiceUnavailable", args)
 }
 
@@ -70,7 +72,7 @@ pub(super) fn native_http_error_gateway_timeout(args: &[NValue]) -> Result<NValu
 /// Returns (tag, payload) or None if not an HttpError enum.
 fn unwrap_http_error(val: &NValue) -> Option<(RcStr, NValue)> {
     let (tag, payload) = val.as_enum()?;
-    if http_error_status_code(&tag).is_some() {
+    if http_error_status_code(tag).is_some() {
         Some((tag.clone(), payload.clone()))
     } else {
         None
@@ -170,37 +172,33 @@ pub(crate) fn http_error_to_response_record(tag: &str, payload: &NValue) -> NVal
         body_parts.push(format!("\"message\":\"{}\"", escape_json_string(msg)));
         body_parts.push(format!("\"status\":{status}"));
 
-        if let Some(code_val) = fields.iter().find(|(k, _)| &**k == "code") {
-            if let Some(code) = code_val.1.as_str() {
-                body_parts.push(format!("\"code\":\"{}\"", escape_json_string(code)));
-            }
+        if let Some(code_val) = fields.iter().find(|(k, _)| &**k == "code")
+            && let Some(code) = code_val.1.as_str()
+        {
+            body_parts.push(format!("\"code\":\"{}\"", escape_json_string(code)));
         }
 
-        if let Some(ctx_val) = fields.iter().find(|(k, _)| &**k == "context") {
-            if let Some(ctx_list) = ctx_val.1.as_list() {
-                let mut ctx_parts: Vec<String> = Vec::new();
-                for item in ctx_list {
-                    if let Some(ctx_fields) = item.as_record() {
-                        let k = ctx_fields
-                            .iter()
-                            .find(|(k, _)| &**k == "key")
-                            .and_then(|(_, v)| v.as_str())
-                            .unwrap_or("?");
-                        let v = ctx_fields
-                            .iter()
-                            .find(|(k, _)| &**k == "value")
-                            .map(|(_, v)| format_json_value(v))
-                            .unwrap_or_else(|| "null".to_string());
-                        ctx_parts.push(format!(
-                            "\"{}\":{}",
-                            escape_json_string(k),
-                            v
-                        ));
-                    }
+        if let Some(ctx_val) = fields.iter().find(|(k, _)| &**k == "context")
+            && let Some(ctx_list) = ctx_val.1.as_list()
+        {
+            let mut ctx_parts: Vec<String> = Vec::new();
+            for item in ctx_list {
+                if let Some(ctx_fields) = item.as_record() {
+                    let k = ctx_fields
+                        .iter()
+                        .find(|(k, _)| &**k == "key")
+                        .and_then(|(_, v)| v.as_str())
+                        .unwrap_or("?");
+                    let v = ctx_fields
+                        .iter()
+                        .find(|(k, _)| &**k == "value")
+                        .map(|(_, v)| format_json_value(v))
+                        .unwrap_or_else(|| "null".to_string());
+                    ctx_parts.push(format!("\"{}\":{}", escape_json_string(k), v));
                 }
-                if !ctx_parts.is_empty() {
-                    body_parts.push(format!("\"context\":{{{}}}", ctx_parts.join(",")));
-                }
+            }
+            if !ctx_parts.is_empty() {
+                body_parts.push(format!("\"context\":{{{}}}", ctx_parts.join(",")));
             }
         }
     } else {
@@ -311,11 +309,9 @@ mod tests {
     #[test]
     fn with_code_sets_code() {
         let err = NValue::enum_val("NotFound".into(), NValue::string("missing".into()));
-        let enriched = native_http_error_with_code(&[
-            err,
-            NValue::string("RESOURCE_NOT_FOUND".into()),
-        ])
-        .unwrap();
+        let enriched =
+            native_http_error_with_code(&[err, NValue::string("RESOURCE_NOT_FOUND".into())])
+                .unwrap();
         let (tag, payload) = enriched.as_enum().unwrap();
         assert_eq!(&**tag, "NotFound");
         let fields = payload.as_record().unwrap();
@@ -356,4 +352,3 @@ mod tests {
         assert!(body_str.contains("\"context\""));
     }
 }
-

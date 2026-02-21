@@ -1,11 +1,14 @@
+use super::super::infer::{InferCtx, UserGenericSchema};
 use super::check_lambda::{bind_pattern, check_lambda_with_expected};
 use super::check_pattern::{check_match_exhaustiveness, check_pattern};
 use super::symbol_table::SymbolTable;
-use super::type_compat::{detect_implicit_type_params, extract_explicit_type_params, extract_type_param_bounds, types_compatible};
+use super::type_compat::{
+    detect_implicit_type_params, extract_explicit_type_params, extract_type_param_bounds,
+    types_compatible,
+};
 use super::type_def::Type;
 use super::type_parse::{call_arg_expr, infer_expected_type, parse_type};
 use crate::diagnostics::{Diagnostic, Location, Severity, Suggestion};
-use super::super::infer::{InferCtx, UserGenericSchema};
 use std::collections::HashSet;
 use tree_sitter::Node;
 
@@ -17,7 +20,11 @@ fn is_decode_compatible(ty: &Type) -> bool {
         Type::Enum(name, variants) if name == "Option" => {
             // Option<T> where T is a scalar type
             if let Some((_, payload)) = variants.iter().find(|(tag, _)| tag == "Some") {
-                payload.len() == 1 && matches!(payload[0], Type::Int | Type::Float | Type::String | Type::Bool)
+                payload.len() == 1
+                    && matches!(
+                        payload[0],
+                        Type::Int | Type::Float | Type::String | Type::Bool
+                    )
             } else {
                 false
             }
@@ -51,7 +58,8 @@ pub(super) fn extract_field_name(
                             code: "TYP_030".to_string(),
                             severity: Severity::Error,
                             location: Location::from_node(file, &child),
-                            message: "Interpolation is not allowed in quoted field names".to_string(),
+                            message: "Interpolation is not allowed in quoted field names"
+                                .to_string(),
                             context: "Use a plain string literal for field names.".to_string(),
                             suggestions: vec![],
                         });
@@ -94,14 +102,13 @@ pub(super) fn check_inline_test(
         diagnostics.push(Diagnostic {
             code: "TYP_026".to_string(),
             severity: Severity::Error,
-            location: Location::from_node(file,&expr_node),
+            location: Location::from_node(file, &expr_node),
             message: format!("Inline test expression must be Bool, found {}", test_type),
             context: "Test expressions should evaluate to true or false.".to_string(),
             suggestions: vec![],
         });
     }
 }
-
 
 /// Extract a qualified name like "List.map" from a field_expression node.
 pub(super) fn extract_qualified_name(node: &Node, source: &str) -> Option<String> {
@@ -126,7 +133,8 @@ pub(super) fn check_node(
     let ty = check_node_inner(node, source, file, symbols, diagnostics);
     // Record the resolved type for this node (used by the VM compiler for specialization).
     // Don't overwrite trait dispatch entries (mangled names stored as Type::Module with '$').
-    if !matches!(symbols.type_map.get(&node.start_byte()), Some(Type::Module(m)) if m.contains('$')) {
+    if !matches!(symbols.type_map.get(&node.start_byte()), Some(Type::Module(m)) if m.contains('$'))
+    {
         symbols.type_map.insert(node.start_byte(), ty.clone());
     }
     ty
@@ -154,16 +162,18 @@ fn check_node_inner(
             // Walk into spec_block to type-check the wrapped definition
             let mut cursor = node.walk();
             for child in node.named_children(&mut cursor) {
-                if child.kind() == "function_def" || child.kind() == "type_def" || child.kind() == "effect_def" {
+                if child.kind() == "function_def"
+                    || child.kind() == "type_def"
+                    || child.kind() == "effect_def"
+                {
                     check_node(&child, source, file, symbols, diagnostics);
                 }
                 // spec_attribute children are ignored by the type checker
             }
             Type::Unit
         }
-        "spec_attribute" | "spec_decl" | "given_clause" | "returns_clause"
-        | "requires_clause" | "ensures_clause" | "assume_clause"
-        | "pure_attribute" | "total_attribute" => Type::Unit,
+        "spec_attribute" | "spec_decl" | "given_clause" | "returns_clause" | "requires_clause"
+        | "ensures_clause" | "assume_clause" | "pure_attribute" | "total_attribute" => Type::Unit,
         "try_expression" => {
             // expr? — unwraps Option<T> to T or Result<T,E> to T
             let inner = check_node(
@@ -353,10 +363,11 @@ fn check_node_inner(
                             } else if let Some(pat_node) = param.child_by_field_name("pattern") {
                                 // Bind pattern variables
                                 bind_pattern(&pat_node, param_type, source, symbols);
-                                
+
                                 // Collect param name for named args if simple identifier
                                 if pat_node.kind() == "identifier" {
-                                    let arg_name = pat_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                                    let arg_name =
+                                        pat_node.utf8_text(source.as_bytes()).unwrap().to_string();
                                     param_names.push(arg_name);
                                 } else {
                                     // Complex pattern parameters cannot be targeted by named arguments
@@ -379,7 +390,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_006".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&body_node),
+                        location: Location::from_node(file, &body_node),
                         message: format!(
                             "Function `{}` declares return type {}, body returns {}",
                             name, ret_type, body_type
@@ -432,7 +443,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_026".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&body),
+                        location: Location::from_node(file, &body),
                         message: format!("Test expression must be Bool, found {}", body_type),
                         context: "it block body should evaluate to true or false.".to_string(),
                         suggestions: vec![],
@@ -530,7 +541,7 @@ fn check_node_inner(
                             diagnostics.push(Diagnostic {
                                 code: "TYP_021".to_string(),
                                 severity: Severity::Error,
-                                location: Location::from_node(file,&expr_node),
+                                location: Location::from_node(file, &expr_node),
                                 message: format!(
                                     "Binding type mismatch: declared {}, found {}",
                                     declared_type, expr_type
@@ -566,12 +577,15 @@ fn check_node_inner(
                 if arg.kind() == "named_argument" {
                     seen_named = true;
                     if let Some(name_node) = arg.child_by_field_name("name") {
-                        let name = name_node.utf8_text(source.as_bytes()).unwrap_or("").to_string();
+                        let name = name_node
+                            .utf8_text(source.as_bytes())
+                            .unwrap_or("")
+                            .to_string();
                         if named_names.contains(&name) {
                             diagnostics.push(Diagnostic {
                                 code: "TYP_031".to_string(),
                                 severity: Severity::Error,
-                                location: Location::from_node(file,&arg),
+                                location: Location::from_node(file, &arg),
                                 message: format!("Duplicate named argument: {}", name),
                                 context: "Each named argument may only appear once.".to_string(),
                                 suggestions: vec![],
@@ -583,9 +597,10 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_030".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&arg),
+                        location: Location::from_node(file, &arg),
                         message: "Positional argument after named argument".to_string(),
-                        context: "All positional arguments must come before named arguments.".to_string(),
+                        context: "All positional arguments must come before named arguments."
+                            .to_string(),
                         suggestions: vec![],
                     });
                 }
@@ -596,7 +611,10 @@ fn check_node_inner(
             let fn_name = extract_qualified_name(&func_node, source).or_else(|| {
                 let k = func_node.kind();
                 if k == "identifier" || k == "effect_identifier" {
-                    func_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+                    func_node
+                        .utf8_text(source.as_bytes())
+                        .ok()
+                        .map(|s| s.to_string())
                 } else {
                     None
                 }
@@ -609,51 +627,56 @@ fn check_node_inner(
             // arg_position_map[i] = which parameter position arg i fills
             // Default: identity mapping (positional)
             let mut arg_position_map: Vec<usize> = (0..params_provided).collect();
-            if !named_names.is_empty() {
-                if let Some(ref param_names) = fn_param_names {
-                    // Check for unknown named args
-                    for named in &named_names {
-                        if !param_names.contains(named) {
-                            // Find closest match for suggestion
-                            let suggestions: Vec<String> = param_names.iter()
-                                .filter(|p| !named_names.contains(p))
-                                .cloned()
-                                .collect();
-                            let suggestion_text = if suggestions.is_empty() {
-                                String::new()
-                            } else {
-                                format!(" Did you mean: {}?", suggestions.join(", "))
-                            };
-                            diagnostics.push(Diagnostic {
-                                code: "TYP_032".to_string(),
-                                severity: Severity::Error,
-                                location: Location::from_node(file, node),
-                                message: format!("Unknown named argument: {}.{}", named, suggestion_text),
-                                context: format!(
-                                    "Available parameters: {}",
-                                    param_names.join(", ")
-                                ),
-                                suggestions: vec![],
-                            });
-                        }
-                    }
-
-                    // Build position mapping: positional args stay in order,
-                    // named args map to their parameter position
-                    let mut positional_idx = 0;
-                    for i in 0..params_provided {
-                        let arg = node.named_child(i + 1).unwrap();
-                        if arg.kind() == "named_argument" {
-                            if let Some(name_node) = arg.child_by_field_name("name") {
-                                let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
-                                if let Some(pos) = param_names.iter().position(|p| p == name) {
-                                    arg_position_map[i] = pos;
-                                }
-                            }
+            if !named_names.is_empty()
+                && let Some(ref param_names) = fn_param_names
+            {
+                // Check for unknown named args
+                for named in &named_names {
+                    if !param_names.contains(named) {
+                        // Find closest match for suggestion
+                        let suggestions: Vec<String> = param_names
+                            .iter()
+                            .filter(|p| !named_names.contains(p))
+                            .cloned()
+                            .collect();
+                        let suggestion_text = if suggestions.is_empty() {
+                            String::new()
                         } else {
-                            arg_position_map[i] = positional_idx;
-                            positional_idx += 1;
+                            format!(" Did you mean: {}?", suggestions.join(", "))
+                        };
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_032".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, node),
+                            message: format!(
+                                "Unknown named argument: {}.{}",
+                                named, suggestion_text
+                            ),
+                            context: format!("Available parameters: {}", param_names.join(", ")),
+                            suggestions: vec![],
+                        });
+                    }
+                }
+
+                // Build position mapping: positional args stay in order,
+                // named args map to their parameter position
+                let mut positional_idx = 0;
+                for (i, slot) in arg_position_map
+                    .iter_mut()
+                    .enumerate()
+                    .take(params_provided)
+                {
+                    let arg = node.named_child(i + 1).unwrap();
+                    if arg.kind() == "named_argument" {
+                        if let Some(name_node) = arg.child_by_field_name("name") {
+                            let name = name_node.utf8_text(source.as_bytes()).unwrap_or("");
+                            if let Some(pos) = param_names.iter().position(|p| p == name) {
+                                *slot = pos;
+                            }
                         }
+                    } else {
+                        *slot = positional_idx;
+                        positional_idx += 1;
                     }
                 }
             }
@@ -665,7 +688,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "STY_001".to_string(),
                         severity: Severity::Warning,
-                        location: Location::from_node(file,node),
+                        location: Location::from_node(file, node),
                         message: "Nested call could use pipe syntax".to_string(),
                         context: "Consider rewriting f(g(x)) as x |> g |> f for readability."
                             .to_string(),
@@ -680,41 +703,45 @@ fn check_node_inner(
             }
 
             // Row.decode(row, TypeName) — automatic row-to-record mapping
-            if let Some(qualified) = extract_qualified_name(&func_node, source) {
-                if qualified == "Row.decode" {
-                    if params_provided != 2 {
-                        diagnostics.push(Diagnostic {
-                            code: "TYP_040".to_string(),
-                            severity: Severity::Error,
-                            location: Location::from_node(file, node),
-                            message: "Row.decode expects 2 arguments: (row, TypeName)".to_string(),
-                            context: "Usage: Row.decode(row, User)".to_string(),
-                            suggestions: vec![],
-                        });
-                        return Type::Unknown;
-                    }
-                    // Type-check first arg: must be Row
-                    let row_arg = node.named_child(1).unwrap();
-                    let row_arg_expr = call_arg_expr(&row_arg);
-                    let row_type = check_node(&row_arg_expr, source, file, symbols, diagnostics);
-                    if row_type != Type::Row && row_type != Type::Unknown {
-                        diagnostics.push(Diagnostic {
-                            code: "TYP_040".to_string(),
-                            severity: Severity::Error,
-                            location: Location::from_node(file, &row_arg_expr),
-                            message: format!("Row.decode: first argument must be Row, found {}", row_type),
-                            context: "Pass a Row value from a database query.".to_string(),
-                            suggestions: vec![],
-                        });
-                    }
-                    // Second arg: type_identifier → resolve struct
-                    let type_arg = node.named_child(2).unwrap();
-                    let type_name = type_arg.utf8_text(source.as_bytes()).unwrap();
-                    if let Some(Type::Struct(name, fields)) = symbols.lookup_type(type_name).cloned() {
-                        // Validate all fields are decode-compatible
-                        for (fname, ftype) in &fields {
-                            if !is_decode_compatible(ftype) {
-                                diagnostics.push(Diagnostic {
+            if let Some(qualified) = extract_qualified_name(&func_node, source)
+                && qualified == "Row.decode"
+            {
+                if params_provided != 2 {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_040".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, node),
+                        message: "Row.decode expects 2 arguments: (row, TypeName)".to_string(),
+                        context: "Usage: Row.decode(row, User)".to_string(),
+                        suggestions: vec![],
+                    });
+                    return Type::Unknown;
+                }
+                // Type-check first arg: must be Row
+                let row_arg = node.named_child(1).unwrap();
+                let row_arg_expr = call_arg_expr(&row_arg);
+                let row_type = check_node(&row_arg_expr, source, file, symbols, diagnostics);
+                if row_type != Type::Row && row_type != Type::Unknown {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_040".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &row_arg_expr),
+                        message: format!(
+                            "Row.decode: first argument must be Row, found {}",
+                            row_type
+                        ),
+                        context: "Pass a Row value from a database query.".to_string(),
+                        suggestions: vec![],
+                    });
+                }
+                // Second arg: type_identifier → resolve struct
+                let type_arg = node.named_child(2).unwrap();
+                let type_name = type_arg.utf8_text(source.as_bytes()).unwrap();
+                if let Some(Type::Struct(name, fields)) = symbols.lookup_type(type_name).cloned() {
+                    // Validate all fields are decode-compatible
+                    for (fname, ftype) in &fields {
+                        if !is_decode_compatible(ftype) {
+                            diagnostics.push(Diagnostic {
                                     code: "TYP_042".to_string(),
                                     severity: Severity::Error,
                                     location: Location::from_node(file, &type_arg),
@@ -725,27 +752,25 @@ fn check_node_inner(
                                     context: "Decodable types: Int, Float, String, Bool, Option<Int>, Option<String>".to_string(),
                                     suggestions: vec![],
                                 });
-                            }
                         }
-                        // Store struct type in TypeMap for the lowerer
-                        symbols.type_map.insert(
-                            node.start_byte(),
-                            Type::Struct(name.clone(), fields.clone()),
-                        );
-                        return Type::Struct(name, fields);
-                    } else {
-                        diagnostics.push(Diagnostic {
-                            code: "TYP_041".to_string(),
-                            severity: Severity::Error,
-                            location: Location::from_node(file, &type_arg),
-                            message: format!("Row.decode: '{}' is not a known struct type", type_name),
-                            context: "The second argument must be a struct type name.".to_string(),
-                            suggestions: vec![],
-                        });
-                        return Type::Unknown;
                     }
+                    // Store struct type in TypeMap for the lowerer
+                    symbols.type_map.insert(
+                        node.start_byte(),
+                        Type::Struct(name.clone(), fields.clone()),
+                    );
+                    return Type::Struct(name, fields);
+                } else {
+                    diagnostics.push(Diagnostic {
+                        code: "TYP_041".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &type_arg),
+                        message: format!("Row.decode: '{}' is not a known struct type", type_name),
+                        context: "The second argument must be a struct type name.".to_string(),
+                        suggestions: vec![],
+                    });
+                    return Type::Unknown;
                 }
-
             }
 
             // Trait method call: TraitName.method(value, args...)
@@ -759,7 +784,8 @@ fn check_node_inner(
                         // Infer type of first argument to determine which impl to use
                         let first_arg_node = node.named_child(1).unwrap();
                         let first_arg_expr = call_arg_expr(&first_arg_node);
-                        let first_arg_type = check_node(&first_arg_expr, source, file, symbols, diagnostics);
+                        let first_arg_type =
+                            check_node(&first_arg_expr, source, file, symbols, diagnostics);
 
                         // Type-check remaining args
                         for i in 2..=params_provided {
@@ -771,27 +797,32 @@ fn check_node_inner(
 
                         // If first arg is a TypeParam, check trait bounds (dictionary passing)
                         if let Type::TypeParam(ref param_name) = first_arg_type {
-                            let has_bound = symbols.current_bounds
+                            let has_bound = symbols
+                                .current_bounds
                                 .get(param_name)
-                                .map_or(false, |bs| bs.contains(&maybe_trait.to_string()));
+                                .is_some_and(|bs| bs.contains(&maybe_trait.to_string()));
                             if has_bound {
                                 // Store a dict marker so the lowerer uses the hidden parameter
-                                let dict_marker = format!("__dict${}${}${}", maybe_trait, method, param_name);
-                                symbols.type_map.insert(
-                                    func_node.start_byte(),
-                                    Type::Module(dict_marker),
-                                );
+                                let dict_marker =
+                                    format!("__dict${}${}${}", maybe_trait, method, param_name);
+                                symbols
+                                    .type_map
+                                    .insert(func_node.start_byte(), Type::Module(dict_marker));
                                 // Return type: look up trait method sig, substitute Self -> TypeParam
-                                let trait_methods = symbols.lookup_trait(maybe_trait)
+                                let trait_methods = symbols
+                                    .lookup_trait(maybe_trait)
                                     .map(|td| td.methods.clone())
                                     .unwrap_or_default();
-                                let ret_type = trait_methods.iter()
+                                let ret_type = trait_methods
+                                    .iter()
                                     .find(|(n, _)| n == method)
-                                    .map(|(_, ty)| {
-                                        substitute_self(ty, &first_arg_type)
-                                    })
+                                    .map(|(_, ty)| substitute_self(ty, &first_arg_type))
                                     .and_then(|ty| {
-                                        if let Type::Function(_, ret) = ty { Some(*ret) } else { None }
+                                        if let Type::Function(_, ret) = ty {
+                                            Some(*ret)
+                                        } else {
+                                            None
+                                        }
                                     })
                                     .unwrap_or(Type::Unknown);
                                 return ret_type;
@@ -801,7 +832,8 @@ fn check_node_inner(
 
                         let type_key = SymbolTable::type_key(&first_arg_type);
 
-                        if let Some(trait_impl) = symbols.lookup_trait_impl(maybe_trait, &type_key) {
+                        if let Some(trait_impl) = symbols.lookup_trait_impl(maybe_trait, &type_key)
+                        {
                             if let Some(mangled) = trait_impl.methods.get(method) {
                                 let mangled_clone = mangled.clone();
                                 // Store mangled name in type_map for the call site
@@ -812,7 +844,9 @@ fn check_node_inner(
                                 );
 
                                 // Get return type from the mangled function
-                                let ret_type = if let Some(Type::Function(_, ret)) = symbols.lookup(&mangled_clone) {
+                                let ret_type = if let Some(Type::Function(_, ret)) =
+                                    symbols.lookup(&mangled_clone)
+                                {
                                     *ret.clone()
                                 } else {
                                     Type::Unknown
@@ -827,7 +861,8 @@ fn check_node_inner(
                                         "No method `{}` in impl of `{}` for `{}`",
                                         method, maybe_trait, type_key
                                     ),
-                                    context: "Trait method not found in implementation.".to_string(),
+                                    context: "Trait method not found in implementation."
+                                        .to_string(),
                                     suggestions: vec![],
                                 });
                                 return Type::Unknown;
@@ -837,10 +872,7 @@ fn check_node_inner(
                                 code: "TRT_004".to_string(),
                                 severity: Severity::Error,
                                 location: Location::from_node(file, &func_node),
-                                message: format!(
-                                    "No impl of `{}` for `{}`",
-                                    maybe_trait, type_key
-                                ),
+                                message: format!("No impl of `{}` for `{}`", maybe_trait, type_key),
                                 context: "Implement the trait for this type first.".to_string(),
                                 suggestions: vec![],
                             });
@@ -876,9 +908,8 @@ fn check_node_inner(
 
             if builtin_schema.is_some() || user_schema.is_some() {
                 // Capture bounds info before borrowing for instantiation
-                let schema_bounds = user_schema.map(|us| {
-                    (us.bounds.clone(), us.type_param_names.clone())
-                });
+                let schema_bounds =
+                    user_schema.map(|us| (us.bounds.clone(), us.type_param_names.clone()));
 
                 let mut ctx = InferCtx::new();
                 let (instantiated, param_vars) = if let Some(schema) = builtin_schema {
@@ -893,7 +924,8 @@ fn check_node_inner(
                         pvars.push((name.clone(), v.clone()));
                         mapping.insert(name.clone(), v);
                     }
-                    let instantiated = crate::analysis::infer::substitute_type_params(&us.fn_type, &mapping);
+                    let instantiated =
+                        crate::analysis::infer::substitute_type_params(&us.fn_type, &mapping);
                     (instantiated, pvars)
                 };
                 if let Type::Function(schema_params, schema_ret) = instantiated {
@@ -902,7 +934,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_007".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,node),
+                            location: Location::from_node(file, node),
                             message: format!(
                                 "Function call expects {} arguments, found {}",
                                 schema_params.len(),
@@ -949,43 +981,53 @@ fn check_node_inner(
                     }
 
                     // After unification: validate trait bounds and populate dict_map
-                    if let Some((bounds, _param_names)) = schema_bounds {
-                        if !bounds.is_empty() {
-                            let mut dict_entries = Vec::new();
-                            for (param_name, var) in &param_vars {
-                                let resolved_type = ctx.apply(var);
-                                if let Some(bound_traits) = bounds.get(param_name) {
-                                    let resolved_key = SymbolTable::type_key(&resolved_type);
-                                    for trait_name in bound_traits {
-                                        if let Some(trait_impl) = symbols.lookup_trait_impl(trait_name, &resolved_key) {
-                                            // Concrete type: pass the mangled impl functions
-                                            let methods: Vec<(String, String)> = trait_impl.methods.iter()
-                                                .map(|(k, v)| (k.clone(), v.clone()))
+                    if let Some((bounds, _param_names)) = schema_bounds
+                        && !bounds.is_empty()
+                    {
+                        let mut dict_entries = Vec::new();
+                        for (param_name, var) in &param_vars {
+                            let resolved_type = ctx.apply(var);
+                            if let Some(bound_traits) = bounds.get(param_name) {
+                                let resolved_key = SymbolTable::type_key(&resolved_type);
+                                for trait_name in bound_traits {
+                                    if let Some(trait_impl) =
+                                        symbols.lookup_trait_impl(trait_name, &resolved_key)
+                                    {
+                                        // Concrete type: pass the mangled impl functions
+                                        let methods: Vec<(String, String)> = trait_impl
+                                            .methods
+                                            .iter()
+                                            .map(|(k, v)| (k.clone(), v.clone()))
+                                            .collect();
+                                        dict_entries.push(super::symbol_table::DictEntry {
+                                            trait_name: trait_name.clone(),
+                                            methods,
+                                        });
+                                    } else if let Type::TypeParam(ref tp_name) = resolved_type {
+                                        // TypeParam: check if caller has the same bound
+                                        let caller_has_bound = symbols
+                                            .current_bounds
+                                            .get(tp_name)
+                                            .is_some_and(|bs| bs.contains(trait_name));
+                                        if caller_has_bound {
+                                            // Forward caller's hidden params as dict entries.
+                                            // Use hidden param names like "__Show_show".
+                                            let trait_methods = symbols
+                                                .lookup_trait(trait_name)
+                                                .map(|td| td.methods.clone())
+                                                .unwrap_or_default();
+                                            let methods: Vec<(String, String)> = trait_methods
+                                                .iter()
+                                                .map(|(mn, _)| {
+                                                    (mn.clone(), format!("__{}_{}", trait_name, mn))
+                                                })
                                                 .collect();
                                             dict_entries.push(super::symbol_table::DictEntry {
                                                 trait_name: trait_name.clone(),
                                                 methods,
                                             });
-                                        } else if let Type::TypeParam(ref tp_name) = resolved_type {
-                                            // TypeParam: check if caller has the same bound
-                                            let caller_has_bound = symbols.current_bounds
-                                                .get(tp_name)
-                                                .map_or(false, |bs| bs.contains(trait_name));
-                                            if caller_has_bound {
-                                                // Forward caller's hidden params as dict entries.
-                                                // Use hidden param names like "__Show_show".
-                                                let trait_methods = symbols.lookup_trait(trait_name)
-                                                    .map(|td| td.methods.clone())
-                                                    .unwrap_or_default();
-                                                let methods: Vec<(String, String)> = trait_methods.iter()
-                                                    .map(|(mn, _)| (mn.clone(), format!("__{}_{}", trait_name, mn)))
-                                                    .collect();
-                                                dict_entries.push(super::symbol_table::DictEntry {
-                                                    trait_name: trait_name.clone(),
-                                                    methods,
-                                                });
-                                            } else {
-                                                diagnostics.push(Diagnostic {
+                                        } else {
+                                            diagnostics.push(Diagnostic {
                                                     code: "TRT_011".to_string(),
                                                     severity: Severity::Error,
                                                     location: Location::from_node(file, node),
@@ -996,9 +1038,9 @@ fn check_node_inner(
                                                     context: "Trait bound not satisfied.".to_string(),
                                                     suggestions: vec![],
                                                 });
-                                            }
-                                        } else if resolved_type != Type::Unknown {
-                                            diagnostics.push(Diagnostic {
+                                        }
+                                    } else if resolved_type != Type::Unknown {
+                                        diagnostics.push(Diagnostic {
                                                 code: "TRT_011".to_string(),
                                                 severity: Severity::Error,
                                                 location: Location::from_node(file, node),
@@ -1009,13 +1051,12 @@ fn check_node_inner(
                                                 context: "Trait bound not satisfied.".to_string(),
                                                 suggestions: vec![],
                                             });
-                                        }
                                     }
                                 }
                             }
-                            if !dict_entries.is_empty() {
-                                symbols.dict_map.insert(node.start_byte(), dict_entries);
-                            }
+                        }
+                        if !dict_entries.is_empty() {
+                            symbols.dict_map.insert(node.start_byte(), dict_entries);
                         }
                     }
 
@@ -1035,11 +1076,7 @@ fn check_node_inner(
                         // so provided args fill positions 1..N.
                         // Type-check provided args against offset positions.
                         let offset = arg_types.len() - params_provided;
-                        for (i, expected_arg_type) in arg_types
-                            .iter()
-                            .skip(offset)
-                            .enumerate()
-                        {
+                        for (i, expected_arg_type) in arg_types.iter().skip(offset).enumerate() {
                             let raw_arg = node.named_child(i + 1).unwrap();
                             let arg_expr = call_arg_expr(&raw_arg);
 
@@ -1074,7 +1111,8 @@ fn check_node_inner(
                                         expected_arg_type,
                                         arg_type
                                     ),
-                                    context: "Argument type must match function signature.".to_string(),
+                                    context: "Argument type must match function signature."
+                                        .to_string(),
                                     suggestions: vec![],
                                 });
                             }
@@ -1085,10 +1123,17 @@ fn check_node_inner(
 
                     // Allow builtins with optional extra args (e.g. Log.info! accepts
                     // an optional record for structured fields).
-                    let is_variadic_builtin = fn_name.as_ref().map_or(false, |n| {
-                        matches!(n.as_str(),
-                            "Log.info!" | "Log.warn!" | "Log.error!" | "Log.debug!"
-                            | "Log.info" | "Log.warn" | "Log.error" | "Log.debug"
+                    let is_variadic_builtin = fn_name.as_ref().is_some_and(|n| {
+                        matches!(
+                            n.as_str(),
+                            "Log.info!"
+                                | "Log.warn!"
+                                | "Log.error!"
+                                | "Log.debug!"
+                                | "Log.info"
+                                | "Log.warn"
+                                | "Log.error"
+                                | "Log.debug"
                         )
                     });
                     if is_variadic_builtin && params_provided > arg_types.len() {
@@ -1096,7 +1141,8 @@ fn check_node_inner(
                         for (i, expected) in arg_types.iter().enumerate() {
                             let raw_arg = node.named_child(i + 1).unwrap();
                             let arg_expr = call_arg_expr(&raw_arg);
-                            let arg_type = check_node(&arg_expr, source, file, symbols, diagnostics);
+                            let arg_type =
+                                check_node(&arg_expr, source, file, symbols, diagnostics);
                             if !types_compatible(&arg_type, expected) {
                                 diagnostics.push(Diagnostic {
                                     code: "TYP_008".to_string(),
@@ -1104,9 +1150,12 @@ fn check_node_inner(
                                     location: Location::from_node(file, &arg_expr),
                                     message: format!(
                                         "Argument {} mismatch: expected {}, found {}",
-                                        i + 1, expected, arg_type
+                                        i + 1,
+                                        expected,
+                                        arg_type
                                     ),
-                                    context: "Argument type must match function signature.".to_string(),
+                                    context: "Argument type must match function signature."
+                                        .to_string(),
                                     suggestions: vec![],
                                 });
                             }
@@ -1123,7 +1172,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_007".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,node),
+                        location: Location::from_node(file, node),
                         message: format!(
                             "Function call expects {} arguments, found {}",
                             arg_types.len(),
@@ -1170,7 +1219,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_008".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,&arg_expr),
+                            location: Location::from_node(file, &arg_expr),
                             message: format!(
                                 "Argument {} mismatch: expected {}, found {}",
                                 param_pos + 1,
@@ -1189,7 +1238,7 @@ fn check_node_inner(
                 diagnostics.push(Diagnostic {
                     code: "TYP_009".to_string(),
                     severity: Severity::Error,
-                    location: Location::from_node(file,&func_node),
+                    location: Location::from_node(file, &func_node),
                     message: format!("Called expression is not a function, it is {}", func_type),
                     context: "Only functions can be called.".to_string(),
                     suggestions: vec![],
@@ -1239,7 +1288,7 @@ fn check_node_inner(
                             diagnostics.push(Diagnostic {
                                 code: "TYP_010".to_string(),
                                 severity: Severity::Error,
-                                location: Location::from_node(file,&fexpr_node),
+                                location: Location::from_node(file, &fexpr_node),
                                 message: format!(
                                     "Field `{}` expects {}, found {}",
                                     fname, expected_type, ftype
@@ -1253,7 +1302,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_011".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,&fname_node),
+                            location: Location::from_node(file, &fname_node),
                             message: format!("Struct `{}` has no field `{}`", name, fname),
                             context: "Field not defined in struct.".to_string(),
                             suggestions: vec![],
@@ -1266,7 +1315,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_012".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,node),
+                            location: Location::from_node(file, node),
                             message: format!("Missing field `{}`", required_field),
                             context: "All struct fields must be initialized.".to_string(),
                             suggestions: vec![],
@@ -1279,7 +1328,7 @@ fn check_node_inner(
                 diagnostics.push(Diagnostic {
                     code: "TYP_013".to_string(),
                     severity: Severity::Error,
-                    location: Location::from_node(file,&type_name_node),
+                    location: Location::from_node(file, &type_name_node),
                     message: format!("Unknown type `{}`", type_name),
                     context: "Type must be defined before use.".to_string(),
                     suggestions: vec![],
@@ -1295,7 +1344,8 @@ fn check_node_inner(
                 let field_init = node.named_child(i).unwrap();
                 if field_init.kind() == "record_field_init" {
                     let fname_node = field_init.named_child(0).unwrap();
-                    if let Some(fname) = extract_field_name(&fname_node, source, file, diagnostics) {
+                    if let Some(fname) = extract_field_name(&fname_node, source, file, diagnostics)
+                    {
                         let fexpr_node = field_init.named_child(1).unwrap();
                         let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
                         fields.insert(fname, ftype);
@@ -1316,7 +1366,8 @@ fn check_node_inner(
                     for i in 1..count {
                         let field_init = node.named_child(i).unwrap();
                         let fname_node = field_init.named_child(0).unwrap();
-                        let fname = match extract_field_name(&fname_node, source, file, diagnostics) {
+                        let fname = match extract_field_name(&fname_node, source, file, diagnostics)
+                        {
                             Some(n) => n,
                             None => continue,
                         };
@@ -1328,7 +1379,7 @@ fn check_node_inner(
                                 diagnostics.push(Diagnostic {
                                     code: "TYP_028".to_string(),
                                     severity: Severity::Error,
-                                    location: Location::from_node(file,&fexpr_node),
+                                    location: Location::from_node(file, &fexpr_node),
                                     message: format!(
                                         "Field `{}` expects {}, found {}",
                                         fname, expected_type, ftype
@@ -1341,7 +1392,7 @@ fn check_node_inner(
                             diagnostics.push(Diagnostic {
                                 code: "TYP_029".to_string(),
                                 severity: Severity::Error,
-                                location: Location::from_node(file,&fname_node),
+                                location: Location::from_node(file, &fname_node),
                                 message: format!("Struct `{}` has no field `{}`", name, fname),
                                 context: "Field not defined in struct.".to_string(),
                                 suggestions: vec![],
@@ -1358,27 +1409,28 @@ fn check_node_inner(
                     for i in 1..count {
                         let field_init = node.named_child(i).unwrap();
                         let fname_node = field_init.named_child(0).unwrap();
-                        let fname = match extract_field_name(&fname_node, source, file, diagnostics) {
+                        let fname = match extract_field_name(&fname_node, source, file, diagnostics)
+                        {
                             Some(n) => n,
                             None => continue,
                         };
                         let fexpr_node = field_init.named_child(1).unwrap();
                         let ftype = check_node(&fexpr_node, source, file, symbols, diagnostics);
 
-                        if let Some(expected_type) = fields.get(&fname) {
-                            if !types_compatible(&ftype, expected_type) {
-                                diagnostics.push(Diagnostic {
-                                    code: "TYP_028".to_string(),
-                                    severity: Severity::Error,
-                                    location: Location::from_node(file,&fexpr_node),
-                                    message: format!(
-                                        "Field `{}` expects {}, found {}",
-                                        fname, expected_type, ftype
-                                    ),
-                                    context: "Record update field type mismatch.".to_string(),
-                                    suggestions: vec![],
-                                });
-                            }
+                        if let Some(expected_type) = fields.get(&fname)
+                            && !types_compatible(&ftype, expected_type)
+                        {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_028".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, &fexpr_node),
+                                message: format!(
+                                    "Field `{}` expects {}, found {}",
+                                    fname, expected_type, ftype
+                                ),
+                                context: "Record update field type mismatch.".to_string(),
+                                suggestions: vec![],
+                            });
                         }
                         // Insert or update the field in the result type
                         result_fields.insert(fname, ftype);
@@ -1390,7 +1442,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_027".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&base_node),
+                        location: Location::from_node(file, &base_node),
                         message: format!(
                             "Record update requires a record or struct, found {}",
                             base_type
@@ -1417,7 +1469,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_014".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,&field_node),
+                            location: Location::from_node(file, &field_node),
                             message: format!("Struct `{}` has no field `{}`", name, field_name),
                             context: "Field access error.".to_string(),
                             suggestions: vec![],
@@ -1432,7 +1484,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_014".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,&field_node),
+                            location: Location::from_node(file, &field_node),
                             message: format!("Record has no field `{}`", field_name),
                             context: "Field access error.".to_string(),
                             suggestions: vec![],
@@ -1453,7 +1505,8 @@ fn check_node_inner(
                                 "Symbol `{}` not found in module `{}`",
                                 field_name, module_name
                             ),
-                            context: "The symbol may be private (not exported) or does not exist.".to_string(),
+                            context: "The symbol may be private (not exported) or does not exist."
+                                .to_string(),
                             suggestions: vec![],
                         });
                         Type::Unknown
@@ -1468,10 +1521,7 @@ fn check_node_inner(
                     if all_nullary {
                         match field_name {
                             "to_string" => {
-                                Type::Function(
-                                    vec![obj_type.clone()],
-                                    Box::new(Type::String),
-                                )
+                                Type::Function(vec![obj_type.clone()], Box::new(Type::String))
                             }
                             "parse" => {
                                 let result_type = Type::Enum(
@@ -1481,10 +1531,7 @@ fn check_node_inner(
                                         ("Err".to_string(), vec![Type::String]),
                                     ],
                                 );
-                                Type::Function(
-                                    vec![Type::String],
-                                    Box::new(result_type),
-                                )
+                                Type::Function(vec![Type::String], Box::new(result_type))
                             }
                             _ => {
                                 diagnostics.push(Diagnostic {
@@ -1495,7 +1542,8 @@ fn check_node_inner(
                                         "Enum `{}` has no method `{}`",
                                         enum_name, field_name
                                     ),
-                                    context: "Simple enums support to_string and parse.".to_string(),
+                                    context: "Simple enums support to_string and parse."
+                                        .to_string(),
                                     suggestions: vec![],
                                 });
                                 Type::Unknown
@@ -1521,7 +1569,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_015".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&obj_node),
+                        location: Location::from_node(file, &obj_node),
                         message: format!("Type {} excludes field access", obj_type),
                         context: "Only Structs, Records, and Modules support field access."
                             .to_string(),
@@ -1565,7 +1613,7 @@ fn check_node_inner(
                 diagnostics.push(Diagnostic {
                     code: "TYP_002".to_string(),
                     severity: Severity::Error,
-                    location: Location::from_node(file,node),
+                    location: Location::from_node(file, node),
                     message: format!("Undefined variable `{}`", name),
                     context: "Variable must be defined before use.".to_string(),
                     suggestions,
@@ -1582,7 +1630,13 @@ fn check_node_inner(
             // Named argument: name: expression — type-check the expression
             let count = node.named_child_count();
             if count > 0 {
-                check_node(&node.named_child(count - 1).unwrap(), source, file, symbols, diagnostics)
+                check_node(
+                    &node.named_child(count - 1).unwrap(),
+                    source,
+                    file,
+                    symbols,
+                    diagnostics,
+                )
             } else {
                 Type::Unknown
             }
@@ -1603,7 +1657,7 @@ fn check_node_inner(
             diagnostics.push(Diagnostic {
                 code: "HOLE_001".to_string(),
                 severity: Severity::Warning,
-                location: Location::from_node(file,node),
+                location: Location::from_node(file, node),
                 message: msg,
                 context: "Replace ?? with an expression of the expected type.".to_string(),
                 suggestions: vec![],
@@ -1689,17 +1743,28 @@ fn check_node_inner(
                                 Type::List(inner_l.clone())
                             }
                         }
-                        (Type::List(_), Type::Unknown) | (Type::Unknown, Type::List(_)) | (Type::Unknown, Type::Unknown) => {
-                            if matches!(left_type, Type::List(_)) { left_type.clone() } else { right_type.clone() }
+                        (Type::List(_), Type::Unknown)
+                        | (Type::Unknown, Type::List(_))
+                        | (Type::Unknown, Type::Unknown) => {
+                            if matches!(left_type, Type::List(_)) {
+                                left_type.clone()
+                            } else {
+                                right_type.clone()
+                            }
                         }
                         _ => {
                             if left_type != Type::Unknown && right_type != Type::Unknown {
                                 diagnostics.push(Diagnostic {
                                     code: "TYP_001".to_string(),
                                     severity: Severity::Error,
-                                    location: Location::from_node(file,node),
-                                    message: format!("Operator `++` requires List operands, found {} and {}", left_type, right_type),
-                                    context: "The ++ operator concatenates two lists of the same type.".to_string(),
+                                    location: Location::from_node(file, node),
+                                    message: format!(
+                                        "Operator `++` requires List operands, found {} and {}",
+                                        left_type, right_type
+                                    ),
+                                    context:
+                                        "The ++ operator concatenates two lists of the same type."
+                                            .to_string(),
                                     suggestions: vec![],
                                 });
                             }
@@ -1719,7 +1784,7 @@ fn check_node_inner(
                 diagnostics.push(Diagnostic {
                     code: "TYP_003".to_string(),
                     severity: Severity::Error,
-                    location: Location::from_node(file,&cond),
+                    location: Location::from_node(file, &cond),
                     message: format!("If condition must be Boolean, found {}", cond_type),
                     context: "Control flow conditions must evaluate to true or false.".to_string(),
                     suggestions: vec![],
@@ -1740,7 +1805,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_004".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&else_branch),
+                        location: Location::from_node(file, &else_branch),
                         message: format!(
                             "If branches match mismatch: then is {}, else is {}",
                             then_type, else_type
@@ -1801,7 +1866,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_016".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&child),
+                        location: Location::from_node(file, &child),
                         message: format!(
                             "List element type mismatch: expected {}, found {}",
                             element_type, ty
@@ -1853,7 +1918,8 @@ fn check_node_inner(
 
                 // Collect all pattern nodes (or-patterns have multiple separated by |)
                 let mut arm_cursor2 = arm.walk();
-                let pat_nodes: Vec<tree_sitter::Node> = arm.named_children(&mut arm_cursor2)
+                let pat_nodes: Vec<tree_sitter::Node> = arm
+                    .named_children(&mut arm_cursor2)
                     .filter(|c| c.kind() != "match_guard" && c.id() != body.id())
                     .collect();
 
@@ -1865,19 +1931,24 @@ fn check_node_inner(
                 // Type-check guard expression if present
                 let mut arm_cursor = arm.walk();
                 for arm_child in arm.children(&mut arm_cursor) {
-                    if arm_child.kind() == "match_guard" {
-                        if let Some(guard_expr) = arm_child.named_child(0) {
-                            let guard_type = check_node(&guard_expr, source, file, symbols, diagnostics);
-                            if guard_type != Type::Bool && guard_type != Type::Unknown {
-                                diagnostics.push(Diagnostic {
-                                    code: "TYP_003".to_string(),
-                                    severity: Severity::Error,
-                                    location: Location::from_node(file, &guard_expr),
-                                    message: format!("Match guard must be Boolean, found {}", guard_type),
-                                    context: "Guard expressions must evaluate to true or false.".to_string(),
-                                    suggestions: vec![],
-                                });
-                            }
+                    if arm_child.kind() == "match_guard"
+                        && let Some(guard_expr) = arm_child.named_child(0)
+                    {
+                        let guard_type =
+                            check_node(&guard_expr, source, file, symbols, diagnostics);
+                        if guard_type != Type::Bool && guard_type != Type::Unknown {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_003".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, &guard_expr),
+                                message: format!(
+                                    "Match guard must be Boolean, found {}",
+                                    guard_type
+                                ),
+                                context: "Guard expressions must evaluate to true or false."
+                                    .to_string(),
+                                suggestions: vec![],
+                            });
                         }
                     }
                 }
@@ -1922,17 +1993,22 @@ fn check_node_inner(
                 let func_name = extract_qualified_name(&func_node, source).or_else(|| {
                     let k = func_node.kind();
                     if k == "identifier" || k == "effect_identifier" {
-                        func_node.utf8_text(source.as_bytes()).ok().map(|s| s.to_string())
+                        func_node
+                            .utf8_text(source.as_bytes())
+                            .ok()
+                            .map(|s| s.to_string())
                     } else {
                         None
                     }
                 });
 
                 // Try generic schema first (covers List.map, List.filter, etc.)
-                let schema = func_name.as_ref()
+                let schema = func_name
+                    .as_ref()
                     .and_then(|n| symbols.lookup_generic_schema(n));
                 let user_schema = if schema.is_none() {
-                    func_name.as_ref()
+                    func_name
+                        .as_ref()
                         .and_then(|n| symbols.lookup_user_generic_schema(n))
                 } else {
                     None
@@ -1976,10 +2052,17 @@ fn check_node_inner(
                                 let expected = &params[i + 1];
                                 let arg_type = if arg_expr.kind() == "lambda" {
                                     let expected_applied = ctx.apply(expected);
-                                    if let Type::Function(ref exp_params, ref exp_ret) = expected_applied {
+                                    if let Type::Function(ref exp_params, ref exp_ret) =
+                                        expected_applied
+                                    {
                                         check_lambda_with_expected(
-                                            &arg_expr, exp_params, exp_ret,
-                                            source, file, symbols, diagnostics,
+                                            &arg_expr,
+                                            exp_params,
+                                            exp_ret,
+                                            source,
+                                            file,
+                                            symbols,
+                                            diagnostics,
                                         )
                                     } else {
                                         check_node(&arg_expr, source, file, symbols, diagnostics)
@@ -2010,7 +2093,8 @@ fn check_node_inner(
                                         "Pipe argument mismatch: expected {}, found {}",
                                         params[0], left_type
                                     ),
-                                    context: "Piped value type must match first parameter.".to_string(),
+                                    context: "Piped value type must match first parameter."
+                                        .to_string(),
                                     suggestions: vec![],
                                 });
                             }
@@ -2018,7 +2102,8 @@ fn check_node_inner(
                             for i in 0..explicit_arg_count {
                                 let arg_node = right_node.named_child(i + 1).unwrap();
                                 let arg_expr = call_arg_expr(&arg_node);
-                                let arg_type = check_node(&arg_expr, source, file, symbols, diagnostics);
+                                let arg_type =
+                                    check_node(&arg_expr, source, file, symbols, diagnostics);
                                 if !types_compatible(&arg_type, &params[i + 1]) {
                                     diagnostics.push(Diagnostic {
                                         code: "TYP_019".to_string(),
@@ -2026,9 +2111,11 @@ fn check_node_inner(
                                         location: Location::from_node(file, &arg_expr),
                                         message: format!(
                                             "Argument mismatch: expected {}, found {}",
-                                            params[i + 1], arg_type
+                                            params[i + 1],
+                                            arg_type
                                         ),
-                                        context: "Argument type must match function signature.".to_string(),
+                                        context: "Argument type must match function signature."
+                                            .to_string(),
                                         suggestions: vec![],
                                     });
                                 }
@@ -2045,7 +2132,8 @@ fn check_node_inner(
                                         "Pipe argument mismatch: expected {}, found {}",
                                         params[0], left_type
                                     ),
-                                    context: "Argument type must match function signature.".to_string(),
+                                    context: "Argument type must match function signature."
+                                        .to_string(),
                                     suggestions: vec![],
                                 });
                             }
@@ -2155,7 +2243,7 @@ fn check_node_inner(
                     diagnostics.push(Diagnostic {
                         code: "TYP_023".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&collection_node),
+                        location: Location::from_node(file, &collection_node),
                         message: format!("For loop requires a List, found {}", collection_type),
                         context: "The collection in a for..in must be a List.".to_string(),
                         suggestions: vec![],
@@ -2175,12 +2263,13 @@ fn check_node_inner(
                 diagnostics.push(Diagnostic {
                     code: "TYP_033".to_string(),
                     severity: Severity::Warning,
-                    location: Location::from_node(file,&body_node),
+                    location: Location::from_node(file, &body_node),
                     message: format!(
                         "For loop body returns {}, but for loops are for side effects only",
                         body_type
                     ),
-                    context: "Use List.map() to transform data, for loops to perform effects.".to_string(),
+                    context: "Use List.map() to transform data, for loops to perform effects."
+                        .to_string(),
                     suggestions: vec![Suggestion {
                         strategy: "replace".to_string(),
                         description: "Use List.map() for transformations".to_string(),
@@ -2204,7 +2293,7 @@ fn check_node_inner(
                 diagnostics.push(Diagnostic {
                     code: "TYP_024".to_string(),
                     severity: Severity::Error,
-                    location: Location::from_node(file,&start_node),
+                    location: Location::from_node(file, &start_node),
                     message: format!("Range operand must be Int, found {}", start_type),
                     context: "Range expressions require Int operands.".to_string(),
                     suggestions: vec![],
@@ -2214,7 +2303,7 @@ fn check_node_inner(
                 diagnostics.push(Diagnostic {
                     code: "TYP_024".to_string(),
                     severity: Severity::Error,
-                    location: Location::from_node(file,&end_node),
+                    location: Location::from_node(file, &end_node),
                     message: format!("Range operand must be Int, found {}", end_type),
                     context: "Range expressions require Int operands.".to_string(),
                     suggestions: vec![],
@@ -2235,7 +2324,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_025".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,&operand_node),
+                            location: Location::from_node(file, &operand_node),
                             message: format!("Logical NOT requires Bool, found {}", operand_type),
                             context: "The not operator can only be applied to Bool values."
                                 .to_string(),
@@ -2252,7 +2341,7 @@ fn check_node_inner(
                         diagnostics.push(Diagnostic {
                             code: "TYP_025".to_string(),
                             severity: Severity::Error,
-                            location: Location::from_node(file,&operand_node),
+                            location: Location::from_node(file, &operand_node),
                             message: format!(
                                 "Negation requires Int or Float, found {}",
                                 operand_type
@@ -2301,11 +2390,22 @@ fn substitute_self(ty: &Type, target: &Type) -> Type {
             Type::Function(new_args, Box::new(new_ret))
         }
         Type::List(inner) => Type::List(Box::new(substitute_self(inner, target))),
-        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute_self(e, target)).collect()),
+        Type::Tuple(elems) => {
+            Type::Tuple(elems.iter().map(|e| substitute_self(e, target)).collect())
+        }
         Type::Enum(name, variants) => {
-            let new_variants = variants.iter().map(|(n, payloads)| {
-                (n.clone(), payloads.iter().map(|p| substitute_self(p, target)).collect())
-            }).collect();
+            let new_variants = variants
+                .iter()
+                .map(|(n, payloads)| {
+                    (
+                        n.clone(),
+                        payloads
+                            .iter()
+                            .map(|p| substitute_self(p, target))
+                            .collect(),
+                    )
+                })
+                .collect();
             Type::Enum(name.clone(), new_variants)
         }
         _ => ty.clone(),
@@ -2324,7 +2424,10 @@ fn check_trait_def(
         Some(n) => n,
         None => return,
     };
-    let trait_name = trait_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+    let trait_name = trait_name_node
+        .utf8_text(source.as_bytes())
+        .unwrap()
+        .to_string();
 
     // Clone supertraits to avoid borrow conflicts
     let supertraits = match symbols.lookup_trait(&trait_name) {
@@ -2379,7 +2482,10 @@ fn check_impl_block(
         Some(n) => n,
         None => return,
     };
-    let trait_name = trait_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+    let trait_name = trait_name_node
+        .utf8_text(source.as_bytes())
+        .unwrap()
+        .to_string();
 
     let target_type_node = match node.child_by_field_name("target_type") {
         Some(n) => n,
@@ -2447,48 +2553,56 @@ fn check_impl_block(
     let mut impl_method_names: Vec<String> = Vec::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "function_def" {
-            if let Some(name_node) = child.child_by_field_name("name") {
-                let method_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+        if child.kind() == "function_def"
+            && let Some(name_node) = child.child_by_field_name("name")
+        {
+            let method_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
 
-                // TRT_006: Extra method not in trait
-                if !trait_methods.iter().any(|(n, _)| n == &method_name) {
-                    diagnostics.push(Diagnostic {
-                        code: "TRT_006".to_string(),
-                        severity: Severity::Error,
-                        location: Location::from_node(file, &name_node),
-                        message: format!(
-                            "Extra method `{}` not in trait `{}`",
-                            method_name, trait_name
-                        ),
-                        context: format!(
-                            "Trait `{}` defines: {}",
-                            trait_name,
-                            trait_methods.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
-                        ),
-                        suggestions: vec![],
-                    });
-                    impl_method_names.push(method_name);
-                    continue;
-                }
+            // TRT_006: Extra method not in trait
+            if !trait_methods.iter().any(|(n, _)| n == &method_name) {
+                diagnostics.push(Diagnostic {
+                    code: "TRT_006".to_string(),
+                    severity: Severity::Error,
+                    location: Location::from_node(file, &name_node),
+                    message: format!(
+                        "Extra method `{}` not in trait `{}`",
+                        method_name, trait_name
+                    ),
+                    context: format!(
+                        "Trait `{}` defines: {}",
+                        trait_name,
+                        trait_methods
+                            .iter()
+                            .map(|(n, _)| n.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                    suggestions: vec![],
+                });
+                impl_method_names.push(method_name);
+                continue;
+            }
 
-                // Type-check the method body using the mangled name
-                let mangled = format!("{}${}${}", trait_name, type_key, method_name);
-                let fn_type = symbols.lookup(&mangled).cloned();
+            // Type-check the method body using the mangled name
+            let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+            let fn_type = symbols.lookup(&mangled).cloned();
 
-                if let Some(Type::Function(ref arg_types, ref ret_type)) = fn_type {
-                    // TRT_005: Check method signature matches trait
-                    if let Some((_, trait_fn_type)) = trait_methods.iter().find(|(n, _)| n == &method_name) {
-                        let substituted = substitute_self(trait_fn_type, &target_type);
-                        if let Type::Function(ref expected_args, ref expected_ret) = substituted {
-                            let sig_matches = arg_types.len() == expected_args.len()
-                                && arg_types.iter().zip(expected_args.iter()).all(|(a, e)| {
-                                    super::type_compat::types_compatible(a, e)
-                                })
-                                && super::type_compat::types_compatible(ret_type, expected_ret);
+            if let Some(Type::Function(ref arg_types, ref ret_type)) = fn_type {
+                // TRT_005: Check method signature matches trait
+                if let Some((_, trait_fn_type)) =
+                    trait_methods.iter().find(|(n, _)| n == &method_name)
+                {
+                    let substituted = substitute_self(trait_fn_type, &target_type);
+                    if let Type::Function(ref expected_args, ref expected_ret) = substituted {
+                        let sig_matches = arg_types.len() == expected_args.len()
+                            && arg_types
+                                .iter()
+                                .zip(expected_args.iter())
+                                .all(|(a, e)| super::type_compat::types_compatible(a, e))
+                            && super::type_compat::types_compatible(ret_type, expected_ret);
 
-                            if !sig_matches {
-                                diagnostics.push(Diagnostic {
+                        if !sig_matches {
+                            diagnostics.push(Diagnostic {
                                     code: "TRT_005".to_string(),
                                     severity: Severity::Error,
                                     location: Location::from_node(file, &name_node),
@@ -2499,54 +2613,56 @@ fn check_impl_block(
                                     context: "Impl method signature must match the trait definition.".to_string(),
                                     suggestions: vec![],
                                 });
-                            }
                         }
                     }
-
-                    // Type-check the function body
-                    symbols.enter_scope();
-
-                    if let Some(params) = child.child_by_field_name("params") {
-                        let mut pcursor = params.walk();
-                        let mut i = 0;
-                        for param in params.named_children(&mut pcursor) {
-                            if param.kind() == "param" {
-                                // Grammar uses field('pattern', ...) not field('name', ...)
-                                let name_node = param.child_by_field_name("name")
-                                    .or_else(|| param.child_by_field_name("pattern"));
-                                if let Some(pn) = name_node {
-                                    let arg_name = pn.utf8_text(source.as_bytes()).unwrap().to_string();
-                                    if i < arg_types.len() {
-                                        symbols.insert(arg_name, arg_types[i].clone());
-                                    }
-                                }
-                                i += 1;
-                            }
-                        }
-                    }
-
-                    if let Some(body_node) = child.child_by_field_name("body") {
-                        let body_type = check_node(&body_node, source, file, symbols, diagnostics);
-                        if !super::type_compat::types_compatible(&body_type, ret_type) && **ret_type != Type::Unit {
-                            diagnostics.push(Diagnostic {
-                                code: "TYP_006".to_string(),
-                                severity: Severity::Error,
-                                location: Location::from_node(file, &body_node),
-                                message: format!(
-                                    "Function `{}` declares return type {}, body returns {}",
-                                    method_name, ret_type, body_type
-                                ),
-                                context: "Function body return type must match signature.".to_string(),
-                                suggestions: vec![],
-                            });
-                        }
-                    }
-
-                    symbols.exit_scope();
                 }
 
-                impl_method_names.push(method_name);
+                // Type-check the function body
+                symbols.enter_scope();
+
+                if let Some(params) = child.child_by_field_name("params") {
+                    let mut pcursor = params.walk();
+                    let mut i = 0;
+                    for param in params.named_children(&mut pcursor) {
+                        if param.kind() == "param" {
+                            // Grammar uses field('pattern', ...) not field('name', ...)
+                            let name_node = param
+                                .child_by_field_name("name")
+                                .or_else(|| param.child_by_field_name("pattern"));
+                            if let Some(pn) = name_node {
+                                let arg_name = pn.utf8_text(source.as_bytes()).unwrap().to_string();
+                                if i < arg_types.len() {
+                                    symbols.insert(arg_name, arg_types[i].clone());
+                                }
+                            }
+                            i += 1;
+                        }
+                    }
+                }
+
+                if let Some(body_node) = child.child_by_field_name("body") {
+                    let body_type = check_node(&body_node, source, file, symbols, diagnostics);
+                    if !super::type_compat::types_compatible(&body_type, ret_type)
+                        && **ret_type != Type::Unit
+                    {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_006".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &body_node),
+                            message: format!(
+                                "Function `{}` declares return type {}, body returns {}",
+                                method_name, ret_type, body_type
+                            ),
+                            context: "Function body return type must match signature.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
+                }
+
+                symbols.exit_scope();
             }
+
+            impl_method_names.push(method_name);
         }
     }
 
@@ -2599,7 +2715,8 @@ fn check_impl_block(
                     for param in params.named_children(&mut pcursor) {
                         if param.kind() == "param" {
                             // Grammar uses field('pattern', ...) not field('name', ...)
-                            let name_node = param.child_by_field_name("name")
+                            let name_node = param
+                                .child_by_field_name("name")
                                 .or_else(|| param.child_by_field_name("pattern"));
                             if let Some(pn) = name_node {
                                 let arg_name = pn.utf8_text(source.as_bytes()).unwrap().to_string();

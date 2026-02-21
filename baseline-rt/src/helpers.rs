@@ -7,7 +7,9 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
-use crate::nvalue::{HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT};
+use crate::nvalue::{
+    HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT,
+};
 use crate::value::RcStr;
 
 // ---------------------------------------------------------------------------
@@ -400,9 +402,7 @@ pub extern "C" fn jit_list_get(list_bits: u64, index_bits: u64) -> u64 {
         None => Err("ListGet requires a List".to_string()),
     };
     match outcome {
-        Ok(val) => {
-            jit_own(val)
-        }
+        Ok(val) => jit_own(val),
         Err(msg) => {
             jit_set_error(msg);
             NV_UNIT
@@ -466,7 +466,11 @@ pub extern "C" fn jit_closure_upvalue(closure_bits: u64, idx: u64) -> u64 {
                 let val = upvalues[i].clone();
                 jit_own(val)
             } else {
-                jit_set_error(format!("Closure upvalue index {} out of bounds (len {})", i, upvalues.len()));
+                jit_set_error(format!(
+                    "Closure upvalue index {} out of bounds (len {})",
+                    i,
+                    upvalues.len()
+                ));
                 NV_UNIT
             }
         }
@@ -496,19 +500,17 @@ pub extern "C" fn jit_closure_fn_ptr(closure_bits: u64) -> u64 {
         return 0;
     }
     match nv.as_heap_ref() {
-        HeapObject::Closure { chunk_idx, .. } => {
-            JIT_FN_TABLE.with(|table| {
-                let guard = table.borrow();
-                let tbl = guard.as_ref().unwrap();
-                let ptr = tbl.get(*chunk_idx).copied().unwrap_or(std::ptr::null());
-                if ptr.is_null() {
-                    jit_set_error(format!("Closure chunk_idx {} has no JIT code", chunk_idx));
-                    0
-                } else {
-                    ptr as u64
-                }
-            })
-        }
+        HeapObject::Closure { chunk_idx, .. } => JIT_FN_TABLE.with(|table| {
+            let guard = table.borrow();
+            let tbl = guard.as_ref().unwrap();
+            let ptr = tbl.get(*chunk_idx).copied().unwrap_or(std::ptr::null());
+            if ptr.is_null() {
+                jit_set_error(format!("Closure chunk_idx {} has no JIT code", chunk_idx));
+                0
+            } else {
+                ptr as u64
+            }
+        }),
         _ => {
             jit_set_error("closure_fn_ptr on non-closure".to_string());
             0
@@ -759,25 +761,41 @@ pub extern "C" fn jit_int_neg(a: u64) -> u64 {
 /// Compare two NaN-boxed integers: a < b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_lt(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) < nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
+    if nv_as_any_int(a) < nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
 }
 
 /// Compare two NaN-boxed integers: a <= b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_le(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) <= nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
+    if nv_as_any_int(a) <= nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
 }
 
 /// Compare two NaN-boxed integers: a > b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_gt(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) > nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
+    if nv_as_any_int(a) > nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
 }
 
 /// Compare two NaN-boxed integers: a >= b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_ge(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) >= nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
+    if nv_as_any_int(a) >= nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -791,7 +809,9 @@ pub extern "C" fn jit_int_ge(a: u64, b: u64) -> u64 {
 pub extern "C" fn jit_rc_incref(bits: u64) -> u64 {
     if bits & TAG_MASK == TAG_HEAP {
         let ptr = (bits & PAYLOAD_MASK) as *const HeapObject;
-        unsafe { Arc::increment_strong_count(ptr); }
+        unsafe {
+            Arc::increment_strong_count(ptr);
+        }
     }
     bits
 }
@@ -815,7 +835,9 @@ pub extern "C" fn jit_rc_decref(bits: u64) {
                 crate::nvalue::record_free();
             }
         }
-        unsafe { Arc::decrement_strong_count(ptr); }
+        unsafe {
+            Arc::decrement_strong_count(ptr);
+        }
     }
 }
 

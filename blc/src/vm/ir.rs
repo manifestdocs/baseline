@@ -26,7 +26,10 @@ impl TagRegistry {
             tag_to_id.insert(tag.to_string(), i as u32);
             id_to_tag.push(tag.to_string());
         }
-        TagRegistry { tag_to_id, id_to_tag }
+        TagRegistry {
+            tag_to_id,
+            id_to_tag,
+        }
     }
 
     /// Register a tag, returning its ID. Idempotent — returns existing ID if already registered.
@@ -345,7 +348,7 @@ pub enum Pattern {
     Literal(Box<Expr>),
     Constructor(String, Vec<Pattern>),
     Tuple(Vec<Pattern>),
-    Record(Vec<(String, Pattern)>),  // field_name → sub_pattern
+    Record(Vec<(String, Pattern)>),     // field_name → sub_pattern
     List(Vec<Pattern>, Option<String>), // element patterns, optional rest binding
 }
 

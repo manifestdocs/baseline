@@ -24,29 +24,49 @@ use crate::prelude::Prelude;
 // ---------------------------------------------------------------------------
 
 const KEYWORDS: &[&str] = &[
-    "fn", "let", "type", "effect", "if", "then", "else", "match", "for", "in",
-    "do", "with", "handle", "import", "export", "where", "test", "not", "true",
-    "false", "describe", "context", "it", "expect", "before_each", "after_each",
+    "fn",
+    "let",
+    "type",
+    "effect",
+    "if",
+    "then",
+    "else",
+    "match",
+    "for",
+    "in",
+    "do",
+    "with",
+    "handle",
+    "import",
+    "export",
+    "where",
+    "test",
+    "not",
+    "true",
+    "false",
+    "describe",
+    "context",
+    "it",
+    "expect",
+    "before_each",
+    "after_each",
 ];
 
 const TOP_LEVEL_STARTERS: &[&str] = &[
-    "fn", "@prelude", "@module", "import", "type", "effect", "export",
-    "test", "describe", "context", "@spec", "let",
+    "fn", "@prelude", "@module", "import", "type", "effect", "export", "test", "describe",
+    "context", "@spec", "let",
 ];
 
 const EXPRESSION_STARTERS: &[&str] = &[
-    "if", "match", "for", "with", "handle", "not", "true", "false",
-    "(", "[", "{", "|", "#{",
+    "if", "match", "for", "with", "handle", "not", "true", "false", "(", "[", "{", "|", "#{",
 ];
 
 const OPERATORS: &[&str] = &[
-    "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=",
-    "&&", "||", "|>", "..", "++", "?",
+    "+", "-", "*", "/", "%", "==", "!=", "<", ">", "<=", ">=", "&&", "||", "|>", "..", "++", "?",
 ];
 
 const TYPE_NAMES: &[&str] = &[
-    "Int", "String", "Boolean", "Float", "Unit", "List", "Option", "Result",
-    "Map", "Set",
+    "Int", "String", "Boolean", "Float", "Unit", "List", "Option", "Result", "Map", "Set",
 ];
 
 const BUILTIN_EFFECTS: &[&str] = &[
@@ -296,10 +316,18 @@ fn analyze_cursor_context(root: &tree_sitter::Node, source: &str) -> CursorConte
             "type_def" | "type_identifier" | "generic_type" => {
                 return CursorContext::TypeAnnotation;
             }
-            "if_expression" | "for_expression" | "binary_expression"
-            | "unary_expression" | "pipe_expression" | "block"
-            | "lambda_expression" | "try_expression" | "with_expression"
-            | "handle_expression" | "restrict_expression" | "parenthesized_expression" => {
+            "if_expression"
+            | "for_expression"
+            | "binary_expression"
+            | "unary_expression"
+            | "pipe_expression"
+            | "block"
+            | "lambda_expression"
+            | "try_expression"
+            | "with_expression"
+            | "handle_expression"
+            | "restrict_expression"
+            | "parenthesized_expression" => {
                 return CursorContext::Expression;
             }
             _ => {}
@@ -338,8 +366,7 @@ fn compute_valid_tokens(
     let mut tokens = Vec::new();
     let mut invalid = HashMap::new();
 
-    let in_scope_effects: HashSet<&str> =
-        session_ctx.effects.iter().map(|s| s.as_str()).collect();
+    let in_scope_effects: HashSet<&str> = session_ctx.effects.iter().map(|s| s.as_str()).collect();
 
     match context {
         CursorContext::TopLevel => {
@@ -353,9 +380,7 @@ fn compute_valid_tokens(
             add_bindings(&mut tokens, session_ctx, type_info);
 
             // Add type constructors
-            tokens.extend(
-                ["Some", "None", "Ok", "Err"].iter().map(|s| s.to_string()),
-            );
+            tokens.extend(["Some", "None", "Ok", "Err"].iter().map(|s| s.to_string()));
 
             // Add literal starters
             tokens.extend(["0", "1", "\""].iter().map(|s| s.to_string()));
@@ -377,9 +402,11 @@ fn compute_valid_tokens(
         CursorContext::Pattern => {
             // Variable names, constructors, wildcards, literals
             tokens.extend(
-                ["_", "Some", "None", "Ok", "Err", "true", "false", "0", "1", "\""]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "_", "Some", "None", "Ok", "Err", "true", "false", "0", "1", "\"",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
             // Add user-defined enum constructors
             if let Some(info) = type_info {
@@ -433,10 +460,12 @@ fn compute_valid_tokens(
         CursorContext::AfterExpression => {
             tokens.extend(OPERATORS.iter().map(|s| s.to_string()));
             tokens.extend(
-                ["(", ")", ",", ".", "->", "|>", "where", "\n", "then", "else",
-                 "do", "in", "with", "]", "}"]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "(", ")", ",", ".", "->", "|>", "where", "\n", "then", "else", "do", "in",
+                    "with", "]", "}",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
         }
         CursorContext::MatchArm => {
@@ -547,9 +576,8 @@ fn add_field_completions(
     // Generic field/method completions
     tokens.extend(
         [
-            "map", "filter", "fold", "len", "head", "tail", "get", "insert",
-            "remove", "contains", "keys", "values", "unwrap", "is_some",
-            "is_none", "is_ok", "is_err",
+            "map", "filter", "fold", "len", "head", "tail", "get", "insert", "remove", "contains",
+            "keys", "values", "unwrap", "is_some", "is_none", "is_ok", "is_err",
         ]
         .iter()
         .map(|s| s.to_string()),
@@ -570,32 +598,63 @@ fn add_module_methods(tokens: &mut Vec<String>, module: &str, ctx: &SessionConte
         }
         "List" => {
             tokens.extend(
-                ["map", "filter", "fold", "find", "head", "tail", "len", "reverse",
-                 "contains", "zip", "take", "drop", "flatten", "sort", "range"]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "map", "filter", "fold", "find", "head", "tail", "len", "reverse", "contains",
+                    "zip", "take", "drop", "flatten", "sort", "range",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
         }
         "String" => {
             tokens.extend(
-                ["len", "slice", "contains", "split", "trim", "upper", "lower",
-                 "starts_with", "ends_with", "replace", "chars", "to_int", "join"]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "len",
+                    "slice",
+                    "contains",
+                    "split",
+                    "trim",
+                    "upper",
+                    "lower",
+                    "starts_with",
+                    "ends_with",
+                    "replace",
+                    "chars",
+                    "to_int",
+                    "join",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
         }
         "Option" => {
             tokens.extend(
-                ["map", "unwrap", "unwrap_or", "is_some", "is_none", "flat_map"]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "map",
+                    "unwrap",
+                    "unwrap_or",
+                    "is_some",
+                    "is_none",
+                    "flat_map",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
         }
         "Result" => {
             tokens.extend(
-                ["map", "unwrap", "unwrap_or", "is_ok", "is_err", "map_err", "context", "and_then"]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "map",
+                    "unwrap",
+                    "unwrap_or",
+                    "is_ok",
+                    "is_err",
+                    "map_err",
+                    "context",
+                    "and_then",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
         }
         "Math" => {
@@ -607,18 +666,36 @@ fn add_module_methods(tokens: &mut Vec<String>, module: &str, ctx: &SessionConte
         }
         "Map" => {
             tokens.extend(
-                ["get", "insert", "remove", "contains", "keys", "values", "len",
-                 "entries", "from_list", "merge"]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "get",
+                    "insert",
+                    "remove",
+                    "contains",
+                    "keys",
+                    "values",
+                    "len",
+                    "entries",
+                    "from_list",
+                    "merge",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
         }
         "Set" => {
             tokens.extend(
-                ["insert", "remove", "contains", "len", "union", "intersect",
-                 "difference", "from_list"]
-                    .iter()
-                    .map(|s| s.to_string()),
+                [
+                    "insert",
+                    "remove",
+                    "contains",
+                    "len",
+                    "union",
+                    "intersect",
+                    "difference",
+                    "from_list",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
             );
         }
         "Http" if in_scope.contains("Http") => {
@@ -672,7 +749,8 @@ fn build_type_check_wrapper(source: &str, ctx: &SessionContext) -> (String, usiz
         &ctx.mode
     };
 
-    if mode == "top_level" || source.trim_start().starts_with("fn ")
+    if mode == "top_level"
+        || source.trim_start().starts_with("fn ")
         || source.trim_start().starts_with("type ")
         || source.trim_start().starts_with("@")
         || source.trim_start().starts_with("import ")
@@ -937,9 +1015,7 @@ fn handle_advance(body: &str, sessions: &Mutex<HashMap<String, Session>>) -> (u1
     }
 
     // Parse (incremental if we have an old tree)
-    let new_tree = session
-        .parser
-        .parse(&session.source, session.tree.as_ref());
+    let new_tree = session.parser.parse(&session.source, session.tree.as_ref());
     session.tree = new_tree;
 
     let mut errors = Vec::new();
@@ -1089,11 +1165,7 @@ fn byte_to_point(source: &str, byte_offset: usize) -> Point {
     Point::new(row, col)
 }
 
-fn collect_errors_from_tree(
-    node: tree_sitter::Node,
-    source: &str,
-    errors: &mut Vec<String>,
-) {
+fn collect_errors_from_tree(node: tree_sitter::Node, source: &str, errors: &mut Vec<String>) {
     if node.is_error() || node.is_missing() {
         let start = node.start_position();
         let text = node.utf8_text(source.as_bytes()).unwrap_or("<unknown>");
@@ -1118,7 +1190,11 @@ fn collect_errors_from_tree(
 mod tests {
     use super::*;
 
-    fn make_context(prelude: &str, bindings: Vec<(&str, &str)>, effects: Vec<&str>) -> SessionContext {
+    fn make_context(
+        prelude: &str,
+        bindings: Vec<(&str, &str)>,
+        effects: Vec<&str>,
+    ) -> SessionContext {
         SessionContext {
             file: "test.bl".into(),
             bindings: bindings
@@ -1247,45 +1323,45 @@ mod tests {
     #[test]
     fn test_valid_tokens_expression_context() {
         let ctx = make_context("core", vec![("x", "Int")], vec!["Console"]);
-        let (tokens, invalid) = compute_valid_tokens(
-            &CursorContext::Expression,
-            &ctx,
-            None,
-            "",
-        );
+        let (tokens, invalid) = compute_valid_tokens(&CursorContext::Expression, &ctx, None, "");
 
-        assert!(tokens.contains(&"x".to_string()), "Should include binding 'x'");
-        assert!(tokens.contains(&"if".to_string()), "Should include keyword 'if'");
-        assert!(tokens.contains(&"Some".to_string()), "Should include constructor 'Some'");
-        assert!(!invalid.contains_key("Console"), "Console should be in scope");
+        assert!(
+            tokens.contains(&"x".to_string()),
+            "Should include binding 'x'"
+        );
+        assert!(
+            tokens.contains(&"if".to_string()),
+            "Should include keyword 'if'"
+        );
+        assert!(
+            tokens.contains(&"Some".to_string()),
+            "Should include constructor 'Some'"
+        );
+        assert!(
+            !invalid.contains_key("Console"),
+            "Console should be in scope"
+        );
         assert!(invalid.contains_key("Http"), "Http should NOT be in scope");
     }
 
     #[test]
     fn test_valid_tokens_type_context() {
         let ctx = make_context("core", vec![], vec![]);
-        let (tokens, _) = compute_valid_tokens(
-            &CursorContext::TypeAnnotation,
-            &ctx,
-            None,
-            "",
-        );
+        let (tokens, _) = compute_valid_tokens(&CursorContext::TypeAnnotation, &ctx, None, "");
 
         assert!(tokens.contains(&"Int".to_string()));
         assert!(tokens.contains(&"String".to_string()));
         assert!(tokens.contains(&"List".to_string()));
-        assert!(!tokens.contains(&"if".to_string()), "Keywords not valid in type position");
+        assert!(
+            !tokens.contains(&"if".to_string()),
+            "Keywords not valid in type position"
+        );
     }
 
     #[test]
     fn test_valid_tokens_effect_set() {
         let ctx = make_context("script", vec![], vec!["Console", "Http"]);
-        let (tokens, _) = compute_valid_tokens(
-            &CursorContext::EffectSet,
-            &ctx,
-            None,
-            "",
-        );
+        let (tokens, _) = compute_valid_tokens(&CursorContext::EffectSet, &ctx, None, "");
 
         assert!(tokens.contains(&"Console".to_string()));
         assert!(tokens.contains(&"Http".to_string()));
@@ -1307,12 +1383,7 @@ mod tests {
     #[test]
     fn test_effect_enforcement() {
         let ctx = make_context("script", vec![], vec!["Console"]);
-        let (tokens, invalid) = compute_valid_tokens(
-            &CursorContext::Expression,
-            &ctx,
-            None,
-            "",
-        );
+        let (tokens, invalid) = compute_valid_tokens(&CursorContext::Expression, &ctx, None, "");
 
         // Console is in scope — should not be in invalid
         assert!(!invalid.contains_key("Console"));
@@ -1344,12 +1415,8 @@ mod tests {
             let _ctx = analyze_cursor_context(&t.root_node(), source);
         }
         let _type_info = compute_type_info(source, &ctx);
-        let (_tokens, _invalid) = compute_valid_tokens(
-            &CursorContext::Expression,
-            &ctx,
-            None,
-            source,
-        );
+        let (_tokens, _invalid) =
+            compute_valid_tokens(&CursorContext::Expression, &ctx, None, source);
 
         let elapsed = start.elapsed();
         assert!(

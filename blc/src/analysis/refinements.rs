@@ -67,18 +67,12 @@ impl StringConstraint {
                 if let Some(min_val) = min
                     && len < *min_val
                 {
-                    return Err(format!(
-                        "length {} is less than minimum {}",
-                        len, min_val
-                    ));
+                    return Err(format!("length {} is less than minimum {}", len, min_val));
                 }
                 if let Some(max_val) = max
                     && len > *max_val
                 {
-                    return Err(format!(
-                        "length {} exceeds maximum {}",
-                        len, max_val
-                    ));
+                    return Err(format!("length {} exceeds maximum {}", len, max_val));
                 }
                 Ok(())
             }
@@ -141,7 +135,7 @@ impl StringConstraint {
             StringConstraint::StartsWith(s) => format!("starts with \"{}\"", s),
             StringConstraint::EndsWith(s) => format!("ends with \"{}\"", s),
             StringConstraint::Contains(s) => format!("contains \"{}\"", s),
-            StringConstraint::Equals(s) => format!("\"{}\"" , s),
+            StringConstraint::Equals(s) => format!("\"{}\"", s),
             StringConstraint::All(cs) => cs
                 .iter()
                 .map(|c| c.describe())
@@ -459,13 +453,12 @@ fn parse_equality_constraint(node: Node, source: &str) -> Option<StringConstrain
 /// Parse a call_expression like `String.matches(self, "pattern")`.
 fn parse_call_constraint(node: Node, source: &str) -> Option<StringConstraint> {
     // Extract the method name from the field_expression child
-    let field_expr = node.child_by_field_name("function")
-        .or_else(|| {
-            // Fallback: first child that is a field_expression
-            let mut cursor = node.walk();
-            node.children(&mut cursor)
-                .find(|c| c.kind() == "field_expression")
-        })?;
+    let field_expr = node.child_by_field_name("function").or_else(|| {
+        // Fallback: first child that is a field_expression
+        let mut cursor = node.walk();
+        node.children(&mut cursor)
+            .find(|c| c.kind() == "field_expression")
+    })?;
 
     let method_name = extract_method_name(field_expr, source)?;
 
@@ -507,7 +500,10 @@ fn extract_method_name(node: Node, source: &str) -> Option<String> {
     // The method name is typically the last identifier child
     for child in children.iter().rev() {
         if child.kind() == "identifier" {
-            return child.utf8_text(source.as_bytes()).ok().map(|s| s.to_string());
+            return child
+                .utf8_text(source.as_bytes())
+                .ok()
+                .map(|s| s.to_string());
         }
     }
     None
@@ -598,20 +594,44 @@ fn parse_length_comparison(node: Node, source: &str) -> Option<StringConstraint>
     if is_length_left {
         let num: usize = right_text.trim().parse().ok()?;
         match op {
-            ">=" => Some(StringConstraint::Length { min: Some(num), max: None }),
-            ">" => Some(StringConstraint::Length { min: Some(num + 1), max: None }),
-            "<=" => Some(StringConstraint::Length { min: None, max: Some(num) }),
-            "<" => Some(StringConstraint::Length { min: None, max: Some(num.saturating_sub(1)) }),
+            ">=" => Some(StringConstraint::Length {
+                min: Some(num),
+                max: None,
+            }),
+            ">" => Some(StringConstraint::Length {
+                min: Some(num + 1),
+                max: None,
+            }),
+            "<=" => Some(StringConstraint::Length {
+                min: None,
+                max: Some(num),
+            }),
+            "<" => Some(StringConstraint::Length {
+                min: None,
+                max: Some(num.saturating_sub(1)),
+            }),
             _ => None,
         }
     } else if is_length_right {
         let num: usize = left_text.trim().parse().ok()?;
         // Reversed: n >= String.length(self) means length <= n
         match op {
-            ">=" => Some(StringConstraint::Length { min: None, max: Some(num) }),
-            ">" => Some(StringConstraint::Length { min: None, max: Some(num.saturating_sub(1)) }),
-            "<=" => Some(StringConstraint::Length { min: Some(num), max: None }),
-            "<" => Some(StringConstraint::Length { min: Some(num + 1), max: None }),
+            ">=" => Some(StringConstraint::Length {
+                min: None,
+                max: Some(num),
+            }),
+            ">" => Some(StringConstraint::Length {
+                min: None,
+                max: Some(num.saturating_sub(1)),
+            }),
+            "<=" => Some(StringConstraint::Length {
+                min: Some(num),
+                max: None,
+            }),
+            "<" => Some(StringConstraint::Length {
+                min: Some(num + 1),
+                max: None,
+            }),
             _ => None,
         }
     } else {
@@ -742,9 +762,7 @@ fn check_let_binding(
         None => {
             // No refinement — still track integer values for later use
             if let Some(mut val) = value_node {
-                while val.kind() == "literal"
-                    || val.kind() == "parenthesized_expression"
-                {
+                while val.kind() == "literal" || val.kind() == "parenthesized_expression" {
                     if let Some(child) = val.named_child(0) {
                         val = child;
                     } else {
@@ -790,9 +808,8 @@ fn check_int_refinement(
         }
 
         if val.kind() == "integer_literal" {
-            resolved_value = crate::parse::parse_int_literal(
-                val.utf8_text(source.as_bytes()).unwrap_or("0"),
-            );
+            resolved_value =
+                crate::parse::parse_int_literal(val.utf8_text(source.as_bytes()).unwrap_or("0"));
         } else if val.kind() == "identifier"
             && let Ok(var_name) = val.utf8_text(source.as_bytes())
         {
@@ -873,11 +890,7 @@ fn check_string_refinement(
                         "Refinement Violation: String {} for type {}",
                         reason, type_name
                     ),
-                    context: format!(
-                        "Type {} requires: {}",
-                        type_name,
-                        constraint.describe()
-                    ),
+                    context: format!("Type {} requires: {}", type_name, constraint.describe()),
                     suggestions: vec![],
                 });
             }

@@ -1,5 +1,5 @@
-use super::{HeapObject, NValue, NativeError};
 use super::json::serde_to_nvalue;
+use super::{HeapObject, NValue, NativeError};
 
 /// Request.header(req, name) -> Option<String>
 /// Case-insensitive header lookup from request record's headers list.
@@ -223,9 +223,7 @@ pub(super) fn native_request_param_int(args: &[NValue]) -> Result<NValue, Native
                 }
                 return Ok(NValue::enum_val(
                     "Err".into(),
-                    NValue::string(
-                        format!("Parameter '{}' is not a valid integer", name).into(),
-                    ),
+                    NValue::string(format!("Parameter '{}' is not a valid integer", name).into()),
                 ));
             }
         }
@@ -349,4 +347,3 @@ pub(super) fn native_request_query_int(args: &[NValue]) -> Result<NValue, Native
         NValue::string(format!("Query parameter '{}' not found", name).into()),
     ))
 }
-

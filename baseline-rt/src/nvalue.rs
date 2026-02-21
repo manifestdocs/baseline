@@ -12,8 +12,8 @@
 //!   Heap:     0xFFFE_PPPP_PPPP_PPPP  (P = pointer to Arc<HeapObject> inner data)
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::value::{RcStr, Value};
 
@@ -219,20 +219,56 @@ impl PartialEq for HeapObject {
             (HeapObject::Record(a), HeapObject::Record(b)) => a == b,
             (HeapObject::Tuple(a), HeapObject::Tuple(b)) => a == b,
             // Compare tag + payload only — tag_id is an optimization hint
-            (HeapObject::Enum { tag: t1, payload: p1, .. },
-             HeapObject::Enum { tag: t2, payload: p2, .. }) => t1 == t2 && p1 == p2,
-            (HeapObject::Struct { name: n1, fields: f1 },
-             HeapObject::Struct { name: n2, fields: f2 }) => n1 == n2 && f1 == f2,
-            (HeapObject::Closure { chunk_idx: c1, upvalues: u1 },
-             HeapObject::Closure { chunk_idx: c2, upvalues: u2 }) => c1 == c2 && u1 == u2,
+            (
+                HeapObject::Enum {
+                    tag: t1,
+                    payload: p1,
+                    ..
+                },
+                HeapObject::Enum {
+                    tag: t2,
+                    payload: p2,
+                    ..
+                },
+            ) => t1 == t2 && p1 == p2,
+            (
+                HeapObject::Struct {
+                    name: n1,
+                    fields: f1,
+                },
+                HeapObject::Struct {
+                    name: n2,
+                    fields: f2,
+                },
+            ) => n1 == n2 && f1 == f2,
+            (
+                HeapObject::Closure {
+                    chunk_idx: c1,
+                    upvalues: u1,
+                },
+                HeapObject::Closure {
+                    chunk_idx: c2,
+                    upvalues: u2,
+                },
+            ) => c1 == c2 && u1 == u2,
             (HeapObject::Map(a), HeapObject::Map(b)) => a == b,
             (HeapObject::Set(a), HeapObject::Set(b)) => a == b,
             (HeapObject::WeakRef(a), HeapObject::WeakRef(b)) => std::sync::Weak::ptr_eq(a, b),
             (HeapObject::BigInt(a), HeapObject::BigInt(b)) => a == b,
-            (HeapObject::NativeObject { tag: t1, data: d1 },
-             HeapObject::NativeObject { tag: t2, data: d2 }) => t1 == t2 && Arc::ptr_eq(d1, d2),
-            (HeapObject::Row { columns: c1, values: v1 },
-             HeapObject::Row { columns: c2, values: v2 }) => Arc::ptr_eq(c1, c2) && v1 == v2,
+            (
+                HeapObject::NativeObject { tag: t1, data: d1 },
+                HeapObject::NativeObject { tag: t2, data: d2 },
+            ) => t1 == t2 && Arc::ptr_eq(d1, d2),
+            (
+                HeapObject::Row {
+                    columns: c1,
+                    values: v1,
+                },
+                HeapObject::Row {
+                    columns: c2,
+                    values: v2,
+                },
+            ) => Arc::ptr_eq(c1, c2) && v1 == v2,
             _ => false,
         }
     }
@@ -354,11 +390,19 @@ impl NValue {
             "Err" => 3,
             _ => u32::MAX,
         };
-        Self::from_heap(HeapObject::Enum { tag, tag_id, payload })
+        Self::from_heap(HeapObject::Enum {
+            tag,
+            tag_id,
+            payload,
+        })
     }
 
     pub fn enum_val_with_id(tag: RcStr, tag_id: u32, payload: NValue) -> Self {
-        Self::from_heap(HeapObject::Enum { tag, tag_id, payload })
+        Self::from_heap(HeapObject::Enum {
+            tag,
+            tag_id,
+            payload,
+        })
     }
 
     pub fn struct_val(name: RcStr, fields: Vec<(RcStr, NValue)>) -> Self {
@@ -961,8 +1005,15 @@ mod tests {
     #[test]
     fn int_roundtrip() {
         for i in [
-            -1i64, 0, 1, 42, -42, 1000000, -1000000,
-            (1 << 47) - 1, -(1 << 47),
+            -1i64,
+            0,
+            1,
+            42,
+            -42,
+            1000000,
+            -1000000,
+            (1 << 47) - 1,
+            -(1 << 47),
         ] {
             let v = NValue::int(i);
             assert!(v.is_int() || v.is_heap(), "failed for {}", i);

@@ -19,8 +19,6 @@ use super::natives::NativeRegistry;
 use super::nvalue::{HeapObject, NValue};
 use super::value::Value;
 
-
-
 // ---------------------------------------------------------------------------
 // Safety & Resource Limits
 // ---------------------------------------------------------------------------
@@ -262,7 +260,11 @@ impl Vm {
     /// - Source map only consulted in error paths
     /// - Unsafe stack access eliminates bounds checks
     /// - Instruction limit checked only every INSTRUCTION_CHECK_INTERVAL ops
-    pub(crate) fn run_frames(&mut self, chunks: &[Chunk], base_depth: usize) -> Result<NValue, CompileError> {
+    pub(crate) fn run_frames(
+        &mut self,
+        chunks: &[Chunk],
+        base_depth: usize,
+    ) -> Result<NValue, CompileError> {
         let frame = self.frames.last();
         let mut ip = frame.ip as usize;
         let mut chunk_idx = frame.chunk_idx as usize;
@@ -351,15 +353,18 @@ impl Vm {
                 // ============================================================
                 Op::AddInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_any_int().wrapping_add(b.as_any_int())));
+                    self.stack
+                        .push(NValue::int(a.as_any_int().wrapping_add(b.as_any_int())));
                 }
                 Op::SubInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_any_int().wrapping_sub(b.as_any_int())));
+                    self.stack
+                        .push(NValue::int(a.as_any_int().wrapping_sub(b.as_any_int())));
                 }
                 Op::MulInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::int(a.as_any_int().wrapping_mul(b.as_any_int())));
+                    self.stack
+                        .push(NValue::int(a.as_any_int().wrapping_mul(b.as_any_int())));
                 }
                 Op::DivInt => {
                     let (b, a) = self.pop2_fast();
@@ -385,19 +390,23 @@ impl Vm {
                 // ============================================================
                 Op::GtInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() > b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() > b.as_any_int()));
                 }
                 Op::GeInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() >= b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() >= b.as_any_int()));
                 }
                 Op::LtInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() < b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() < b.as_any_int()));
                 }
                 Op::LeInt => {
                     let (b, a) = self.pop2_fast();
-                    self.stack.push(NValue::bool(a.as_any_int() <= b.as_any_int()));
+                    self.stack
+                        .push(NValue::bool(a.as_any_int() <= b.as_any_int()));
                 }
                 Op::Eq => {
                     let (b, a) = self.pop2_fast();
@@ -409,8 +418,14 @@ impl Vm {
                 }
 
                 // Generic arithmetic/comparison → dispatch functions (cold path)
-                Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
-                | Op::Negate | Op::Not | Op::Concat => {
+                Op::Add
+                | Op::Sub
+                | Op::Mul
+                | Op::Div
+                | Op::Mod
+                | Op::Negate
+                | Op::Not
+                | Op::Concat => {
                     self.dispatch_arithmetic(&op, chunk, ip)?;
                 }
 
@@ -477,11 +492,21 @@ impl Vm {
                     ip -= offset as usize;
                 }
 
-                Op::MakeRange | Op::ListGet | Op::ListLen | Op::MakeList(_)
-                | Op::ListConcat | Op::ListTailFrom(_) | Op::MakeRecord(_) | Op::GetField(_)
+                Op::MakeRange
+                | Op::ListGet
+                | Op::ListLen
+                | Op::MakeList(_)
+                | Op::ListConcat
+                | Op::ListTailFrom(_)
+                | Op::MakeRecord(_)
+                | Op::GetField(_)
                 | Op::GetFieldIdx(_, _)
-                | Op::MakeTuple(_) | Op::TupleGet(_) | Op::MakeEnum(_)
-                | Op::MakeStruct(_) | Op::EnumTag | Op::EnumPayload
+                | Op::MakeTuple(_)
+                | Op::TupleGet(_)
+                | Op::MakeEnum(_)
+                | Op::MakeStruct(_)
+                | Op::EnumTag
+                | Op::EnumPayload
                 | Op::UpdateRecord(_) => {
                     self.dispatch_data_structures(&op, chunk, ip)?;
                 }
@@ -569,16 +594,28 @@ impl Vm {
                 }
 
                 // -- Remaining function calls, closures, superinstructions --
-                Op::Call(_) | Op::GetUpvalue(_)
-                | Op::MakeClosure(_, _) | Op::CallNative(_, _)
-                | Op::GetLocalSubInt(_, _) | Op::GetLocalLeInt(_, _)
-                | Op::GetLocalAddInt(_, _) | Op::GetLocalLtInt(_, _)
-                | Op::GetLocalMulInt(_, _) | Op::GetLocalGeInt(_, _)
+                Op::Call(_)
+                | Op::GetUpvalue(_)
+                | Op::MakeClosure(_, _)
+                | Op::CallNative(_, _)
+                | Op::GetLocalSubInt(_, _)
+                | Op::GetLocalLeInt(_, _)
+                | Op::GetLocalAddInt(_, _)
+                | Op::GetLocalLtInt(_, _)
+                | Op::GetLocalMulInt(_, _)
+                | Op::GetLocalGeInt(_, _)
                 | Op::GetLocalGetField(_, _)
-                | Op::GetLocalLeIntJumpIfFalse(_, _, _) | Op::GetLocalLtIntJumpIfFalse(_, _, _) => {
-                    match self.dispatch_call(&op, chunk, chunks, ip, chunk_idx, base_slot, base_depth)? {
+                | Op::GetLocalLeIntJumpIfFalse(_, _, _)
+                | Op::GetLocalLtIntJumpIfFalse(_, _, _) => {
+                    match self
+                        .dispatch_call(&op, chunk, chunks, ip, chunk_idx, base_slot, base_depth)?
+                    {
                         DispatchResult::Continue => {}
-                        DispatchResult::Restart { ip: new_ip, chunk_idx: new_ci, base_slot: new_bs } => {
+                        DispatchResult::Restart {
+                            ip: new_ip,
+                            chunk_idx: new_ci,
+                            base_slot: new_bs,
+                        } => {
                             ip = new_ip;
                             chunk_idx = new_ci;
                             base_slot = new_bs;
@@ -590,12 +627,20 @@ impl Vm {
                 }
 
                 // -- Effect handlers --
-                Op::PushHandler | Op::PushResumableHandler(_)
-                | Op::PerformEffect(_, _) | Op::PopHandler
+                Op::PushHandler
+                | Op::PushResumableHandler(_)
+                | Op::PerformEffect(_, _)
+                | Op::PopHandler
                 | Op::Halt(_) => {
-                    match self.dispatch_effects(&op, chunk, chunks, ip, chunk_idx, base_slot, base_depth)? {
+                    match self.dispatch_effects(
+                        &op, chunk, chunks, ip, chunk_idx, base_slot, base_depth,
+                    )? {
                         DispatchResult::Continue => {}
-                        DispatchResult::Restart { ip: new_ip, chunk_idx: new_ci, base_slot: new_bs } => {
+                        DispatchResult::Restart {
+                            ip: new_ip,
+                            chunk_idx: new_ci,
+                            base_slot: new_bs,
+                        } => {
                             ip = new_ip;
                             chunk_idx = new_ci;
                             base_slot = new_bs;
@@ -643,12 +688,14 @@ impl Vm {
         effect_name: &str,
         method_name: &str,
     ) -> Option<(NValue, Option<usize>)> {
-        for (hs_idx, frame) in self.handler_stack.iter().enumerate().rev() {
+        if let Some((hs_idx, frame)) = self.handler_stack.iter().enumerate().next_back() {
             let handler_record = frame.get(effect_name)?;
             if let HeapObject::Record(fields) = handler_record.as_heap_ref() {
                 for (k, v) in fields {
                     if k.as_ref() == method_name {
-                        let boundary_idx = self.handler_boundaries.iter()
+                        let boundary_idx = self
+                            .handler_boundaries
+                            .iter()
                             .position(|b| b.handler_stack_idx == hs_idx);
                         return Some((v.clone(), boundary_idx));
                     }

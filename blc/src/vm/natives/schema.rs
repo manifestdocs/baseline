@@ -1,8 +1,8 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::analysis::refinements::{Constraint, Interval, StringConstraint};
 use crate::analysis::Type;
+use crate::analysis::refinements::{Constraint, Interval, StringConstraint};
 
 use super::json::serde_to_nvalue;
 use super::{NValue, NativeError, RcStr};
@@ -60,12 +60,8 @@ fn build_schemas(
 
     for (name, ty) in type_defs {
         let fields = match ty {
-            Type::Struct(_, field_map) => {
-                extract_fields_from_map(field_map, refined_types)
-            }
-            Type::Record(field_map, _) => {
-                extract_fields_from_map(field_map, refined_types)
-            }
+            Type::Struct(_, field_map) => extract_fields_from_map(field_map, refined_types),
+            Type::Record(field_map, _) => extract_fields_from_map(field_map, refined_types),
             _ => continue,
         };
 
@@ -94,10 +90,7 @@ fn extract_fields_from_map(
 }
 
 /// Convert a Type into a FieldSchema, resolving refined types via the constraint map.
-fn type_to_field_schema(
-    ty: &Type,
-    refined_types: &HashMap<String, Constraint>,
-) -> FieldSchema {
+fn type_to_field_schema(ty: &Type, refined_types: &HashMap<String, Constraint>) -> FieldSchema {
     match ty {
         Type::String => FieldSchema::StringField,
         Type::Int => FieldSchema::IntField,
@@ -158,16 +151,15 @@ pub(super) fn native_request_decode(args: &[NValue]) -> Result<NValue, NativeErr
     };
 
     // Look up schema
-    let schema = SCHEMA_REGISTRY.with(|cell| {
-        cell.borrow().get(&type_name).cloned()
-    });
+    let schema = SCHEMA_REGISTRY.with(|cell| cell.borrow().get(&type_name).cloned());
 
     let schema = match schema {
         Some(s) => s,
         None => {
-            return Ok(decode_error_response(
-                &[format!("No schema registered for type '{}'", type_name)],
-            ));
+            return Ok(decode_error_response(&[format!(
+                "No schema registered for type '{}'",
+                type_name
+            )]));
         }
     };
 
@@ -181,29 +173,31 @@ pub(super) fn native_request_decode(args: &[NValue]) -> Result<NValue, NativeErr
     let body_str = match body.as_string() {
         Some(s) => s.to_string(),
         None => {
-            return Ok(decode_error_response(&["Request body is not a string".to_string()]));
+            return Ok(decode_error_response(&[
+                "Request body is not a string".to_string()
+            ]));
         }
     };
 
     if body_str.is_empty() {
-        return Ok(decode_error_response(&["Request body is empty".to_string()]));
+        return Ok(decode_error_response(
+            &["Request body is empty".to_string()],
+        ));
     }
 
     let json_value: serde_json::Value = match serde_json::from_str(&body_str) {
         Ok(v) => v,
         Err(e) => {
-            return Ok(decode_error_response(
-                &[format!("JSON parse error: {}", e)],
-            ));
+            return Ok(decode_error_response(&[format!("JSON parse error: {}", e)]));
         }
     };
 
     let json_obj = match json_value.as_object() {
         Some(obj) => obj,
         None => {
-            return Ok(decode_error_response(
-                &["Request body must be a JSON object".to_string()],
-            ));
+            return Ok(decode_error_response(&[
+                "Request body must be a JSON object".to_string(),
+            ]));
         }
     };
 
@@ -221,16 +215,14 @@ pub(super) fn native_request_decode(args: &[NValue]) -> Result<NValue, NativeErr
             Some(serde_json::Value::Null) => {
                 errors.push(format!("'{}' is required", field_name));
             }
-            Some(val) => {
-                match validate_field(field_name, val, field_schema) {
-                    Ok(nval) => {
-                        record_fields.push((RcStr::from(field_name.as_str()), nval));
-                    }
-                    Err(field_errors) => {
-                        errors.extend(field_errors);
-                    }
+            Some(val) => match validate_field(field_name, val, field_schema) {
+                Ok(nval) => {
+                    record_fields.push((RcStr::from(field_name.as_str()), nval));
                 }
-            }
+                Err(field_errors) => {
+                    errors.extend(field_errors);
+                }
+            },
         }
     }
 
@@ -249,24 +241,18 @@ fn validate_field(
     schema: &FieldSchema,
 ) -> Result<NValue, Vec<String>> {
     match schema {
-        FieldSchema::StringField => {
-            match value.as_str() {
-                Some(s) => Ok(NValue::string(s.into())),
-                None => Err(vec![format!("'{}' must be a string", field_name)]),
-            }
-        }
-        FieldSchema::IntField => {
-            match value.as_i64() {
-                Some(n) => Ok(NValue::int(n)),
-                None => Err(vec![format!("'{}' must be an integer", field_name)]),
-            }
-        }
-        FieldSchema::BoolField => {
-            match value.as_bool() {
-                Some(b) => Ok(NValue::bool(b)),
-                None => Err(vec![format!("'{}' must be a boolean", field_name)]),
-            }
-        }
+        FieldSchema::StringField => match value.as_str() {
+            Some(s) => Ok(NValue::string(s.into())),
+            None => Err(vec![format!("'{}' must be a string", field_name)]),
+        },
+        FieldSchema::IntField => match value.as_i64() {
+            Some(n) => Ok(NValue::int(n)),
+            None => Err(vec![format!("'{}' must be an integer", field_name)]),
+        },
+        FieldSchema::BoolField => match value.as_bool() {
+            Some(b) => Ok(NValue::bool(b)),
+            None => Err(vec![format!("'{}' must be a boolean", field_name)]),
+        },
         FieldSchema::RefinedString(constraint) => {
             let s = match value.as_str() {
                 Some(s) => s,
@@ -288,7 +274,9 @@ fn validate_field(
             };
             if !interval.contains(n) {
                 let desc = match (interval.min != i64::MIN, interval.max != i64::MAX) {
-                    (true, true) => format!("must be between {} and {}", interval.min, interval.max),
+                    (true, true) => {
+                        format!("must be between {} and {}", interval.min, interval.max)
+                    }
                     (true, false) => format!("must be at least {}", interval.min),
                     (false, true) => format!("must be at most {}", interval.max),
                     (false, false) => "invalid".to_string(),
@@ -297,9 +285,7 @@ fn validate_field(
             }
             Ok(NValue::int(n))
         }
-        FieldSchema::AnyField => {
-            Ok(serde_to_nvalue(value.clone()))
-        }
+        FieldSchema::AnyField => Ok(serde_to_nvalue(value.clone())),
     }
 }
 
@@ -345,14 +331,20 @@ mod tests {
         let mut field_map = HashMap::new();
         field_map.insert("name".to_string(), Type::String);
         field_map.insert("age".to_string(), Type::Int);
-        type_defs.insert("CreateUser".to_string(), Type::Struct("CreateUser".to_string(), field_map));
+        type_defs.insert(
+            "CreateUser".to_string(),
+            Type::Struct("CreateUser".to_string(), field_map),
+        );
 
         let refined_types = HashMap::new();
         populate_schemas(&type_defs, &refined_types);
 
         // Valid decode
         let req = NValue::record(vec![
-            (RcStr::from("body"), NValue::string(r#"{"name":"Alice","age":30}"#.into())),
+            (
+                RcStr::from("body"),
+                NValue::string(r#"{"name":"Alice","age":30}"#.into()),
+            ),
             (RcStr::from("method"), NValue::string("POST".into())),
             (RcStr::from("headers"), NValue::list(vec![])),
         ]);
@@ -367,13 +359,19 @@ mod tests {
         let mut field_map = HashMap::new();
         field_map.insert("name".to_string(), Type::String);
         field_map.insert("age".to_string(), Type::Int);
-        type_defs.insert("User".to_string(), Type::Struct("User".to_string(), field_map));
+        type_defs.insert(
+            "User".to_string(),
+            Type::Struct("User".to_string(), field_map),
+        );
 
         let refined_types = HashMap::new();
         populate_schemas(&type_defs, &refined_types);
 
         let req = NValue::record(vec![
-            (RcStr::from("body"), NValue::string(r#"{"name":"Alice"}"#.into())),
+            (
+                RcStr::from("body"),
+                NValue::string(r#"{"name":"Alice"}"#.into()),
+            ),
             (RcStr::from("method"), NValue::string("POST".into())),
             (RcStr::from("headers"), NValue::list(vec![])),
         ]);
@@ -387,13 +385,19 @@ mod tests {
         let mut type_defs = HashMap::new();
         let mut field_map = HashMap::new();
         field_map.insert("age".to_string(), Type::Int);
-        type_defs.insert("AgeOnly".to_string(), Type::Struct("AgeOnly".to_string(), field_map));
+        type_defs.insert(
+            "AgeOnly".to_string(),
+            Type::Struct("AgeOnly".to_string(), field_map),
+        );
 
         let refined_types = HashMap::new();
         populate_schemas(&type_defs, &refined_types);
 
         let req = NValue::record(vec![
-            (RcStr::from("body"), NValue::string(r#"{"age":"not_a_number"}"#.into())),
+            (
+                RcStr::from("body"),
+                NValue::string(r#"{"age":"not_a_number"}"#.into()),
+            ),
             (RcStr::from("method"), NValue::string("POST".into())),
             (RcStr::from("headers"), NValue::list(vec![])),
         ]);
@@ -406,25 +410,32 @@ mod tests {
     fn decode_with_refined_string() {
         let mut type_defs = HashMap::new();
         let mut field_map = HashMap::new();
-        field_map.insert("status".to_string(), Type::Refined(
-            Box::new(Type::String),
-            "Status".to_string(),
-        ));
-        type_defs.insert("UpdateTask".to_string(), Type::Struct("UpdateTask".to_string(), field_map));
+        field_map.insert(
+            "status".to_string(),
+            Type::Refined(Box::new(Type::String), "Status".to_string()),
+        );
+        type_defs.insert(
+            "UpdateTask".to_string(),
+            Type::Struct("UpdateTask".to_string(), field_map),
+        );
 
         let mut refined_types = HashMap::new();
-        refined_types.insert("Status".to_string(), Constraint::StringConstraint(
-            StringConstraint::Any(vec![
+        refined_types.insert(
+            "Status".to_string(),
+            Constraint::StringConstraint(StringConstraint::Any(vec![
                 StringConstraint::Equals("pending".to_string()),
                 StringConstraint::Equals("done".to_string()),
-            ]),
-        ));
+            ])),
+        );
 
         populate_schemas(&type_defs, &refined_types);
 
         // Valid: status = "pending"
         let req = NValue::record(vec![
-            (RcStr::from("body"), NValue::string(r#"{"status":"pending"}"#.into())),
+            (
+                RcStr::from("body"),
+                NValue::string(r#"{"status":"pending"}"#.into()),
+            ),
             (RcStr::from("method"), NValue::string("POST".into())),
             (RcStr::from("headers"), NValue::list(vec![])),
         ]);
@@ -434,7 +445,10 @@ mod tests {
 
         // Invalid: status = "invalid"
         let req2 = NValue::record(vec![
-            (RcStr::from("body"), NValue::string(r#"{"status":"invalid"}"#.into())),
+            (
+                RcStr::from("body"),
+                NValue::string(r#"{"status":"invalid"}"#.into()),
+            ),
             (RcStr::from("method"), NValue::string("POST".into())),
             (RcStr::from("headers"), NValue::list(vec![])),
         ]);
@@ -447,22 +461,29 @@ mod tests {
     fn decode_with_refined_int() {
         let mut type_defs = HashMap::new();
         let mut field_map = HashMap::new();
-        field_map.insert("port".to_string(), Type::Refined(
-            Box::new(Type::Int),
-            "Port".to_string(),
-        ));
-        type_defs.insert("Config".to_string(), Type::Struct("Config".to_string(), field_map));
+        field_map.insert(
+            "port".to_string(),
+            Type::Refined(Box::new(Type::Int), "Port".to_string()),
+        );
+        type_defs.insert(
+            "Config".to_string(),
+            Type::Struct("Config".to_string(), field_map),
+        );
 
         let mut refined_types = HashMap::new();
-        refined_types.insert("Port".to_string(), Constraint::IntInterval(
-            Interval { min: 1, max: 65535 },
-        ));
+        refined_types.insert(
+            "Port".to_string(),
+            Constraint::IntInterval(Interval { min: 1, max: 65535 }),
+        );
 
         populate_schemas(&type_defs, &refined_types);
 
         // Valid
         let req = NValue::record(vec![
-            (RcStr::from("body"), NValue::string(r#"{"port":8080}"#.into())),
+            (
+                RcStr::from("body"),
+                NValue::string(r#"{"port":8080}"#.into()),
+            ),
             (RcStr::from("method"), NValue::string("POST".into())),
             (RcStr::from("headers"), NValue::list(vec![])),
         ]);

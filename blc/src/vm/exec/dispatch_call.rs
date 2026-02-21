@@ -139,7 +139,9 @@ impl super::Vm {
                         let method = name[dot + 1..]
                             .strip_suffix('!')
                             .unwrap_or(&name[dot + 1..]);
-                        if let Some(restart) = self.dispatch_handler_interception(module, method, n, ip, chunk_idx, chunks)? {
+                        if let Some(restart) = self.dispatch_handler_interception(
+                            module, method, n, ip, chunk_idx, chunks,
+                        )? {
                             return Ok(restart);
                         }
                     }
@@ -323,11 +325,7 @@ impl super::Vm {
     }
 
     #[inline(always)]
-    fn dispatch_continuation(
-        &mut self,
-        func: &NValue,
-        n: usize,
-    ) -> DispatchResult {
+    fn dispatch_continuation(&mut self, func: &NValue, n: usize) -> DispatchResult {
         let (ss, fs, us, hs, original_base_slot, hbs, r_ip, r_ci) = match func.as_heap_ref() {
             HeapObject::Continuation {
                 stack_segment,
@@ -452,11 +450,9 @@ impl super::Vm {
                 let stack_segment: Vec<NValue> =
                     self.stack[original_base_slot_usize..args_start].to_vec();
 
-                let frame_segment: Vec<(u32, u32, u32, u32)> = (frame_idx_start
-                    ..self.frames.len())
+                let frame_segment: Vec<(u32, u32, u32, u32)> = (frame_idx_start..self.frames.len())
                     .map(|i| {
-                        let f =
-                            unsafe { *self.frames.frames.get_unchecked(i) };
+                        let f = unsafe { *self.frames.frames.get_unchecked(i) };
                         (f.chunk_idx, f.ip, f.base_slot.raw(), f.upvalue_idx)
                     })
                     .collect();
@@ -475,28 +471,28 @@ impl super::Vm {
                 // If there were nested frames, we abort all the way back to the boundary frame
                 self.frames.len = bd_frame;
 
-                let upvalue_segment: Vec<Vec<NValue>> = self.upvalue_stack
-                    [bd_upvalue..]
+                let upvalue_segment: Vec<Vec<NValue>> = self.upvalue_stack[bd_upvalue..]
                     .iter()
                     .map(|rc| (**rc).clone())
                     .collect();
 
-                let args: Vec<NValue> =
-                    self.stack.drain(args_start..).collect();
+                let args: Vec<NValue> = self.stack.drain(args_start..).collect();
 
                 let handler_stack_segment: Vec<HashMap<String, NValue>> =
                     self.handler_stack[handler_depth..].to_vec();
                 let handler_boundary_segment: Vec<(usize, usize, usize, usize, usize, usize)> =
                     self.handler_boundaries[bi..]
                         .iter()
-                        .map(|b| (
-                            b.stack_depth - original_base_slot_usize,
-                            b.frame_depth - frame_idx_start,
-                            b.upvalue_depth,
-                            b.handler_stack_idx,
-                            b.return_ip,
-                            b.original_base_slot - original_base_slot_usize,
-                        ))
+                        .map(|b| {
+                            (
+                                b.stack_depth - original_base_slot_usize,
+                                b.frame_depth - frame_idx_start,
+                                b.upvalue_depth,
+                                b.handler_stack_idx,
+                                b.return_ip,
+                                b.original_base_slot - original_base_slot_usize,
+                            )
+                        })
                         .collect();
 
                 self.stack.truncate(bd_stack);
@@ -544,10 +540,8 @@ impl super::Vm {
                 {
                     let fn_idx = *cidx;
                     let new_base = PackedBase::from_slot(self.stack.len() - total_args);
-                    self.upvalue_stack
-                        .push(Rc::new(upvalues.clone()));
-                    let uv_idx =
-                        (self.upvalue_stack.len() - 1) as u32;
+                    self.upvalue_stack.push(Rc::new(upvalues.clone()));
+                    let uv_idx = (self.upvalue_stack.len() - 1) as u32;
                     self.frames.push(CallFrame {
                         chunk_idx: fn_idx as u32,
                         ip: 0,
@@ -590,8 +584,7 @@ impl super::Vm {
                     let caller = self.frames.last_mut();
                     caller.ip = ip as u32;
                     caller.chunk_idx = chunk_idx as u32;
-                    self.upvalue_stack
-                        .push(Rc::new(upvalues.clone()));
+                    self.upvalue_stack.push(Rc::new(upvalues.clone()));
                     let uv_idx = self.upvalue_stack.len() - 1;
                     let new_base = PackedBase::from_slot(start);
                     self.frames.push(CallFrame {
@@ -659,95 +652,177 @@ impl super::Vm {
             "Cell.await!" | "Cell.await" => {
                 // Cell.await!(cell)
                 if args.is_empty() {
-                    return Err(self.error("Cell.await! requires a Cell argument".into(), line, col));
+                    return Err(self.error(
+                        "Cell.await! requires a Cell argument".into(),
+                        line,
+                        col,
+                    ));
                 }
                 fiber::exec_cell_await(&args[0], line, col)?
             }
             "Cell.cancel!" | "Cell.cancel" => {
                 // Cell.cancel!(cell)
                 if args.is_empty() {
-                    return Err(
-                        self.error("Cell.cancel! requires a Cell argument".into(), line, col)
-                    );
+                    return Err(self.error(
+                        "Cell.cancel! requires a Cell argument".into(),
+                        line,
+                        col,
+                    ));
                 }
                 fiber::exec_cell_cancel(&args[0], line, col)?
             }
             "Async.parallel!" | "Async.parallel" => {
                 if args.is_empty() {
-                    return Err(self.error("Async.parallel! requires a list of closures".into(), line, col));
+                    return Err(self.error(
+                        "Async.parallel! requires a list of closures".into(),
+                        line,
+                        col,
+                    ));
                 }
-                let program = self.program.as_ref().ok_or_else(|| {
-                    self.error("Async.parallel! requires a program context".into(), line, col)
-                })?.clone();
+                let program = self
+                    .program
+                    .as_ref()
+                    .ok_or_else(|| {
+                        self.error(
+                            "Async.parallel! requires a program context".into(),
+                            line,
+                            col,
+                        )
+                    })?
+                    .clone();
                 fiber::exec_parallel(&args[0], program, chunks, line, col)?
             }
             "Async.race!" | "Async.race" => {
                 if args.is_empty() {
-                    return Err(self.error("Async.race! requires a list of closures".into(), line, col));
+                    return Err(self.error(
+                        "Async.race! requires a list of closures".into(),
+                        line,
+                        col,
+                    ));
                 }
-                let program = self.program.as_ref().ok_or_else(|| {
-                    self.error("Async.race! requires a program context".into(), line, col)
-                })?.clone();
+                let program = self
+                    .program
+                    .as_ref()
+                    .ok_or_else(|| {
+                        self.error("Async.race! requires a program context".into(), line, col)
+                    })?
+                    .clone();
                 fiber::exec_race(&args[0], program, chunks, line, col)?
             }
             "Async.scatter_gather!" | "Async.scatter_gather" => {
                 if args.len() < 2 {
                     return Err(self.error("Async.scatter_gather! requires a list of closures and an aggregator closure".into(), line, col));
                 }
-                let program = self.program.as_ref().ok_or_else(|| {
-                    self.error("Async.scatter_gather! requires a program context".into(), line, col)
-                })?.clone();
+                let program = self
+                    .program
+                    .as_ref()
+                    .ok_or_else(|| {
+                        self.error(
+                            "Async.scatter_gather! requires a program context".into(),
+                            line,
+                            col,
+                        )
+                    })?
+                    .clone();
                 fiber::exec_scatter_gather(&args[0], &args[1], program, chunks, line, col)?
             }
             "Channel.bounded" => {
                 if args.is_empty() {
-                    return Err(self.error("Channel.bounded requires a capacity argument".into(), line, col));
+                    return Err(self.error(
+                        "Channel.bounded requires a capacity argument".into(),
+                        line,
+                        col,
+                    ));
                 }
                 fiber::exec_channel_bounded(&args[0], line, col)?
             }
             "Channel.send!" | "Channel.send" => {
                 if args.len() < 2 {
-                    return Err(self.error("Channel.send! requires sender and value arguments".into(), line, col));
+                    return Err(self.error(
+                        "Channel.send! requires sender and value arguments".into(),
+                        line,
+                        col,
+                    ));
                 }
                 fiber::exec_channel_send(&args[0], &args[1], line, col)?
             }
             "Channel.recv!" | "Channel.recv" => {
                 if args.is_empty() {
-                    return Err(self.error("Channel.recv! requires a receiver argument".into(), line, col));
+                    return Err(self.error(
+                        "Channel.recv! requires a receiver argument".into(),
+                        line,
+                        col,
+                    ));
                 }
                 fiber::exec_channel_recv(&args[0], line, col)?
             }
             "Channel.close!" | "Channel.close" => {
                 if args.is_empty() {
-                    return Err(self.error("Channel.close! requires a sender argument".into(), line, col));
+                    return Err(self.error(
+                        "Channel.close! requires a sender argument".into(),
+                        line,
+                        col,
+                    ));
                 }
                 fiber::exec_channel_close(&args[0], line, col)?
             }
             "Async.delay!" | "Async.delay" => {
                 if args.len() < 2 {
-                    return Err(self.error("Async.delay! requires duration (ms) and closure arguments".into(), line, col));
+                    return Err(self.error(
+                        "Async.delay! requires duration (ms) and closure arguments".into(),
+                        line,
+                        col,
+                    ));
                 }
-                let program = self.program.as_ref().ok_or_else(|| {
-                    self.error("Async.delay! requires a program context".into(), line, col)
-                })?.clone();
+                let program = self
+                    .program
+                    .as_ref()
+                    .ok_or_else(|| {
+                        self.error("Async.delay! requires a program context".into(), line, col)
+                    })?
+                    .clone();
                 fiber::exec_delay(&args[0], args[1].clone(), program, chunks, line, col)?
             }
             "Async.interval!" | "Async.interval" => {
                 if args.len() < 2 {
-                    return Err(self.error("Async.interval! requires duration (ms) and closure arguments".into(), line, col));
+                    return Err(self.error(
+                        "Async.interval! requires duration (ms) and closure arguments".into(),
+                        line,
+                        col,
+                    ));
                 }
-                let program = self.program.as_ref().ok_or_else(|| {
-                    self.error("Async.interval! requires a program context".into(), line, col)
-                })?.clone();
+                let program = self
+                    .program
+                    .as_ref()
+                    .ok_or_else(|| {
+                        self.error(
+                            "Async.interval! requires a program context".into(),
+                            line,
+                            col,
+                        )
+                    })?
+                    .clone();
                 fiber::exec_interval(self, &args[0], args[1].clone(), program, chunks, line, col)?
             }
             "Async.timeout!" | "Async.timeout" => {
                 if args.len() < 2 {
-                    return Err(self.error("Async.timeout! requires duration (ms) and closure arguments".into(), line, col));
+                    return Err(self.error(
+                        "Async.timeout! requires duration (ms) and closure arguments".into(),
+                        line,
+                        col,
+                    ));
                 }
-                let program = self.program.as_ref().ok_or_else(|| {
-                    self.error("Async.timeout! requires a program context".into(), line, col)
-                })?.clone();
+                let program = self
+                    .program
+                    .as_ref()
+                    .ok_or_else(|| {
+                        self.error(
+                            "Async.timeout! requires a program context".into(),
+                            line,
+                            col,
+                        )
+                    })?
+                    .clone();
                 fiber::exec_timeout(&args[0], args[1].clone(), program, chunks, line, col)?
             }
             _ => {

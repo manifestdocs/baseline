@@ -9,13 +9,15 @@ mod type_def;
 mod type_parse;
 
 pub use check_cycles::check_closure_cycles;
-pub use type_def::{Type, TypeMap};
 pub use symbol_table::{DictEntry, DictMap, SymbolTable};
+pub use type_def::{Type, TypeMap};
 
 use std::collections::HashMap;
 
 use check_node::check_node;
-use type_compat::{detect_implicit_type_params, extract_explicit_type_params, extract_type_param_bounds};
+use type_compat::{
+    detect_implicit_type_params, extract_explicit_type_params, extract_type_param_bounds,
+};
 use type_parse::parse_type_ext;
 
 use super::infer::UserGenericSchema;
@@ -101,7 +103,11 @@ pub fn check_types_with_loader(
     check_types_core(root, source, file, loader).diagnostics
 }
 
-pub fn check_types_with_map(root: &Node, source: &str, file: &str) -> (Vec<Diagnostic>, TypeMap, DictMap) {
+pub fn check_types_with_map(
+    root: &Node,
+    source: &str,
+    file: &str,
+) -> (Vec<Diagnostic>, TypeMap, DictMap) {
     let r = check_types_core(root, source, file, None);
     (r.diagnostics, r.type_map, r.dict_map)
 }
@@ -362,7 +368,7 @@ fn process_imports(
                     diagnostics.push(Diagnostic {
                         code: "IMP_004".to_string(),
                         severity: Severity::Error,
-                        location: Location::from_node(file,&import_node),
+                        location: Location::from_node(file, &import_node),
                         message: format!(
                             "Symbol `{}` not found in module `{}`",
                             name, import.module_name
@@ -446,7 +452,10 @@ fn collect_trait_def(node: &Node, source: &str, symbols: &mut SymbolTable) {
         if child.kind() == "function_signature" {
             // function_signature: name ':' type_signature
             let sig_name_node = child.named_child(0).unwrap();
-            let sig_name = sig_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+            let sig_name = sig_name_node
+                .utf8_text(source.as_bytes())
+                .unwrap()
+                .to_string();
             let type_sig_node = child.named_child(1).unwrap();
             // Parse the type signature with "Self" as a type parameter
             let self_params: HashSet<String> = ["Self".to_string()].into_iter().collect();
@@ -457,7 +466,8 @@ fn collect_trait_def(node: &Node, source: &str, symbols: &mut SymbolTable) {
             if let Some(fname_node) = child.child_by_field_name("name") {
                 let method_name = fname_node.utf8_text(source.as_bytes()).unwrap().to_string();
                 let self_params: HashSet<String> = ["Self".to_string()].into_iter().collect();
-                let fn_type = parse_function_type_with_params(&child, source, symbols, &self_params);
+                let fn_type =
+                    parse_function_type_with_params(&child, source, symbols, &self_params);
                 methods.push((method_name.clone(), fn_type));
                 default_method_bytes.insert(method_name, child.start_byte());
             }
@@ -481,7 +491,10 @@ fn collect_impl_block(node: &Node, source: &str, symbols: &mut SymbolTable) {
         Some(n) => n,
         None => return,
     };
-    let trait_name = trait_name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+    let trait_name = trait_name_node
+        .utf8_text(source.as_bytes())
+        .unwrap()
+        .to_string();
 
     let target_type_node = match node.child_by_field_name("target_type") {
         Some(n) => n,
@@ -497,7 +510,10 @@ fn collect_impl_block(node: &Node, source: &str, symbols: &mut SymbolTable) {
     };
 
     // Check for duplicate impl
-    if symbols.trait_impls.contains_key(&(trait_name.clone(), type_key.clone())) {
+    if symbols
+        .trait_impls
+        .contains_key(&(trait_name.clone(), type_key.clone()))
+    {
         return; // TRT_003 emitted during check_node
     }
 
@@ -505,51 +521,48 @@ fn collect_impl_block(node: &Node, source: &str, symbols: &mut SymbolTable) {
     let mut impl_methods = HashMap::new();
     let mut cursor = node.walk();
     for child in node.named_children(&mut cursor) {
-        if child.kind() == "function_def" {
-            if let Some(name_node) = child.child_by_field_name("name") {
-                let method_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+        if child.kind() == "function_def"
+            && let Some(name_node) = child.child_by_field_name("name")
+        {
+            let method_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+            let mangled = format!("{}${}${}", trait_name, type_key, method_name);
 
-                // Parse the function type
-                let fn_type = parse_function_type_with_params(
-                    &child, source, symbols, &HashSet::new(),
-                );
-                symbols.insert(mangled.clone(), fn_type);
+            // Parse the function type
+            let fn_type = parse_function_type_with_params(&child, source, symbols, &HashSet::new());
+            symbols.insert(mangled.clone(), fn_type);
 
-                // Register param names for the mangled function
-                let mut param_names = Vec::new();
-                if let Some(params) = child.child_by_field_name("params") {
-                    let mut pcursor = params.walk();
-                    for param in params.named_children(&mut pcursor) {
-                        if param.kind() == "param" {
-                            // Grammar uses field('pattern', ...) not field('name', ...)
-                            let name_node = param.child_by_field_name("name")
-                                .or_else(|| param.child_by_field_name("pattern"));
-                            if let Some(pn) = name_node {
-                                param_names.push(pn.utf8_text(source.as_bytes()).unwrap().to_string());
-                            }
+            // Register param names for the mangled function
+            let mut param_names = Vec::new();
+            if let Some(params) = child.child_by_field_name("params") {
+                let mut pcursor = params.walk();
+                for param in params.named_children(&mut pcursor) {
+                    if param.kind() == "param" {
+                        // Grammar uses field('pattern', ...) not field('name', ...)
+                        let name_node = param
+                            .child_by_field_name("name")
+                            .or_else(|| param.child_by_field_name("pattern"));
+                        if let Some(pn) = name_node {
+                            param_names.push(pn.utf8_text(source.as_bytes()).unwrap().to_string());
                         }
                     }
                 }
-                symbols.insert_fn_params(mangled.clone(), param_names);
-
-                impl_methods.insert(method_name, mangled);
             }
+            symbols.insert_fn_params(mangled.clone(), param_names);
+
+            impl_methods.insert(method_name, mangled);
         }
     }
 
     // For default methods not overridden, generate mangled names and register them
     for (method_name, method_type) in &trait_methods {
-        if !impl_methods.contains_key(method_name) {
-            if default_bytes.contains_key(method_name) {
-                // Default method: register a mangled function for the concrete type
-                let mangled = format!("{}${}${}", trait_name, type_key, method_name);
-                let substituted = substitute_self_in_type(method_type, &target_type);
-                symbols.insert(mangled.clone(), substituted);
-                impl_methods.insert(method_name.clone(), mangled);
-            }
-            // else: Will be reported as TRT_002 during check_node
+        if !impl_methods.contains_key(method_name) && default_bytes.contains_key(method_name) {
+            // Default method: register a mangled function for the concrete type
+            let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+            let substituted = substitute_self_in_type(method_type, &target_type);
+            symbols.insert(mangled.clone(), substituted);
+            impl_methods.insert(method_name.clone(), mangled);
         }
+        // else: Will be reported as TRT_002 during check_node
     }
 
     symbols.trait_impls.insert(
@@ -593,16 +606,33 @@ fn substitute_self_in_type(ty: &Type, target: &Type) -> Type {
     match ty {
         Type::TypeParam(name) if name == "Self" => target.clone(),
         Type::Function(args, ret) => {
-            let new_args = args.iter().map(|a| substitute_self_in_type(a, target)).collect();
+            let new_args = args
+                .iter()
+                .map(|a| substitute_self_in_type(a, target))
+                .collect();
             let new_ret = substitute_self_in_type(ret, target);
             Type::Function(new_args, Box::new(new_ret))
         }
         Type::List(inner) => Type::List(Box::new(substitute_self_in_type(inner, target))),
-        Type::Tuple(elems) => Type::Tuple(elems.iter().map(|e| substitute_self_in_type(e, target)).collect()),
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_self_in_type(e, target))
+                .collect(),
+        ),
         Type::Enum(name, variants) => {
-            let new_variants = variants.iter().map(|(n, payloads)| {
-                (n.clone(), payloads.iter().map(|p| substitute_self_in_type(p, target)).collect())
-            }).collect();
+            let new_variants = variants
+                .iter()
+                .map(|(n, payloads)| {
+                    (
+                        n.clone(),
+                        payloads
+                            .iter()
+                            .map(|p| substitute_self_in_type(p, target))
+                            .collect(),
+                    )
+                })
+                .collect();
             Type::Enum(name.clone(), new_variants)
         }
         _ => ty.clone(),

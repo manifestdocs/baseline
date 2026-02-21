@@ -139,7 +139,12 @@ fn collect_native_calls(module: &IrModule) -> HashSet<String> {
 
 fn collect_native_calls_expr(expr: &Expr, calls: &mut HashSet<String>) {
     match expr {
-        Expr::CallNative { module, method, args, .. } => {
+        Expr::CallNative {
+            module,
+            method,
+            args,
+            ..
+        } => {
             calls.insert(format!("{}.{}", module, method));
             for a in args {
                 collect_native_calls_expr(a, calls);
@@ -157,7 +162,12 @@ fn collect_native_calls_expr(expr: &Expr, calls: &mut HashSet<String>) {
             collect_native_calls_expr(a, calls);
             collect_native_calls_expr(b, calls);
         }
-        Expr::If { condition, then_branch, else_branch, .. } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             collect_native_calls_expr(condition, calls);
             collect_native_calls_expr(then_branch, calls);
             if let Some(eb) = else_branch {
@@ -281,9 +291,12 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
         .finish(settings::Flags::new(flag_builder))
         .map_err(|e| e.to_string())?;
 
-    let obj_builder =
-        ObjectBuilder::new(isa, "baseline_aot", cranelift_module::default_libcall_names())
-            .map_err(|e| e.to_string())?;
+    let obj_builder = ObjectBuilder::new(
+        isa,
+        "baseline_aot",
+        cranelift_module::default_libcall_names(),
+    )
+    .map_err(|e| e.to_string())?;
     let mut obj_module = ObjectModule::new(obj_builder);
     let ptr_type = obj_module.target_config().pointer_type();
 
@@ -443,7 +456,11 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
                 tags: &module.tags,
                 sra_records: HashMap::new(),
                 aot_strings: Some(&aot_strings),
-                aot_native_ids: if aot_native_ids.is_empty() { None } else { Some(&aot_native_ids) },
+                aot_native_ids: if aot_native_ids.is_empty() {
+                    None
+                } else {
+                    Some(&aot_native_ids)
+                },
                 rc_enabled: true,
                 rc_scope_stack: Vec::new(),
                 func_call_conv: CallConv::Fast,
@@ -649,8 +666,8 @@ fn create_main_wrapper(
     ptr_type: cranelift_codegen::ir::Type,
     trace: bool,
 ) -> Result<(), String> {
-    let entry_func_id = func_ids[entry_idx]
-        .ok_or_else(|| "AOT: entry function was not compiled".to_string())?;
+    let entry_func_id =
+        func_ids[entry_idx].ok_or_else(|| "AOT: entry function was not compiled".to_string())?;
 
     // Signature: (argc: i32, argv: ptr) -> i32
     let mut main_sig = obj_module.make_signature();
@@ -674,13 +691,12 @@ fn create_main_wrapper(
 
         // 1. Build function table on the stack and initialize it
         let table_size = (func_ids.len() * 8) as u32;
-        let fn_table_slot = builder.create_sized_stack_slot(
-            cranelift_codegen::ir::StackSlotData::new(
+        let fn_table_slot =
+            builder.create_sized_stack_slot(cranelift_codegen::ir::StackSlotData::new(
                 cranelift_codegen::ir::StackSlotKind::ExplicitSlot,
                 table_size,
                 3, // 8-byte aligned
-            ),
-        );
+            ));
         let table_addr = builder.ins().stack_addr(ptr_type, fn_table_slot, 0);
 
         // Store each function's address into the table
@@ -699,9 +715,7 @@ fn create_main_wrapper(
             }
         }
 
-        let func_count = builder
-            .ins()
-            .iconst(types::I64, func_ids.len() as i64);
+        let func_count = builder.ins().iconst(types::I64, func_ids.len() as i64);
 
         let init_fn_id = helper_ids["jit_init_fn_table"];
         let init_fn_ref = obj_module.declare_func_in_func(init_fn_id, builder.func);
@@ -785,7 +799,10 @@ fn create_main_wrapper(
         .map_err(|e| format!("AOT: main wrapper error: {}", e))?;
 
     if trace {
-        eprintln!("AOT: created main wrapper (entry_unboxed={})", entry_unboxed);
+        eprintln!(
+            "AOT: created main wrapper (entry_unboxed={})",
+            entry_unboxed
+        );
     }
 
     Ok(())
@@ -894,8 +911,7 @@ fn collect_expr_strings(expr: &Expr, strings: &mut HashSet<String>) {
                 collect_expr_strings(a, strings);
             }
         }
-        Expr::CallIndirect { callee, args, .. }
-        | Expr::TailCallIndirect { callee, args, .. } => {
+        Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
             collect_expr_strings(callee, strings);
             for a in args {
                 collect_expr_strings(a, strings);

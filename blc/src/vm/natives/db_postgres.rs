@@ -58,8 +58,10 @@ pub fn postgres_execute(sql: &str, params: &[String]) -> Result<i64, NativeError
             NativeError("Postgres.execute!: no connection (call Postgres.connect! first)".into())
         })?;
 
-        let pg_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            params.iter().map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let pg_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
 
         let affected = rt
             .block_on(client.execute(sql, &pg_params))
@@ -79,8 +81,10 @@ pub fn postgres_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeEr
             NativeError("Postgres.query!: no connection (call Postgres.connect! first)".into())
         })?;
 
-        let pg_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> =
-            params.iter().map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync)).collect();
+        let pg_params: Vec<&(dyn tokio_postgres::types::ToSql + Sync)> = params
+            .iter()
+            .map(|s| s as &(dyn tokio_postgres::types::ToSql + Sync))
+            .collect();
 
         let rows = rt
             .block_on(client.query(sql, &pg_params))
@@ -88,7 +92,13 @@ pub fn postgres_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeEr
 
         // Build shared column names from first row (or empty query)
         let columns: ColumnNames = if let Some(first) = rows.first() {
-            Arc::new(first.columns().iter().map(|c| RcStr::from(c.name())).collect())
+            Arc::new(
+                first
+                    .columns()
+                    .iter()
+                    .map(|c| RcStr::from(c.name()))
+                    .collect(),
+            )
         } else {
             Arc::new(Vec::new())
         };
@@ -110,7 +120,10 @@ pub fn postgres_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeEr
                 };
                 values.push(val);
             }
-            result.push(Row { columns: columns.clone(), values });
+            result.push(Row {
+                columns: columns.clone(),
+                values,
+            });
         }
 
         Ok(result)

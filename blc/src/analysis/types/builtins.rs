@@ -39,10 +39,7 @@ fn response_type() -> Type {
 /// Shape: { routes: List<Unknown>, middleware: List<Unknown> }
 fn router_type() -> Type {
     let mut fields = HashMap::new();
-    fields.insert(
-        "routes".to_string(),
-        Type::List(Box::new(Type::Unknown)),
-    );
+    fields.insert("routes".to_string(), Type::List(Box::new(Type::Unknown)));
     fields.insert(
         "middleware".to_string(),
         Type::List(Box::new(Type::Unknown)),
@@ -653,17 +650,11 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Result.map_err".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::Unknown],
-                Box::new(Type::Unknown),
-            ),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
         );
         sigs.insert(
             "Result.context".into(),
-            Type::Function(
-                vec![Type::Unknown, Type::String],
-                Box::new(Type::Unknown),
-            ),
+            Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
         );
     }
 
@@ -845,10 +836,7 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Request.decode".into(),
-            Type::Function(
-                vec![req, Type::String],
-                Box::new(result_unknown_resp),
-            ),
+            Type::Function(vec![req, Type::String], Box::new(result_unknown_resp)),
         );
     }
 
@@ -906,8 +894,14 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         // All route methods: (Router, String, Handler) -> Router
         for method_name in &[
-            "Router.get", "Router.post", "Router.put", "Router.delete",
-            "Router.patch", "Router.options", "Router.head", "Router.any",
+            "Router.get",
+            "Router.post",
+            "Router.put",
+            "Router.delete",
+            "Router.patch",
+            "Router.options",
+            "Router.head",
+            "Router.any",
         ] {
             sigs.insert(
                 (*method_name).into(),
@@ -998,7 +992,10 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Request.header".into(),
-            Type::Function(vec![req.clone(), Type::String], Box::new(option_str.clone())),
+            Type::Function(
+                vec![req.clone(), Type::String],
+                Box::new(option_str.clone()),
+            ),
         );
         sigs.insert(
             "Request.method".into(),
@@ -1054,10 +1051,7 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
         sigs.insert(
             "Request.query_int".into(),
-            Type::Function(
-                vec![req.clone(), Type::String],
-                Box::new(result_int_string),
-            ),
+            Type::Function(vec![req.clone(), Type::String], Box::new(result_int_string)),
         );
     }
 
@@ -1104,10 +1098,7 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Async.scatter_gather!".into(),
             Type::Function(
                 vec![
-                    Type::List(Box::new(Type::Function(
-                        vec![],
-                        Box::new(Type::Unknown),
-                    ))),
+                    Type::List(Box::new(Type::Function(vec![], Box::new(Type::Unknown)))),
                     Type::Function(
                         vec![Type::List(Box::new(Type::Unknown))],
                         Box::new(Type::Unknown),
@@ -1119,30 +1110,21 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         sigs.insert(
             "Async.delay!".into(),
             Type::Function(
-                vec![
-                    Type::Int,
-                    Type::Function(vec![], Box::new(Type::Unknown)),
-                ],
+                vec![Type::Int, Type::Function(vec![], Box::new(Type::Unknown))],
                 Box::new(Type::Unknown),
             ),
         );
         sigs.insert(
             "Async.interval!".into(),
             Type::Function(
-                vec![
-                    Type::Int,
-                    Type::Function(vec![], Box::new(Type::Unit)),
-                ],
+                vec![Type::Int, Type::Function(vec![], Box::new(Type::Unit))],
                 Box::new(Type::Unit),
             ),
         );
         sigs.insert(
             "Async.timeout!".into(),
             Type::Function(
-                vec![
-                    Type::Int,
-                    Type::Function(vec![], Box::new(Type::Unknown)),
-                ],
+                vec![Type::Int, Type::Function(vec![], Box::new(Type::Unknown))],
                 Box::new(Type::Enum(
                     "Result".to_string(),
                     vec![
@@ -1183,7 +1165,13 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Channel.recv!".into(),
             Type::Function(
                 vec![Type::Unknown],
-                Box::new(Type::Enum("Option".into(), vec![("Some".into(), vec![Type::Unknown]), ("None".into(), vec![])])),
+                Box::new(Type::Enum(
+                    "Option".into(),
+                    vec![
+                        ("Some".into(), vec![Type::Unknown]),
+                        ("None".into(), vec![]),
+                    ],
+                )),
             ),
         );
         sigs.insert(
@@ -1308,11 +1296,19 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
     // -- query_as! / query_one_as! (special-cased in type checker, fallback signatures here) --
     if builtin_modules.contains(&"Sqlite") {
         let query_as_fallback = Type::Function(
-            vec![Type::Unknown, Type::String, Type::List(Box::new(Type::String))],
+            vec![
+                Type::Unknown,
+                Type::String,
+                Type::List(Box::new(Type::String)),
+            ],
             Box::new(Type::List(Box::new(Type::Unknown))),
         );
         let query_one_as_fallback = Type::Function(
-            vec![Type::Unknown, Type::String, Type::List(Box::new(Type::String))],
+            vec![
+                Type::Unknown,
+                Type::String,
+                Type::List(Box::new(Type::String)),
+            ],
             Box::new(Type::Enum(
                 "Option".to_string(),
                 vec![
@@ -1323,10 +1319,7 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
 
         for backend in &["Sqlite", "Postgres", "Mysql"] {
-            sigs.insert(
-                format!("{}.query_as!", backend),
-                query_as_fallback.clone(),
-            );
+            sigs.insert(format!("{}.query_as!", backend), query_as_fallback.clone());
             sigs.insert(
                 format!("{}.query_one_as!", backend),
                 query_one_as_fallback.clone(),

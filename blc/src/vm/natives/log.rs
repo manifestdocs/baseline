@@ -92,10 +92,7 @@ fn emit_log(level: LogLevel, label: &str, args: &[NValue]) -> Result<NValue, Nat
             if fields.is_empty() {
                 eprintln!("{} [{}] {}", timestamp, label, msg);
             } else {
-                let kvs: Vec<String> = fields
-                    .iter()
-                    .map(|(k, v)| format!("{}={}", k, v))
-                    .collect();
+                let kvs: Vec<String> = fields.iter().map(|(k, v)| format!("{}={}", k, v)).collect();
                 eprintln!("{} [{}] {} {}", timestamp, label, msg, kvs.join(" "));
             }
         }
@@ -222,20 +219,28 @@ mod tests {
             ("user_id".into(), NValue::int(42)),
             ("action".into(), NValue::string("login".into())),
         ]);
-        let result = native_log_info(&[
-            NValue::string("user action".into()),
-            fields,
-        ])
-        .unwrap();
+        let result = native_log_info(&[NValue::string("user action".into()), fields]).unwrap();
         assert!(result.is_unit());
     }
 
     #[test]
     fn log_all_levels_return_unit() {
         let msg = NValue::string("test".into());
-        assert!(native_log_debug(&[msg.clone()]).unwrap().is_unit());
-        assert!(native_log_info(&[msg.clone()]).unwrap().is_unit());
-        assert!(native_log_warn(&[msg.clone()]).unwrap().is_unit());
+        assert!(
+            native_log_debug(std::slice::from_ref(&msg))
+                .unwrap()
+                .is_unit()
+        );
+        assert!(
+            native_log_info(std::slice::from_ref(&msg))
+                .unwrap()
+                .is_unit()
+        );
+        assert!(
+            native_log_warn(std::slice::from_ref(&msg))
+                .unwrap()
+                .is_unit()
+        );
         assert!(native_log_error(&[msg]).unwrap().is_unit());
     }
 

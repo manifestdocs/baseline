@@ -299,11 +299,7 @@ impl super::Vm {
                         if i >= items.len() {
                             let (line, col) = chunk.source_map[ip - 1];
                             return Err(self.error(
-                                format!(
-                                    "Tuple index {} out of bounds (len {})",
-                                    i,
-                                    items.len()
-                                ),
+                                format!("Tuple index {} out of bounds (len {})", i, items.len()),
                                 line,
                                 col,
                             ));

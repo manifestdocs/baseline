@@ -19,24 +19,17 @@ pub(crate) fn serde_to_nvalue(value: serde_json::Value) -> NValue {
         }
         serde_json::Value::Object(obj) => {
             // Check for enum encoding: {"type": "Tag", "value": ...}
-            if obj.len() == 2 {
-                if let (Some(serde_json::Value::String(tag)), Some(val)) =
+            if obj.len() == 2
+                && let (Some(serde_json::Value::String(tag)), Some(val)) =
                     (obj.get("type"), obj.get("value"))
-                {
-                    return NValue::enum_val(
-                        RcStr::from(tag.as_str()),
-                        serde_to_nvalue(val.clone()),
-                    );
-                }
+            {
+                return NValue::enum_val(RcStr::from(tag.as_str()), serde_to_nvalue(val.clone()));
             }
             // Also handle {"type": "Tag"} with no value (unit payload)
-            if obj.len() == 1 {
-                if let Some(serde_json::Value::String(tag)) = obj.get("type") {
-                    return NValue::enum_val(
-                        RcStr::from(tag.as_str()),
-                        NValue::unit(),
-                    );
-                }
+            if obj.len() == 1
+                && let Some(serde_json::Value::String(tag)) = obj.get("type")
+            {
+                return NValue::enum_val(RcStr::from(tag.as_str()), NValue::unit());
             }
             let fields: Vec<(RcStr, NValue)> = obj
                 .into_iter()
@@ -210,7 +203,10 @@ fn convert_record_keys(value: &NValue, convert: fn(&str) -> String) -> NValue {
             let new_fields: Vec<(RcStr, NValue)> = fields
                 .iter()
                 .map(|(k, v)| {
-                    (RcStr::from(convert(k).as_str()), convert_record_keys(v, convert))
+                    (
+                        RcStr::from(convert(k).as_str()),
+                        convert_record_keys(v, convert),
+                    )
                 })
                 .collect();
             NValue::record(new_fields)
@@ -219,14 +215,20 @@ fn convert_record_keys(value: &NValue, convert: fn(&str) -> String) -> NValue {
             let new_fields: Vec<(RcStr, NValue)> = fields
                 .iter()
                 .map(|(k, v)| {
-                    (RcStr::from(convert(k).as_str()), convert_record_keys(v, convert))
+                    (
+                        RcStr::from(convert(k).as_str()),
+                        convert_record_keys(v, convert),
+                    )
                 })
                 .collect();
             NValue::struct_val(name.clone(), new_fields)
         }
-        HeapObject::List(items) => {
-            NValue::list(items.iter().map(|v| convert_record_keys(v, convert)).collect())
-        }
+        HeapObject::List(items) => NValue::list(
+            items
+                .iter()
+                .map(|v| convert_record_keys(v, convert))
+                .collect(),
+        ),
         _ => value.clone(),
     }
 }

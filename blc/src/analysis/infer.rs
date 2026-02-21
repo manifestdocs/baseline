@@ -42,9 +42,12 @@ pub fn substitute_type_params(ty: &Type, mapping: &HashMap<String, Type>) -> Typ
             Type::Function(params, ret)
         }
         Type::List(inner) => Type::List(Box::new(substitute_type_params(inner, mapping))),
-        Type::Tuple(elems) => {
-            Type::Tuple(elems.iter().map(|e| substitute_type_params(e, mapping)).collect())
-        }
+        Type::Tuple(elems) => Type::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_type_params(e, mapping))
+                .collect(),
+        ),
         Type::Enum(name, variants) => {
             let variants = variants
                 .iter()
@@ -351,10 +354,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                     vec![Type::List(Box::new(a.clone()))],
                     Box::new(Type::Enum(
                         "Option".to_string(),
-                        vec![
-                            ("Some".to_string(), vec![a]),
-                            ("None".to_string(), vec![]),
-                        ],
+                        vec![("Some".to_string(), vec![a]), ("None".to_string(), vec![])],
                     )),
                 )
             },
@@ -435,10 +435,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                     vec![Type::List(Box::new(a.clone())), Type::Int],
                     Box::new(Type::Enum(
                         "Option".to_string(),
-                        vec![
-                            ("Some".to_string(), vec![a]),
-                            ("None".to_string(), vec![]),
-                        ],
+                        vec![("Some".to_string(), vec![a]), ("None".to_string(), vec![])],
                     )),
                 )
             },
@@ -571,10 +568,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                     ],
                     Box::new(Type::Enum(
                         "Result".to_string(),
-                        vec![
-                            ("Ok".to_string(), vec![a]),
-                            ("Err".to_string(), vec![e]),
-                        ],
+                        vec![("Ok".to_string(), vec![a]), ("Err".to_string(), vec![e])],
                     )),
                 )
             },
@@ -733,10 +727,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                     ],
                     Box::new(Type::Enum(
                         "Result".to_string(),
-                        vec![
-                            ("Ok".to_string(), vec![a]),
-                            ("Err".to_string(), vec![f]),
-                        ],
+                        vec![("Ok".to_string(), vec![a]), ("Err".to_string(), vec![f])],
                     )),
                 )
             },
@@ -769,10 +760,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                         "Result".to_string(),
                         vec![
                             ("Ok".to_string(), vec![a]),
-                            (
-                                "Err".to_string(),
-                                vec![Type::Record(err_fields, None)],
-                            ),
+                            ("Err".to_string(), vec![Type::Record(err_fields, None)]),
                         ],
                     )),
                 )
@@ -885,10 +873,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                     vec![Type::Map(Box::new(k.clone()), Box::new(v.clone())), k],
                     Box::new(Type::Enum(
                         "Option".to_string(),
-                        vec![
-                            ("Some".to_string(), vec![v]),
-                            ("None".to_string(), vec![]),
-                        ],
+                        vec![("Some".to_string(), vec![v]), ("None".to_string(), vec![])],
                     )),
                 )
             },
@@ -904,7 +889,10 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                 let k = ctx.fresh_var();
                 let v = ctx.fresh_var();
                 Type::Function(
-                    vec![Type::Map(Box::new(k.clone()), Box::new(v.clone())), k.clone()],
+                    vec![
+                        Type::Map(Box::new(k.clone()), Box::new(v.clone())),
+                        k.clone(),
+                    ],
                     Box::new(Type::Map(Box::new(k), Box::new(v))),
                 )
             },
@@ -1042,7 +1030,10 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
             build: |ctx| {
                 let t = ctx.fresh_var();
                 Type::Function(
-                    vec![Type::Set(Box::new(t.clone())), Type::Set(Box::new(t.clone()))],
+                    vec![
+                        Type::Set(Box::new(t.clone())),
+                        Type::Set(Box::new(t.clone())),
+                    ],
                     Box::new(Type::Set(Box::new(t))),
                 )
             },
@@ -1057,7 +1048,10 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
             build: |ctx| {
                 let t = ctx.fresh_var();
                 Type::Function(
-                    vec![Type::Set(Box::new(t.clone())), Type::Set(Box::new(t.clone()))],
+                    vec![
+                        Type::Set(Box::new(t.clone())),
+                        Type::Set(Box::new(t.clone())),
+                    ],
                     Box::new(Type::Set(Box::new(t))),
                 )
             },
@@ -1071,10 +1065,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
             type_params: 1,
             build: |ctx| {
                 let t = ctx.fresh_var();
-                Type::Function(
-                    vec![Type::Set(Box::new(t))],
-                    Box::new(Type::Int),
-                )
+                Type::Function(vec![Type::Set(Box::new(t))], Box::new(Type::Int))
             },
         },
     );
@@ -1103,10 +1094,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
             type_params: 1,
             build: |ctx| {
                 let a = ctx.fresh_var();
-                Type::Function(
-                    vec![a.clone()],
-                    Box::new(Type::Weak(Box::new(a))),
-                )
+                Type::Function(vec![a.clone()], Box::new(Type::Weak(Box::new(a))))
             },
         },
     );
@@ -1122,10 +1110,7 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                     vec![Type::Weak(Box::new(a.clone()))],
                     Box::new(Type::Enum(
                         "Option".to_string(),
-                        vec![
-                            ("Some".to_string(), vec![a]),
-                            ("None".to_string(), vec![]),
-                        ],
+                        vec![("Some".to_string(), vec![a]), ("None".to_string(), vec![])],
                     )),
                 )
             },

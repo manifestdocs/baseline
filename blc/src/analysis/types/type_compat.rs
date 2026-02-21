@@ -80,17 +80,16 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
             if row_a.is_some() || row_b.is_some() =>
         {
             // An open record with no fields is a wildcard — compatible with any record
-            if (row_a.is_some() && fields_a.is_empty())
-                || (row_b.is_some() && fields_b.is_empty())
+            if (row_a.is_some() && fields_a.is_empty()) || (row_b.is_some() && fields_b.is_empty())
             {
                 return true;
             }
             // Overlapping fields must be compatible
             for (k, ta) in fields_a.iter() {
-                if let Some(tb) = fields_b.get(k) {
-                    if !types_compatible(ta, tb) {
-                        return false;
-                    }
+                if let Some(tb) = fields_b.get(k)
+                    && !types_compatible(ta, tb)
+                {
+                    return false;
                 }
                 // Field only in A but not in B: ok, since at least one side is open
             }
@@ -101,17 +100,15 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         (Type::Record(fa, None), Type::Record(fb, None)) => {
             // Closed records: exact field match
             fa.len() == fb.len()
-                && fa.iter().all(|(k, ta)| {
-                    fb.get(k).is_some_and(|tb| types_compatible(ta, tb))
-                })
+                && fa
+                    .iter()
+                    .all(|(k, ta)| fb.get(k).is_some_and(|tb| types_compatible(ta, tb)))
         }
         // Open record with Struct (structs have fixed fields)
         (Type::Record(fields, Some(_)), Type::Struct(_, sfields))
-        | (Type::Struct(_, sfields), Type::Record(fields, Some(_))) => {
-            fields.iter().all(|(k, ta)| {
-                sfields.get(k).is_some_and(|tb| types_compatible(ta, tb))
-            })
-        }
+        | (Type::Struct(_, sfields), Type::Record(fields, Some(_))) => fields
+            .iter()
+            .all(|(k, ta)| sfields.get(k).is_some_and(|tb| types_compatible(ta, tb))),
         _ => false,
     }
 }
@@ -142,27 +139,31 @@ pub(super) fn extract_explicit_type_params(func_node: &Node, source: &str) -> Ve
 
 /// Extract trait bounds from a function_def's type_params node.
 /// Returns a map from type parameter name to list of trait bound names.
-pub(super) fn extract_type_param_bounds(func_node: &Node, source: &str) -> HashMap<String, Vec<String>> {
+pub(super) fn extract_type_param_bounds(
+    func_node: &Node,
+    source: &str,
+) -> HashMap<String, Vec<String>> {
     let mut bounds = HashMap::new();
     let mut cursor = func_node.walk();
     for child in func_node.children(&mut cursor) {
         if child.kind() == "type_params" {
             let mut inner = child.walk();
             for tp in child.named_children(&mut inner) {
-                if tp.kind() == "type_param" {
-                    if let Some(name_node) = tp.child_by_field_name("name") {
-                        let param_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
-                        if let Some(bounds_node) = tp.child_by_field_name("bounds") {
-                            let mut bound_names = Vec::new();
-                            let mut bcursor = bounds_node.walk();
-                            for bc in bounds_node.named_children(&mut bcursor) {
-                                if bc.kind() == "type_identifier" {
-                                    bound_names.push(bc.utf8_text(source.as_bytes()).unwrap().to_string());
-                                }
+                if tp.kind() == "type_param"
+                    && let Some(name_node) = tp.child_by_field_name("name")
+                {
+                    let param_name = name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                    if let Some(bounds_node) = tp.child_by_field_name("bounds") {
+                        let mut bound_names = Vec::new();
+                        let mut bcursor = bounds_node.walk();
+                        for bc in bounds_node.named_children(&mut bcursor) {
+                            if bc.kind() == "type_identifier" {
+                                bound_names
+                                    .push(bc.utf8_text(source.as_bytes()).unwrap().to_string());
                             }
-                            if !bound_names.is_empty() {
-                                bounds.insert(param_name, bound_names);
-                            }
+                        }
+                        if !bound_names.is_empty() {
+                            bounds.insert(param_name, bound_names);
                         }
                     }
                 }
@@ -220,7 +221,16 @@ pub(super) fn detect_implicit_type_params(
 pub(super) fn is_builtin_type_name(name: &str) -> bool {
     matches!(
         name,
-        "Int" | "Float" | "String" | "Bool" | "Unit" | "List" | "Option" | "Result" | "Map"
-            | "Set" | "Weak"
+        "Int"
+            | "Float"
+            | "String"
+            | "Bool"
+            | "Unit"
+            | "List"
+            | "Option"
+            | "Result"
+            | "Map"
+            | "Set"
+            | "Weak"
     )
 }

@@ -1,10 +1,10 @@
-use super::{NValue, NativeError};
 use super::fs_sandbox::resolve_sandboxed_path;
+use super::{NValue, NativeError};
 
 pub(super) fn native_fs_read_file(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_string() {
         Some(path) => {
-            let resolved = resolve_sandboxed_path(&path)?;
+            let resolved = resolve_sandboxed_path(path)?;
             match std::fs::read_to_string(&resolved) {
                 Ok(content) => Ok(NValue::string(content.into())),
                 Err(e) => Err(NativeError(format!(
@@ -23,7 +23,7 @@ pub(super) fn native_fs_read_file(args: &[NValue]) -> Result<NValue, NativeError
 pub(super) fn native_fs_write_file(args: &[NValue]) -> Result<NValue, NativeError> {
     match (args[0].as_string(), args[1].as_string()) {
         (Some(path), Some(content)) => {
-            let resolved = resolve_sandboxed_path(&path)?;
+            let resolved = resolve_sandboxed_path(path)?;
             match std::fs::write(&resolved, &**content) {
                 Ok(()) => Ok(NValue::unit()),
                 Err(e) => Err(NativeError(format!(
@@ -41,7 +41,7 @@ pub(super) fn native_fs_write_file(args: &[NValue]) -> Result<NValue, NativeErro
 pub(super) fn native_fs_exists(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_string() {
         Some(path) => {
-            let resolved = resolve_sandboxed_path(&path)?;
+            let resolved = resolve_sandboxed_path(path)?;
             Ok(NValue::bool(resolved.exists()))
         }
         None => Err(NativeError(format!(
@@ -54,7 +54,7 @@ pub(super) fn native_fs_exists(args: &[NValue]) -> Result<NValue, NativeError> {
 pub(super) fn native_fs_list_dir(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_string() {
         Some(path) => {
-            let resolved = resolve_sandboxed_path(&path)?;
+            let resolved = resolve_sandboxed_path(path)?;
             match std::fs::read_dir(&resolved) {
                 Ok(entries) => {
                     let mut names: Vec<NValue> = Vec::new();
@@ -86,4 +86,3 @@ pub(super) fn native_fs_list_dir(args: &[NValue]) -> Result<NValue, NativeError>
         ))),
     }
 }
-

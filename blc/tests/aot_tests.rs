@@ -36,10 +36,7 @@ fn compile_and_run(source_path: &str) -> String {
 
     if !build_result.status.success() {
         let stderr = String::from_utf8_lossy(&build_result.stderr);
-        panic!(
-            "blc build failed for {}:\n{}",
-            source_path, stderr
-        );
+        panic!("blc build failed for {}:\n{}", source_path, stderr);
     }
 
     // Run the compiled executable
@@ -52,13 +49,12 @@ fn compile_and_run(source_path: &str) -> String {
 
     if !run_result.status.success() {
         let stderr = String::from_utf8_lossy(&run_result.stderr);
-        panic!(
-            "Executable failed for {}:\n{}",
-            source_path, stderr
-        );
+        panic!("Executable failed for {}:\n{}", source_path, stderr);
     }
 
-    String::from_utf8_lossy(&run_result.stdout).trim().to_string()
+    String::from_utf8_lossy(&run_result.stdout)
+        .trim()
+        .to_string()
 }
 
 #[test]

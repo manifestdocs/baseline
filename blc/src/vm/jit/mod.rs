@@ -88,7 +88,8 @@ impl JitProgram {
         let func: fn() -> u64 = unsafe { std::mem::transmute(self.entry_wrapper) };
 
         // Set up the function pointer table for indirect calls
-        let fn_table: Vec<*const u8> = self.dispatch
+        let fn_table: Vec<*const u8> = self
+            .dispatch
             .iter()
             .map(|opt| opt.unwrap_or(std::ptr::null()))
             .collect();
@@ -303,7 +304,10 @@ fn compile_inner(
     builder.symbol("jit_list_length_raw", jit_list_length_raw as *const u8);
     builder.symbol("jit_list_get_raw", jit_list_get_raw as *const u8);
     builder.symbol("jit_alloc_buf", jit_alloc_buf as *const u8);
-    builder.symbol("jit_build_list_from_buf", jit_build_list_from_buf as *const u8);
+    builder.symbol(
+        "jit_build_list_from_buf",
+        jit_build_list_from_buf as *const u8,
+    );
     builder.symbol("jit_make_some", jit_make_some as *const u8);
     builder.symbol("jit_make_none", jit_make_none as *const u8);
     builder.symbol("jit_make_ok", jit_make_ok as *const u8);
@@ -539,7 +543,8 @@ fn compile_inner(
     // Phase 2.5: Create entry wrapper with platform-default calling convention.
     // All language functions use Tail CC for guaranteed tail call elimination.
     // The wrapper bridges to the host's C ABI so transmute to fn()->u64 works.
-    let entry_wrapper_id: Option<FuncId> = if compilable.get(module.entry).copied().unwrap_or(false) {
+    let entry_wrapper_id: Option<FuncId> = if compilable.get(module.entry).copied().unwrap_or(false)
+    {
         let entry_func_id = func_ids[module.entry].unwrap();
 
         // Platform-default CC (SystemV on Linux, AppleAarch64 on macOS ARM64)
@@ -694,15 +699,24 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "jit_enum_tag_id" | "jit_enum_payload" | "jit_list_length" | "jit_is_err" | "jit_is_none"
-        | "jit_int_from_i64" | "jit_int_neg" => {
+        "jit_enum_tag_id" | "jit_enum_payload" | "jit_list_length" | "jit_is_err"
+        | "jit_is_none" | "jit_int_from_i64" | "jit_int_neg" => {
             // (val) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "jit_tuple_get" | "jit_closure_upvalue" | "jit_list_concat"
-        | "jit_int_add" | "jit_int_sub" | "jit_int_mul" | "jit_int_div" | "jit_int_mod"
-        | "jit_int_lt" | "jit_int_le" | "jit_int_gt" | "jit_int_ge" => {
+        "jit_tuple_get"
+        | "jit_closure_upvalue"
+        | "jit_list_concat"
+        | "jit_int_add"
+        | "jit_int_sub"
+        | "jit_int_mul"
+        | "jit_int_div"
+        | "jit_int_mod"
+        | "jit_int_lt"
+        | "jit_int_le"
+        | "jit_int_gt"
+        | "jit_int_ge" => {
             // (a, b) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
