@@ -76,10 +76,10 @@ fn extract_scope(nv: &NValue) -> Option<Arc<Mutex<ScopeState>>> {
     if !nv.is_heap() {
         return None;
     }
-    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref() {
-        if *tag == SCOPE_TAG {
-            return data.clone().downcast::<Mutex<ScopeState>>().ok();
-        }
+    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref()
+        && *tag == SCOPE_TAG
+    {
+        return data.clone().downcast::<Mutex<ScopeState>>().ok();
     }
     None
 }
@@ -88,10 +88,10 @@ fn extract_cell(nv: &NValue) -> Option<Arc<Mutex<CellState>>> {
     if !nv.is_heap() {
         return None;
     }
-    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref() {
-        if *tag == CELL_TAG {
-            return data.clone().downcast::<Mutex<CellState>>().ok();
-        }
+    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref()
+        && *tag == CELL_TAG
+    {
+        return data.clone().downcast::<Mutex<CellState>>().ok();
     }
     None
 }
@@ -126,6 +126,10 @@ pub fn exec_scope(
         col,
     })?;
 
+    // The MutexGuard is held across `.await` but this is safe because we're inside
+    // `block_on` — the current thread is blocked synchronously, so no other task
+    // on this thread can try to acquire the lock.
+    #[allow(clippy::await_holding_lock)]
     let join_result = rt.block_on(async {
         let mut state = scope_state.lock().unwrap();
         let mut first_error: Option<String> = None;
@@ -213,11 +217,7 @@ pub fn exec_spawn(
 }
 
 /// Await a cell: `Cell.await!(cell)` — blocks until the fiber completes.
-pub fn exec_cell_await(
-    cell_nv: &NValue,
-    line: usize,
-    col: usize,
-) -> Result<NValue, CompileError> {
+pub fn exec_cell_await(cell_nv: &NValue, line: usize, col: usize) -> Result<NValue, CompileError> {
     let cell_state = extract_cell(cell_nv).ok_or_else(|| CompileError {
         message: "Cell.await! argument must be a Cell".into(),
         line,
@@ -250,11 +250,7 @@ pub fn exec_cell_await(
 }
 
 /// Cancel a cell: `Cell.cancel!(cell)` — aborts the fiber.
-pub fn exec_cell_cancel(
-    cell_nv: &NValue,
-    line: usize,
-    col: usize,
-) -> Result<NValue, CompileError> {
+pub fn exec_cell_cancel(cell_nv: &NValue, line: usize, col: usize) -> Result<NValue, CompileError> {
     let cell_state = extract_cell(cell_nv).ok_or_else(|| CompileError {
         message: "Cell.cancel! argument must be a Cell".into(),
         line,
@@ -270,7 +266,7 @@ pub fn exec_cell_cancel(
 pub fn exec_parallel(
     closures_list: &NValue,
     program: Arc<Program>,
-    chunks: &[Chunk],
+    _chunks: &[Chunk],
     line: usize,
     col: usize,
 ) -> Result<NValue, CompileError> {
@@ -348,7 +344,7 @@ pub fn exec_parallel(
 pub fn exec_race(
     closures_list: &NValue,
     program: Arc<Program>,
-    chunks: &[Chunk],
+    _chunks: &[Chunk],
     line: usize,
     col: usize,
 ) -> Result<NValue, CompileError> {
@@ -445,7 +441,7 @@ pub fn exec_scatter_gather(
 ) -> Result<NValue, CompileError> {
     // First, run them all in parallel
     let list_result = exec_parallel(closures_list, program, chunks, line, col)?;
-    
+
     // Then sequentially run the aggregator on the resulting list
     let mut current_vm = Vm::new();
     current_vm.call_nvalue(aggregator, &[list_result], chunks, line, col)
@@ -484,10 +480,10 @@ fn extract_channel_tx(nv: &NValue) -> Option<Arc<Mutex<ChannelTxState>>> {
     if !nv.is_heap() {
         return None;
     }
-    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref() {
-        if *tag == CHANNEL_TX_TAG {
-            return data.clone().downcast::<Mutex<ChannelTxState>>().ok();
-        }
+    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref()
+        && *tag == CHANNEL_TX_TAG
+    {
+        return data.clone().downcast::<Mutex<ChannelTxState>>().ok();
     }
     None
 }
@@ -496,10 +492,10 @@ fn extract_channel_rx(nv: &NValue) -> Option<Arc<Mutex<ChannelRxState>>> {
     if !nv.is_heap() {
         return None;
     }
-    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref() {
-        if *tag == CHANNEL_RX_TAG {
-            return data.clone().downcast::<Mutex<ChannelRxState>>().ok();
-        }
+    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref()
+        && *tag == CHANNEL_RX_TAG
+    {
+        return data.clone().downcast::<Mutex<ChannelRxState>>().ok();
     }
     None
 }
@@ -576,11 +572,7 @@ pub fn exec_channel_send(
     }
 }
 
-pub fn exec_channel_recv(
-    rx_nv: &NValue,
-    line: usize,
-    col: usize,
-) -> Result<NValue, CompileError> {
+pub fn exec_channel_recv(rx_nv: &NValue, line: usize, col: usize) -> Result<NValue, CompileError> {
     let rx_state = extract_channel_rx(rx_nv).ok_or_else(|| CompileError {
         message: "Channel.recv! argument must be a Channel Receiver".into(),
         line,
@@ -594,11 +586,7 @@ pub fn exec_channel_recv(
     }
 }
 
-pub fn exec_channel_close(
-    tx_nv: &NValue,
-    line: usize,
-    col: usize,
-) -> Result<NValue, CompileError> {
+pub fn exec_channel_close(tx_nv: &NValue, line: usize, col: usize) -> Result<NValue, CompileError> {
     let tx_state = extract_channel_tx(tx_nv).ok_or_else(|| CompileError {
         message: "Channel.close! argument must be a Channel Sender".into(),
         line,
@@ -622,7 +610,7 @@ pub fn exec_delay(
     duration_nv: &NValue,
     body: NValue,
     program: Arc<Program>,
-    chunks: &[Chunk],
+    _chunks: &[Chunk],
     line: usize,
     col: usize,
 ) -> Result<NValue, CompileError> {
@@ -715,7 +703,8 @@ pub fn exec_interval(
             let result = tokio::task::spawn_blocking(move || {
                 let mut fiber_vm = Vm::new();
                 fiber_vm.call_nvalue(&body_inner, &[], &program_inner.chunks, line, col)
-            }).await;
+            })
+            .await;
 
             match result {
                 Ok(Ok(_)) => {} // Continue

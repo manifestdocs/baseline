@@ -36,7 +36,15 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "match with destructuring",
         category: "control_flow",
-        keywords: &["match", "destructure", "option", "result", "unwrap", "some", "none"],
+        keywords: &[
+            "match",
+            "destructure",
+            "option",
+            "result",
+            "unwrap",
+            "some",
+            "none",
+        ],
         python: "if val is not None:\n    use(val)\nelse:\n    fallback",
         typescript: "val !== null ? use(val) : fallback",
         baseline: "match opt\n  Some(v) -> use(v)\n  None -> fallback",
@@ -111,7 +119,15 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "null check → Option",
         category: "error_handling",
-        keywords: &["null", "none", "nil", "undefined", "optional", "some", "nothing"],
+        keywords: &[
+            "null",
+            "none",
+            "nil",
+            "undefined",
+            "optional",
+            "some",
+            "nothing",
+        ],
         python: "if x is not None:\n    use(x)",
         typescript: "if (x !== null) {\n  use(x);\n}",
         baseline: "match x\n  Some(v) -> use(v)\n  None -> fallback",
@@ -177,7 +193,14 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "class → record",
         category: "data_structures",
-        keywords: &["class", "struct", "record", "object", "dataclass", "interface"],
+        keywords: &[
+            "class",
+            "struct",
+            "record",
+            "object",
+            "dataclass",
+            "interface",
+        ],
         python: "class User:\n    name: str\n    age: int",
         typescript: "interface User {\n  name: string;\n  age: number;\n}",
         baseline: "type User = { name: String, age: Int }",
@@ -213,7 +236,14 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "enum / sum type",
         category: "data_structures",
-        keywords: &["enum", "union", "variant", "sum type", "tagged union", "discriminated"],
+        keywords: &[
+            "enum",
+            "union",
+            "variant",
+            "sum type",
+            "tagged union",
+            "discriminated",
+        ],
         python: "class Shape(Enum):\n    CIRCLE = auto()\n    RECT = auto()",
         typescript: "type Shape = \n  | { kind: \"circle\"; r: number }\n  | { kind: \"rect\"; w: number; h: number };",
         baseline: "type Shape = | Circle(Float) | Rectangle(Float, Float)",
@@ -252,7 +282,9 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "print / console output",
         category: "io",
-        keywords: &["print", "println", "console", "log", "output", "stdout", "write"],
+        keywords: &[
+            "print", "println", "console", "log", "output", "stdout", "write",
+        ],
         python: "print(\"hello\")",
         typescript: "console.log(\"hello\")",
         baseline: "Console.println!(\"hello\")",
@@ -345,7 +377,12 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "pure function",
         category: "effects",
-        keywords: &["pure", "no effects", "deterministic", "referential transparency"],
+        keywords: &[
+            "pure",
+            "no effects",
+            "deterministic",
+            "referential transparency",
+        ],
         python: "def add(a, b): return a + b  # pure by convention",
         typescript: "function add(a: number, b: number) { return a + b; }",
         baseline: "fn add(a: Int, b: Int) -> Int = a + b",
@@ -627,7 +664,14 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "refinement type",
         category: "types",
-        keywords: &["refinement", "constraint", "where", "predicate", "range", "validate"],
+        keywords: &[
+            "refinement",
+            "constraint",
+            "where",
+            "predicate",
+            "range",
+            "validate",
+        ],
         python: "# no equivalent (use assert)",
         typescript: "// no equivalent (use branded types)",
         baseline: "type Port = Int where self > 0 && self <= 65535",
@@ -636,7 +680,14 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "row polymorphism",
         category: "types",
-        keywords: &["row", "polymorphism", "open record", "structural", "duck typing", "spread"],
+        keywords: &[
+            "row",
+            "polymorphism",
+            "open record",
+            "structural",
+            "duck typing",
+            "spread",
+        ],
         python: "# duck typing (implicit)",
         typescript: "function greet(p: { name: string }) { ... }",
         baseline: "fn greet(p: { name: String, ..r }) -> String = p.name",
@@ -684,7 +735,9 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "HTTP server setup",
         category: "modules",
-        keywords: &["http", "server", "router", "listen", "handler", "endpoint", "route"],
+        keywords: &[
+            "http", "server", "router", "listen", "handler", "endpoint", "route",
+        ],
         python: "@app.get(\"/health\")\ndef health(): return \"ok\"",
         typescript: "app.get(\"/health\", (req, res) => res.send(\"ok\"));",
         baseline: "@prelude(server)\n\nfn health(req: {...}) -> Result<{...}, String> =\n  Ok(Response.ok(\"ok\"))\n\nfn main!() =\n  Router.new()\n    |> Router.get(\"/health\", health)\n    |> Server.listen!(8080)",
@@ -746,7 +799,11 @@ pub fn search(
                 }
             }
 
-            if score > 0 { Some((entry, score)) } else { None }
+            if score > 0 {
+                Some((entry, score))
+            } else {
+                None
+            }
         })
         .collect();
 

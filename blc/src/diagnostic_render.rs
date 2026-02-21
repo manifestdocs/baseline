@@ -150,9 +150,7 @@ pub fn levenshtein_distance(a: &str, b: &str) -> usize {
         curr[0] = i + 1;
         for (j, bc) in b.chars().enumerate() {
             let cost = if ac == bc { 0 } else { 1 };
-            curr[j + 1] = (prev[j + 1] + 1)
-                .min(curr[j] + 1)
-                .min(prev[j] + cost);
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
         }
         std::mem::swap(&mut prev, &mut curr);
     }
@@ -175,9 +173,7 @@ pub fn find_similar_name<'a>(name: &str, candidates: &'a [String]) -> Option<(&'
             continue;
         }
         let dist = levenshtein_distance(name, candidate);
-        if dist > 0 && dist <= max_dist
-            && (best.is_none() || dist < best.unwrap().1)
-        {
+        if dist > 0 && dist <= max_dist && (best.is_none() || dist < best.unwrap().1) {
             best = Some((candidate.as_str(), dist));
         }
     }

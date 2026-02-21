@@ -12,8 +12,8 @@
 //!   Heap:     0xFFFE_PPPP_PPPP_PPPP  (P = pointer to Arc<HeapObject> inner data)
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::value::{RcStr, Value};
 
@@ -98,24 +98,42 @@ impl fmt::Display for AllocSnapshot {
 }
 
 /// Returns a snapshot of current heap allocation statistics.
+/// In release builds, always returns zeros (tracking is disabled for performance).
 pub fn alloc_stats() -> AllocSnapshot {
-    let allocs = ALLOC_STATS.allocs.load(Ordering::Relaxed);
-    let frees = ALLOC_STATS.frees.load(Ordering::Relaxed);
-    AllocSnapshot {
-        allocs,
-        frees,
-        live: allocs.saturating_sub(frees),
+    #[cfg(debug_assertions)]
+    {
+        let allocs = ALLOC_STATS.allocs.load(Ordering::Relaxed);
+        let frees = ALLOC_STATS.frees.load(Ordering::Relaxed);
+        AllocSnapshot {
+            allocs,
+            frees,
+            live: allocs.saturating_sub(frees),
+        }
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        AllocSnapshot {
+            allocs: 0,
+            frees: 0,
+            live: 0,
+        }
     }
 }
 
 /// Reset allocation counters to zero. Useful for test isolation.
+/// No-op in release builds.
 pub fn reset_alloc_stats() {
-    ALLOC_STATS.allocs.store(0, Ordering::Relaxed);
-    ALLOC_STATS.frees.store(0, Ordering::Relaxed);
+    #[cfg(debug_assertions)]
+    {
+        ALLOC_STATS.allocs.store(0, Ordering::Relaxed);
+        ALLOC_STATS.frees.store(0, Ordering::Relaxed);
+    }
 }
 
 /// Record a free in alloc_stats. Used by jit_rc_decref which bypasses NValue::drop.
+/// No-op in release builds.
 pub fn record_free() {
+    #[cfg(debug_assertions)]
     ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -148,8 +166,8 @@ pub enum HeapObject {
         handler: NValue,
         remaining_mw: Vec<NValue>,
     },
-    /// Map: association list of (key, value) pairs.
-    Map(Vec<(NValue, NValue)>),
+    /// Map: hash map of key-value pairs.
+    Map(std::collections::HashMap<NValue, NValue>),
     /// Set: unique elements.
     Set(Vec<NValue>),
     /// Weak reference to a heap object (does not prevent deallocation).
@@ -201,20 +219,56 @@ impl PartialEq for HeapObject {
             (HeapObject::Record(a), HeapObject::Record(b)) => a == b,
             (HeapObject::Tuple(a), HeapObject::Tuple(b)) => a == b,
             // Compare tag + payload only — tag_id is an optimization hint
-            (HeapObject::Enum { tag: t1, payload: p1, .. },
-             HeapObject::Enum { tag: t2, payload: p2, .. }) => t1 == t2 && p1 == p2,
-            (HeapObject::Struct { name: n1, fields: f1 },
-             HeapObject::Struct { name: n2, fields: f2 }) => n1 == n2 && f1 == f2,
-            (HeapObject::Closure { chunk_idx: c1, upvalues: u1 },
-             HeapObject::Closure { chunk_idx: c2, upvalues: u2 }) => c1 == c2 && u1 == u2,
+            (
+                HeapObject::Enum {
+                    tag: t1,
+                    payload: p1,
+                    ..
+                },
+                HeapObject::Enum {
+                    tag: t2,
+                    payload: p2,
+                    ..
+                },
+            ) => t1 == t2 && p1 == p2,
+            (
+                HeapObject::Struct {
+                    name: n1,
+                    fields: f1,
+                },
+                HeapObject::Struct {
+                    name: n2,
+                    fields: f2,
+                },
+            ) => n1 == n2 && f1 == f2,
+            (
+                HeapObject::Closure {
+                    chunk_idx: c1,
+                    upvalues: u1,
+                },
+                HeapObject::Closure {
+                    chunk_idx: c2,
+                    upvalues: u2,
+                },
+            ) => c1 == c2 && u1 == u2,
             (HeapObject::Map(a), HeapObject::Map(b)) => a == b,
             (HeapObject::Set(a), HeapObject::Set(b)) => a == b,
             (HeapObject::WeakRef(a), HeapObject::WeakRef(b)) => std::sync::Weak::ptr_eq(a, b),
             (HeapObject::BigInt(a), HeapObject::BigInt(b)) => a == b,
-            (HeapObject::NativeObject { tag: t1, data: d1 },
-             HeapObject::NativeObject { tag: t2, data: d2 }) => t1 == t2 && Arc::ptr_eq(d1, d2),
-            (HeapObject::Row { columns: c1, values: v1 },
-             HeapObject::Row { columns: c2, values: v2 }) => Arc::ptr_eq(c1, c2) && v1 == v2,
+            (
+                HeapObject::NativeObject { tag: t1, data: d1 },
+                HeapObject::NativeObject { tag: t2, data: d2 },
+            ) => t1 == t2 && Arc::ptr_eq(d1, d2),
+            (
+                HeapObject::Row {
+                    columns: c1,
+                    values: v1,
+                },
+                HeapObject::Row {
+                    columns: c2,
+                    values: v2,
+                },
+            ) => Arc::ptr_eq(c1, c2) && v1 == v2,
             _ => false,
         }
     }
@@ -328,11 +382,27 @@ impl NValue {
     }
 
     pub fn enum_val(tag: RcStr, payload: NValue) -> Self {
-        Self::from_heap(HeapObject::Enum { tag, tag_id: u32::MAX, payload })
+        // Assign well-known tag IDs matching the JIT's TagRegistry.
+        let tag_id = match tag.as_ref() {
+            "None" => 0,
+            "Some" => 1,
+            "Ok" => 2,
+            "Err" => 3,
+            _ => u32::MAX,
+        };
+        Self::from_heap(HeapObject::Enum {
+            tag,
+            tag_id,
+            payload,
+        })
     }
 
     pub fn enum_val_with_id(tag: RcStr, tag_id: u32, payload: NValue) -> Self {
-        Self::from_heap(HeapObject::Enum { tag, tag_id, payload })
+        Self::from_heap(HeapObject::Enum {
+            tag,
+            tag_id,
+            payload,
+        })
     }
 
     pub fn struct_val(name: RcStr, fields: Vec<(RcStr, NValue)>) -> Self {
@@ -340,7 +410,12 @@ impl NValue {
     }
 
     pub fn map(entries: Vec<(NValue, NValue)>) -> Self {
-        Self::from_heap(HeapObject::Map(entries))
+        let hm: std::collections::HashMap<NValue, NValue> = entries.into_iter().collect();
+        Self::from_heap(HeapObject::Map(hm))
+    }
+
+    pub fn map_from_hashmap(hm: std::collections::HashMap<NValue, NValue>) -> Self {
+        Self::from_heap(HeapObject::Map(hm))
     }
 
     pub fn set(elems: Vec<NValue>) -> Self {
@@ -402,6 +477,7 @@ impl NValue {
         let rc = Arc::new(obj);
         let ptr = Arc::into_raw(rc) as u64;
         debug_assert!(ptr & TAG_MASK == 0, "heap pointer exceeds 48 bits");
+        #[cfg(debug_assertions)]
         ALLOC_STATS.allocs.fetch_add(1, Ordering::Relaxed);
         NValue(TAG_HEAP | ptr)
     }
@@ -651,15 +727,24 @@ impl Drop for NValue {
     fn drop(&mut self) {
         if self.is_heap() {
             let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
-            let is_last = unsafe {
-                let arc = Arc::from_raw(ptr);
-                let count = Arc::strong_count(&arc);
-                std::mem::forget(arc);
-                count == 1
-            };
-            if is_last {
-                ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
+            // In debug builds, track free count for leak detection.
+            #[cfg(debug_assertions)]
+            {
+                // SAFETY: We reconstruct the Arc only to read strong_count,
+                // then forget it so we don't double-drop.
+                let is_last = unsafe {
+                    let arc = Arc::from_raw(ptr);
+                    let count = Arc::strong_count(&arc);
+                    std::mem::forget(arc);
+                    count == 1
+                };
+                if is_last {
+                    ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
+                }
             }
+            // SAFETY: is_heap() guarantees ptr is a valid Arc pointer.
+            // This NValue owns exactly one strong count, which we're releasing.
+            // If this is the last reference, the HeapObject will be deallocated.
             unsafe {
                 Arc::decrement_strong_count(ptr);
             }
@@ -684,6 +769,45 @@ impl PartialEq for NValue {
             return self.as_heap_ref() == other.as_heap_ref();
         }
         false
+    }
+}
+
+// -- Eq + Hash (required for HashMap-backed Map) --
+
+impl Eq for NValue {}
+
+impl std::hash::Hash for NValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.is_heap() {
+            match self.as_heap_ref() {
+                HeapObject::String(s) => {
+                    state.write_u8(1);
+                    s.hash(state);
+                }
+                HeapObject::BigInt(i) => {
+                    state.write_u8(0);
+                    i.hash(state);
+                }
+                _ => {
+                    state.write_u8(2);
+                    state.write_u64(self.0);
+                }
+            }
+        } else if self.is_float() {
+            let bits = self.0;
+            let f = f64::from_bits(bits);
+            state.write_u8(3);
+            if f.is_nan() {
+                state.write_u64(0x7FF8_0000_0000_0000);
+            } else if f == 0.0 {
+                state.write_u64(0);
+            } else {
+                state.write_u64(bits);
+            }
+        } else {
+            state.write_u8(0);
+            state.write_u64(self.0);
+        }
     }
 }
 
@@ -740,10 +864,11 @@ impl fmt::Display for NValue {
                     write!(f, "<middleware-next>")
                 }
                 HeapObject::Map(entries) => {
-                    let s: Vec<String> = entries
+                    let mut s: Vec<String> = entries
                         .iter()
                         .map(|(k, v)| format!("{}: {}", k, v))
                         .collect();
+                    s.sort(); // deterministic output
                     write!(f, "#{{{}}}", s.join(", "))
                 }
                 HeapObject::Set(elems) => {
@@ -880,8 +1005,15 @@ mod tests {
     #[test]
     fn int_roundtrip() {
         for i in [
-            -1i64, 0, 1, 42, -42, 1000000, -1000000,
-            (1 << 47) - 1, -(1 << 47),
+            -1i64,
+            0,
+            1,
+            42,
+            -42,
+            1000000,
+            -1000000,
+            (1 << 47) - 1,
+            -(1 << 47),
         ] {
             let v = NValue::int(i);
             assert!(v.is_int() || v.is_heap(), "failed for {}", i);

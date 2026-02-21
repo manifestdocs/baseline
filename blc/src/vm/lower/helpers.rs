@@ -78,28 +78,28 @@ impl<'a> super::Lowerer<'a> {
         let mut all_nullary = true;
         let mut cursor = def_node.walk();
         for child in def_node.children(&mut cursor) {
-            if child.kind() == "variant" {
-                if let Some(vname_node) = child.child_by_field_name("name") {
-                    let vname = self.node_text(&vname_node);
-                    // A variant is nullary if the only type_identifier child is its name
-                    let payload_count = (0..child.child_count())
-                        .filter(|&i| {
-                            let c = child.child(i).unwrap();
-                            (c.kind() != "type_identifier" || c.id() != vname_node.id())
-                                && c.kind() != "|"
-                                && c.kind() != "("
-                                && c.kind() != ")"
-                                && c.kind() != ","
-                                && c.kind() != "line_comment"
-                                && c.kind() != "block_comment"
-                        })
-                        .count();
-                    if payload_count > 0 {
-                        all_nullary = false;
-                        break;
-                    }
-                    variants.push(vname);
+            if child.kind() == "variant"
+                && let Some(vname_node) = child.child_by_field_name("name")
+            {
+                let vname = self.node_text(&vname_node);
+                // A variant is nullary if the only type_identifier child is its name
+                let payload_count = (0..child.child_count())
+                    .filter(|&i| {
+                        let c = child.child(i).unwrap();
+                        (c.kind() != "type_identifier" || c.id() != vname_node.id())
+                            && c.kind() != "|"
+                            && c.kind() != "("
+                            && c.kind() != ")"
+                            && c.kind() != ","
+                            && c.kind() != "line_comment"
+                            && c.kind() != "block_comment"
+                    })
+                    .count();
+                if payload_count > 0 {
+                    all_nullary = false;
+                    break;
                 }
+                variants.push(vname);
             }
         }
         if all_nullary && !variants.is_empty() {
@@ -115,7 +115,7 @@ impl<'a> super::Lowerer<'a> {
             for child in param_list.named_children(&mut cursor) {
                 if child.kind() == "param" {
                     if let Some(name_node) = child.child_by_field_name("name") {
-                         params.push(self.node_text(&name_node));
+                        params.push(self.node_text(&name_node));
                     } else if let Some(pat_node) = child.child_by_field_name("pattern") {
                         // Simple identifier patterns support named args
                         if pat_node.kind() == "identifier" {

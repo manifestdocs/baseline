@@ -11,9 +11,8 @@ use super::{NValue, NativeError};
 // ---------------------------------------------------------------------------
 
 fn base64url_encode(bytes: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
@@ -32,8 +31,7 @@ fn base64url_encode(bytes: &[u8]) -> String {
 }
 
 fn base64url_decode(input: &str) -> Option<Vec<u8>> {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = Vec::new();
     let mut buf: u32 = 0;
     let mut bits: u32 = 0;
@@ -58,15 +56,13 @@ fn base64url_decode(input: &str) -> Option<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 fn hmac_sha256(key: &[u8], message: &[u8]) -> Vec<u8> {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key)
-        .expect("HMAC accepts any key length");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(message);
     mac.finalize().into_bytes().to_vec()
 }
 
 fn hmac_sha256_verify(key: &[u8], message: &[u8], signature: &[u8]) -> bool {
-    let mut mac = Hmac::<Sha256>::new_from_slice(key)
-        .expect("HMAC accepts any key length");
+    let mut mac = Hmac::<Sha256>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(message);
     mac.verify_slice(signature).is_ok()
 }
@@ -120,20 +116,20 @@ pub(super) fn native_jwt_sign_with(args: &[NValue]) -> Result<NValue, NativeErro
     let mut serde_val = nvalue_to_serde(claims)?;
 
     // Inject iat and exp if expires_in is set
-    if let Some(exp_val) = options.iter().find(|(k, _)| &**k == "expires_in") {
-        if exp_val.1.is_any_int() {
-            let expires_in = exp_val.1.as_any_int();
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
-            if let serde_json::Value::Object(ref mut map) = serde_val {
-                map.insert("iat".to_string(), serde_json::Value::Number(now.into()));
-                map.insert(
-                    "exp".to_string(),
-                    serde_json::Value::Number((now + expires_in).into()),
-                );
-            }
+    if let Some(exp_val) = options.iter().find(|(k, _)| &**k == "expires_in")
+        && exp_val.1.is_any_int()
+    {
+        let expires_in = exp_val.1.as_any_int();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        if let serde_json::Value::Object(ref mut map) = serde_val {
+            map.insert("iat".to_string(), serde_json::Value::Number(now.into()));
+            map.insert(
+                "exp".to_string(),
+                serde_json::Value::Number((now + expires_in).into()),
+            );
         }
     }
 
@@ -261,9 +257,7 @@ mod tests {
 
     #[test]
     fn verify_detects_invalid_signature() {
-        let claims = NValue::record(vec![
-            ("sub".into(), NValue::string("user123".into())),
-        ]);
+        let claims = NValue::record(vec![("sub".into(), NValue::string("user123".into()))]);
         let secret = NValue::string("correct-secret".into());
         let wrong_secret = NValue::string("wrong-secret".into());
 
@@ -275,9 +269,7 @@ mod tests {
 
     #[test]
     fn decode_without_verification() {
-        let claims = NValue::record(vec![
-            ("data".into(), NValue::string("hello".into())),
-        ]);
+        let claims = NValue::record(vec![("data".into(), NValue::string("hello".into()))]);
         let secret = NValue::string("secret".into());
         let token = native_jwt_sign(&[claims, secret]).unwrap();
 
@@ -291,13 +283,9 @@ mod tests {
 
     #[test]
     fn sign_with_expiration() {
-        let claims = NValue::record(vec![
-            ("sub".into(), NValue::string("user".into())),
-        ]);
+        let claims = NValue::record(vec![("sub".into(), NValue::string("user".into()))]);
         let secret = NValue::string("secret".into());
-        let options = NValue::record(vec![
-            ("expires_in".into(), NValue::int(3600)),
-        ]);
+        let options = NValue::record(vec![("expires_in".into(), NValue::int(3600))]);
 
         let token = native_jwt_sign_with(&[claims, secret.clone(), options]).unwrap();
         let result = native_jwt_verify(&[token, secret]).unwrap();

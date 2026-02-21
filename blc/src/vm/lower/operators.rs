@@ -151,12 +151,12 @@ impl<'a> super::Lowerer<'a> {
 
     pub(super) fn try_eval_const(&self, node: &Node) -> Option<Expr> {
         match node.kind() {
-            "integer_literal" => crate::parse::parse_int_literal(&self.node_text(node)).map(Expr::Int),
+            "integer_literal" => {
+                crate::parse::parse_int_literal(&self.node_text(node)).map(Expr::Int)
+            }
             "float_literal" => self.node_text(node).parse::<f64>().ok().map(Expr::Float),
             "boolean_literal" => Some(Expr::Bool(self.node_text(node) == "true")),
-            "string_literal" | "multiline_string_literal"
-                if !self.has_interpolation(node) =>
-            {
+            "string_literal" | "multiline_string_literal" if !self.has_interpolation(node) => {
                 Some(self.extract_string_content(node))
             }
             "raw_string_literal" | "raw_hash_string_literal" => {

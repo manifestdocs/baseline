@@ -75,7 +75,9 @@ impl BaselineLanguageServer {
         if let Some(root) = ws.as_ref() {
             return Some(root.clone());
         }
-        uri.to_file_path().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        uri.to_file_path()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
     }
 
     /// Collect symbols from a module's exports based on the import kind.
@@ -92,10 +94,10 @@ impl BaselineLanguageServer {
             ImportKind::Qualified => return, // No direct symbols injected
         };
         for (func_name, sig) in &exports.functions {
-            if let Some(names) = filter {
-                if !names.contains(func_name) {
-                    continue;
-                }
+            if let Some(names) = filter
+                && !names.contains(func_name)
+            {
+                continue;
             }
             symbols.push(SymbolInfo {
                 name: func_name.clone(),
@@ -174,15 +176,16 @@ impl BaselineLanguageServer {
                 let parsed_imports = ModuleLoader::parse_imports(&root, &text);
 
                 for (mut resolved, import_node) in parsed_imports {
-                    let Ok(path) = loader.resolve_path(&resolved.module_name, &import_node, &file_name) else {
+                    let Ok(path) =
+                        loader.resolve_path(&resolved.module_name, &import_node, &file_name)
+                    else {
                         continue;
                     };
                     resolved.file_path = path.clone();
 
                     // Load and extract exports from the resolved module
-                    let mut mod_loader = ModuleLoader::with_base_dir(
-                        path.parent().unwrap_or(&path).to_path_buf(),
-                    );
+                    let mut mod_loader =
+                        ModuleLoader::with_base_dir(path.parent().unwrap_or(&path).to_path_buf());
                     if let Ok(idx) = mod_loader.load_module(&path, &import_node, &file_name)
                         && let Some((mod_root, mod_source, _)) = mod_loader.get_module(idx)
                     {
@@ -351,7 +354,10 @@ impl LanguageServer for BaselineLanguageServer {
         if let Some((module, method)) = detect_qualified_access(&state.source, &pos) {
             let key = format!("{}.{}", module, method);
             if let Some(sig) = state.module_methods.get(&key) {
-                let contents = format!("**{}.{}**: `{}`\n\n*from module {}*", module, method, sig, module);
+                let contents = format!(
+                    "**{}.{}**: `{}`\n\n*from module {}*",
+                    module, method, sig, module
+                );
                 return Ok(Some(Hover {
                     contents: HoverContents::Markup(MarkupContent {
                         kind: MarkupKind::Markdown,

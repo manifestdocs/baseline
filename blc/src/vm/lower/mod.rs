@@ -155,7 +155,11 @@ impl<'a> Lowerer<'a> {
             .position(|f| f.name == "main!")
             .unwrap_or(entry);
 
-        Ok(IrModule { functions, entry, tags: TagRegistry::new() })
+        Ok(IrModule {
+            functions,
+            entry,
+            tags: TagRegistry::new(),
+        })
     }
 
     /// Lower function definitions for a module (no entry point required).
@@ -301,19 +305,19 @@ impl<'a> Lowerer<'a> {
 
         // Wrap body with destructuring bindings if any
         if !param_lets.is_empty() {
-             // Prepend lets to body
-             // If body is Block, prepend. Else wrap in Block.
-             if let Expr::Block(ref mut stmts, ref mut _ty) = body {
-                 // Efficiently prepend: verify overhead of insert vs new vec?
-                 // For small number of params, insert(0) is fine? Or construct new vec.
-                 let mut new_stmts = param_lets;
-                 new_stmts.append(stmts);
-                 *stmts = new_stmts;
-             } else {
-                 let mut stmts = param_lets;
-                 stmts.push(body);
-                 body = Expr::Block(stmts, None); // TODO: Type?
-             }
+            // Prepend lets to body
+            // If body is Block, prepend. Else wrap in Block.
+            if let Expr::Block(ref mut stmts, ref mut _ty) = body {
+                // Efficiently prepend: verify overhead of insert vs new vec?
+                // For small number of params, insert(0) is fine? Or construct new vec.
+                let mut new_stmts = param_lets;
+                new_stmts.append(stmts);
+                *stmts = new_stmts;
+            } else {
+                let mut stmts = param_lets;
+                stmts.push(body);
+                body = Expr::Block(stmts, None); // TODO: Type?
+            }
         }
 
         self.current_fn_name = None;
@@ -344,25 +348,25 @@ impl<'a> Lowerer<'a> {
             if child.kind() == "type_params" {
                 let mut inner = child.walk();
                 for tp in child.named_children(&mut inner) {
-                    if tp.kind() == "type_param" {
-                        if let Some(bounds_node) = tp.child_by_field_name("bounds") {
-                            // Collect bound trait names
-                            let mut bound_names = Vec::new();
-                            let mut bcursor = bounds_node.walk();
-                            for bc in bounds_node.named_children(&mut bcursor) {
-                                if bc.kind() == "type_identifier" {
-                                    bound_names.push(self.node_text(&bc));
-                                }
+                    if tp.kind() == "type_param"
+                        && let Some(bounds_node) = tp.child_by_field_name("bounds")
+                    {
+                        // Collect bound trait names
+                        let mut bound_names = Vec::new();
+                        let mut bcursor = bounds_node.walk();
+                        for bc in bounds_node.named_children(&mut bcursor) {
+                            if bc.kind() == "type_identifier" {
+                                bound_names.push(self.node_text(&bc));
                             }
-                            // Sort traits alphabetically for deterministic param order
-                            bound_names.sort();
-                            // For each bound trait, look up its methods from trait_defs
-                            // via type_map (we look for known trait method patterns)
-                            for trait_name in &bound_names {
-                                let methods = self.get_trait_method_names(trait_name);
-                                for method in methods {
-                                    hidden.push(format!("__{}_{}", trait_name, method));
-                                }
+                        }
+                        // Sort traits alphabetically for deterministic param order
+                        bound_names.sort();
+                        // For each bound trait, look up its methods from trait_defs
+                        // via type_map (we look for known trait method patterns)
+                        for trait_name in &bound_names {
+                            let methods = self.get_trait_method_names(trait_name);
+                            for method in methods {
+                                hidden.push(format!("__{}_{}", trait_name, method));
                             }
                         }
                     }
@@ -382,12 +386,12 @@ impl<'a> Lowerer<'a> {
         if let Some(ref tm) = self.type_map {
             let prefix = format!("__dict${}$", trait_name);
             for ty in tm.values() {
-                if let crate::analysis::types::Type::Module(marker) = ty {
-                    if let Some(rest) = marker.strip_prefix(&prefix) {
-                        // rest is "method$ParamName"
-                        if let Some(method) = rest.split('$').next() {
-                            methods.insert(method.to_string());
-                        }
+                if let crate::analysis::types::Type::Module(marker) = ty
+                    && let Some(rest) = marker.strip_prefix(&prefix)
+                {
+                    // rest is "method$ParamName"
+                    if let Some(method) = rest.split('$').next() {
+                        methods.insert(method.to_string());
                     }
                 }
             }
@@ -407,14 +411,12 @@ impl<'a> Lowerer<'a> {
 
         let mut cursor = trait_node.walk();
         for (child_idx, child) in trait_node.named_children(&mut cursor).enumerate() {
-            if child.kind() == "function_def" {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    let method_name = self.node_text(&name_node);
-                    self.trait_defaults.insert(
-                        (trait_name.clone(), method_name),
-                        (root_idx, child_idx),
-                    );
-                }
+            if child.kind() == "function_def"
+                && let Some(name_node) = child.child_by_field_name("name")
+            {
+                let method_name = self.node_text(&name_node);
+                self.trait_defaults
+                    .insert((trait_name.clone(), method_name), (root_idx, child_idx));
             }
         }
     }
@@ -444,21 +446,23 @@ impl<'a> Lowerer<'a> {
         let mut overridden_methods = HashSet::new();
         let mut cursor = impl_node.walk();
         for (func_idx, child) in impl_node.named_children(&mut cursor).enumerate() {
-            if child.kind() == "function_def" {
-                if let Some(name_node) = child.child_by_field_name("name") {
-                    let method_name = self.node_text(&name_node);
-                    overridden_methods.insert(method_name.clone());
-                    let mangled = format!("{}${}${}", trait_name, type_key, method_name);
-                    self.functions.insert(mangled.clone());
-                    let params = self.extract_param_names(&child);
-                    self.fn_params.insert(mangled.clone(), params);
-                    impl_func_nodes.push((mangled, parent_idx, func_idx));
-                }
+            if child.kind() == "function_def"
+                && let Some(name_node) = child.child_by_field_name("name")
+            {
+                let method_name = self.node_text(&name_node);
+                overridden_methods.insert(method_name.clone());
+                let mangled = format!("{}${}${}", trait_name, type_key, method_name);
+                self.functions.insert(mangled.clone());
+                let params = self.extract_param_names(&child);
+                self.fn_params.insert(mangled.clone(), params);
+                impl_func_nodes.push((mangled, parent_idx, func_idx));
             }
         }
 
         // Find default methods from the trait that are not overridden
-        let defaults: Vec<(String, usize, usize)> = self.trait_defaults.iter()
+        let defaults: Vec<(String, usize, usize)> = self
+            .trait_defaults
+            .iter()
             .filter(|((tn, mn), _)| tn == &trait_name && !overridden_methods.contains(mn))
             .map(|((_, mn), (root_idx, child_idx))| (mn.clone(), *root_idx, *child_idx))
             .collect();

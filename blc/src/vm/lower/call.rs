@@ -20,8 +20,12 @@ impl<'a> super::Lowerer<'a> {
         // The VM handles resume by calling the continuation value.
 
         // Constructor call: type_identifier(args) -> MakeEnum
+        // Constructor arguments are never in tail position — they produce
+        // the payload for a data constructor, not the function's return value.
         if callee.kind() == "type_identifier" {
             let tag = self.node_text(callee);
+            let was_tail = self.tail_position;
+            self.tail_position = false;
             let payload = if arg_nodes.len() == 1 {
                 self.lower_expression(&arg_nodes[0])?
             } else if arg_nodes.is_empty() {
@@ -33,6 +37,7 @@ impl<'a> super::Lowerer<'a> {
                 }
                 Expr::MakeTuple(elems, None)
             };
+            self.tail_position = was_tail;
             return Ok(Expr::MakeEnum {
                 tag,
                 payload: Box::new(payload),
@@ -69,12 +74,11 @@ impl<'a> super::Lowerer<'a> {
         if callee.kind() == "field_expression" {
             let mangled_name = self.type_map.as_ref().and_then(|tm| {
                 let key = callee.start_byte();
-                if let Some(ty) = tm.get(&key) {
-                    if let crate::analysis::types::Type::Module(mangled) = ty {
-                        if mangled.contains('$') {
-                            return Some(mangled.clone());
-                        }
-                    }
+                if let Some(ty) = tm.get(&key)
+                    && let crate::analysis::types::Type::Module(mangled) = ty
+                    && mangled.contains('$')
+                {
+                    return Some(mangled.clone());
                 }
                 None
             });
@@ -119,24 +123,24 @@ impl<'a> super::Lowerer<'a> {
         // Row.decode(row, TypeName) — rewrite type arg into field spec constant
         if callee.kind() == "field_expression"
             && let Some((ref _mod, ref _meth, ref qualified)) = self.try_resolve_qualified(callee)
+            && qualified == "Row.decode"
+            && arg_nodes.len() == 2
+            && let Some(struct_type) = self
+                .type_map
+                .as_ref()
+                .and_then(|tm| tm.get(&node.start_byte()))
+            && let crate::analysis::types::Type::Struct(name, fields) = struct_type.clone()
         {
-            if qualified == "Row.decode" && arg_nodes.len() == 2 {
-                if let Some(struct_type) = self.type_map.as_ref().and_then(|tm| tm.get(&node.start_byte())) {
-                    if let crate::analysis::types::Type::Struct(name, fields) = struct_type.clone() {
-                        let row_expr = self.lower_expression(&arg_nodes[0])?;
-                        let field_spec = build_field_spec_expr(&fields);
-                        let name_expr = Expr::String(name.clone());
-                        self.tail_position = was_tail;
-                        return Ok(Expr::CallNative {
-                            module: "Row".to_string(),
-                            method: "decode".to_string(),
-                            args: vec![row_expr, field_spec, name_expr],
-                            ty: None,
-                        });
-                    }
-                }
-            }
-
+            let row_expr = self.lower_expression(&arg_nodes[0])?;
+            let field_spec = build_field_spec_expr(&fields);
+            let name_expr = Expr::String(name.clone());
+            self.tail_position = was_tail;
+            return Ok(Expr::CallNative {
+                module: "Row".to_string(),
+                method: "decode".to_string(),
+                args: vec![row_expr, field_spec, name_expr],
+                ty: None,
+            });
         }
 
         // Native call: Module.method(args)
@@ -178,9 +182,8 @@ impl<'a> super::Lowerer<'a> {
                     args.push(self.lower_expression(arg)?);
                 }
                 self.tail_position = was_tail;
-                let result = super::helpers::generate_enum_method(
-                    &module, &method, &variants, args,
-                );
+                let result =
+                    super::helpers::generate_enum_method(&module, &method, &variants, args);
                 if let Some(expr) = result {
                     return Ok(expr);
                 }
@@ -263,7 +266,10 @@ impl<'a> super::Lowerer<'a> {
         }
     }
 
-    pub(super) fn try_resolve_qualified(&self, field_expr: &Node) -> Option<(String, String, String)> {
+    pub(super) fn try_resolve_qualified(
+        &self,
+        field_expr: &Node,
+    ) -> Option<(String, String, String)> {
         let obj = field_expr.named_child(0)?;
         let method = field_expr.named_child(1)?;
         let module = if obj.kind() == "type_identifier" {
@@ -541,10 +547,7 @@ fn build_field_spec_expr(fields: &HashMap<String, crate::analysis::types::Type>)
         .map(|(name, ty)| {
             let tag = type_to_tag(ty);
             Expr::MakeList(
-                vec![
-                    Expr::String(name.clone()),
-                    Expr::String(tag.to_string()),
-                ],
+                vec![Expr::String(name.clone()), Expr::String(tag.to_string())],
                 None,
             )
         })

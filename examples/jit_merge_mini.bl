@@ -1,0 +1,39 @@
+@prelude(script)
+
+// Minimal mergesort test to isolate JIT crash
+
+fn take(xs: List<Int>, n: Int) -> List<Int> =
+  if n <= 0 then []
+  else match List.head(xs)
+    None -> []
+    Some(h) -> List.concat([h], take(List.tail(xs), n - 1))
+
+fn drop_n(xs: List<Int>, n: Int) -> List<Int> =
+  if n <= 0 then xs
+  else drop_n(List.tail(xs), n - 1)
+
+fn merge(xs: List<Int>, ys: List<Int>) -> List<Int> =
+  match List.head(xs)
+    None -> ys
+    Some(x) -> match List.head(ys)
+      None -> xs
+      Some(y) ->
+        if x <= y then List.concat([x], merge(List.tail(xs), ys))
+        else List.concat([y], merge(xs, List.tail(ys)))
+
+fn msort(xs: List<Int>) -> List<Int> = {
+  let n = List.length(xs)
+  if n <= 1 then xs
+  else {
+    let mid = n / 2
+    let left = msort(take(xs, mid))
+    let right = msort(drop_n(xs, mid))
+    merge(left, right)
+  }
+}
+
+fn main!() -> {Console} () = {
+  let data = [5, 3, 8, 1, 9, 2, 7, 4, 6]
+  let sorted = msort(data)
+  Console.println!("${sorted}")
+}

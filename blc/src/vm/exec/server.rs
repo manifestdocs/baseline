@@ -6,7 +6,9 @@ use crate::vm::nvalue::{HeapObject, NValue};
 use crate::vm::radix::{RadixNode, RadixTree, SmallParams};
 use crate::vm::sendable::{SendableHandler, SendableValue};
 
-use super::http_helpers::{extract_response_nv, inject_params_nv, inject_state_nv, parse_url_query_nv};
+use super::http_helpers::{
+    extract_response_nv, inject_params_nv, inject_state_nv, parse_url_query_nv,
+};
 
 /// Thread-safe route tree node.
 struct SendableNode {
@@ -126,11 +128,7 @@ impl SendableChunks {
                 .iter()
                 .map(|c| SendableChunk {
                     code: c.code.clone(),
-                    constants: c
-                        .constants
-                        .iter()
-                        .map(SendableValue::from_nvalue)
-                        .collect(),
+                    constants: c.constants.iter().map(SendableValue::from_nvalue).collect(),
                     source_map: c.source_map.clone(),
                 })
                 .collect(),
@@ -355,8 +353,18 @@ impl super::Vm {
             .iter()
             .filter_map(|route| {
                 let fields = route.as_record()?;
-                let method = fields.iter().find(|(k, _)| &**k == "method")?.1.as_string()?.to_string();
-                let path = fields.iter().find(|(k, _)| &**k == "path")?.1.as_string()?.to_string();
+                let method = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "method")?
+                    .1
+                    .as_string()?
+                    .to_string();
+                let path = fields
+                    .iter()
+                    .find(|(k, _)| &**k == "path")?
+                    .1
+                    .as_string()?
+                    .to_string();
                 Some((method, path))
             })
             .collect();
@@ -371,14 +379,16 @@ impl super::Vm {
             Some(ref cv) => parse_server_config(cv),
             None => crate::vm::hyper_server::ServerConfig::default(),
         };
-        let ctx = std::sync::Arc::new(crate::vm::hyper_server::AsyncServerContext::with_executor_state_and_meta(
-            route_tree,
-            chunks_vec,
-            sendable_mw,
-            config,
-            sendable_state,
-            route_meta,
-        ));
+        let ctx = std::sync::Arc::new(
+            crate::vm::hyper_server::AsyncServerContext::with_executor_state_and_meta(
+                route_tree,
+                chunks_vec,
+                sendable_mw,
+                config,
+                sendable_state,
+                route_meta,
+            ),
+        );
 
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_all()

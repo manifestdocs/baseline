@@ -1,10 +1,11 @@
 use rmcp::{
+    ErrorData as McpError, ServerHandler,
     handler::server::{tool::ToolRouter, wrapper::Parameters},
     model::{
-        CallToolResult, Content, ListResourcesResult, PaginatedRequestParam,
-        RawResource, ReadResourceRequestParam, ReadResourceResult, ResourceContents, ServerInfo,
+        CallToolResult, Content, ListResourcesResult, PaginatedRequestParam, RawResource,
+        ReadResourceRequestParam, ReadResourceResult, ResourceContents, ServerInfo,
     },
-    tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
+    tool, tool_handler, tool_router,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
@@ -118,10 +119,10 @@ impl BaselineMcp {
         let req = params.0;
 
         // Validate level early
-        let ver_level: crate::diagnostics::VerificationLevel =
-            req.level.parse().map_err(|e: String| {
-                McpError::invalid_params(e, None)
-            })?;
+        let ver_level: crate::diagnostics::VerificationLevel = req
+            .level
+            .parse()
+            .map_err(|e: String| McpError::invalid_params(e, None))?;
 
         // Resolve path: either from file param or write inline source to tempfile
         let (_tmpdir, path) = match (&req.file, &req.source) {
@@ -150,9 +151,8 @@ impl BaselineMcp {
             }
         };
 
-        let mut result = crate::parse::parse_file(&path).map_err(|e| {
-            McpError::internal_error(format!("Failed to read file: {}", e), None)
-        })?;
+        let mut result = crate::parse::parse_file(&path)
+            .map_err(|e| McpError::internal_error(format!("Failed to read file: {}", e), None))?;
 
         // Set verification level metadata on the result
         result.verification_level = ver_level;

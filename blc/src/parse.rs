@@ -61,7 +61,8 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
 
         // Run closure cycle detection (W_CYCLE_001)
         let root_node = tree.root_node();
-        let cycle_diagnostics = crate::analysis::check_closure_cycles(&root_node, &source, &file_name);
+        let cycle_diagnostics =
+            crate::analysis::check_closure_cycles(&root_node, &source, &file_name);
         diagnostics.extend(cycle_diagnostics);
     }
 
@@ -108,7 +109,8 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
 
         // Run closure cycle detection (W_CYCLE_001)
         let root_node = tree.root_node();
-        let cycle_diagnostics = crate::analysis::check_closure_cycles(&root_node, source, file_name);
+        let cycle_diagnostics =
+            crate::analysis::check_closure_cycles(&root_node, source, file_name);
         diagnostics.extend(cycle_diagnostics);
     }
 
@@ -182,7 +184,8 @@ pub fn parse_source_with_path(source: &str, file_path: &Path) -> CheckResult {
 
         // Run closure cycle detection (W_CYCLE_001)
         let root_node = tree.root_node();
-        let cycle_diagnostics = crate::analysis::check_closure_cycles(&root_node, source, &file_name);
+        let cycle_diagnostics =
+            crate::analysis::check_closure_cycles(&root_node, source, &file_name);
         diagnostics.extend(cycle_diagnostics);
     }
 
@@ -320,16 +323,16 @@ fn has_preceding_match(node: &tree_sitter::Node) -> bool {
 /// The closing `}` is a sibling ERROR after test_section.
 fn has_preceding_test_annotation(node: &tree_sitter::Node) -> bool {
     // Case 1: ERROR is a child of test_section (the opening `{`)
-    if let Some(parent) = node.parent() {
-        if parent.kind() == "test_section" {
-            return true;
-        }
+    if let Some(parent) = node.parent()
+        && parent.kind() == "test_section"
+    {
+        return true;
     }
     // Case 2: ERROR is a sibling after test_section (the closing `}`)
-    if let Some(prev) = node.prev_named_sibling() {
-        if prev.kind() == "test_section" {
-            return true;
-        }
+    if let Some(prev) = node.prev_named_sibling()
+        && prev.kind() == "test_section"
+    {
+        return true;
     }
     false
 }

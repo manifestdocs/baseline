@@ -33,6 +33,13 @@ impl<'a> super::Lowerer<'a> {
     pub(super) fn lower_string_literal(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let mut parts: Vec<Expr> = Vec::new();
 
+        // Interpolation sub-expressions are never in tail position — they are
+        // arguments to a Concat.  Without this, a self-recursive call inside
+        // "${show(rest)}" is incorrectly lowered as TailCall, reusing the frame
+        // and discarding the surrounding concatenation.
+        let was_tail = self.tail_position;
+        self.tail_position = false;
+
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
             match child.kind() {
@@ -55,6 +62,8 @@ impl<'a> super::Lowerer<'a> {
                 _ => {} // string_start, string_end, etc.
             }
         }
+
+        self.tail_position = was_tail;
 
         if parts.is_empty() {
             return Ok(Expr::String(String::new()));
@@ -83,7 +92,10 @@ impl<'a> super::Lowerer<'a> {
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
             if child.kind().contains("content") {
-                return child.utf8_text(self.source.as_bytes()).unwrap_or("").to_string();
+                return child
+                    .utf8_text(self.source.as_bytes())
+                    .unwrap_or("")
+                    .to_string();
             }
         }
         String::new()

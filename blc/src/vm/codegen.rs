@@ -232,7 +232,9 @@ impl<'a> Codegen<'a> {
                 }
                 let count = Self::checked_u16(fields.len(), "struct fields", span)?;
                 self.emit(Op::MakeRecord(count), span);
-                let tag_idx = self.chunk.add_constant(NValue::string(name.as_str().into()));
+                let tag_idx = self
+                    .chunk
+                    .add_constant(NValue::string(name.as_str().into()));
                 self.emit(Op::MakeStruct(tag_idx), span);
                 self.end_scope(span);
             }
@@ -250,9 +252,8 @@ impl<'a> Codegen<'a> {
                 // Without this, string interpolation inside record values
                 // resolves GetLocal to the wrong stack position (BASEL-223).
                 self.begin_scope();
-                let temps: Vec<String> = (0..fields.len())
-                    .map(|i| format!("__rec_{}", i))
-                    .collect();
+                let temps: Vec<String> =
+                    (0..fields.len()).map(|i| format!("__rec_{}", i)).collect();
                 for (i, (_, val)) in fields.iter().enumerate() {
                     self.gen_expr(val, span)?;
                     self.declare_local(&temps[i]);
@@ -282,9 +283,8 @@ impl<'a> Codegen<'a> {
                 // Pre-evaluate update values into temp locals (same fix as
                 // MakeRecord — see BASEL-223).
                 self.begin_scope();
-                let temps: Vec<String> = (0..updates.len())
-                    .map(|i| format!("__upd_{}", i))
-                    .collect();
+                let temps: Vec<String> =
+                    (0..updates.len()).map(|i| format!("__upd_{}", i)).collect();
                 for (i, (_, val)) in updates.iter().enumerate() {
                     self.gen_expr(val, span)?;
                     self.declare_local(&temps[i]);
@@ -300,7 +300,12 @@ impl<'a> Codegen<'a> {
                 self.end_scope(span);
             }
 
-            Expr::GetField { object, field, field_idx, .. } => {
+            Expr::GetField {
+                object,
+                field,
+                field_idx,
+                ..
+            } => {
                 self.gen_expr(object, span)?;
                 let name_idx = self
                     .chunk
@@ -962,8 +967,11 @@ impl<'a> Codegen<'a> {
         self.emit(Op::SetLocal(idx_slot), span);
         self.emit(Op::Pop, span);
 
-        let jump_back_dist =
-            Self::checked_u16(self.chunk.code.len() - loop_start + 1, "jump distance", span)?;
+        let jump_back_dist = Self::checked_u16(
+            self.chunk.code.len() - loop_start + 1,
+            "jump distance",
+            span,
+        )?;
         self.emit(Op::JumpBack(jump_back_dist), span);
 
         self.chunk.patch_jump(exit_jump);
@@ -1224,7 +1232,9 @@ impl<'a> Codegen<'a> {
     ) -> Result<(), CompileError> {
         // Build outer record: { EffectName: { method: fn, ... }, ... }
         for (effect_name, methods) in handlers {
-            let eff_key = self.chunk.add_constant(NValue::string(effect_name.as_str().into()));
+            let eff_key = self
+                .chunk
+                .add_constant(NValue::string(effect_name.as_str().into()));
             self.emit(Op::LoadConst(eff_key), span);
 
             if methods.len() == 1 && methods[0].0 == "__record__" {
@@ -1233,7 +1243,9 @@ impl<'a> Codegen<'a> {
             } else {
                 // handle form — build inner method record
                 for (method_key, handler_fn) in methods {
-                    let mk = self.chunk.add_constant(NValue::string(method_key.as_str().into()));
+                    let mk = self
+                        .chunk
+                        .add_constant(NValue::string(method_key.as_str().into()));
                     self.emit(Op::LoadConst(mk), span);
                     self.gen_expr(handler_fn, span)?;
                 }
@@ -1315,7 +1327,6 @@ impl<'a> Codegen<'a> {
             self.emit(Op::MakeRecord(methods.len() as u16), span);
         }
         self.emit(Op::MakeRecord(grouped.len() as u16), span);
-
 
         if all_tail_resumptive {
             // All handlers are tail-resumptive: no continuation capture needed.
@@ -1633,9 +1644,9 @@ impl<'a> Codegen<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vm::exec::Vm;
     use crate::vm::lower::Lowerer;
     use crate::vm::value::Value;
-    use crate::vm::exec::Vm;
 
     fn eval_via_ir(source: &str) -> Value {
         let mut parser = tree_sitter::Parser::new();

@@ -121,12 +121,7 @@ pub(super) fn parse_type_ext(
             } else {
                 let elems: Vec<Type> = (0..count)
                     .map(|i| {
-                        parse_type_ext(
-                            &node.named_child(i).unwrap(),
-                            source,
-                            symbols,
-                            type_params,
-                        )
+                        parse_type_ext(&node.named_child(i).unwrap(), source, symbols, type_params)
                     })
                     .collect();
                 Type::Tuple(elems)
@@ -141,8 +136,9 @@ pub(super) fn parse_type_ext(
                     let name_node = child.named_child(0).unwrap();
                     let type_node = child.named_child(1).unwrap();
 
-                    let name = super::check_node::extract_field_name(&name_node, source, "", &mut vec![])
-                        .unwrap_or_default();
+                    let name =
+                        super::check_node::extract_field_name(&name_node, source, "", &mut vec![])
+                            .unwrap_or_default();
                     let ty = parse_type_ext(&type_node, source, symbols, type_params);
                     fields.insert(name, ty);
                 } else if child.kind() == "row_variable" {

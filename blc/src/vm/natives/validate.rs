@@ -15,10 +15,10 @@ pub(super) fn native_validate_required(args: &[NValue]) -> Result<NValue, Native
         .as_string()
         .ok_or_else(|| NativeError("Validate.required: field name must be String".into()))?;
     // Check if the value is a None enum variant
-    if let Some((tag, _)) = args[0].as_enum() {
-        if tag.as_ref() == "None" {
-            return Ok(validation_err(field, "is required"));
-        }
+    if let Some((tag, _)) = args[0].as_enum()
+        && tag.as_ref() == "None"
+    {
+        return Ok(validation_err(field, "is required"));
     }
     Ok(NValue::enum_val("Ok".into(), args[0].clone()))
 }
@@ -43,10 +43,10 @@ pub(super) fn native_validate_int(args: &[NValue]) -> Result<NValue, NativeError
         return Ok(NValue::enum_val("Ok".into(), args[0].clone()));
     }
     // Try parsing string as int
-    if let Some(s) = args[0].as_string() {
-        if let Ok(n) = s.parse::<i64>() {
-            return Ok(NValue::enum_val("Ok".into(), NValue::int(n)));
-        }
+    if let Some(s) = args[0].as_string()
+        && let Ok(n) = s.parse::<i64>()
+    {
+        return Ok(NValue::enum_val("Ok".into(), NValue::int(n)));
     }
     Ok(validation_err(field, "must be an integer"))
 }
@@ -108,10 +108,7 @@ pub(super) fn native_validate_min(args: &[NValue]) -> Result<NValue, NativeError
         .as_string()
         .ok_or_else(|| NativeError("Validate.min: field name must be String".into()))?;
     if val < min {
-        Ok(validation_err(
-            field,
-            &format!("must be at least {}", min),
-        ))
+        Ok(validation_err(field, &format!("must be at least {}", min)))
     } else {
         Ok(NValue::enum_val("Ok".into(), args[0].clone()))
     }
@@ -125,10 +122,7 @@ pub(super) fn native_validate_max(args: &[NValue]) -> Result<NValue, NativeError
         .as_string()
         .ok_or_else(|| NativeError("Validate.max: field name must be String".into()))?;
     if val > max {
-        Ok(validation_err(
-            field,
-            &format!("must be at most {}", max),
-        ))
+        Ok(validation_err(field, &format!("must be at most {}", max)))
     } else {
         Ok(NValue::enum_val("Ok".into(), args[0].clone()))
     }
@@ -147,10 +141,10 @@ pub(super) fn native_validate_one_of(args: &[NValue]) -> Result<NValue, NativeEr
         .ok_or_else(|| NativeError("Validate.one_of: field name must be String".into()))?;
 
     for opt in options {
-        if let Some(s) = opt.as_string() {
-            if s.as_ref() == val.as_ref() {
-                return Ok(NValue::enum_val("Ok".into(), args[0].clone()));
-            }
+        if let Some(s) = opt.as_string()
+            && s.as_ref() == val.as_ref()
+        {
+            return Ok(NValue::enum_val("Ok".into(), args[0].clone()));
         }
     }
 

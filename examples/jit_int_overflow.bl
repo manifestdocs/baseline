@@ -1,0 +1,15 @@
+@prelude(script)
+
+fn main!() -> {Console} () = {
+  // Test integer multiply behavior
+  let a = 347652313
+  let b = 1103515245
+  let c = a * b
+  Console.println!("a * b = ${c}")
+  let d = c + 12345
+  Console.println!("+ 12345 = ${d}")
+  let e = if d < 0 then 0 - d else d
+  Console.println!("abs = ${e}")
+  let f = e % 1000000007
+  Console.println!("mod = ${f}")
+}

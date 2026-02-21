@@ -6,7 +6,7 @@
 //! Args are NaN-boxed NValue bits. Return value is NaN-boxed NValue bits.
 //! On error, calls `jit_set_error()` and returns NV_UNIT.
 
-use crate::helpers::{jit_arena_push, jit_set_error, NV_UNIT};
+use crate::helpers::{NV_UNIT, jit_arena_push, jit_set_error};
 use crate::nvalue::{HeapObject, NValue};
 
 // ---------------------------------------------------------------------------
@@ -18,7 +18,10 @@ use crate::nvalue::{HeapObject, NValue};
 /// does not free the caller's values.
 fn args_from_raw(args: *const u64, count: u64) -> Vec<NValue> {
     let slice = unsafe { std::slice::from_raw_parts(args, count as usize) };
-    slice.iter().map(|&bits| unsafe { NValue::borrow_from_raw(bits) }).collect()
+    slice
+        .iter()
+        .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
+        .collect()
 }
 
 /// Push an NValue to the arena and return its raw bits.
@@ -250,7 +253,10 @@ pub extern "C" fn bl_string_split(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match (vals[0].as_string(), vals[1].as_string()) {
         (Some(s), Some(delim)) => {
-            let parts: Vec<NValue> = s.split(&**delim).map(|p| NValue::string(p.into())).collect();
+            let parts: Vec<NValue> = s
+                .split(&**delim)
+                .map(|p| NValue::string(p.into()))
+                .collect();
             push_result(NValue::list(parts))
         }
         _ => native_error("String.split: expected (String, String)".into()),
@@ -272,7 +278,11 @@ pub extern "C" fn bl_string_join(args: *const u64, count: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn bl_string_slice(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
-    match (vals[0].as_string(), vals[1].is_any_int(), vals[2].is_any_int()) {
+    match (
+        vals[0].as_string(),
+        vals[1].is_any_int(),
+        vals[2].is_any_int(),
+    ) {
         (Some(s), true, true) => {
             let start = vals[1].as_any_int() as usize;
             let len = vals[2].as_any_int() as usize;
@@ -288,8 +298,10 @@ pub extern "C" fn bl_string_chars(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_string() {
         Some(s) => {
-            let chars: Vec<NValue> =
-                s.chars().map(|c| NValue::string(c.to_string().into())).collect();
+            let chars: Vec<NValue> = s
+                .chars()
+                .map(|c| NValue::string(c.to_string().into()))
+                .collect();
             push_result(NValue::list(chars))
         }
         None => native_error(format!("String.chars: expected String, got {}", vals[0])),
@@ -349,10 +361,16 @@ pub extern "C" fn bl_string_from_char_code(args: *const u64, count: u64) -> u64 
         let code = vals[0].as_any_int() as u32;
         match char::from_u32(code) {
             Some(c) => push_result(NValue::string(c.to_string().into())),
-            None => native_error(format!("String.from_char_code: invalid code point {}", code)),
+            None => native_error(format!(
+                "String.from_char_code: invalid code point {}",
+                code
+            )),
         }
     } else {
-        native_error(format!("String.from_char_code: expected Int, got {}", vals[0]))
+        native_error(format!(
+            "String.from_char_code: expected Int, got {}",
+            vals[0]
+        ))
     }
 }
 
@@ -364,7 +382,10 @@ pub extern "C" fn bl_string_char_code(args: *const u64, count: u64) -> u64 {
             Some(c) => NValue::int(c as i64).raw(),
             None => native_error("String.char_code: empty string".into()),
         },
-        None => native_error(format!("String.char_code: expected String, got {}", vals[0])),
+        None => native_error(format!(
+            "String.char_code: expected String, got {}",
+            vals[0]
+        )),
     }
 }
 
@@ -514,9 +535,7 @@ pub extern "C" fn bl_option_unwrap(args: *const u64, count: u64) -> u64 {
             jit_arena_push(payload.clone());
             bits
         }
-        Some((tag, _)) if &**tag == "None" => {
-            native_error("Option.unwrap: called on None".into())
-        }
+        Some((tag, _)) if &**tag == "None" => native_error("Option.unwrap: called on None".into()),
         _ => native_error(format!("Option.unwrap: expected Option, got {}", vals[0])),
     }
 }
@@ -531,7 +550,10 @@ pub extern "C" fn bl_option_unwrap_or(args: *const u64, count: u64) -> u64 {
             bits
         }
         Some((tag, _)) if &**tag == "None" => vals[1].raw(),
-        _ => native_error(format!("Option.unwrap_or: expected Option, got {}", vals[0])),
+        _ => native_error(format!(
+            "Option.unwrap_or: expected Option, got {}",
+            vals[0]
+        )),
     }
 }
 
@@ -583,7 +605,10 @@ pub extern "C" fn bl_result_unwrap_or(args: *const u64, count: u64) -> u64 {
             bits
         }
         Some((tag, _)) if &**tag == "Err" => vals[1].raw(),
-        _ => native_error(format!("Result.unwrap_or: expected Result, got {}", vals[0])),
+        _ => native_error(format!(
+            "Result.unwrap_or: expected Result, got {}",
+            vals[0]
+        )),
     }
 }
 
@@ -691,7 +716,7 @@ pub extern "C" fn bl_fs_list_dir(args: *const u64, count: u64) -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn bl_map_empty(_args: *const u64, _count: u64) -> u64 {
-    push_result(NValue::map(Vec::new()))
+    push_result(NValue::map_from_hashmap(std::collections::HashMap::new()))
 }
 
 #[unsafe(no_mangle)]
@@ -701,10 +726,9 @@ pub extern "C" fn bl_map_insert(args: *const u64, count: u64) -> u64 {
     let val = vals[2].clone();
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let mut new_entries: Vec<(NValue, NValue)> =
-                entries.iter().filter(|(k, _)| *k != key).cloned().collect();
-            new_entries.push((key, val));
-            push_result(NValue::map(new_entries))
+            let mut new_map = entries.clone();
+            new_map.insert(key, val);
+            push_result(NValue::map_from_hashmap(new_map))
         }
         _ => native_error("Map.insert: expected Map".into()),
     }
@@ -715,14 +739,10 @@ pub extern "C" fn bl_map_get(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     let key = &vals[1];
     match vals[0].as_heap_ref() {
-        HeapObject::Map(entries) => {
-            for (k, v) in entries {
-                if k == key {
-                    return push_result(NValue::enum_val("Some".into(), v.clone()));
-                }
-            }
-            push_result(NValue::enum_val("None".into(), NValue::unit()))
-        }
+        HeapObject::Map(entries) => match entries.get(key) {
+            Some(v) => push_result(NValue::enum_val("Some".into(), v.clone())),
+            None => push_result(NValue::enum_val("None".into(), NValue::unit())),
+        },
         _ => native_error("Map.get: expected Map".into()),
     }
 }
@@ -733,8 +753,9 @@ pub extern "C" fn bl_map_remove(args: *const u64, count: u64) -> u64 {
     let key = &vals[1];
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let new_entries: Vec<_> = entries.iter().filter(|(k, _)| k != key).cloned().collect();
-            push_result(NValue::map(new_entries))
+            let mut new_map = entries.clone();
+            new_map.remove(key);
+            push_result(NValue::map_from_hashmap(new_map))
         }
         _ => native_error("Map.remove: expected Map".into()),
     }
@@ -745,10 +766,7 @@ pub extern "C" fn bl_map_contains(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     let key = &vals[1];
     match vals[0].as_heap_ref() {
-        HeapObject::Map(entries) => {
-            let found = entries.iter().any(|(k, _)| k == key);
-            NValue::bool(found).raw()
-        }
+        HeapObject::Map(entries) => NValue::bool(entries.contains_key(key)).raw(),
         _ => native_error("Map.contains: expected Map".into()),
     }
 }
@@ -758,7 +776,7 @@ pub extern "C" fn bl_map_keys(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let keys: Vec<_> = entries.iter().map(|(k, _)| k.clone()).collect();
+            let keys: Vec<_> = entries.keys().cloned().collect();
             push_result(NValue::list(keys))
         }
         _ => native_error("Map.keys: expected Map".into()),
@@ -770,7 +788,7 @@ pub extern "C" fn bl_map_values(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let vals: Vec<_> = entries.iter().map(|(_, v)| v.clone()).collect();
+            let vals: Vec<_> = entries.values().cloned().collect();
             push_result(NValue::list(vals))
         }
         _ => native_error("Map.values: expected Map".into()),
@@ -791,11 +809,11 @@ pub extern "C" fn bl_map_from_list(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_list() {
         Some(items) => {
-            let mut entries: Vec<(NValue, NValue)> = Vec::new();
+            let mut entries = std::collections::HashMap::new();
             for item in items {
                 if let Some(tuple) = item.as_tuple() {
                     if tuple.len() >= 2 {
-                        entries.push((tuple[0].clone(), tuple[1].clone()));
+                        entries.insert(tuple[0].clone(), tuple[1].clone());
                     } else {
                         return native_error(
                             "Map.from_list: each element must be a (key, value) pair".into(),
@@ -807,7 +825,7 @@ pub extern "C" fn bl_map_from_list(args: *const u64, count: u64) -> u64 {
                     );
                 }
             }
-            push_result(NValue::map(entries))
+            push_result(NValue::map_from_hashmap(entries))
         }
         None => native_error(format!("Map.from_list: expected List, got {}", vals[0])),
     }

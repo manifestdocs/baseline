@@ -20,19 +20,19 @@ pub enum Type {
     Unit,
     Function(Vec<Type>, Box<Type>),
     List(Box<Type>),
-    Struct(String, HashMap<String, Type>),  // Name, Fields
+    Struct(String, HashMap<String, Type>),      // Name, Fields
     Record(HashMap<String, Type>, Option<u32>), // Anonymous record, optional row var
-    Tuple(Vec<Type>),                       // (T, U, ...)
-    Enum(String, Vec<(String, Vec<Type>)>), // Name, [(VariantName, PayloadTypes)]
-    Map(Box<Type>, Box<Type>),             // Map<K, V>
-    Set(Box<Type>),                        // Set<T>
-    Weak(Box<Type>),                       // Weak<T> — weak reference
-    Module(String),                         // Module/Effect namespace
-    Var(u32),                               // Inference type variable
-    TypeParam(String),                      // Named type parameter (e.g., T, A, K)
-    Refined(Box<Type>, String),             // Refined type: base type + alias name
-    Scoped(Box<Type>),                      // Scoped resource handle (cannot escape closure)
-    Row,                                    // Typed database row
+    Tuple(Vec<Type>),                           // (T, U, ...)
+    Enum(String, Vec<(String, Vec<Type>)>),     // Name, [(VariantName, PayloadTypes)]
+    Map(Box<Type>, Box<Type>),                  // Map<K, V>
+    Set(Box<Type>),                             // Set<T>
+    Weak(Box<Type>),                            // Weak<T> — weak reference
+    Module(String),                             // Module/Effect namespace
+    Var(u32),                                   // Inference type variable
+    TypeParam(String),                          // Named type parameter (e.g., T, A, K)
+    Refined(Box<Type>, String),                 // Refined type: base type + alias name
+    Scoped(Box<Type>),                          // Scoped resource handle (cannot escape closure)
+    Row,                                        // Typed database row
     Unknown,
 }
 
