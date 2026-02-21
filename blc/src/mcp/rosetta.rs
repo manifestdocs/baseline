@@ -63,11 +63,11 @@ static ENTRIES: &[RosettaEntry] = &[
     RosettaEntry {
         concept: "early return / guard",
         category: "control_flow",
-        keywords: &["return", "early", "guard", "bail"],
-        python: "if not valid:\n    return None\nprocess()",
-        typescript: "if (!valid) return null;\nprocess();",
-        baseline: "if not valid then None else Some(process())",
-        explanation: "No `return` keyword. Use if/else expressions — last expression is the result.",
+        keywords: &["return", "early", "guard", "bail", "ensure"],
+        python: "if not valid:\n    return Err(\"invalid\")\nprocess()",
+        typescript: "if (!valid) return { error: \"invalid\" };\nprocess();",
+        baseline: "Result.ensure(valid, \"invalid\")?\nprocess()",
+        explanation: "Use `Result.ensure(cond, err)?` for guard clauses. Returns Err if false, continues if true.",
     },
     RosettaEntry {
         concept: "logical negation",
@@ -161,6 +161,15 @@ static ENTRIES: &[RosettaEntry] = &[
         typescript: "const val = risky() ?? defaultVal;",
         baseline: "let val = match risky()\n  Ok(v) -> v\n  Err(_) -> default",
         explanation: "No `??` or `or`. Use match to provide a default on Err/None.",
+    },
+    RosettaEntry {
+        concept: "option to result",
+        category: "error_handling",
+        keywords: &["ok_or", "option", "result", "convert", "none", "error"],
+        python: "val = opt or raise ValueError(\"missing\")",
+        typescript: "const val = opt ?? throw new Error(\"missing\");",
+        baseline: "let val = Option.ok_or(opt, \"missing\")?",
+        explanation: "Option.ok_or converts Some(x) to Ok(x) and None to Err(e). Chain with ? to propagate.",
     },
     // ================================================================
     // Data Structures
