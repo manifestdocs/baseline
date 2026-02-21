@@ -1,4 +1,5 @@
 mod builtins;
+mod check_cycles;
 mod check_lambda;
 mod check_node;
 mod check_pattern;
@@ -7,6 +8,7 @@ mod type_compat;
 mod type_def;
 mod type_parse;
 
+pub use check_cycles::check_closure_cycles;
 pub use type_def::{Type, TypeMap};
 pub use symbol_table::{DictEntry, DictMap, SymbolTable};
 

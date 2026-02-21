@@ -14,6 +14,7 @@ pub use refinements::check_refinements;
 pub use refinements::collect_refined_types;
 pub use refinements::{Constraint, StringConstraint};
 pub use smt::check_specs;
+pub use types::check_closure_cycles;
 pub use types::check_types;
 pub use types::check_types_with_loader;
 pub use types::check_types_with_map;

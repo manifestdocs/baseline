@@ -58,6 +58,11 @@ pub fn parse_file(path: &Path) -> Result<CheckResult, std::io::Error> {
         // Run refinement checking pass
         let refinement_diagnostics = crate::analysis::check_refinements(&tree, &source, &file_name);
         diagnostics.extend(refinement_diagnostics);
+
+        // Run closure cycle detection (W_CYCLE_001)
+        let root_node = tree.root_node();
+        let cycle_diagnostics = crate::analysis::check_closure_cycles(&root_node, &source, &file_name);
+        diagnostics.extend(cycle_diagnostics);
     }
 
     let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
@@ -100,6 +105,11 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
 
         let refinement_diagnostics = crate::analysis::check_refinements(&tree, source, file_name);
         diagnostics.extend(refinement_diagnostics);
+
+        // Run closure cycle detection (W_CYCLE_001)
+        let root_node = tree.root_node();
+        let cycle_diagnostics = crate::analysis::check_closure_cycles(&root_node, source, file_name);
+        diagnostics.extend(cycle_diagnostics);
     }
 
     let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
@@ -169,6 +179,11 @@ pub fn parse_source_with_path(source: &str, file_path: &Path) -> CheckResult {
 
         let refinement_diagnostics = crate::analysis::check_refinements(&tree, source, &file_name);
         diagnostics.extend(refinement_diagnostics);
+
+        // Run closure cycle detection (W_CYCLE_001)
+        let root_node = tree.root_node();
+        let cycle_diagnostics = crate::analysis::check_closure_cycles(&root_node, source, &file_name);
+        diagnostics.extend(cycle_diagnostics);
     }
 
     let has_errors = diagnostics.iter().any(|d| d.severity == Severity::Error);
