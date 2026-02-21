@@ -1088,10 +1088,9 @@ fn inline_expr(
     })
 }
 
-/// Shallow structural equality check (for detecting if inlining changed anything).
+/// Structural equality check (for detecting if inlining changed anything).
 fn exprs_equal(a: &Expr, b: &Expr) -> bool {
-    // Use debug representation for a quick check
-    format!("{:?}", a) == format!("{:?}", b)
+    a == b
 }
 
 // ---------------------------------------------------------------------------

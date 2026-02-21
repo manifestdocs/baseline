@@ -701,15 +701,18 @@ pub extern "C" fn jit_rc_incref(bits: u64) -> u64 {
 pub extern "C" fn jit_rc_decref(bits: u64) {
     if bits & TAG_MASK == TAG_HEAP {
         let ptr = (bits & PAYLOAD_MASK) as *const HeapObject;
-        // Track deallocation in alloc_stats (matches NValue::drop logic)
-        let is_last = unsafe {
-            let arc = Arc::from_raw(ptr);
-            let count = Arc::strong_count(&arc);
-            std::mem::forget(arc);
-            count == 1
-        };
-        if is_last {
-            crate::nvalue::record_free();
+        // In debug builds, track deallocation in alloc_stats (matches NValue::drop logic)
+        #[cfg(debug_assertions)]
+        {
+            let is_last = unsafe {
+                let arc = Arc::from_raw(ptr);
+                let count = Arc::strong_count(&arc);
+                std::mem::forget(arc);
+                count == 1
+            };
+            if is_last {
+                crate::nvalue::record_free();
+            }
         }
         unsafe { Arc::decrement_strong_count(ptr); }
     }

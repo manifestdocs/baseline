@@ -44,6 +44,9 @@ pub struct ModuleLoader {
     loaded: HashMap<PathBuf, usize>,
     /// Base directory for resolving imports
     base_dir: Option<PathBuf>,
+    /// Cache: canonical path -> type-check diagnostics.
+    /// Prevents re-type-checking the same module on diamond imports.
+    type_check_cache: HashMap<PathBuf, Vec<Diagnostic>>,
 }
 
 impl Default for ModuleLoader {
@@ -59,6 +62,7 @@ impl ModuleLoader {
             resolution_stack: Vec::new(),
             loaded: HashMap::new(),
             base_dir: None,
+            type_check_cache: HashMap::new(),
         }
     }
 
@@ -68,12 +72,24 @@ impl ModuleLoader {
             resolution_stack: Vec::new(),
             loaded: HashMap::new(),
             base_dir: Some(base_dir),
+            type_check_cache: HashMap::new(),
         }
     }
 
     /// Get the base directory for imports.
     pub fn base_dir(&self) -> Option<&Path> {
         self.base_dir.as_deref()
+    }
+
+    /// Look up cached type-check diagnostics for a module.
+    /// Returns `Some` if the module has already been type-checked in this session.
+    pub fn get_type_check_cache(&self, path: &Path) -> Option<&Vec<Diagnostic>> {
+        self.type_check_cache.get(path)
+    }
+
+    /// Cache type-check diagnostics for a module path.
+    pub fn set_type_check_cache(&mut self, path: PathBuf, diagnostics: Vec<Diagnostic>) {
+        self.type_check_cache.insert(path, diagnostics);
     }
 
     /// Parse import declarations from a source file's root node.

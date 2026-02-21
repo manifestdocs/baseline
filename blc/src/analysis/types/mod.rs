@@ -212,47 +212,76 @@ fn process_imports(
         };
 
         // Type-check the imported module with recursive import support.
-        // Clone source/path to release the borrow on loader, so we can pass &mut loader.
+        // Use cached results if this module has already been type-checked (diamond imports).
         {
-            let (mod_root, mod_source, _) = loader.get_module(module_idx).unwrap();
-            let mod_source_owned = mod_source.to_string();
-            let mod_file_owned = mod_file.clone();
-            let _ = mod_root;
-            // Re-parse to get an owned tree (required because mod_root borrows loader)
-            let mut parser = tree_sitter::Parser::new();
-            parser
-                .set_language(&tree_sitter_baseline::LANGUAGE.into())
-                .expect("Failed to load Baseline grammar");
-            let tree = parser.parse(&mod_source_owned, None).unwrap();
-            let mod_root = tree.root_node();
-            let mod_diagnostics = check_types_with_loader(
-                &mod_root,
-                &mod_source_owned,
-                &mod_file_owned,
-                Some(loader),
-            );
-            // Pop the resolution stack now that this module's transitive imports are resolved
-            loader.pop_resolution(&file_path);
-            let has_errors = mod_diagnostics
-                .iter()
-                .any(|d| d.severity == Severity::Error);
-            if has_errors {
-                diagnostics.push(Diagnostic {
-                    code: "IMP_003".to_string(),
-                    severity: Severity::Error,
-                    location: Location::from_node(file,&import_node),
-                    message: format!(
-                        "Imported module `{}` has {} type error(s)",
-                        import.module_name,
-                        mod_diagnostics
-                            .iter()
-                            .filter(|d| d.severity == Severity::Error)
-                            .count()
-                    ),
-                    context: "Fix the errors in the imported module first.".to_string(),
-                    suggestions: vec![],
-                });
-                continue;
+            // Check if we already type-checked this module
+            if let Some(cached) = loader.get_type_check_cache(&file_path) {
+                let has_errors = cached.iter().any(|d| d.severity == Severity::Error);
+                if has_errors {
+                    diagnostics.push(Diagnostic {
+                        code: "IMP_003".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &import_node),
+                        message: format!(
+                            "Imported module `{}` has {} type error(s)",
+                            import.module_name,
+                            cached
+                                .iter()
+                                .filter(|d| d.severity == Severity::Error)
+                                .count()
+                        ),
+                        context: "Fix the errors in the imported module first.".to_string(),
+                        suggestions: vec![],
+                    });
+                    continue;
+                }
+            } else {
+                // Clone source/path to release the borrow on loader, so we can pass &mut loader.
+                let (mod_root, mod_source, _) = loader.get_module(module_idx).unwrap();
+                let mod_source_owned = mod_source.to_string();
+                let mod_file_owned = mod_file.clone();
+                let _ = mod_root;
+                // Re-parse to get an owned tree (required because mod_root borrows loader)
+                let mut parser = tree_sitter::Parser::new();
+                parser
+                    .set_language(&tree_sitter_baseline::LANGUAGE.into())
+                    .expect("Failed to load Baseline grammar");
+                let tree = parser.parse(&mod_source_owned, None).unwrap();
+                let mod_root = tree.root_node();
+                let mod_diagnostics = check_types_with_loader(
+                    &mod_root,
+                    &mod_source_owned,
+                    &mod_file_owned,
+                    Some(loader),
+                );
+                // Pop the resolution stack now that this module's transitive imports are resolved
+                loader.pop_resolution(&file_path);
+
+                // Cache the result for future imports of this module
+                let has_errors = mod_diagnostics
+                    .iter()
+                    .any(|d| d.severity == Severity::Error);
+                loader.set_type_check_cache(file_path.clone(), mod_diagnostics);
+
+                if has_errors {
+                    let cached = loader.get_type_check_cache(&file_path).unwrap();
+                    diagnostics.push(Diagnostic {
+                        code: "IMP_003".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &import_node),
+                        message: format!(
+                            "Imported module `{}` has {} type error(s)",
+                            import.module_name,
+                            cached
+                                .iter()
+                                .filter(|d| d.severity == Severity::Error)
+                                .count()
+                        ),
+                        context: "Fix the errors in the imported module first.".to_string(),
+                        suggestions: vec![],
+                    });
+                    continue;
+                }
             }
         }
 

@@ -93,7 +93,7 @@ pub struct IrFunction {
 }
 
 /// Source location for diagnostics.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Span {
     pub line: usize,
     pub col: usize,
@@ -107,7 +107,7 @@ pub struct Span {
 
 /// The core IR expression type. Lifetime-free, fully desugared.
 /// Each node optionally carries a resolved `Type` from the type checker.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Expr {
     // -- Literals --
     Int(i64),
@@ -320,7 +320,7 @@ pub enum UnaryOp {
 // Pattern matching
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
     pub guard: Option<Expr>,
@@ -328,7 +328,7 @@ pub struct MatchArm {
 }
 
 /// A single clause in a `handle ... with { ... }` block.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct HandlerClause {
     pub effect: String,
     pub method: String,
@@ -338,7 +338,7 @@ pub struct HandlerClause {
     pub is_tail_resumptive: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Pattern {
     Wildcard,
     Var(String),
@@ -354,7 +354,7 @@ pub enum Pattern {
 // ---------------------------------------------------------------------------
 
 /// Matcher for `expect` expressions in inline tests.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Matcher {
     Equal(Box<Expr>),
     BeOk,
