@@ -1,0 +1,12 @@
+@prelude(server)
+
+// Negative tests for Row.decode type checking
+// Expected errors: TYP_041
+
+type ValidUser = { id: Int, name: String }
+
+// Error: second arg is not a known struct type
+fn bad_decode!(row: Row) -> {Console} () = {
+  let _ = Row.decode(row, NotAType)
+  Console.println!("should not reach")
+}

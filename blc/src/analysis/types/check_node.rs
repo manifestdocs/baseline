@@ -9,6 +9,24 @@ use super::super::infer::{InferCtx, UserGenericSchema};
 use std::collections::HashSet;
 use tree_sitter::Node;
 
+/// Check if a type can be decoded from a SQL row.
+/// Compatible types: Int, Float, String, Bool, Option<Int>, Option<String>, Option<Float>, Option<Bool>.
+fn is_decode_compatible(ty: &Type) -> bool {
+    match ty {
+        Type::Int | Type::Float | Type::String | Type::Bool => true,
+        Type::Enum(name, variants) if name == "Option" => {
+            // Option<T> where T is a scalar type
+            if let Some((_, payload)) = variants.iter().find(|(tag, _)| tag == "Some") {
+                payload.len() == 1 && matches!(payload[0], Type::Int | Type::Float | Type::String | Type::Bool)
+            } else {
+                false
+            }
+        }
+        Type::Unknown => true, // Allow Unknown to not cascade errors
+        _ => false,
+    }
+}
+
 /// Extract a field name from an identifier or string_literal node.
 /// For identifiers, returns the text directly.
 /// For string_literal nodes, concatenates string_content children and rejects interpolation.
@@ -658,6 +676,169 @@ fn check_node_inner(
                             patch: None,
                         }],
                     });
+                }
+            }
+
+            // Row.decode(row, TypeName) — automatic row-to-record mapping
+            if let Some(qualified) = extract_qualified_name(&func_node, source) {
+                if qualified == "Row.decode" {
+                    if params_provided != 2 {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_040".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, node),
+                            message: "Row.decode expects 2 arguments: (row, TypeName)".to_string(),
+                            context: "Usage: Row.decode(row, User)".to_string(),
+                            suggestions: vec![],
+                        });
+                        return Type::Unknown;
+                    }
+                    // Type-check first arg: must be Row
+                    let row_arg = node.named_child(1).unwrap();
+                    let row_arg_expr = call_arg_expr(&row_arg);
+                    let row_type = check_node(&row_arg_expr, source, file, symbols, diagnostics);
+                    if row_type != Type::Row && row_type != Type::Unknown {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_040".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &row_arg_expr),
+                            message: format!("Row.decode: first argument must be Row, found {}", row_type),
+                            context: "Pass a Row value from a database query.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
+                    // Second arg: type_identifier → resolve struct
+                    let type_arg = node.named_child(2).unwrap();
+                    let type_name = type_arg.utf8_text(source.as_bytes()).unwrap();
+                    if let Some(Type::Struct(name, fields)) = symbols.lookup_type(type_name).cloned() {
+                        // Validate all fields are decode-compatible
+                        for (fname, ftype) in &fields {
+                            if !is_decode_compatible(ftype) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_042".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &type_arg),
+                                    message: format!(
+                                        "Row.decode: field '{}' has type {} which cannot be decoded from SQL",
+                                        fname, ftype
+                                    ),
+                                    context: "Decodable types: Int, Float, String, Bool, Option<Int>, Option<String>".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        }
+                        // Store struct type in TypeMap for the lowerer
+                        symbols.type_map.insert(
+                            node.start_byte(),
+                            Type::Struct(name.clone(), fields.clone()),
+                        );
+                        return Type::Struct(name, fields);
+                    } else {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_041".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &type_arg),
+                            message: format!("Row.decode: '{}' is not a known struct type", type_name),
+                            context: "The second argument must be a struct type name.".to_string(),
+                            suggestions: vec![],
+                        });
+                        return Type::Unknown;
+                    }
+                }
+
+                // Sqlite.query_as! / Postgres.query_as! / Mysql.query_as!
+                // Sqlite.query_one_as! / Postgres.query_one_as! / Mysql.query_one_as!
+                let is_query_as = matches!(
+                    qualified.as_str(),
+                    "Sqlite.query_as!" | "Postgres.query_as!" | "Mysql.query_as!"
+                );
+                let is_query_one_as = matches!(
+                    qualified.as_str(),
+                    "Sqlite.query_one_as!" | "Postgres.query_one_as!" | "Mysql.query_one_as!"
+                );
+                if is_query_as || is_query_one_as {
+                    if params_provided != 3 {
+                        let fn_name = if is_query_as { "query_as!" } else { "query_one_as!" };
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_007".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, node),
+                            message: format!(
+                                "{} expects 3 arguments: (TypeName, sql, params)",
+                                fn_name
+                            ),
+                            context: format!("Usage: {}(User, \"SELECT ...\", [])", fn_name),
+                            suggestions: vec![],
+                        });
+                        return Type::Unknown;
+                    }
+                    // First arg: type_identifier → resolve struct
+                    let type_arg = node.named_child(1).unwrap();
+                    let type_name = type_arg.utf8_text(source.as_bytes()).unwrap();
+                    let struct_type = symbols.lookup_type(type_name).cloned();
+                    if let Some(Type::Struct(name, fields)) = struct_type {
+                        // Validate fields
+                        for (fname, ftype) in &fields {
+                            if !is_decode_compatible(ftype) {
+                                diagnostics.push(Diagnostic {
+                                    code: "TYP_042".to_string(),
+                                    severity: Severity::Error,
+                                    location: Location::from_node(file, &type_arg),
+                                    message: format!(
+                                        "{}: field '{}' has type {} which cannot be decoded from SQL",
+                                        qualified, fname, ftype
+                                    ),
+                                    context: "Decodable types: Int, Float, String, Bool, Option<Int>, Option<String>".to_string(),
+                                    suggestions: vec![],
+                                });
+                            }
+                        }
+                        // Type-check sql and params args
+                        let sql_arg = node.named_child(2).unwrap();
+                        let sql_expr = call_arg_expr(&sql_arg);
+                        let sql_type = check_node(&sql_expr, source, file, symbols, diagnostics);
+                        if sql_type != Type::String && sql_type != Type::Unknown {
+                            diagnostics.push(Diagnostic {
+                                code: "TYP_008".to_string(),
+                                severity: Severity::Error,
+                                location: Location::from_node(file, &sql_expr),
+                                message: format!("Expected String for sql argument, found {}", sql_type),
+                                context: "SQL query must be a String.".to_string(),
+                                suggestions: vec![],
+                            });
+                        }
+                        let params_arg = node.named_child(3).unwrap();
+                        let params_expr = call_arg_expr(&params_arg);
+                        let _params_type = check_node(&params_expr, source, file, symbols, diagnostics);
+
+                        // Store struct type in TypeMap for the lowerer
+                        symbols.type_map.insert(
+                            node.start_byte(),
+                            Type::Struct(name.clone(), fields.clone()),
+                        );
+
+                        if is_query_as {
+                            return Type::List(Box::new(Type::Struct(name, fields)));
+                        } else {
+                            return Type::Enum(
+                                "Option".to_string(),
+                                vec![
+                                    ("Some".to_string(), vec![Type::Struct(name, fields)]),
+                                    ("None".to_string(), vec![]),
+                                ],
+                            );
+                        }
+                    } else {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_041".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &type_arg),
+                            message: format!("{}: '{}' is not a known struct type", qualified, type_name),
+                            context: "The first argument must be a struct type name.".to_string(),
+                            suggestions: vec![],
+                        });
+                        return Type::Unknown;
+                    }
                 }
             }
 

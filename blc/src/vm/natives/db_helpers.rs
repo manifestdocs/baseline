@@ -330,6 +330,164 @@ pub(super) fn native_db_has_rows(args: &[NValue]) -> Result<NValue, NativeError>
     Ok(NValue::bool(!list.is_empty()))
 }
 
+// ---------------------------------------------------------------------------
+// Row.decode — automatic row-to-record mapping
+// ---------------------------------------------------------------------------
+
+/// Decode a single column value based on the type tag.
+/// Reuses the same coercion logic as the individual Row.* accessors.
+fn decode_field(
+    columns: &[RcStr],
+    values: &[SqlValue],
+    field_name: &str,
+    type_tag: &str,
+    struct_name: &str,
+) -> Result<NValue, NativeError> {
+    match type_tag {
+        "Int" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Int(i)) => Ok(NValue::int(*i)),
+            Some(SqlValue::Float(f)) => Ok(NValue::int(*f as i64)),
+            Some(SqlValue::Null) => Ok(NValue::int(0)),
+            Some(SqlValue::Text(s)) => Ok(NValue::int(s.as_ref().parse::<i64>().unwrap_or(0))),
+            Some(SqlValue::Blob(_)) => Err(NativeError(format!(
+                "Row.decode: column '{}' is a blob (struct {} requires Int)",
+                field_name, struct_name
+            ))),
+            None => Err(NativeError(format!(
+                "Row.decode: column '{}' not found in row (struct {} requires it)",
+                field_name, struct_name
+            ))),
+        },
+        "Float" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Float(f)) => Ok(NValue::float(*f)),
+            Some(SqlValue::Int(i)) => Ok(NValue::float(*i as f64)),
+            Some(SqlValue::Null) => Ok(NValue::float(0.0)),
+            Some(SqlValue::Text(s)) => Ok(NValue::float(s.as_ref().parse::<f64>().unwrap_or(0.0))),
+            Some(SqlValue::Blob(_)) => Err(NativeError(format!(
+                "Row.decode: column '{}' is a blob (struct {} requires Float)",
+                field_name, struct_name
+            ))),
+            None => Err(NativeError(format!(
+                "Row.decode: column '{}' not found in row (struct {} requires it)",
+                field_name, struct_name
+            ))),
+        },
+        "String" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Text(s)) => Ok(NValue::string(s.clone())),
+            Some(SqlValue::Int(i)) => Ok(NValue::string(RcStr::from(i.to_string().as_str()))),
+            Some(SqlValue::Float(f)) => Ok(NValue::string(RcStr::from(f.to_string().as_str()))),
+            Some(SqlValue::Null) => Ok(NValue::string(RcStr::from(""))),
+            Some(SqlValue::Blob(_)) => Ok(NValue::string(RcStr::from("<blob>"))),
+            None => Err(NativeError(format!(
+                "Row.decode: column '{}' not found in row (struct {} requires it)",
+                field_name, struct_name
+            ))),
+        },
+        "Bool" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Int(i)) => Ok(NValue::bool(*i != 0)),
+            Some(SqlValue::Float(f)) => Ok(NValue::bool(*f != 0.0)),
+            Some(SqlValue::Text(s)) => Ok(NValue::bool(s.as_ref() == "1" || s.as_ref() == "true")),
+            Some(SqlValue::Null) => Ok(NValue::bool(false)),
+            Some(SqlValue::Blob(_)) => Ok(NValue::bool(false)),
+            None => Err(NativeError(format!(
+                "Row.decode: column '{}' not found in row (struct {} requires it)",
+                field_name, struct_name
+            ))),
+        },
+        "Option<Int>" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Null) | None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+            Some(SqlValue::Int(i)) => Ok(NValue::enum_val("Some".into(), NValue::int(*i))),
+            Some(SqlValue::Float(f)) => Ok(NValue::enum_val("Some".into(), NValue::int(*f as i64))),
+            Some(SqlValue::Text(s)) => match s.as_ref().parse::<i64>() {
+                Ok(i) => Ok(NValue::enum_val("Some".into(), NValue::int(i))),
+                Err(_) => Ok(NValue::enum_val("None".into(), NValue::unit())),
+            },
+            Some(SqlValue::Blob(_)) => Ok(NValue::enum_val("None".into(), NValue::unit())),
+        },
+        "Option<Float>" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Null) | None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+            Some(SqlValue::Float(f)) => Ok(NValue::enum_val("Some".into(), NValue::float(*f))),
+            Some(SqlValue::Int(i)) => Ok(NValue::enum_val("Some".into(), NValue::float(*i as f64))),
+            Some(SqlValue::Text(s)) => match s.as_ref().parse::<f64>() {
+                Ok(f) => Ok(NValue::enum_val("Some".into(), NValue::float(f))),
+                Err(_) => Ok(NValue::enum_val("None".into(), NValue::unit())),
+            },
+            Some(SqlValue::Blob(_)) => Ok(NValue::enum_val("None".into(), NValue::unit())),
+        },
+        "Option<String>" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Null) | None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+            Some(SqlValue::Text(s)) => Ok(NValue::enum_val("Some".into(), NValue::string(s.clone()))),
+            Some(SqlValue::Int(i)) => Ok(NValue::enum_val(
+                "Some".into(),
+                NValue::string(RcStr::from(i.to_string().as_str())),
+            )),
+            Some(SqlValue::Float(f)) => Ok(NValue::enum_val(
+                "Some".into(),
+                NValue::string(RcStr::from(f.to_string().as_str())),
+            )),
+            Some(SqlValue::Blob(_)) => Ok(NValue::enum_val(
+                "Some".into(),
+                NValue::string(RcStr::from("<blob>")),
+            )),
+        },
+        "Option<Bool>" => match row_lookup(columns, values, field_name) {
+            Some(SqlValue::Null) | None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+            Some(SqlValue::Int(i)) => Ok(NValue::enum_val("Some".into(), NValue::bool(*i != 0))),
+            Some(SqlValue::Text(s)) => Ok(NValue::enum_val(
+                "Some".into(),
+                NValue::bool(s.as_ref() == "1" || s.as_ref() == "true"),
+            )),
+            Some(SqlValue::Float(f)) => Ok(NValue::enum_val("Some".into(), NValue::bool(*f != 0.0))),
+            Some(SqlValue::Blob(_)) => Ok(NValue::enum_val("Some".into(), NValue::bool(false))),
+        },
+        _ => Err(NativeError(format!(
+            "Row.decode: unsupported type tag '{}' for field '{}'",
+            type_tag, field_name
+        ))),
+    }
+}
+
+/// Row.decode(row, field_spec, struct_name) -> Struct
+///
+/// Automatically decode a Row into a struct using the compiler-generated field spec.
+/// The field_spec is a List<List<String>> like [["id","Int"],["name","String"],...].
+/// The struct_name is the target struct type name.
+pub(crate) fn native_row_decode(args: &[NValue]) -> Result<NValue, NativeError> {
+    // args[0] = row, args[1] = field_spec (List<List<String>>), args[2] = struct_name
+    let (columns, values) = args[0]
+        .as_row()
+        .ok_or_else(|| NativeError("Row.decode: first argument must be Row".into()))?;
+
+    let field_spec = args[1]
+        .as_list()
+        .ok_or_else(|| NativeError("Row.decode: second argument must be field spec list".into()))?;
+
+    let struct_name = args[2]
+        .as_string()
+        .ok_or_else(|| NativeError("Row.decode: third argument must be struct name".into()))?;
+
+    let mut fields = Vec::with_capacity(field_spec.len());
+    for pair in field_spec {
+        let pair_list = pair
+            .as_list()
+            .ok_or_else(|| NativeError("Row.decode: field spec entry must be a list".into()))?;
+        if pair_list.len() != 2 {
+            return Err(NativeError("Row.decode: field spec entry must have 2 elements".into()));
+        }
+        let field_name = pair_list[0]
+            .as_string()
+            .ok_or_else(|| NativeError("Row.decode: field name must be String".into()))?;
+        let type_tag = pair_list[1]
+            .as_string()
+            .ok_or_else(|| NativeError("Row.decode: type tag must be String".into()))?;
+
+        let value = decode_field(columns, values, field_name.as_ref(), type_tag.as_ref(), struct_name.as_ref())?;
+        fields.push((field_name.clone(), value));
+    }
+
+    Ok(NValue::struct_val(struct_name.clone(), fields))
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

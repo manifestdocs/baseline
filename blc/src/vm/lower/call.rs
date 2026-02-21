@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use tree_sitter::Node;
 
 use crate::vm::chunk::CompileError;
@@ -111,6 +112,59 @@ impl<'a> super::Lowerer<'a> {
                         args,
                         ty: None,
                     });
+                }
+            }
+        }
+
+        // Row.decode(row, TypeName) — rewrite type arg into field spec constant
+        if callee.kind() == "field_expression"
+            && let Some((ref _mod, ref _meth, ref qualified)) = self.try_resolve_qualified(callee)
+        {
+            if qualified == "Row.decode" && arg_nodes.len() == 2 {
+                if let Some(struct_type) = self.type_map.as_ref().and_then(|tm| tm.get(&node.start_byte())) {
+                    if let crate::analysis::types::Type::Struct(name, fields) = struct_type.clone() {
+                        let row_expr = self.lower_expression(&arg_nodes[0])?;
+                        let field_spec = build_field_spec_expr(&fields);
+                        let name_expr = Expr::String(name.clone());
+                        self.tail_position = was_tail;
+                        return Ok(Expr::CallNative {
+                            module: "Row".to_string(),
+                            method: "decode".to_string(),
+                            args: vec![row_expr, field_spec, name_expr],
+                            ty: None,
+                        });
+                    }
+                }
+            }
+
+            // query_as! / query_one_as! — rewrite: inject field_spec + struct_name before sql/params
+            let is_query_as = matches!(
+                qualified.as_str(),
+                "Sqlite.query_as!" | "Sqlite.query_as"
+                | "Postgres.query_as!" | "Postgres.query_as"
+                | "Mysql.query_as!" | "Mysql.query_as"
+                | "Sqlite.query_one_as!" | "Sqlite.query_one_as"
+                | "Postgres.query_one_as!" | "Postgres.query_one_as"
+                | "Mysql.query_one_as!" | "Mysql.query_one_as"
+            );
+            if is_query_as && arg_nodes.len() == 3 {
+                if let Some(struct_type) = self.type_map.as_ref().and_then(|tm| tm.get(&node.start_byte())) {
+                    if let crate::analysis::types::Type::Struct(name, fields) = struct_type.clone() {
+                        let (module, method, _) = self.try_resolve_qualified(callee).unwrap();
+                        // arg_nodes[0] = TypeName (skip — we generate field_spec instead)
+                        // arg_nodes[1] = sql, arg_nodes[2] = params
+                        let field_spec = build_field_spec_expr(&fields);
+                        let name_expr = Expr::String(name.clone());
+                        let sql_expr = self.lower_expression(&arg_nodes[1])?;
+                        let params_expr = self.lower_expression(&arg_nodes[2])?;
+                        self.tail_position = was_tail;
+                        return Ok(Expr::CallNative {
+                            module,
+                            method,
+                            args: vec![field_spec, name_expr, sql_expr, params_expr],
+                            ty: None,
+                        });
+                    }
                 }
             }
         }
@@ -475,4 +529,55 @@ impl<'a> super::Lowerer<'a> {
             }
         }
     }
+}
+
+/// Convert a struct field type to a type tag string for the Row.decode field spec.
+fn type_to_tag(ty: &crate::analysis::types::Type) -> &'static str {
+    use crate::analysis::types::Type;
+    match ty {
+        Type::Int => "Int",
+        Type::Float => "Float",
+        Type::String => "String",
+        Type::Bool => "Bool",
+        Type::Enum(name, variants) if name == "Option" => {
+            if let Some((_, payload)) = variants.iter().find(|(tag, _)| tag == "Some") {
+                if payload.len() == 1 {
+                    match &payload[0] {
+                        Type::Int => "Option<Int>",
+                        Type::Float => "Option<Float>",
+                        Type::String => "Option<String>",
+                        Type::Bool => "Option<Bool>",
+                        _ => "String", // fallback
+                    }
+                } else {
+                    "String"
+                }
+            } else {
+                "String"
+            }
+        }
+        _ => "String", // fallback
+    }
+}
+
+/// Build a field spec expression: List<List<String>> like [["id","Int"],["name","String"],...].
+/// Fields are sorted by name for deterministic ordering.
+fn build_field_spec_expr(fields: &HashMap<String, crate::analysis::types::Type>) -> Expr {
+    let mut sorted_fields: Vec<_> = fields.iter().collect();
+    sorted_fields.sort_by_key(|(name, _)| (*name).clone());
+
+    let entries: Vec<Expr> = sorted_fields
+        .into_iter()
+        .map(|(name, ty)| {
+            let tag = type_to_tag(ty);
+            Expr::MakeList(
+                vec![
+                    Expr::String(name.clone()),
+                    Expr::String(tag.to_string()),
+                ],
+                None,
+            )
+        })
+        .collect();
+    Expr::MakeList(entries, None)
 }

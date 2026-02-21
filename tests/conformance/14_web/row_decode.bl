@@ -1,0 +1,42 @@
+@prelude(server)
+
+// Row.decode and query_as!/query_one_as! — type checker positive tests
+
+type User = { id: Int, name: String, age: Int, active: Bool }
+type Profile = { bio: Option<String>, score: Option<Int> }
+
+// Row.decode with basic types
+fn decode_user!(row: Row) -> {Console} User = {
+  let user = Row.decode(row, User)
+  Console.println!("ok")
+  user
+}
+
+// query_as! returns List<Struct>
+fn fetch_users!() -> {Sqlite, Console} List<User> = {
+  Sqlite.connect!(":memory:")
+  let users = Sqlite.query_as!(User, "SELECT * FROM users", [])
+  Console.println!("ok")
+  users
+}
+
+// query_one_as! returns Option<Struct>
+fn fetch_user!() -> {Sqlite, Console} Option<User> = {
+  Sqlite.connect!(":memory:")
+  let user = Sqlite.query_one_as!(User, "SELECT * FROM users WHERE id = ?1", ["1"])
+  Console.println!("ok")
+  user
+}
+
+// Row.decode with Option fields
+fn decode_profile!(row: Row) -> {Console} Profile = {
+  let profile = Row.decode(row, Profile)
+  Console.println!("ok")
+  profile
+}
+
+fn main!() -> {Sqlite, Console} () = {
+  Console.println!("row_decode check passed")
+}
+
+// expect: row_decode check passed
