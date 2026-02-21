@@ -691,7 +691,7 @@ pub extern "C" fn bl_fs_list_dir(args: *const u64, count: u64) -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn bl_map_empty(_args: *const u64, _count: u64) -> u64 {
-    push_result(NValue::map(Vec::new()))
+    push_result(NValue::map_from_hashmap(std::collections::HashMap::new()))
 }
 
 #[unsafe(no_mangle)]
@@ -701,10 +701,9 @@ pub extern "C" fn bl_map_insert(args: *const u64, count: u64) -> u64 {
     let val = vals[2].clone();
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let mut new_entries: Vec<(NValue, NValue)> =
-                entries.iter().filter(|(k, _)| *k != key).cloned().collect();
-            new_entries.push((key, val));
-            push_result(NValue::map(new_entries))
+            let mut new_map = entries.clone();
+            new_map.insert(key, val);
+            push_result(NValue::map_from_hashmap(new_map))
         }
         _ => native_error("Map.insert: expected Map".into()),
     }
@@ -715,14 +714,10 @@ pub extern "C" fn bl_map_get(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     let key = &vals[1];
     match vals[0].as_heap_ref() {
-        HeapObject::Map(entries) => {
-            for (k, v) in entries {
-                if k == key {
-                    return push_result(NValue::enum_val("Some".into(), v.clone()));
-                }
-            }
-            push_result(NValue::enum_val("None".into(), NValue::unit()))
-        }
+        HeapObject::Map(entries) => match entries.get(key) {
+            Some(v) => push_result(NValue::enum_val("Some".into(), v.clone())),
+            None => push_result(NValue::enum_val("None".into(), NValue::unit())),
+        },
         _ => native_error("Map.get: expected Map".into()),
     }
 }
@@ -733,8 +728,9 @@ pub extern "C" fn bl_map_remove(args: *const u64, count: u64) -> u64 {
     let key = &vals[1];
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let new_entries: Vec<_> = entries.iter().filter(|(k, _)| k != key).cloned().collect();
-            push_result(NValue::map(new_entries))
+            let mut new_map = entries.clone();
+            new_map.remove(key);
+            push_result(NValue::map_from_hashmap(new_map))
         }
         _ => native_error("Map.remove: expected Map".into()),
     }
@@ -746,8 +742,7 @@ pub extern "C" fn bl_map_contains(args: *const u64, count: u64) -> u64 {
     let key = &vals[1];
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let found = entries.iter().any(|(k, _)| k == key);
-            NValue::bool(found).raw()
+            NValue::bool(entries.contains_key(key)).raw()
         }
         _ => native_error("Map.contains: expected Map".into()),
     }
@@ -758,7 +753,7 @@ pub extern "C" fn bl_map_keys(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let keys: Vec<_> = entries.iter().map(|(k, _)| k.clone()).collect();
+            let keys: Vec<_> = entries.keys().cloned().collect();
             push_result(NValue::list(keys))
         }
         _ => native_error("Map.keys: expected Map".into()),
@@ -770,7 +765,7 @@ pub extern "C" fn bl_map_values(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_heap_ref() {
         HeapObject::Map(entries) => {
-            let vals: Vec<_> = entries.iter().map(|(_, v)| v.clone()).collect();
+            let vals: Vec<_> = entries.values().cloned().collect();
             push_result(NValue::list(vals))
         }
         _ => native_error("Map.values: expected Map".into()),
@@ -791,11 +786,11 @@ pub extern "C" fn bl_map_from_list(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_list() {
         Some(items) => {
-            let mut entries: Vec<(NValue, NValue)> = Vec::new();
+            let mut entries = std::collections::HashMap::new();
             for item in items {
                 if let Some(tuple) = item.as_tuple() {
                     if tuple.len() >= 2 {
-                        entries.push((tuple[0].clone(), tuple[1].clone()));
+                        entries.insert(tuple[0].clone(), tuple[1].clone());
                     } else {
                         return native_error(
                             "Map.from_list: each element must be a (key, value) pair".into(),
@@ -807,7 +802,7 @@ pub extern "C" fn bl_map_from_list(args: *const u64, count: u64) -> u64 {
                     );
                 }
             }
-            push_result(NValue::map(entries))
+            push_result(NValue::map_from_hashmap(entries))
         }
         None => native_error(format!("Map.from_list: expected List, got {}", vals[0])),
     }

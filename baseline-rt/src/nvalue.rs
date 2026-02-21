@@ -166,8 +166,8 @@ pub enum HeapObject {
         handler: NValue,
         remaining_mw: Vec<NValue>,
     },
-    /// Map: association list of (key, value) pairs.
-    Map(Vec<(NValue, NValue)>),
+    /// Map: hash map of key-value pairs.
+    Map(std::collections::HashMap<NValue, NValue>),
     /// Set: unique elements.
     Set(Vec<NValue>),
     /// Weak reference to a heap object (does not prevent deallocation).
@@ -358,7 +358,12 @@ impl NValue {
     }
 
     pub fn map(entries: Vec<(NValue, NValue)>) -> Self {
-        Self::from_heap(HeapObject::Map(entries))
+        let hm: std::collections::HashMap<NValue, NValue> = entries.into_iter().collect();
+        Self::from_heap(HeapObject::Map(hm))
+    }
+
+    pub fn map_from_hashmap(hm: std::collections::HashMap<NValue, NValue>) -> Self {
+        Self::from_heap(HeapObject::Map(hm))
     }
 
     pub fn set(elems: Vec<NValue>) -> Self {
@@ -715,6 +720,45 @@ impl PartialEq for NValue {
     }
 }
 
+// -- Eq + Hash (required for HashMap-backed Map) --
+
+impl Eq for NValue {}
+
+impl std::hash::Hash for NValue {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        if self.is_heap() {
+            match self.as_heap_ref() {
+                HeapObject::String(s) => {
+                    state.write_u8(1);
+                    s.hash(state);
+                }
+                HeapObject::BigInt(i) => {
+                    state.write_u8(0);
+                    i.hash(state);
+                }
+                _ => {
+                    state.write_u8(2);
+                    state.write_u64(self.0);
+                }
+            }
+        } else if self.is_float() {
+            let bits = self.0;
+            let f = f64::from_bits(bits);
+            state.write_u8(3);
+            if f.is_nan() {
+                state.write_u64(0x7FF8_0000_0000_0000);
+            } else if f == 0.0 {
+                state.write_u64(0);
+            } else {
+                state.write_u64(bits);
+            }
+        } else {
+            state.write_u8(0);
+            state.write_u64(self.0);
+        }
+    }
+}
+
 // -- Display --
 
 impl fmt::Display for NValue {
@@ -768,10 +812,11 @@ impl fmt::Display for NValue {
                     write!(f, "<middleware-next>")
                 }
                 HeapObject::Map(entries) => {
-                    let s: Vec<String> = entries
+                    let mut s: Vec<String> = entries
                         .iter()
                         .map(|(k, v)| format!("{}: {}", k, v))
                         .collect();
+                    s.sort(); // deterministic output
                     write!(f, "#{{{}}}", s.join(", "))
                 }
                 HeapObject::Set(elems) => {

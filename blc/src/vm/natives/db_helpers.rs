@@ -180,8 +180,8 @@ pub(super) fn native_row_optional_int(args: &[NValue]) -> Result<NValue, NativeE
 // ---------------------------------------------------------------------------
 
 /// Look up a key in a Map's entries, returning the value if found.
-fn map_lookup<'a>(entries: &'a [(NValue, NValue)], key: &NValue) -> Option<&'a NValue> {
-    entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+fn map_lookup<'a>(entries: &'a std::collections::HashMap<NValue, NValue>, key: &NValue) -> Option<&'a NValue> {
+    entries.get(key)
 }
 
 /// Extract the string content from an NValue, returning None if not a string.

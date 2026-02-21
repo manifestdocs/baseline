@@ -38,8 +38,10 @@ use super::value::Value;
 // get_unchecked) are sound because the compiler guarantees stack invariants:
 // every pop has a matching push, and local slot indices are always valid.
 
-/// Maximum call stack depth (prevents stack overflow from recursion)
-const MAX_CALL_DEPTH: usize = 1024;
+/// Maximum call stack depth (prevents stack overflow from recursion).
+/// 8192 frames × 16 bytes = 128 KB. Enables recursive algorithms on
+/// data structures up to ~8K depth (e.g., unbalanced BSTs with 8K nodes).
+const MAX_CALL_DEPTH: usize = 8192;
 
 /// Maximum range iteration size (prevents memory exhaustion from `1..1000000000`)
 const MAX_RANGE_SIZE: i64 = 1_000_000;
