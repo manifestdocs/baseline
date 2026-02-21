@@ -238,6 +238,68 @@ impl super::Vm {
                 }
             }
 
+            Op::GetLocalGetField(slot, name_idx) => {
+                let idx = base_slot + *slot as usize;
+                debug_assert!(idx < self.stack.len());
+                let record = unsafe { self.stack.get_unchecked(idx) };
+                if !record.is_heap() {
+                    let (line, col) = chunk.source_map[ip - 1];
+                    return Err(self.error(
+                        format!("Cannot access field on {}", record),
+                        line,
+                        col,
+                    ));
+                }
+                let field_name = match chunk.constants[*name_idx as usize].as_string() {
+                    Some(s) => s.clone(),
+                    None => {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            "GetLocalGetField constant must be String".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                };
+                match record.as_heap_ref() {
+                    HeapObject::Record(fields) | HeapObject::Struct { fields, .. } => {
+                        match fields.iter().find(|(k, _)| *k == field_name) {
+                            Some((_, v)) => self.stack.push(v.clone()),
+                            None => {
+                                let (line, col) = chunk.source_map[ip - 1];
+                                return Err(self.error(
+                                    format!("Record has no field '{}'", field_name),
+                                    line,
+                                    col,
+                                ));
+                            }
+                        }
+                    }
+                    _ => {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("Cannot access field '{}' on {}", field_name, record),
+                            line,
+                            col,
+                        ));
+                    }
+                }
+            }
+
+            Op::GetLocalMulInt(slot, k) => {
+                let idx = base_slot + *slot as usize;
+                debug_assert!(idx < self.stack.len());
+                let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                self.stack.push(NValue::int(val.wrapping_mul(*k as i64)));
+            }
+
+            Op::GetLocalGeInt(slot, k) => {
+                let idx = base_slot + *slot as usize;
+                debug_assert!(idx < self.stack.len());
+                let val = unsafe { self.stack.get_unchecked(idx) }.as_any_int();
+                self.stack.push(NValue::bool(val >= *k as i64));
+            }
+
             Op::TailCall(arg_count) => {
                 let n = *arg_count as usize;
                 let args_start = self.stack.len() - n;

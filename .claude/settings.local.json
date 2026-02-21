@@ -219,7 +219,9 @@
       "Bash(target/aarch64-apple-darwin/release/blc:*)",
       "Bash(tar:*)",
       "Bash(shasum:*)",
-      "Bash(scripts/test.sh:*)"
+      "Bash(scripts/test.sh:*)",
+      "Bash(cargo update:*)",
+      "Bash(cargo audit:*)"
     ]
   },
   "enableAllProjectMcpServers": true,
