@@ -1,0 +1,27 @@
+@prelude(script)
+
+// Test closures with higher-order list functions
+
+fn main!() -> {Console} () = {
+  // Basic closure capture in List.map
+  let multiplier = 10
+  let nums = [1, 2, 3, 4, 5]
+  let mapped = List.map(nums, |x| x * multiplier)
+  Console.println!("map: ${mapped}")
+
+  // Closure capture in List.filter
+  let threshold = 3
+  let filtered = List.filter(nums, |x| x > threshold)
+  Console.println!("filter: ${filtered}")
+
+  // Closure capture in List.fold
+  let offset = 100
+  let sum = List.fold(nums, 0, |acc, x| acc + x + offset)
+  Console.println!("fold: ${sum}")
+
+  // Nested closure: map then filter
+  let factor = 2
+  let cutoff = 5
+  let result = List.filter(List.map(nums, |x| x * factor), |y| y > cutoff)
+  Console.println!("nested: ${result}")
+}

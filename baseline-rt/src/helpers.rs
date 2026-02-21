@@ -7,7 +7,7 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
-use crate::nvalue::{HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_MASK, TAG_UNIT};
+use crate::nvalue::{HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT};
 use crate::value::RcStr;
 
 // ---------------------------------------------------------------------------
@@ -677,6 +677,107 @@ pub extern "C" fn jit_is_truthy(val_bits: u64) -> u64 {
         (val_bits & 1) != 0
     };
     if truthy { 1 } else { 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Integer arithmetic helpers (handle BigInt overflow transparently)
+// ---------------------------------------------------------------------------
+
+/// Extract a full i64 from a NaN-boxed value (handles both inline int and BigInt).
+#[inline(always)]
+fn nv_as_any_int(bits: u64) -> i64 {
+    if bits & TAG_MASK == TAG_INT {
+        // Inline int: sign-extend from 48 bits
+        ((bits << 16) as i64) >> 16
+    } else {
+        // Must be BigInt on the heap
+        let nv = unsafe { NValue::borrow_from_raw(bits) };
+        nv.as_any_int()
+    }
+}
+
+/// Convert a raw i64 arithmetic result into a properly NaN-boxed integer value.
+/// If the result fits in the 48-bit inline range, returns TAG_INT | payload.
+/// Otherwise, allocates a BigInt on the heap.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_from_i64(val: i64) -> u64 {
+    jit_own(NValue::int(val))
+}
+
+/// Add two NaN-boxed integers (handles BigInt inputs and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_add(a: u64, b: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_add(nv_as_any_int(b));
+    jit_own(NValue::int(result))
+}
+
+/// Subtract two NaN-boxed integers (handles BigInt inputs and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_sub(a: u64, b: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_sub(nv_as_any_int(b));
+    jit_own(NValue::int(result))
+}
+
+/// Multiply two NaN-boxed integers (handles BigInt inputs and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_mul(a: u64, b: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_mul(nv_as_any_int(b));
+    jit_own(NValue::int(result))
+}
+
+/// Divide two NaN-boxed integers (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_div(a: u64, b: u64) -> u64 {
+    let bv = nv_as_any_int(b);
+    if bv == 0 {
+        jit_set_error("Division by zero".to_string());
+        return NV_UNIT;
+    }
+    let result = nv_as_any_int(a) / bv;
+    jit_own(NValue::int(result))
+}
+
+/// Modulo two NaN-boxed integers (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_mod(a: u64, b: u64) -> u64 {
+    let bv = nv_as_any_int(b);
+    if bv == 0 {
+        jit_set_error("Modulo by zero".to_string());
+        return NV_UNIT;
+    }
+    let result = nv_as_any_int(a) % bv;
+    jit_own(NValue::int(result))
+}
+
+/// Negate a NaN-boxed integer (handles BigInt input and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_neg(a: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_neg();
+    jit_own(NValue::int(result))
+}
+
+/// Compare two NaN-boxed integers: a < b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_lt(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) < nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
+}
+
+/// Compare two NaN-boxed integers: a <= b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_le(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) <= nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
+}
+
+/// Compare two NaN-boxed integers: a > b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_gt(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) > nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
+}
+
+/// Compare two NaN-boxed integers: a >= b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_ge(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) >= nv_as_any_int(b) { NV_TRUE } else { NV_FALSE }
 }
 
 // ---------------------------------------------------------------------------

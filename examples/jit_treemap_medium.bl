@@ -1,0 +1,29 @@
+@prelude(script)
+
+type Tree =
+  | Leaf
+  | Node(Int, Int, Tree, Tree)
+
+fn insert(tree: Tree, key: Int, val: Int) -> Tree =
+  match tree
+    Leaf -> Node(key, val, Leaf, Leaf)
+    Node(k, v, left, right) ->
+      if key < k then Node(k, v, insert(left, key, val), right)
+      else if key > k then Node(k, v, left, insert(right, key, val))
+      else Node(k, val, left, right)
+
+fn tree_sum(tree: Tree) -> Int =
+  match tree
+    Leaf -> 0
+    Node(_, v, left, right) -> v + tree_sum(left) + tree_sum(right)
+
+fn build_tree(n: Int, i: Int, t: Tree) -> Tree =
+  if i >= n then t
+  else build_tree(n, i + 1, insert(t, i * 2654435761 % 1000000, i))
+
+fn main!() -> {Console} () = {
+  let t = build_tree(5000, 0, Leaf)
+  Console.println!("sum5000: ${tree_sum(t)}")
+  let t2 = build_tree(10000, 0, Leaf)
+  Console.println!("sum10000: ${tree_sum(t2)}")
+}

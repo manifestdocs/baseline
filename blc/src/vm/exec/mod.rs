@@ -346,15 +346,75 @@ impl Vm {
                     self.stack.push(NValue::int(n as i64));
                 }
 
+                // ============================================================
+                // HOT PATH: int arithmetic inlined to avoid double dispatch
+                // ============================================================
+                Op::AddInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::int(a.as_any_int().wrapping_add(b.as_any_int())));
+                }
+                Op::SubInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::int(a.as_any_int().wrapping_sub(b.as_any_int())));
+                }
+                Op::MulInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::int(a.as_any_int().wrapping_mul(b.as_any_int())));
+                }
+                Op::DivInt => {
+                    let (b, a) = self.pop2_fast();
+                    let bi = b.as_any_int();
+                    if bi == 0 {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error("Division by zero".into(), line, col));
+                    }
+                    self.stack.push(NValue::int(a.as_any_int() / bi));
+                }
+                Op::ModInt => {
+                    let (b, a) = self.pop2_fast();
+                    let bi = b.as_any_int();
+                    if bi == 0 {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error("Modulo by zero".into(), line, col));
+                    }
+                    self.stack.push(NValue::int(a.as_any_int() % bi));
+                }
+
+                // ============================================================
+                // HOT PATH: int comparisons inlined
+                // ============================================================
+                Op::GtInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_any_int() > b.as_any_int()));
+                }
+                Op::GeInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_any_int() >= b.as_any_int()));
+                }
+                Op::LtInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_any_int() < b.as_any_int()));
+                }
+                Op::LeInt => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a.as_any_int() <= b.as_any_int()));
+                }
+                Op::Eq => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a == b));
+                }
+                Op::Ne => {
+                    let (b, a) = self.pop2_fast();
+                    self.stack.push(NValue::bool(a != b));
+                }
+
+                // Generic arithmetic/comparison → dispatch functions (cold path)
                 Op::Add | Op::Sub | Op::Mul | Op::Div | Op::Mod
-                | Op::Negate | Op::AddInt | Op::SubInt | Op::Not
-                | Op::MulInt | Op::DivInt | Op::ModInt | Op::GtInt | Op::GeInt
-                | Op::Concat => {
+                | Op::Negate | Op::Not | Op::Concat => {
                     self.dispatch_arithmetic(&op, chunk, ip)?;
                 }
 
-                Op::Eq | Op::Ne | Op::Lt | Op::Gt | Op::Le | Op::Ge
-                | Op::LtInt | Op::LeInt => {
+                Op::Lt | Op::Gt | Op::Le | Op::Ge => {
                     self.dispatch_comparison(&op, chunk, ip)?;
                 }
 
@@ -426,15 +486,96 @@ impl Vm {
                     self.dispatch_data_structures(&op, chunk, ip)?;
                 }
 
-                // -- Function calls, closures, superinstructions --
-                Op::Call(_) | Op::CallDirect(_, _) | Op::GetUpvalue(_)
+                // ============================================================
+                // HOT PATH: CallDirect inlined (most common call form)
+                // ============================================================
+                Op::CallDirect(target_chunk, arg_count) => {
+                    if self.frames.len() >= MAX_CALL_DEPTH {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            "Stack overflow: maximum call depth exceeded".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                    let n = arg_count as usize;
+                    let new_base = PackedBase::from_slot(self.stack.len() - n);
+
+                    let caller = self.frames.last_mut();
+                    caller.ip = ip as u32;
+                    caller.chunk_idx = chunk_idx as u32;
+
+                    self.frames.push(CallFrame {
+                        chunk_idx: target_chunk as u32,
+                        ip: 0,
+                        base_slot: new_base,
+                        upvalue_idx: u32::MAX,
+                    });
+                    ip = 0;
+                    chunk_idx = target_chunk as usize;
+                    base_slot = new_base.slot();
+                    chunk = &chunks[chunk_idx];
+                    continue;
+                }
+
+                // ============================================================
+                // HOT PATH: TailCall inlined (self-recursive loops)
+                // ============================================================
+                Op::TailCall(arg_count) => {
+                    let n = arg_count as usize;
+                    let args_start = self.stack.len() - n;
+                    for i in 0..n {
+                        let val = unsafe { self.stack.get_unchecked(args_start + i) }.clone();
+                        unsafe {
+                            *self.stack.get_unchecked_mut(base_slot + i) = val;
+                        }
+                    }
+                    self.stack.truncate(base_slot + n);
+                    ip = 0;
+                    continue;
+                }
+
+                // ============================================================
+                // HOT PATH: Return inlined (every function exit)
+                // ============================================================
+                Op::Return => {
+                    let result = self.stack.pop().unwrap_or_else(NValue::unit);
+                    let frame = self.frames.pop();
+
+                    if frame.upvalue_idx != u32::MAX
+                        && frame.upvalue_idx as usize == self.upvalue_stack.len() - 1
+                    {
+                        self.upvalue_stack.pop();
+                    }
+
+                    if self.frames.len() <= base_depth {
+                        return Ok(result);
+                    }
+
+                    let base = frame.base_slot;
+                    if base.has_func() {
+                        self.stack.truncate(base.slot().saturating_sub(1));
+                    } else {
+                        self.stack.truncate(base.slot());
+                    }
+                    self.stack.push(result);
+
+                    let caller = self.frames.last();
+                    ip = caller.ip as usize;
+                    chunk_idx = caller.chunk_idx as usize;
+                    base_slot = caller.base_slot.slot();
+                    chunk = &chunks[chunk_idx];
+                    continue;
+                }
+
+                // -- Remaining function calls, closures, superinstructions --
+                Op::Call(_) | Op::GetUpvalue(_)
                 | Op::MakeClosure(_, _) | Op::CallNative(_, _)
                 | Op::GetLocalSubInt(_, _) | Op::GetLocalLeInt(_, _)
                 | Op::GetLocalAddInt(_, _) | Op::GetLocalLtInt(_, _)
                 | Op::GetLocalMulInt(_, _) | Op::GetLocalGeInt(_, _)
                 | Op::GetLocalGetField(_, _)
-                | Op::GetLocalLeIntJumpIfFalse(_, _, _) | Op::GetLocalLtIntJumpIfFalse(_, _, _)
-                | Op::TailCall(_) => {
+                | Op::GetLocalLeIntJumpIfFalse(_, _, _) | Op::GetLocalLtIntJumpIfFalse(_, _, _) => {
                     match self.dispatch_call(&op, chunk, chunks, ip, chunk_idx, base_slot, base_depth)? {
                         DispatchResult::Continue => {}
                         DispatchResult::Restart { ip: new_ip, chunk_idx: new_ci, base_slot: new_bs } => {
@@ -448,10 +589,10 @@ impl Vm {
                     }
                 }
 
-                // -- Effect handlers and control flow --
+                // -- Effect handlers --
                 Op::PushHandler | Op::PushResumableHandler(_)
                 | Op::PerformEffect(_, _) | Op::PopHandler
-                | Op::Halt(_) | Op::Return => {
+                | Op::Halt(_) => {
                     match self.dispatch_effects(&op, chunk, chunks, ip, chunk_idx, base_slot, base_depth)? {
                         DispatchResult::Continue => {}
                         DispatchResult::Restart { ip: new_ip, chunk_idx: new_ci, base_slot: new_bs } => {

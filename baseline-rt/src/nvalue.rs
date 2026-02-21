@@ -346,7 +346,15 @@ impl NValue {
     }
 
     pub fn enum_val(tag: RcStr, payload: NValue) -> Self {
-        Self::from_heap(HeapObject::Enum { tag, tag_id: u32::MAX, payload })
+        // Assign well-known tag IDs matching the JIT's TagRegistry.
+        let tag_id = match tag.as_ref() {
+            "None" => 0,
+            "Some" => 1,
+            "Ok" => 2,
+            "Err" => 3,
+            _ => u32::MAX,
+        };
+        Self::from_heap(HeapObject::Enum { tag, tag_id, payload })
     }
 
     pub fn enum_val_with_id(tag: RcStr, tag_id: u32, payload: NValue) -> Self {

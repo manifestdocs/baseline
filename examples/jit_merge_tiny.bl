@@ -1,0 +1,17 @@
+@prelude(script)
+
+fn merge(xs: List<Int>, ys: List<Int>) -> List<Int> =
+  match List.head(xs)
+    None -> ys
+    Some(x) -> match List.head(ys)
+      None -> xs
+      Some(y) ->
+        if x <= y then List.concat([x], merge(List.tail(xs), ys))
+        else List.concat([y], merge(xs, List.tail(ys)))
+
+fn main!() -> {Console} () = {
+  let a = [1, 3, 5]
+  let b = [2, 4, 6]
+  let r = merge(a, b)
+  Console.println!("${r}")
+}

@@ -1,0 +1,16 @@
+@prelude(script)
+
+fn main!() -> {Console} () = {
+  let xs = [10, 20, 30]
+  let h = List.head(xs)
+  Console.println!("head: ${h}")
+  match h
+    None -> Console.println!("none")
+    Some(v) -> Console.println!("some: ${v}")
+  let ys: List<Int> = []
+  let h2 = List.head(ys)
+  Console.println!("head2: ${h2}")
+  match h2
+    None -> Console.println!("none2")
+    Some(v) -> Console.println!("some2: ${v}")
+}

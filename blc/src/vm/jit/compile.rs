@@ -125,6 +125,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
     /// Emit a NaN-boxed NValue constant.
     fn emit_nvalue(&mut self, nv: NValue) -> CValue {
+        if nv.is_heap() {
+            // BigInt, or any other heap-allocated value: must keep rooted
+            return self.emit_heap_nvalue(nv);
+        }
         let bits = nv.raw() as i64;
         self.builder.ins().iconst(types::I64, bits)
     }
@@ -166,11 +170,43 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Tag a raw i64 as a NaN-boxed Int: band with PAYLOAD_MASK, bor with TAG_INT.
+    /// Only correct when the value is guaranteed to fit in 48-bit signed range.
     fn tag_int(&mut self, val: CValue) -> CValue {
         let mask = self.builder.ins().iconst(types::I64, PAYLOAD_MASK as i64);
         let masked = self.builder.ins().band(val, mask);
         let tag = self.builder.ins().iconst(types::I64, TAG_INT as i64);
         self.builder.ins().bor(masked, tag)
+    }
+
+    /// Tag an i64 arithmetic result with overflow checking.
+    /// If the value fits in 48-bit signed range, tags inline (fast path).
+    /// Otherwise calls jit_int_from_i64 to allocate a BigInt (slow path).
+    fn tag_int_checked(&mut self, val: CValue) -> CValue {
+        // Sign-extend from 48 bits and compare with original
+        let sext = self.builder.ins().ishl_imm(val, 16);
+        let sext = self.builder.ins().sshr_imm(sext, 16);
+        let fits = self.builder.ins().icmp(IntCC::Equal, val, sext);
+
+        let inline_block = self.builder.create_block();
+        let overflow_block = self.builder.create_block();
+        let merge_block = self.builder.create_block();
+        self.builder.append_block_param(merge_block, types::I64);
+
+        self.builder.ins().brif(fits, inline_block, &[], overflow_block, &[]);
+
+        self.builder.switch_to_block(inline_block);
+        self.builder.seal_block(inline_block);
+        let fast = self.tag_int(val);
+        self.builder.ins().jump(merge_block, &[BlockArg::Value(fast)]);
+
+        self.builder.switch_to_block(overflow_block);
+        self.builder.seal_block(overflow_block);
+        let slow = self.call_helper("jit_int_from_i64", &[val]);
+        self.builder.ins().jump(merge_block, &[BlockArg::Value(slow)]);
+
+        self.builder.switch_to_block(merge_block);
+        self.builder.seal_block(merge_block);
+        self.builder.block_params(merge_block)[0]
     }
 
     /// Tag a Cranelift i8 comparison result as a NaN-boxed Bool.
@@ -330,7 +366,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             let untagged_args: Vec<CValue> = arg_vals.iter().map(|&v| self.untag_int(v)).collect();
             let call = self.builder.ins().call(func_ref, &untagged_args);
             let raw = self.builder.inst_results(call)[0];
-            self.tag_int(raw)
+            self.tag_int_checked(raw)
         } else {
             let call = self.builder.ins().call(func_ref, &arg_vals);
             self.builder.inst_results(call)[0]
@@ -510,7 +546,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                                 .iter()
                                 .map(|a| {
                                     let raw = self.compile_expr_unboxed(a)?;
-                                    Ok(self.tag_int(raw))
+                                    Ok(self.tag_int_checked(raw))
                                 })
                                 .collect::<Result<Vec<_>, String>>()?;
                             let call = self.builder.ins().call(func_ref, &arg_vals);
@@ -575,7 +611,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                                 .iter()
                                 .map(|a| {
                                     let raw = self.compile_expr_unboxed(a)?;
-                                    Ok(self.tag_int(raw))
+                                    Ok(self.tag_int_checked(raw))
                                 })
                                 .collect::<Result<Vec<_>, String>>()?;
                             let call = self.builder.ins().call(func_ref, &arg_vals);
@@ -802,57 +838,28 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let rhs_val = self.compile_expr(rhs)?;
 
                 if is_int {
-                    // Untag both operands
-                    let l = self.untag_int(lhs_val);
-                    let r = self.untag_int(rhs_val);
+                    // Use runtime helpers for arithmetic ops to correctly handle
+                    // BigInt overflow (values exceeding 48-bit inline range).
+                    // Comparisons that don't produce overflow can use inline ops
+                    // when both inputs are guaranteed to be inline ints.
                     match op {
-                        BinOp::Add => {
-                            let res = self.builder.ins().iadd(l, r);
-                            Ok(self.tag_int(res))
-                        }
-                        BinOp::Sub => {
-                            let res = self.builder.ins().isub(l, r);
-                            Ok(self.tag_int(res))
-                        }
-                        BinOp::Mul => {
-                            let res = self.builder.ins().imul(l, r);
-                            Ok(self.tag_int(res))
-                        }
-                        BinOp::Div => {
-                            let res = self.builder.ins().sdiv(l, r);
-                            Ok(self.tag_int(res))
-                        }
-                        BinOp::Mod => {
-                            let res = self.builder.ins().srem(l, r);
-                            Ok(self.tag_int(res))
-                        }
+                        BinOp::Add => Ok(self.call_helper("jit_int_add", &[lhs_val, rhs_val])),
+                        BinOp::Sub => Ok(self.call_helper("jit_int_sub", &[lhs_val, rhs_val])),
+                        BinOp::Mul => Ok(self.call_helper("jit_int_mul", &[lhs_val, rhs_val])),
+                        BinOp::Div => Ok(self.call_helper("jit_int_div", &[lhs_val, rhs_val])),
+                        BinOp::Mod => Ok(self.call_helper("jit_int_mod", &[lhs_val, rhs_val])),
                         BinOp::Eq => {
-                            let cmp = self.builder.ins().icmp(IntCC::Equal, l, r);
-                            Ok(self.tag_bool(cmp))
+                            Ok(self.call_helper("jit_values_equal", &[lhs_val, rhs_val]))
                         }
                         BinOp::Ne => {
-                            let cmp = self.builder.ins().icmp(IntCC::NotEqual, l, r);
-                            Ok(self.tag_bool(cmp))
+                            let eq = self.call_helper("jit_values_equal", &[lhs_val, rhs_val]);
+                            let one = self.builder.ins().iconst(types::I64, 1);
+                            Ok(self.builder.ins().bxor(eq, one))
                         }
-                        BinOp::Lt => {
-                            let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, l, r);
-                            Ok(self.tag_bool(cmp))
-                        }
-                        BinOp::Gt => {
-                            let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThan, l, r);
-                            Ok(self.tag_bool(cmp))
-                        }
-                        BinOp::Le => {
-                            let cmp = self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, l, r);
-                            Ok(self.tag_bool(cmp))
-                        }
-                        BinOp::Ge => {
-                            let cmp =
-                                self.builder
-                                    .ins()
-                                    .icmp(IntCC::SignedGreaterThanOrEqual, l, r);
-                            Ok(self.tag_bool(cmp))
-                        }
+                        BinOp::Lt => Ok(self.call_helper("jit_int_lt", &[lhs_val, rhs_val])),
+                        BinOp::Gt => Ok(self.call_helper("jit_int_gt", &[lhs_val, rhs_val])),
+                        BinOp::Le => Ok(self.call_helper("jit_int_le", &[lhs_val, rhs_val])),
+                        BinOp::Ge => Ok(self.call_helper("jit_int_ge", &[lhs_val, rhs_val])),
                         BinOp::ListConcat => {
                             Ok(self.call_helper("jit_list_concat", &[lhs_val, rhs_val]))
                         }
@@ -872,31 +879,37 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             let one = self.builder.ins().iconst(types::I64, 1);
                             Ok(self.builder.ins().bxor(eq, one))
                         }
-                        // For non-int arithmetic, untag and retag (handles mixed types)
-                        BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                            let l = self.untag_int(lhs_val);
-                            let r = self.untag_int(rhs_val);
-                            let res = match op {
-                                BinOp::Add => self.builder.ins().iadd(l, r),
-                                BinOp::Sub => self.builder.ins().isub(l, r),
-                                BinOp::Mul => self.builder.ins().imul(l, r),
-                                BinOp::Div => self.builder.ins().sdiv(l, r),
-                                BinOp::Mod => self.builder.ins().srem(l, r),
-                                _ => unreachable!(),
-                            };
-                            Ok(self.tag_int(res))
+                        // For non-int arithmetic, use runtime helpers (handles BigInt)
+                        BinOp::Add => Ok(self.call_helper("jit_int_add", &[lhs_val, rhs_val])),
+                        BinOp::Sub => Ok(self.call_helper("jit_int_sub", &[lhs_val, rhs_val])),
+                        BinOp::Mul => Ok(self.call_helper("jit_int_mul", &[lhs_val, rhs_val])),
+                        BinOp::Div => Ok(self.call_helper("jit_int_div", &[lhs_val, rhs_val])),
+                        BinOp::Mod => Ok(self.call_helper("jit_int_mod", &[lhs_val, rhs_val])),
+                        // For ordering comparisons without type annotation, use inline
+                        // NaN-boxed comparison (works correctly for inline ints; for BigInt
+                        // the type checker should provide ty=Int so the is_int path is used).
+                        BinOp::Lt => {
+                            let a = self.untag_int(lhs_val);
+                            let b = self.untag_int(rhs_val);
+                            let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, a, b);
+                            Ok(self.tag_bool(cmp))
                         }
-                        BinOp::Lt | BinOp::Gt | BinOp::Le | BinOp::Ge => {
-                            let l = self.untag_int(lhs_val);
-                            let r = self.untag_int(rhs_val);
-                            let cc = match op {
-                                BinOp::Lt => IntCC::SignedLessThan,
-                                BinOp::Gt => IntCC::SignedGreaterThan,
-                                BinOp::Le => IntCC::SignedLessThanOrEqual,
-                                BinOp::Ge => IntCC::SignedGreaterThanOrEqual,
-                                _ => unreachable!(),
-                            };
-                            let cmp = self.builder.ins().icmp(cc, l, r);
+                        BinOp::Gt => {
+                            let a = self.untag_int(lhs_val);
+                            let b = self.untag_int(rhs_val);
+                            let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThan, a, b);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::Le => {
+                            let a = self.untag_int(lhs_val);
+                            let b = self.untag_int(rhs_val);
+                            let cmp = self.builder.ins().icmp(IntCC::SignedLessThanOrEqual, a, b);
+                            Ok(self.tag_bool(cmp))
+                        }
+                        BinOp::Ge => {
+                            let a = self.untag_int(lhs_val);
+                            let b = self.untag_int(rhs_val);
+                            let cmp = self.builder.ins().icmp(IntCC::SignedGreaterThanOrEqual, a, b);
                             Ok(self.tag_bool(cmp))
                         }
                         BinOp::ListConcat => {
@@ -910,9 +923,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let val = self.compile_expr(operand)?;
                 match op {
                     UnaryOp::Neg => {
-                        let raw = self.untag_int(val);
-                        let negated = self.builder.ins().ineg(raw);
-                        Ok(self.tag_int(negated))
+                        Ok(self.call_helper("jit_int_neg", &[val]))
                     }
                     UnaryOp::Not => {
                         // Check bit 0 (truthy check), invert
@@ -1034,7 +1045,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                                 .collect::<Result<Vec<_>, String>>()?;
                             let call = self.builder.ins().call(func_ref, &arg_vals);
                             let raw_result = self.builder.inst_results(call)[0];
-                            Ok(self.tag_int(raw_result))
+                            Ok(self.tag_int_checked(raw_result))
                         } else {
                             let arg_vals: Vec<CValue> = args
                                 .iter()
@@ -1102,7 +1113,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                                 .collect::<Result<Vec<_>, String>>()?;
                             let call = self.builder.ins().call(func_ref, &arg_vals);
                             let raw_result = self.builder.inst_results(call)[0];
-                            Ok(self.tag_int(raw_result))
+                            Ok(self.tag_int_checked(raw_result))
                         } else {
                             // Both boxed — use return_call for guaranteed TCE
                             let arg_vals: Vec<CValue> = args
