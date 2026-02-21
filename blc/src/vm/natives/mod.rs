@@ -36,6 +36,7 @@ mod session;
 mod set;
 mod string;
 mod time;
+mod validate;
 mod weak;
 pub(crate) mod ws;
 
@@ -462,6 +463,17 @@ impl NativeRegistry {
         self.register("Request.query_int", native_request_query_int);
         self.register("Request.decode", schema::native_request_decode);
         self.register("Request.multipart", multipart::native_request_multipart);
+
+        // -- Validate --
+        self.register("Validate.required", validate::native_validate_required);
+        self.register("Validate.string", validate::native_validate_string);
+        self.register("Validate.int", validate::native_validate_int);
+        self.register("Validate.boolean", validate::native_validate_boolean);
+        self.register("Validate.min_length", validate::native_validate_min_length);
+        self.register("Validate.max_length", validate::native_validate_max_length);
+        self.register("Validate.min", validate::native_validate_min);
+        self.register("Validate.max", validate::native_validate_max);
+        self.register("Validate.one_of", validate::native_validate_one_of);
 
         // -- Middleware --
         self.register("Middleware.extract_bearer", middleware::native_middleware_extract_bearer);

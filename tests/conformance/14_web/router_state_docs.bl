@@ -1,0 +1,24 @@
+@prelude(server)
+
+// Test Router.state and Router.docs_json full lifecycle
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.ok("ok"))
+
+fn main!() -> () = {
+  let router = Router.new()
+    |> Router.state("db_url", "postgres://localhost/mydb")
+    |> Router.state("secret", "my-secret")
+    |> Router.get("/users", handler)
+    |> Router.post("/users", handler)
+    |> Router.get("/users/:id", handler)
+
+  let docs = Router.docs_json(router)
+  // docs_json returns a non-empty string
+  if String.length(docs) > 0 then
+    Console.println!("ok")
+  else
+    Console.println!("FAIL: empty docs")
+}
+
+// expect: ok

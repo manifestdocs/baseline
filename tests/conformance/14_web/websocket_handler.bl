@@ -1,0 +1,18 @@
+@prelude(server)
+
+// Test Router.ws registers a WebSocket handler correctly
+
+fn ws_handler(req: Request) -> {Http} Response =
+  Response.ok("ws handler registered")
+
+fn health_handler(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.ok("ok"))
+
+fn main!() -> () = {
+  let router = Router.new()
+    |> Router.ws("/chat", ws_handler)
+    |> Router.get("/health", health_handler)
+  Console.println!("ok")
+}
+
+// expect: ok

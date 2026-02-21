@@ -1,0 +1,73 @@
+@prelude(server)
+
+// Test Validate.required, Validate.string, Validate.int, Validate.boolean,
+// Validate.min_length, Validate.max_length, Validate.min, Validate.max, Validate.one_of
+
+fn main!() -> () = {
+  // Validate.required with Some value
+  match Validate.required(Some("hello"), "name")
+    Ok(val) -> Console.println!("required_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.required with None
+  match Validate.required(None, "name")
+    Ok(_) -> Console.println!("FAIL")
+    Err(_) -> Console.println!("required_none")
+
+  // Validate.string
+  match Validate.string("hello", "name")
+    Ok(_) -> Console.println!("string_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.int with int
+  match Validate.int(42, "age")
+    Ok(_) -> Console.println!("int_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.min_length
+  match Validate.min_length("abc", 2, "name")
+    Ok(_) -> Console.println!("min_length_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.min_length too short
+  match Validate.min_length("a", 5, "name")
+    Ok(_) -> Console.println!("FAIL")
+    Err(_) -> Console.println!("min_length_err")
+
+  // Validate.max_length
+  match Validate.max_length("abc", 10, "name")
+    Ok(_) -> Console.println!("max_length_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.min
+  match Validate.min(5, 0, "age")
+    Ok(_) -> Console.println!("min_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.max
+  match Validate.max(5, 10, "age")
+    Ok(_) -> Console.println!("max_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.one_of
+  match Validate.one_of("admin", ["admin", "user"], "role")
+    Ok(_) -> Console.println!("one_of_ok")
+    Err(_) -> Console.println!("FAIL")
+
+  // Validate.one_of invalid
+  match Validate.one_of("superadmin", ["admin", "user"], "role")
+    Ok(_) -> Console.println!("FAIL")
+    Err(_) -> Console.println!("ok")
+}
+
+// expect: required_ok
+// expect: required_none
+// expect: string_ok
+// expect: int_ok
+// expect: min_length_ok
+// expect: min_length_err
+// expect: max_length_ok
+// expect: min_ok
+// expect: max_ok
+// expect: one_of_ok
+// expect: ok

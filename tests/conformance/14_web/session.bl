@@ -1,0 +1,18 @@
+@prelude(server)
+
+// Test Session lifecycle: create!, get!, set!, delete!
+
+fn main!() -> () = {
+  let sid = Session.create!({ user_id: 42, role: "admin" })
+  let s1 = Session.get!(sid)
+  Console.println!("created")
+  Session.set!(sid, "role", "superadmin")
+  Console.println!("updated")
+  Session.delete!(sid)
+  let s3 = Session.get!(sid)
+  Console.println!("ok")
+}
+
+// expect: created
+// expect: updated
+// expect: ok

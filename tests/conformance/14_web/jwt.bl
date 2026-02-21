@@ -1,0 +1,34 @@
+@prelude(server)
+
+// Test Jwt.sign, Jwt.verify, Jwt.decode, Jwt.sign_with
+
+fn main!() -> () = {
+  let secret = "test-secret-key"
+
+  // Sign and verify roundtrip
+  let token = Jwt.sign({ user_id: 42, role: "admin" }, secret)
+  match Jwt.verify(token, secret)
+    Ok(claims) -> Console.println!("verified")
+    Err(reason) -> Console.println!("FAIL: ${reason}")
+
+  // Verify with wrong secret fails
+  match Jwt.verify(token, "wrong-secret")
+    Ok(_) -> Console.println!("FAIL: should not verify with wrong secret")
+    Err(_) -> Console.println!("rejected")
+
+  // Decode without verification
+  match Jwt.decode(token)
+    Ok(claims) -> Console.println!("decoded")
+    Err(reason) -> Console.println!("FAIL: ${reason}")
+
+  // Sign with expiration
+  let token2 = Jwt.sign_with({ user_id: 1 }, secret, { expires_in: 3600 })
+  match Jwt.verify(token2, secret)
+    Ok(_) -> Console.println!("ok")
+    Err(reason) -> Console.println!("FAIL: ${reason}")
+}
+
+// expect: verified
+// expect: rejected
+// expect: decoded
+// expect: ok

@@ -1,0 +1,17 @@
+@prelude(server)
+
+// Test CORS and rate limit configuration
+
+fn handler(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.ok("ok"))
+
+fn main!() -> () = {
+  let cors = Middleware.cors_config(["http://localhost:3000", "https://example.com"])
+  let rl = Middleware.rate_limit_config(100, 60)
+
+  let router = Router.new()
+    |> Router.get("/api/data", handler)
+
+  Console.println!("ok")
+}
+
+// expect: ok

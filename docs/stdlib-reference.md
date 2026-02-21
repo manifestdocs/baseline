@@ -228,7 +228,9 @@ DateTime.diff(end, start, "seconds")
 
 ## Db
 
-Connect to SQLite, run queries, and parse result rows into typed values.
+> **Deprecated:** Prefer the explicit backend APIs (`Sqlite.*`, `Postgres.*`, `Mysql.*`) instead.
+> The `Db.*` functions remain available for backwards compatibility but may be removed in a future version.
+
 
 ### `Db.connect!`
 
@@ -888,6 +890,84 @@ Serialize a value to a pretty-printed JSON string.
 **Example:**
 ```baseline
 Json.to_string_pretty({ name: "Alice" })
+```
+
+---
+
+## Jwt
+
+Sign and verify JSON Web Tokens using HMAC-SHA256.
+
+### `Jwt.sign`
+
+```
+fn sign(Record, String) -> String
+```
+
+**Prelude:** `@prelude(server)`
+
+Sign a claims record as a JWT using HS256.
+
+**Example:**
+```baseline
+let token = Jwt.sign({ user_id: 42, role: "admin" }, "my-secret")
+```
+
+---
+
+### `Jwt.sign_with`
+
+```
+fn sign_with(Record, String, Record) -> String
+```
+
+**Prelude:** `@prelude(server)`
+
+Sign a JWT with options. Supports `{ expires_in: Int }` (seconds from now).
+
+**Example:**
+```baseline
+let token = Jwt.sign_with(
+  { user_id: 42 },
+  "my-secret",
+  { expires_in: 3600 }
+)
+```
+
+---
+
+### `Jwt.verify`
+
+```
+fn verify(String, String) -> Result<Record, String>
+```
+
+**Prelude:** `@prelude(server)`
+
+Verify the HS256 signature and check expiration. Returns the claims record on success.
+
+**Example:**
+```baseline
+match Jwt.verify(token, "my-secret")
+  Ok(claims) -> Console.println!("User: ${claims.user_id}")
+  Err(reason) -> Console.println!("Invalid: ${reason}")
+```
+
+---
+
+### `Jwt.decode`
+
+```
+fn decode(String) -> Result<Record, String>
+```
+
+**Prelude:** `@prelude(server)`
+
+Decode the payload WITHOUT verifying the signature. Useful for inspecting token contents.
+
+**Example:**
+```baseline
+let claims = Jwt.decode(token) |> Result.unwrap()
 ```
 
 ---
@@ -1715,6 +1795,111 @@ let data = Request.body_json(req)
 
 ---
 
+### `Request.param`
+
+```
+fn param(Request, String) -> Option<String>
+```
+
+**Prelude:** `@prelude(server)`
+
+Extract a path parameter by name.
+
+**Example:**
+```baseline
+let id = Request.param(req, "id")
+```
+
+---
+
+### `Request.param_int`
+
+```
+fn param_int(Request, String) -> Option<Int>
+```
+
+**Prelude:** `@prelude(server)`
+
+Extract a path parameter as an integer.
+
+**Example:**
+```baseline
+let id = Request.param_int(req, "id") |> Option.unwrap()
+```
+
+---
+
+### `Request.query`
+
+```
+fn query(Request, String) -> Option<String>
+```
+
+**Prelude:** `@prelude(server)`
+
+Extract a query string parameter by name.
+
+**Example:**
+```baseline
+let page = Request.query(req, "page") |> Option.unwrap_or("1")
+```
+
+---
+
+### `Request.query_int`
+
+```
+fn query_int(Request, String) -> Option<Int>
+```
+
+**Prelude:** `@prelude(server)`
+
+Extract a query string parameter as an integer.
+
+**Example:**
+```baseline
+let page = Request.query_int(req, "page") |> Option.unwrap_or(1)
+```
+
+---
+
+### `Request.decode`
+
+```
+fn decode(Request, String) -> Result<Record, Response>
+```
+
+**Prelude:** `@prelude(server)`
+
+Parse the request body as JSON and validate against a registered type schema. Returns accumulated JSON:API-style errors on validation failure.
+
+**Example:**
+```baseline
+type Name = String where String.length(self) >= 1
+type CreateUser = { name: Name, age: Int }
+
+let user = Request.decode(req, "CreateUser")?
+```
+
+---
+
+### `Request.multipart`
+
+```
+fn multipart(Request) -> Result<List<Part>, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Parse multipart/form-data from the request body. Each Part is a record: `{ name: String, filename: Option<String>, content_type: String, body: String }`.
+
+**Example:**
+```baseline
+let parts = Request.multipart(req)?
+```
+
+---
+
 ## Response
 
 Build HTTP responses with custom status codes, headers, and JSON or text bodies.
@@ -1911,6 +2096,144 @@ fn redirect_permanent(String) -> <unknown>
 **Prelude:** `@prelude(script)`
 
 Create a 301 permanent redirect to a URL.
+
+---
+
+### `Response.redirect_temporary`
+
+```
+fn redirect_temporary(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 307 temporary redirect to a URL (preserves HTTP method).
+
+---
+
+### `Response.unauthorized`
+
+```
+fn unauthorized(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 401 Unauthorized response.
+
+---
+
+### `Response.forbidden`
+
+```
+fn forbidden(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 403 Forbidden response.
+
+---
+
+### `Response.conflict`
+
+```
+fn conflict(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 409 Conflict response.
+
+---
+
+### `Response.unprocessable`
+
+```
+fn unprocessable(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 422 Unprocessable Entity response.
+
+---
+
+### `Response.method_not_allowed`
+
+```
+fn method_not_allowed(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 405 Method Not Allowed response.
+
+---
+
+### `Response.too_many_requests`
+
+```
+fn too_many_requests(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 429 Too Many Requests response.
+
+---
+
+### `Response.bad_gateway`
+
+```
+fn bad_gateway(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 502 Bad Gateway response.
+
+---
+
+### `Response.service_unavailable`
+
+```
+fn service_unavailable(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 503 Service Unavailable response.
+
+---
+
+### `Response.gateway_timeout`
+
+```
+fn gateway_timeout(String) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Create a 504 Gateway Timeout response.
+
+---
+
+### `Response.set_cookie`
+
+```
+fn set_cookie(Response, String, String) -> Response
+```
+
+**Prelude:** `@prelude(server)`
+
+Append a Set-Cookie header to a response.
+
+**Example:**
+```baseline
+Response.ok("welcome")
+|> Response.set_cookie("session", "abc123")
+```
 
 ---
 
@@ -2237,6 +2560,83 @@ router |> Router.group("/api", |r|
 
 ---
 
+### `Router.resources`
+
+```
+fn resources(<unknown>, String, <unknown>) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Register RESTful resource routes (index, show, create, update, delete) for a path.
+
+**Example:**
+```baseline
+router |> Router.resources("/todos", {
+  index: list_todos,
+  show: get_todo,
+  create: create_todo,
+  update: update_todo,
+  delete: delete_todo
+})
+```
+
+---
+
+### `Router.state`
+
+```
+fn state(<unknown>, String, <unknown>) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Attach shared application state to the router, accessible in handlers via `req.state`.
+
+**Example:**
+```baseline
+router |> Router.state("db_url", "postgres://localhost/mydb")
+```
+
+---
+
+### `Router.docs_json`
+
+```
+fn docs_json(<unknown>) -> String
+```
+
+**Prelude:** `@prelude(server)`
+
+Generate an OpenAPI-compatible JSON string documenting all registered routes.
+
+**Example:**
+```baseline
+let docs = Router.docs_json(router)
+```
+
+---
+
+### `Router.ws`
+
+```
+fn ws(<unknown>, String, <unknown>) -> <unknown>
+```
+
+**Prelude:** `@prelude(server)`
+
+Register a WebSocket handler at a path. The handler receives a request and can use `Ws.send!`, `Ws.receive!`, and `Ws.close!` to interact with the connection.
+
+**Example:**
+```baseline
+router |> Router.ws("/chat", |req| {
+  let msg = Ws.receive!()
+  Ws.send!("Echo: ${msg}")
+})
+```
+
+---
+
 ## Server
 
 Start an HTTP server listening on a specific port.
@@ -2245,20 +2645,115 @@ Start an HTTP server listening on a specific port.
 
 ```
 fn listen(<unknown>, Int) -> Unit
+fn listen(<unknown>, Int, <unknown>) -> Unit
 ```
 
 **Effects:** Http
 
 **Prelude:** `@prelude(server)`
 
-Start the HTTP server on the given port.
+Start the HTTP server on the given port. An optional third argument accepts a configuration record for TLS, CORS, rate limiting, and other server options.
 
 **Example:**
 ```baseline
 let app = Router.new()
   |> Router.get("/", |req| Response.ok("Hello!"))
 
+// Basic usage
 Server.listen!(app, 3000)
+
+// With configuration
+Server.listen!(app, 3000, {
+  tls_cert: "cert.pem",
+  tls_key: "key.pem",
+  cors: Middleware.cors_config(["http://localhost:3000"]),
+  rate_limit: Middleware.rate_limit_config(100, 60),
+  static_dir: "./public",
+  static_prefix: "/static",
+  docs_path: "/api/docs"
+})
+```
+
+---
+
+## Session
+
+Manage in-memory server-side sessions with automatic expiration.
+
+### `Session.create!`
+
+```
+fn create(Record) -> String
+```
+
+**Effects:** Http
+
+**Prelude:** `@prelude(server)`
+
+Create a new session with the given data record. Returns the session ID.
+
+**Example:**
+```baseline
+let sid = Session.create!({ user_id: 42, role: "admin" })
+```
+
+---
+
+### `Session.get!`
+
+```
+fn get(String) -> Option<Record>
+```
+
+**Effects:** Http
+
+**Prelude:** `@prelude(server)`
+
+Retrieve session data by ID. Returns None if the session has expired or doesn't exist.
+
+**Example:**
+```baseline
+match Session.get!(session_id)
+  Some(data) -> Response.json(data)
+  None -> Response.unauthorized("Session expired")
+```
+
+---
+
+### `Session.set!`
+
+```
+fn set(String, String, <unknown>) -> Unit
+```
+
+**Effects:** Http
+
+**Prelude:** `@prelude(server)`
+
+Update a single field in an existing session. No-op if the session doesn't exist.
+
+**Example:**
+```baseline
+Session.set!(session_id, "last_active", Time.now!())
+```
+
+---
+
+### `Session.delete!`
+
+```
+fn delete(String) -> Unit
+```
+
+**Effects:** Http
+
+**Prelude:** `@prelude(server)`
+
+Remove a session by ID.
+
+**Example:**
+```baseline
+Session.delete!(session_id)
 ```
 
 ---
@@ -2713,6 +3208,148 @@ Time.sleep!(1000)  // wait 1 second
 
 ---
 
+## Validate
+
+Validate request data with type-safe validation functions that return `Result<T, HttpError>`.
+
+### `Validate.required`
+
+```
+fn required(<unknown>, String) -> Result<T, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Check that a value is not `None`. Returns an error naming the field if it is.
+
+**Example:**
+```baseline
+let name = Validate.required(data.name, "name")?
+```
+
+---
+
+### `Validate.string`
+
+```
+fn string(<unknown>, String) -> Result<String, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a value is a string.
+
+**Example:**
+```baseline
+let email = Validate.string(data.email, "email")?
+```
+
+---
+
+### `Validate.int`
+
+```
+fn int(<unknown>, String) -> Result<Int, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a value is an integer, or parse it from a string.
+
+**Example:**
+```baseline
+let age = Validate.int(data.age, "age")?
+```
+
+---
+
+### `Validate.boolean`
+
+```
+fn boolean(<unknown>, String) -> Result<Bool, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a value is a boolean.
+
+---
+
+### `Validate.min_length`
+
+```
+fn min_length(String, Int, String) -> Result<String, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a string has at least `min` characters.
+
+**Example:**
+```baseline
+let name = Validate.min_length(name, 1, "name")?
+```
+
+---
+
+### `Validate.max_length`
+
+```
+fn max_length(String, Int, String) -> Result<String, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a string has at most `max` characters.
+
+---
+
+### `Validate.min`
+
+```
+fn min(Int, Int, String) -> Result<Int, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a number is at least `min`.
+
+**Example:**
+```baseline
+let age = Validate.min(age, 0, "age")?
+```
+
+---
+
+### `Validate.max`
+
+```
+fn max(Int, Int, String) -> Result<Int, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a number is at most `max`.
+
+---
+
+### `Validate.one_of`
+
+```
+fn one_of(String, List<String>, String) -> Result<String, HttpError>
+```
+
+**Prelude:** `@prelude(server)`
+
+Validate that a value is one of the allowed options.
+
+**Example:**
+```baseline
+let role = Validate.one_of(role, ["admin", "user", "guest"], "role")?
+```
+
+---
+
 ## Weak
 
 Break reference cycles with weak pointers that don't prevent garbage collection.
@@ -2741,3 +3378,65 @@ Attempt to upgrade a weak reference to a strong one, returning an Option.
 
 ---
 
+## Ws
+
+Send and receive messages over WebSocket connections.
+
+### `Ws.send!`
+
+```
+fn send(String) -> Unit
+```
+
+**Effects:** Http
+
+**Prelude:** `@prelude(server)`
+
+Send a text message over the active WebSocket connection.
+
+**Example:**
+```baseline
+Ws.send!("Hello, client!")
+```
+
+---
+
+### `Ws.receive!`
+
+```
+fn receive() -> Result<String, String>
+```
+
+**Effects:** Http
+
+**Prelude:** `@prelude(server)`
+
+Block until a message arrives from the client. Returns `Ok(message)` for text messages, `Err(reason)` on close or error.
+
+**Example:**
+```baseline
+match Ws.receive!()
+  Ok(msg) -> Ws.send!("Echo: ${msg}")
+  Err(reason) -> Log.info!("Connection closed: ${reason}")
+```
+
+---
+
+### `Ws.close!`
+
+```
+fn close() -> Unit
+```
+
+**Effects:** Http
+
+**Prelude:** `@prelude(server)`
+
+Gracefully close the active WebSocket connection.
+
+**Example:**
+```baseline
+Ws.close!()
+```
+
+---
