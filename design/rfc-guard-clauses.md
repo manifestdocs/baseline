@@ -1,5 +1,7 @@
 # RFC: Ergonomic Guard Clauses in an Expression-Oriented Language
 
+**Status:** Option 1 [IMPLEMENTED] — `Result.ensure` shipped in stdlib. Options 2 and 3 deferred to v0.3.
+
 ## 1. Summary
 
 Baseline's strict adherence to expression-oriented design and the "One Way" principle explicitly forbids the `return` keyword. While this enforces functional purity and simplifies LLM generation by removing control-flow edge cases, it introduces ergonomic friction for developers accustomed to using "guard clauses" (early returns) to prevent nested code blocks. 
@@ -29,12 +31,12 @@ We need a solution that:
 
 ## 3. Proposed Solutions
 
-### Option 1: The `ensure` + `?` Pattern (Least Invasive)
+### Option 1: The `ensure` + `?` Pattern (Least Invasive) [IMPLEMENTED]
 
 This approach requires **zero new syntax**. We add an `ensure` function to the `core` prelude that converts a boolean condition into an errorable `Result`.
 
 ```baseline
-// In prelude(core)
+// Implemented as Result.ensure in stdlib (blc/src/vm/natives/result.rs)
 fn ensure<E>(condition: Bool, err: E) -> Result<(), E> =
   if condition then Ok(()) else Err(err)
 ```
@@ -56,7 +58,7 @@ fn process_user!(user: User) -> {Db} Result<Data, String> = {
 * **Pros:** No new keywords, reuses the existing mental model for error propagation (`?`), keeps the happy path flat, and fully respects expression-oriented purity.
 * **Cons:** Feels slightly like a function call rather than a native language construct.
 
-### Option 2: Block-Desugared `guard` Expression
+### Option 2: Block-Desugared `guard` Expression [DEFERRED — v0.3]
 
 Depending on `ensure` might feel slightly unintuitive. We could introduce a `guard` construct that **semantically desugars** into a nested `if/else` block at compile time.
 
@@ -82,7 +84,7 @@ else {
 * **Pros:** Looks identical to Swift's guard clauses, providing a familiar imperative "feel". Mathmatically, it remains a pure expression because the rest of the block is simply appended to the `else` branch during lowering.
 * **Cons:** Introduces a new keyword. Might conceptually collide with the concept of `match` guards.
 
-### Option 3: Pattern-Destructuring Guards (`let ... else`)
+### Option 3: Pattern-Destructuring Guards (`let ... else`) [DEFERRED — v0.3]
 
 Often, a guard clause isn't just checking a boolean; it's trying to extract a value from an `Option` or `Result` (e.g., pulling a user from a database) and bailing if it fails. We could introduce a `let ... else` binding that, like `guard`, desugars the rest of the block into a `match`.
 
@@ -110,5 +112,5 @@ match get_user!(id)
 
 ## 4. Recommendation
 
-1. **Immediate Action:** Adopt **Option 1 (`ensure`)** immediately in the core prelude as an idiom. It requires no compiler changes and fully solves the boolean guard clause problem.
-2. **Long-Term Consideration:** Explore **Option 3 (`let ... else`)** for v0.3, as the need to destructure `Option`/`Result` types without indenting the entire function is a genuine ergonomic hurdle in ML-family languages. The concept of "Block Desugaring Bindings" provides the visual linearity of imperative code while preserving functional purity.
+1. **[IMPLEMENTED]** **Option 1 (`Result.ensure`)** shipped in `blc/src/vm/natives/result.rs`. Type inference schema in `blc/src/analysis/infer.rs`. Conformance tests in `tests/conformance/10_error_handling/guard_clauses.bl`. Also added `Option.ok_or` as a complement for converting `Option` to `Result` in guard chains.
+2. **[DEFERRED — v0.3]** **Option 3 (`let ... else`)** remains the preferred long-term solution for destructuring guard clauses. Requires new parser rules and block desugaring in the compiler.
