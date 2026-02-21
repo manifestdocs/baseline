@@ -266,6 +266,191 @@ pub fn exec_cell_cancel(
     Ok(NValue::unit())
 }
 
+/// Execute `Async.parallel!(closures)` — run multiple closures concurrently and return a list of their results.
+pub fn exec_parallel(
+    closures_list: &NValue,
+    program: Arc<Program>,
+    chunks: &[Chunk],
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    let closures = closures_list.as_list().ok_or_else(|| CompileError {
+        message: "Async.parallel! argument must be a List of closures".into(),
+        line,
+        col,
+    })?;
+
+    let rt = tokio::runtime::Handle::try_current().map_err(|_| CompileError {
+        message: "Async.parallel! requires a tokio runtime (use `blc run --async`)".into(),
+        line,
+        col,
+    })?;
+
+    let join_result = rt.block_on(async {
+        let mut join_set = JoinSet::new();
+        let num_closures = closures.len();
+
+        for (i, closure) in closures.iter().enumerate() {
+            let closure = closure.clone();
+            let program = program.clone();
+            join_set.spawn_blocking(move || {
+                let mut fiber_vm = Vm::new();
+                match fiber_vm.call_nvalue(&closure, &[], &program.chunks, line, col) {
+                    Ok(result) => Ok((i, result)),
+                    Err(e) => Err(e.message),
+                }
+            });
+        }
+
+        let mut results = vec![None; num_closures];
+        let mut first_error: Option<String> = None;
+
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(Ok((i, val))) => {
+                    results[i] = Some(val);
+                }
+                Ok(Err(err)) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                        join_set.abort_all();
+                    }
+                }
+                Err(join_err) => {
+                    if !join_err.is_cancelled() && first_error.is_none() {
+                        first_error = Some(format!("Fiber panicked: {}", join_err));
+                        join_set.abort_all();
+                    }
+                }
+            }
+        }
+
+        if let Some(err) = first_error {
+            Err(err)
+        } else {
+            // All completed successfully
+            let final_results = results.into_iter().map(|o| o.unwrap()).collect();
+            Ok(NValue::list(final_results))
+        }
+    });
+
+    match join_result {
+        Ok(vals) => Ok(vals),
+        Err(err) => Err(CompileError {
+            message: err,
+            line,
+            col,
+        }),
+    }
+}
+
+/// Execute `Async.race!(closures)` — run multiple closures concurrently and return the result of the first to complete.
+pub fn exec_race(
+    closures_list: &NValue,
+    program: Arc<Program>,
+    chunks: &[Chunk],
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    let closures = closures_list.as_list().ok_or_else(|| CompileError {
+        message: "Async.race! argument must be a List of closures".into(),
+        line,
+        col,
+    })?;
+
+    if closures.is_empty() {
+        return Err(CompileError {
+            message: "Async.race! requires at least one closure".into(),
+            line,
+            col,
+        });
+    }
+
+    let rt = tokio::runtime::Handle::try_current().map_err(|_| CompileError {
+        message: "Async.race! requires a tokio runtime (use `blc run --async`)".into(),
+        line,
+        col,
+    })?;
+
+    let join_result = rt.block_on(async {
+        let mut join_set = JoinSet::new();
+
+        for closure in closures.iter() {
+            let closure = closure.clone();
+            let program = program.clone();
+            join_set.spawn_blocking(move || {
+                let mut fiber_vm = Vm::new();
+                match fiber_vm.call_nvalue(&closure, &[], &program.chunks, line, col) {
+                    Ok(result) => Ok(result),
+                    Err(e) => Err(e.message),
+                }
+            });
+        }
+
+        let mut final_result = None;
+        let mut first_error: Option<String> = None;
+
+        while let Some(res) = join_set.join_next().await {
+            match res {
+                Ok(Ok(val)) => {
+                    // First to succeed!
+                    final_result = Some(val);
+                    join_set.abort_all(); // Cancel the rest
+                    break;
+                }
+                Ok(Err(err)) => {
+                    // One errored. For race!, do we fail immediately, or wait for others?
+                    // Standard race usually fails on first error if no success yet.
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                        join_set.abort_all();
+                    }
+                }
+                Err(join_err) => {
+                    if !join_err.is_cancelled() && first_error.is_none() {
+                        first_error = Some(format!("Fiber panicked: {}", join_err));
+                        join_set.abort_all();
+                    }
+                }
+            }
+        }
+
+        if let Some(r) = final_result {
+            Ok(r)
+        } else if let Some(err) = first_error {
+            Err(err)
+        } else {
+            Err("All tasks in Async.race! failed or panicked".into())
+        }
+    });
+
+    match join_result {
+        Ok(val) => Ok(val),
+        Err(err) => Err(CompileError {
+            message: err,
+            line,
+            col,
+        }),
+    }
+}
+
+/// Execute `Async.scatter_gather!(closures, aggregator)` — run closures concurrently and aggregate results.
+pub fn exec_scatter_gather(
+    closures_list: &NValue,
+    aggregator: &NValue,
+    program: Arc<Program>,
+    chunks: &[Chunk],
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    // First, run them all in parallel
+    let list_result = exec_parallel(closures_list, program, chunks, line, col)?;
+    
+    // Then sequentially run the aggregator on the resulting list
+    let mut current_vm = Vm::new();
+    current_vm.call_nvalue(aggregator, &[list_result], chunks, line, col)
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

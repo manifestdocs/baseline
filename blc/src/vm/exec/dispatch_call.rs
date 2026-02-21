@@ -35,94 +35,18 @@ impl super::Vm {
                 }
                 let n = *arg_count as usize;
                 let func_pos = self.stack.len() - n - 1;
-                let func = unsafe { self.stack.get_unchecked(func_pos) };
-
-                // Check for continuation call first
-                if func.is_continuation() {
-                    let (ss, fs, us, hs, hbs, r_ip, r_ci) = match func.as_heap_ref() {
-                        HeapObject::Continuation {
-                            stack_segment,
-                            frame_segment,
-                            upvalue_segment,
-                            handler_stack_segment,
-                            handler_boundary_segment,
-                            resume_ip,
-                            resume_chunk_idx,
-                            ..
-                        } => (
-                            stack_segment.clone(),
-                            frame_segment.clone(),
-                            upvalue_segment.clone(),
-                            handler_stack_segment.clone(),
-                            handler_boundary_segment.clone(),
-                            *resume_ip,
-                            *resume_chunk_idx,
-                        ),
-                        _ => unreachable!(),
-                    };
-                    let resume_value = if n == 1 {
-                        self.stack.pop().unwrap()
-                    } else {
-                        NValue::unit()
-                    };
-
-                    let handler_frame = self.frames.pop();
-                    let raw_base = handler_frame.base_slot;
-                    let has_func = raw_base & FRAME_HAS_FUNC != 0;
-                    let handler_base = (raw_base & !FRAME_HAS_FUNC) as usize;
-                    if has_func {
-                        self.stack.truncate(handler_base - 1);
-                    } else {
-                        self.stack.truncate(handler_base);
+                {
+                    let func = unsafe { self.stack.get_unchecked(func_pos) };
+                    if func.is_continuation() {
+                        let func = self.stack[func_pos].clone();
+                        let caller = self.frames.last_mut();
+                        caller.ip = ip as u32;
+                        caller.chunk_idx = chunk_idx as u32;
+                        return Ok(self.dispatch_continuation(&func, n));
                     }
-
-                    if handler_frame.upvalue_idx != u32::MAX
-                        && handler_frame.upvalue_idx as usize == self.upvalue_stack.len() - 1
-                    {
-                        self.upvalue_stack.pop();
-                    }
-
-                    self.stack.extend(ss);
-
-                    for &(ci, fip, fbs, fuv) in &fs {
-                        self.frames.push(CallFrame {
-                            chunk_idx: ci,
-                            ip: fip,
-                            base_slot: fbs,
-                            upvalue_idx: fuv,
-                        });
-                    }
-
-                    for uvs in us {
-                        self.upvalue_stack.push(Rc::new(uvs));
-                    }
-
-                    for h in hs {
-                        self.handler_stack.push(h);
-                    }
-                    for (sd, fd, ud, hsi, rip) in hbs {
-                        self.handler_boundaries.push(super::HandlerBoundary {
-                            stack_depth: sd,
-                            frame_depth: fd,
-                            upvalue_depth: ud,
-                            handler_stack_idx: hsi,
-                            return_ip: rip,
-                        });
-                    }
-
-                    self.stack.push(resume_value);
-
-                    let new_ip = r_ip as usize;
-                    let new_ci = r_ci as usize;
-                    let top = self.frames.last();
-                    let new_bs = (top.base_slot & !FRAME_HAS_FUNC) as usize;
-                    return Ok(DispatchResult::Restart {
-                        ip: new_ip,
-                        chunk_idx: new_ci,
-                        base_slot: new_bs,
-                    });
                 }
 
+                let func = &self.stack[func_pos];
                 let (new_chunk_idx, new_upvalue_idx) = if func.is_function() {
                     (func.as_function(), u32::MAX)
                 } else if func.is_heap() {
@@ -208,170 +132,15 @@ impl super::Vm {
             Op::CallNative(fn_id, arg_count) => {
                 let n = *arg_count as usize;
 
-                // Effect handler interception
                 if !self.handler_stack.is_empty() {
-                    let name = self.natives.name(*fn_id);
+                    let name = self.natives.name(*fn_id).to_string();
                     if let Some(dot) = name.find('.') {
                         let module = &name[..dot];
                         let method = name[dot + 1..]
                             .strip_suffix('!')
                             .unwrap_or(&name[dot + 1..]);
-                        if let Some((handler_fn, boundary_idx)) =
-                            self.find_handler(module, method)
-                        {
-                            if let Some(bi) = boundary_idx {
-                                // Resumable handler: capture continuation
-                                let boundary = &self.handler_boundaries[bi];
-                                let bd_stack = boundary.stack_depth;
-                                let bd_frame = boundary.frame_depth;
-                                let bd_upvalue = boundary.upvalue_depth;
-                                let handler_depth = boundary.handler_stack_idx;
-                                let return_ip = boundary.return_ip;
-
-                                let resume_ip = ip as u32;
-                                let resume_chunk_idx = chunk_idx as u32;
-
-                                let caller = self.frames.last_mut();
-                                caller.ip = return_ip as u32;
-                                caller.chunk_idx = chunk_idx as u32;
-
-                                let args_start = self.stack.len() - n;
-                                let stack_segment: Vec<NValue> =
-                                    self.stack[bd_stack..args_start].to_vec();
-
-                                let frame_segment: Vec<(u32, u32, u32, u32)> = (bd_frame
-                                    ..self.frames.len())
-                                    .map(|i| {
-                                        let f =
-                                            unsafe { *self.frames.frames.get_unchecked(i) };
-                                        (f.chunk_idx, f.ip, f.base_slot, f.upvalue_idx)
-                                    })
-                                    .collect();
-
-                                let upvalue_segment: Vec<Vec<NValue>> = self.upvalue_stack
-                                    [bd_upvalue..]
-                                    .iter()
-                                    .map(|rc| (**rc).clone())
-                                    .collect();
-
-                                let args: Vec<NValue> =
-                                    self.stack.drain(args_start..).collect();
-
-                                let handler_stack_segment: Vec<HashMap<String, NValue>> =
-                                    self.handler_stack[handler_depth..].to_vec();
-                                let handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)> =
-                                    self.handler_boundaries[bi..]
-                                        .iter()
-                                        .map(|b| (b.stack_depth, b.frame_depth, b.upvalue_depth, b.handler_stack_idx, b.return_ip))
-                                        .collect();
-
-                                self.stack.truncate(bd_stack);
-                                self.frames.len = bd_frame;
-                                self.upvalue_stack.truncate(bd_upvalue);
-                                self.handler_stack.truncate(handler_depth);
-                                self.handler_boundaries.truncate(bi);
-
-                                let cont = NValue::continuation(
-                                    stack_segment,
-                                    frame_segment,
-                                    upvalue_segment,
-                                    handler_depth,
-                                    handler_stack_segment,
-                                    handler_boundary_segment,
-                                    resume_ip,
-                                    resume_chunk_idx,
-                                );
-
-                                for arg in args {
-                                    self.stack.push(arg);
-                                }
-                                self.stack.push(cont);
-
-                                let total_args = n + 1;
-                                if handler_fn.is_function() {
-                                    let fn_idx = handler_fn.as_function();
-                                    let new_base =
-                                        (self.stack.len() - total_args) as u32;
-                                    self.frames.push(CallFrame {
-                                        chunk_idx: fn_idx as u32,
-                                        ip: 0,
-                                        base_slot: new_base,
-                                        upvalue_idx: u32::MAX,
-                                    });
-                                    return Ok(DispatchResult::Restart {
-                                        ip: 0,
-                                        chunk_idx: fn_idx,
-                                        base_slot: new_base as usize,
-                                    });
-                                } else if let HeapObject::Closure {
-                                    chunk_idx: cidx,
-                                    upvalues,
-                                } = handler_fn.as_heap_ref()
-                                {
-                                    let fn_idx = *cidx;
-                                    let new_base =
-                                        (self.stack.len() - total_args) as u32;
-                                    self.upvalue_stack
-                                        .push(Rc::new(upvalues.clone()));
-                                    let uv_idx =
-                                        (self.upvalue_stack.len() - 1) as u32;
-                                    self.frames.push(CallFrame {
-                                        chunk_idx: fn_idx as u32,
-                                        ip: 0,
-                                        base_slot: new_base,
-                                        upvalue_idx: uv_idx,
-                                    });
-                                    return Ok(DispatchResult::Restart {
-                                        ip: 0,
-                                        chunk_idx: fn_idx,
-                                        base_slot: new_base as usize,
-                                    });
-                                }
-                            } else {
-                                // Tail-resumptive (no boundary): call handler inline
-                                let start = self.stack.len() - n;
-                                if handler_fn.is_function() {
-                                    let fn_idx = handler_fn.as_function();
-                                    let caller = self.frames.last_mut();
-                                    caller.ip = ip as u32;
-                                    caller.chunk_idx = chunk_idx as u32;
-                                    self.frames.push(CallFrame {
-                                        chunk_idx: fn_idx as u32,
-                                        ip: 0,
-                                        base_slot: start as u32,
-                                        upvalue_idx: u32::MAX,
-                                    });
-                                    return Ok(DispatchResult::Restart {
-                                        ip: 0,
-                                        chunk_idx: fn_idx,
-                                        base_slot: start,
-                                    });
-                                } else if handler_fn.is_heap()
-                                    && let HeapObject::Closure {
-                                        chunk_idx: cidx,
-                                        upvalues,
-                                    } = handler_fn.as_heap_ref()
-                                {
-                                    let fn_idx = *cidx;
-                                    let caller = self.frames.last_mut();
-                                    caller.ip = ip as u32;
-                                    caller.chunk_idx = chunk_idx as u32;
-                                    self.upvalue_stack
-                                        .push(Rc::new(upvalues.clone()));
-                                    let uv_idx = self.upvalue_stack.len() - 1;
-                                    self.frames.push(CallFrame {
-                                        chunk_idx: fn_idx as u32,
-                                        ip: 0,
-                                        base_slot: start as u32,
-                                        upvalue_idx: uv_idx as u32,
-                                    });
-                                    return Ok(DispatchResult::Restart {
-                                        ip: 0,
-                                        chunk_idx: fn_idx,
-                                        base_slot: start,
-                                    });
-                                }
-                            }
+                        if let Some(restart) = self.dispatch_handler_interception(module, method, n, ip, chunk_idx, chunks)? {
+                            return Ok(restart);
                         }
                     }
                 }
@@ -491,6 +260,292 @@ impl super::Vm {
         Ok(DispatchResult::Continue)
     }
 
+    #[inline(always)]
+    fn dispatch_continuation(
+        &mut self,
+        func: &NValue,
+        n: usize,
+    ) -> DispatchResult {
+        let (ss, fs, us, hs, original_base_slot, hbs, r_ip, r_ci) = match func.as_heap_ref() {
+            HeapObject::Continuation {
+                stack_segment,
+                frame_segment,
+                upvalue_segment,
+                handler_stack_segment,
+                base_stack_depth,
+                handler_boundary_segment,
+                resume_ip,
+                resume_chunk_idx,
+                ..
+            } => (
+                stack_segment.clone(),
+                frame_segment.clone(),
+                upvalue_segment.clone(),
+                handler_stack_segment.clone(),
+                *base_stack_depth,
+                handler_boundary_segment.clone(),
+                *resume_ip,
+                *resume_chunk_idx,
+            ),
+            _ => unreachable!(),
+        };
+        let resume_value = if n == 1 {
+            self.stack.pop().unwrap()
+        } else {
+            NValue::unit()
+        };
+
+        // Instead of replacing the caller's frame, we append the continuation's
+        // captured frames ON TOP of the caller. This ensures that when the continuation
+        // finishes (returns), execution naturally falls back to the caller (the handler).
+        let caller_frame_idx = self.frames.len();
+        let stack_offset = self.stack.len() - original_base_slot;
+
+        self.stack.extend(ss);
+
+        for (i, &(ci, fip, fbs, fuv)) in fs.iter().enumerate() {
+            let mut new_base = (fbs & !super::frame::FRAME_FLAGS_MASK) + stack_offset as u32;
+            if fbs & super::frame::FRAME_HAS_FUNC != 0 {
+                new_base |= super::frame::FRAME_HAS_FUNC;
+            }
+            if i == 0 {
+                new_base |= super::frame::FRAME_IS_CONT;
+                new_base |= super::frame::FRAME_HAS_FUNC;
+            }
+            // Adjust the base_slot by the stack_offset so local variable accesses
+            // point to the shifted stack segment.
+            self.frames.push(CallFrame {
+                chunk_idx: ci,
+                ip: fip,
+                base_slot: new_base,
+                upvalue_idx: fuv,
+            });
+        }
+
+        for uvs in us {
+            self.upvalue_stack.push(Rc::new(uvs));
+        }
+
+        for h in hs {
+            self.handler_stack.push(h);
+        }
+        for (sd, fd, ud, hsi, rip) in hbs {
+            self.handler_boundaries.push(super::HandlerBoundary {
+                stack_depth: sd + stack_offset,
+                frame_depth: fd + caller_frame_idx,
+                upvalue_depth: ud,
+                handler_stack_idx: hsi,
+                return_ip: rip,
+            });
+        }
+
+        self.stack.push(resume_value);
+
+        let new_ip = r_ip as usize;
+        let new_ci = r_ci as usize;
+        let top = self.frames.last();
+        let new_bs = (top.base_slot & !super::frame::FRAME_FLAGS_MASK) as usize;
+
+        DispatchResult::Restart {
+            ip: new_ip,
+            chunk_idx: new_ci,
+            base_slot: new_bs,
+        }
+    }
+
+    pub(crate) fn dispatch_handler_interception(
+        &mut self,
+        module: &str,
+        method: &str,
+        n: usize,
+        ip: usize,
+        chunk_idx: usize,
+        chunks: &[Chunk],
+    ) -> Result<Option<DispatchResult>, CompileError> {
+        if let Some((handler_fn, boundary_idx)) = self.find_handler(module, method) {
+            if let Some(bi) = boundary_idx {
+                // Resumable handler: capture continuation
+                let boundary = &self.handler_boundaries[bi];
+                let bd_stack = boundary.stack_depth;
+                let bd_frame = boundary.frame_depth;
+                let bd_upvalue = boundary.upvalue_depth;
+                let handler_depth = boundary.handler_stack_idx;
+                let return_ip = boundary.return_ip;
+
+                let resume_ip = ip as u32;
+                let resume_chunk_idx = chunk_idx as u32;
+
+                let args_start = self.stack.len() - n;
+
+                let frame_idx_start = bd_frame.saturating_sub(1);
+                let original_base_slot = unsafe { self.frames.frames.get_unchecked(frame_idx_start) }.base_slot & !super::frame::FRAME_FLAGS_MASK;
+                let original_base_slot_usize = original_base_slot as usize;
+
+                // Sync current IP before capturing
+                self.frames.last_mut().ip = ip as u32;
+                self.frames.last_mut().chunk_idx = chunk_idx as u32;
+
+                let stack_segment: Vec<NValue> =
+                    self.stack[original_base_slot_usize..args_start].to_vec();
+
+                let frame_segment: Vec<(u32, u32, u32, u32)> = (frame_idx_start
+                    ..self.frames.len())
+                    .map(|i| {
+                        let f =
+                            unsafe { *self.frames.frames.get_unchecked(i) };
+                        (f.chunk_idx, f.ip, f.base_slot, f.upvalue_idx)
+                    })
+                    .collect();
+
+                // NOW set the abort target on the frame that holds the handle block
+                let abort_frame = unsafe { self.frames.frames.get_unchecked_mut(frame_idx_start) };
+                if abort_frame.base_slot & super::frame::FRAME_IS_CONT != 0 {
+                    // This is a continuation frame! It's not allowed to execute past the handle block.
+                    // If a sub-handler aborts, the continuation itself must abort and return the value.
+                    // We point it to the chunk's guaranteed terminal Return opcode.
+                    let chunk_len = chunks[abort_frame.chunk_idx as usize].code.len();
+                    abort_frame.ip = (chunk_len - 1) as u32;
+                } else {
+                    abort_frame.ip = return_ip as u32;
+                }
+                // If there were nested frames, we abort all the way back to the boundary frame
+                self.frames.len = bd_frame;
+
+                let upvalue_segment: Vec<Vec<NValue>> = self.upvalue_stack
+                    [bd_upvalue..]
+                    .iter()
+                    .map(|rc| (**rc).clone())
+                    .collect();
+
+                let args: Vec<NValue> =
+                    self.stack.drain(args_start..).collect();
+
+                let handler_stack_segment: Vec<HashMap<String, NValue>> =
+                    self.handler_stack[handler_depth..].to_vec();
+                let handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)> =
+                    self.handler_boundaries[bi..]
+                        .iter()
+                        .map(|b| (
+                            b.stack_depth - original_base_slot_usize,
+                            b.frame_depth - frame_idx_start,
+                            b.upvalue_depth,
+                            b.handler_stack_idx,
+                            b.return_ip
+                        ))
+                        .collect();
+
+                self.stack.truncate(bd_stack);
+                // self.frames.len is already handled above
+                self.upvalue_stack.truncate(bd_upvalue);
+                self.handler_stack.truncate(handler_depth);
+                self.handler_boundaries.truncate(bi);
+
+                let cont = NValue::continuation(
+                    stack_segment,
+                    frame_segment,
+                    upvalue_segment,
+                    handler_depth,
+                    original_base_slot_usize,
+                    handler_stack_segment,
+                    handler_boundary_segment,
+                    resume_ip,
+                    resume_chunk_idx,
+                );
+
+                for arg in args {
+                    self.stack.push(arg);
+                }
+                self.stack.push(cont);
+
+                let total_args = n + 1;
+                if handler_fn.is_function() {
+                    let fn_idx = handler_fn.as_function();
+                    let new_base =
+                        (self.stack.len() - total_args) as u32;
+                    self.frames.push(CallFrame {
+                        chunk_idx: fn_idx as u32,
+                        ip: 0,
+                        base_slot: new_base,
+                        upvalue_idx: u32::MAX,
+                    });
+                    return Ok(Some(DispatchResult::Restart {
+                        ip: 0,
+                        chunk_idx: fn_idx,
+                        base_slot: new_base as usize,
+                    }));
+                } else if let HeapObject::Closure {
+                    chunk_idx: cidx,
+                    upvalues,
+                } = handler_fn.as_heap_ref()
+                {
+                    let fn_idx = *cidx;
+                    let new_base =
+                        (self.stack.len() - total_args) as u32;
+                    self.upvalue_stack
+                        .push(Rc::new(upvalues.clone()));
+                    let uv_idx =
+                        (self.upvalue_stack.len() - 1) as u32;
+                    self.frames.push(CallFrame {
+                        chunk_idx: fn_idx as u32,
+                        ip: 0,
+                        base_slot: new_base,
+                        upvalue_idx: uv_idx,
+                    });
+                    return Ok(Some(DispatchResult::Restart {
+                        ip: 0,
+                        chunk_idx: fn_idx,
+                        base_slot: new_base as usize,
+                    }));
+                }
+            } else {
+                // Tail-resumptive (no boundary): call handler inline
+                let start = self.stack.len() - n;
+                if handler_fn.is_function() {
+                    let fn_idx = handler_fn.as_function();
+                    let caller = self.frames.last_mut();
+                    caller.ip = ip as u32;
+                    caller.chunk_idx = chunk_idx as u32;
+                    self.frames.push(CallFrame {
+                        chunk_idx: fn_idx as u32,
+                        ip: 0,
+                        base_slot: start as u32,
+                        upvalue_idx: u32::MAX,
+                    });
+                    return Ok(Some(DispatchResult::Restart {
+                        ip: 0,
+                        chunk_idx: fn_idx,
+                        base_slot: start,
+                    }));
+                } else if handler_fn.is_heap()
+                    && let HeapObject::Closure {
+                        chunk_idx: cidx,
+                        upvalues,
+                    } = handler_fn.as_heap_ref()
+                {
+                    let fn_idx = *cidx;
+                    let caller = self.frames.last_mut();
+                    caller.ip = ip as u32;
+                    caller.chunk_idx = chunk_idx as u32;
+                    self.upvalue_stack
+                        .push(Rc::new(upvalues.clone()));
+                    let uv_idx = self.upvalue_stack.len() - 1;
+                    self.frames.push(CallFrame {
+                        chunk_idx: fn_idx as u32,
+                        ip: 0,
+                        base_slot: start as u32,
+                        upvalue_idx: uv_idx as u32,
+                    });
+                    return Ok(Some(DispatchResult::Restart {
+                        ip: 0,
+                        chunk_idx: fn_idx,
+                        base_slot: start,
+                    }));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Dispatch async fiber primitives: scope!, Scope.spawn!, Cell.await!, Cell.cancel!
     fn dispatch_async(
         &mut self,
@@ -551,6 +606,33 @@ impl super::Vm {
                     );
                 }
                 fiber::exec_cell_cancel(&args[0], line, col)?
+            }
+            "Async.parallel!" | "Async.parallel" => {
+                if args.is_empty() {
+                    return Err(self.error("Async.parallel! requires a list of closures".into(), line, col));
+                }
+                let program = self.program.as_ref().ok_or_else(|| {
+                    self.error("Async.parallel! requires a program context".into(), line, col)
+                })?.clone();
+                fiber::exec_parallel(&args[0], program, chunks, line, col)?
+            }
+            "Async.race!" | "Async.race" => {
+                if args.is_empty() {
+                    return Err(self.error("Async.race! requires a list of closures".into(), line, col));
+                }
+                let program = self.program.as_ref().ok_or_else(|| {
+                    self.error("Async.race! requires a program context".into(), line, col)
+                })?.clone();
+                fiber::exec_race(&args[0], program, chunks, line, col)?
+            }
+            "Async.scatter_gather!" | "Async.scatter_gather" => {
+                if args.len() < 2 {
+                    return Err(self.error("Async.scatter_gather! requires a list of closures and an aggregator closure".into(), line, col));
+                }
+                let program = self.program.as_ref().ok_or_else(|| {
+                    self.error("Async.scatter_gather! requires a program context".into(), line, col)
+                })?.clone();
+                fiber::exec_scatter_gather(&args[0], &args[1], program, chunks, line, col)?
             }
             _ => {
                 return Err(self.error(format!("Unknown async primitive: {}", name), line, col));

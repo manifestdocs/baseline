@@ -1,0 +1,41 @@
+// Test: Structured concurrency combinators: Async.parallel!, Async.race!, Async.scatter_gather!
+@prelude(core)
+
+fn delay_val(ms: Int, val: Int) -> {Time} Int = {
+  Time.sleep!(ms)
+  val
+}
+
+test "Async.parallel!" = scope!(|s| {
+  let t1 = || delay_val(10, 10)
+  let t2 = || delay_val(5, 20)
+  let t3 = || delay_val(15, 30)
+  
+  let results = Async.parallel!([t1, t2, t3])
+  
+  // Verify results are in order
+  let v1 = Option.unwrap_or(List.get(results, 0), 0)
+  let v2 = Option.unwrap_or(List.get(results, 1), 0)
+  let v3 = Option.unwrap_or(List.get(results, 2), 0)
+  
+  v1 == 10 and v2 == 20 and v3 == 30
+})
+
+test "Async.race!" = scope!(|s| {
+  let t1 = || delay_val(50, 1)
+  let t2 = || delay_val(5, 2)
+  let t3 = || delay_val(100, 3)
+  
+  let result = Async.race!([t1, t2, t3])
+  result == 2
+})
+
+test "Async.scatter_gather!" = scope!(|s| {
+  let t1 = || delay_val(10, 10)
+  let t2 = || delay_val(5, 20)
+  
+  let aggregator = |results| List.fold(results, 0, |acc, x| acc + x)
+  
+  let result = Async.scatter_gather!([t1, t2], aggregator)
+  result == 30
+})

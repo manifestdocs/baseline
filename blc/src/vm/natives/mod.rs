@@ -3,7 +3,7 @@ mod crypto;
 mod datetime;
 mod db;
 pub(crate) mod db_backend;
-mod db_helpers;
+pub(crate) mod db_helpers;
 mod db_migrate;
 #[cfg(feature = "postgres")]
 mod db_postgres;
@@ -131,6 +131,18 @@ impl NativeRegistry {
                         | "Postgres.query_map"
                         | "Mysql.query_map!"
                         | "Mysql.query_map"
+                        | "Sqlite.query_as!"
+                        | "Sqlite.query_as"
+                        | "Postgres.query_as!"
+                        | "Postgres.query_as"
+                        | "Mysql.query_as!"
+                        | "Mysql.query_as"
+                        | "Sqlite.query_one_as!"
+                        | "Sqlite.query_one_as"
+                        | "Postgres.query_one_as!"
+                        | "Postgres.query_one_as"
+                        | "Mysql.query_one_as!"
+                        | "Mysql.query_one_as"
                 )
             })
             .unwrap_or(false)
@@ -155,6 +167,9 @@ impl NativeRegistry {
                         | "Scope.spawn!" | "Scope.spawn"
                         | "Cell.await!" | "Cell.await"
                         | "Cell.cancel!" | "Cell.cancel"
+                        | "Async.parallel!" | "Async.parallel"
+                        | "Async.race!" | "Async.race"
+                        | "Async.scatter_gather!" | "Async.scatter_gather"
                 )
             })
             .unwrap_or(false)
@@ -498,6 +513,13 @@ impl NativeRegistry {
         self.register("Row.bool", db_helpers::native_row_bool);
         self.register("Row.optional_string", db_helpers::native_row_optional_string);
         self.register("Row.optional_int", db_helpers::native_row_optional_int);
+        self.register("Row.decode", db_helpers::native_row_decode);
+
+        // -- query_as! / query_one_as! (HOF placeholders — actual dispatch in hof.rs) --
+        self.register("Sqlite.query_as!", db::native_sqlite_query);
+        self.register("Sqlite.query_as", db::native_sqlite_query);
+        self.register("Sqlite.query_one_as!", db::native_sqlite_query_one);
+        self.register("Sqlite.query_one_as", db::native_sqlite_query_one);
 
         // -- Postgres (behind feature flag) --
         #[cfg(feature = "postgres")]
@@ -512,6 +534,10 @@ impl NativeRegistry {
             self.register("Postgres.query_one", db::native_query_one);
             self.register("Postgres.query_map!", db_postgres::native_postgres_query);  // HOF placeholder
             self.register("Postgres.query_map", db_postgres::native_postgres_query);   // HOF placeholder
+            self.register("Postgres.query_as!", db_postgres::native_postgres_query);
+            self.register("Postgres.query_as", db_postgres::native_postgres_query);
+            self.register("Postgres.query_one_as!", db::native_query_one);
+            self.register("Postgres.query_one_as", db::native_query_one);
         }
 
         // -- Mysql (behind feature flag) --
@@ -527,6 +553,10 @@ impl NativeRegistry {
             self.register("Mysql.query_one", db::native_query_one);
             self.register("Mysql.query_map!", db_mysql::native_mysql_query);  // HOF placeholder
             self.register("Mysql.query_map", db_mysql::native_mysql_query);   // HOF placeholder
+            self.register("Mysql.query_as!", db_mysql::native_mysql_query);
+            self.register("Mysql.query_as", db_mysql::native_mysql_query);
+            self.register("Mysql.query_one_as!", db::native_query_one);
+            self.register("Mysql.query_one_as", db::native_query_one);
         }
 
         // -- Sql.migrate! (generic migration runner) --
@@ -566,6 +596,13 @@ impl NativeRegistry {
         self.register("Cell.await", native_async_placeholder);
         self.register("Cell.cancel!", native_async_placeholder);
         self.register("Cell.cancel", native_async_placeholder);
+
+        self.register("Async.parallel!", native_async_placeholder);
+        self.register("Async.parallel", native_async_placeholder);
+        self.register("Async.race!", native_async_placeholder);
+        self.register("Async.race", native_async_placeholder);
+        self.register("Async.scatter_gather!", native_async_placeholder);
+        self.register("Async.scatter_gather", native_async_placeholder);
     }
 }
 
