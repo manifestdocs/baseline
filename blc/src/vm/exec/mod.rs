@@ -429,6 +429,8 @@ impl Vm {
                 | Op::MakeClosure(_, _) | Op::CallNative(_, _)
                 | Op::GetLocalSubInt(_, _) | Op::GetLocalLeInt(_, _)
                 | Op::GetLocalAddInt(_, _) | Op::GetLocalLtInt(_, _)
+                | Op::GetLocalMulInt(_, _) | Op::GetLocalGeInt(_, _)
+                | Op::GetLocalGetField(_, _)
                 | Op::GetLocalLeIntJumpIfFalse(_, _, _) | Op::GetLocalLtIntJumpIfFalse(_, _, _)
                 | Op::TailCall(_) => {
                     match self.dispatch_call(&op, chunk, chunks, ip, chunk_idx, base_slot, base_depth)? {

@@ -154,6 +154,15 @@ pub enum Op {
     /// Fused GetLocalLtInt(slot, k) + JumpIfFalse(offset).
     /// Tests local[slot] < k and jumps if false, without pushing/popping a bool.
     GetLocalLtIntJumpIfFalse(u16, i16, u16),
+    /// Fused GetLocal(slot) + GetField(field_idx).
+    /// Pushes the field value from the record/struct in local[slot].
+    GetLocalGetField(u16, u16),
+    /// Fused GetLocal(slot) + LoadSmallInt(k) + MulInt.
+    /// Pushes (local[slot] * k) onto the stack.
+    GetLocalMulInt(u16, i16),
+    /// Fused GetLocal(slot) + LoadSmallInt(k) + GeInt.
+    /// Pushes (local[slot] >= k) as bool onto the stack.
+    GetLocalGeInt(u16, i16),
 
     // -- Effect handlers --
     /// Push a handler map onto the handler stack. The record is on top of stack.
@@ -453,7 +462,10 @@ impl Chunk {
                 | Op::GetLocalSubInt(_, _)
                 | Op::GetLocalLeInt(_, _)
                 | Op::GetLocalAddInt(_, _)
-                | Op::GetLocalLtInt(_, _) => {
+                | Op::GetLocalLtInt(_, _)
+                | Op::GetLocalMulInt(_, _)
+                | Op::GetLocalGeInt(_, _)
+                | Op::GetLocalGetField(_, _) => {
                     pushes_found += 1;
                 }
                 // Control flow or Call/CallNative — stop scanning
@@ -473,10 +485,22 @@ impl Chunk {
     /// Replaced opcodes become Jump(0) (no-op) to preserve indices and source map.
     pub fn fuse_superinstructions(&mut self) {
         let len = self.code.len();
+        if len < 2 {
+            return;
+        }
+        // Pass 0: fuse 2-instruction patterns (GetLocal + GetField)
+        for i in 0..len - 1 {
+            if let (Op::GetLocal(slot), Op::GetField(field_idx)) = (self.code[i], self.code[i + 1]) {
+                let source_loc = self.source_map[i + 1];
+                self.code[i] = Op::Jump(0); // no-op
+                self.code[i + 1] = Op::GetLocalGetField(slot, field_idx);
+                self.source_map[i + 1] = source_loc;
+            }
+        }
+        // Pass 1: fuse 3-instruction patterns (GetLocal + LoadSmallInt + Op)
         if len < 3 {
             return;
         }
-        // Pass 1: fuse 3-instruction patterns (GetLocal + LoadSmallInt + Op)
         for i in 0..len - 2 {
             if let (Op::GetLocal(slot), Op::LoadSmallInt(k)) = (self.code[i], self.code[i + 1]) {
                 let fused = match self.code[i + 2] {
@@ -484,6 +508,8 @@ impl Chunk {
                     Op::LeInt => Some(Op::GetLocalLeInt(slot, k)),
                     Op::AddInt => Some(Op::GetLocalAddInt(slot, k)),
                     Op::LtInt => Some(Op::GetLocalLtInt(slot, k)),
+                    Op::MulInt => Some(Op::GetLocalMulInt(slot, k)),
+                    Op::GeInt => Some(Op::GetLocalGeInt(slot, k)),
                     _ => None,
                 };
                 if let Some(super_op) = fused {
@@ -978,7 +1004,7 @@ mod tests {
         let mut chunk = Chunk::new();
         chunk.emit(Op::GetLocal(0), 1, 0);
         chunk.emit(Op::LoadSmallInt(1), 1, 5);
-        chunk.emit(Op::MulInt, 1, 10); // MulInt, not a fusable op
+        chunk.emit(Op::Concat, 1, 10); // Concat, not a fusable op
         chunk.emit(Op::Return, 1, 15);
 
         chunk.fuse_superinstructions();
@@ -986,7 +1012,7 @@ mod tests {
         // Should remain unfused
         assert_eq!(chunk.code[0], Op::GetLocal(0));
         assert_eq!(chunk.code[1], Op::LoadSmallInt(1));
-        assert_eq!(chunk.code[2], Op::MulInt);
+        assert_eq!(chunk.code[2], Op::Concat);
     }
 
     #[test]
@@ -1198,6 +1224,51 @@ mod tests {
             "Op is {} bytes, must be <= 8",
             std::mem::size_of::<Op>()
         );
+    }
+
+    #[test]
+    fn fuse_get_local_mul_int() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(0), 1, 0);
+        chunk.emit(Op::LoadSmallInt(3), 1, 5);
+        chunk.emit(Op::MulInt, 1, 10);
+        chunk.emit(Op::Return, 1, 15);
+
+        chunk.fuse_superinstructions();
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code[0], Op::GetLocalMulInt(0, 3));
+        assert_eq!(chunk.code[1], Op::Return);
+    }
+
+    #[test]
+    fn fuse_get_local_ge_int() {
+        let mut chunk = Chunk::new();
+        chunk.emit(Op::GetLocal(1), 1, 0);
+        chunk.emit(Op::LoadSmallInt(0), 1, 5);
+        chunk.emit(Op::GeInt, 1, 10);
+        chunk.emit(Op::Return, 1, 15);
+
+        chunk.fuse_superinstructions();
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code[0], Op::GetLocalGeInt(1, 0));
+        assert_eq!(chunk.code[1], Op::Return);
+    }
+
+    #[test]
+    fn fuse_get_local_get_field() {
+        let mut chunk = Chunk::new();
+        let name_idx = chunk.add_constant(NValue::string("x".into()));
+        chunk.emit(Op::GetLocal(2), 1, 0);
+        chunk.emit(Op::GetField(name_idx), 1, 5);
+        chunk.emit(Op::Return, 1, 10);
+
+        chunk.fuse_superinstructions();
+        chunk.compact_nops();
+
+        assert_eq!(chunk.code[0], Op::GetLocalGetField(2, name_idx));
+        assert_eq!(chunk.code[1], Op::Return);
     }
 
     // Compile-time assertions: Program and Chunk must be Send+Sync
