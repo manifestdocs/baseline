@@ -550,6 +550,58 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
+    // Option.ok_or : (Option<A>, E) -> Result<A, E>
+    schemas.insert(
+        "Option.ok_or".into(),
+        GenericSchema {
+            type_params: 2,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                let e = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::Enum(
+                            "Option".to_string(),
+                            vec![
+                                ("Some".to_string(), vec![a.clone()]),
+                                ("None".to_string(), vec![]),
+                            ],
+                        ),
+                        e.clone(),
+                    ],
+                    Box::new(Type::Enum(
+                        "Result".to_string(),
+                        vec![
+                            ("Ok".to_string(), vec![a]),
+                            ("Err".to_string(), vec![e]),
+                        ],
+                    )),
+                )
+            },
+        },
+    );
+
+    // Result.ensure : (Bool, E) -> Result<(), E>
+    schemas.insert(
+        "Result.ensure".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let e = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Bool, e.clone()],
+                    Box::new(Type::Enum(
+                        "Result".to_string(),
+                        vec![
+                            ("Ok".to_string(), vec![Type::Unit]),
+                            ("Err".to_string(), vec![e]),
+                        ],
+                    )),
+                )
+            },
+        },
+    );
+
     // Result.unwrap : (Result<A,E>) -> A
     schemas.insert(
         "Result.unwrap".into(),

@@ -45,6 +45,18 @@ pub(super) fn native_result_is_err(args: &[NValue]) -> Result<NValue, NativeErro
     }
 }
 
+/// Result.ensure(condition, err) — if condition is true, Ok(()), else Err(err)
+pub(super) fn native_result_ensure(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() != 2 {
+        return Err(NativeError("Result.ensure: expected 2 arguments".into()));
+    }
+    if args[0].is_truthy() {
+        Ok(NValue::enum_val("Ok".into(), NValue::unit()))
+    } else {
+        Ok(NValue::enum_val("Err".into(), args[1].clone()))
+    }
+}
+
 /// Result.context(res, msg) — if Err(e), wraps as Err({ error: e, context: msg })
 pub(super) fn native_result_context(args: &[NValue]) -> Result<NValue, NativeError> {
     if args.len() != 2 {

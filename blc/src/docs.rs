@@ -266,6 +266,8 @@ fn known_functions() -> Vec<(&'static str, &'static str, &'static str, Option<&'
          Some("Some(5) |> Option.map(|x| x * 2)\n// => Some(10)")),
         ("Option", "flat_map", "Apply a function that returns an Option, flattening the result.",
          Some("Some(5) |> Option.flat_map(|x|\n  if x > 0 then Some(x) else None\n)\n// => Some(5)")),
+        ("Option", "ok_or", "Convert an Option to a Result, using the given error for None.",
+         Some("Some(42) |> Option.ok_or(\"not found\")\n// => Ok(42)\nNone |> Option.ok_or(\"not found\")\n// => Err(\"not found\")")),
         // -- Result --
         ("Result", "unwrap", "Extract the Ok value, or panic on Err.",
          Some("Ok(42) |> Result.unwrap  // => 42")),
@@ -281,6 +283,8 @@ fn known_functions() -> Vec<(&'static str, &'static str, &'static str, Option<&'
          Some("Ok(5) |> Result.and_then(|x|\n  if x > 0 then Ok(x) else Err(\"negative\")\n)\n// => Ok(5)")),
         ("Result", "map_err", "Apply a function to the Err value, if present.",
          Some("Err(\"fail\") |> Result.map_err(|e| \"wrapped: \" ++ e)\n// => Err(\"wrapped: fail\")")),
+        ("Result", "ensure", "Return Ok(()) if condition is true, or Err(err) if false. Use with ? for guard clauses.",
+         Some("Result.ensure(age >= 18, \"too young\")?\n// continues if true, propagates Err if false")),
         ("Result", "context", "Add context to an error, wrapping it in a record.",
          Some("Err(\"db fail\") |> Result.context(\"loading user\")\n// => Err({ error: \"db fail\", context: \"loading user\" })")),
         // -- Int --

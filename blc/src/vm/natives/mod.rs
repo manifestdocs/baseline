@@ -302,6 +302,7 @@ impl NativeRegistry {
         self.register("Option.unwrap_or", native_option_unwrap_or);
         self.register("Option.is_some", native_option_is_some);
         self.register("Option.is_none", native_option_is_none);
+        self.register("Option.ok_or", native_option_ok_or);
         self.register("Option.map", native_hof_placeholder);
         self.register("Option.flat_map", native_hof_placeholder);
 
@@ -313,6 +314,7 @@ impl NativeRegistry {
         self.register("Result.map", native_hof_placeholder);
         self.register("Result.map_err", native_hof_placeholder);
         self.register("Result.and_then", native_hof_placeholder);
+        self.register("Result.ensure", native_result_ensure);
         self.register("Result.context", native_result_context);
 
         // -- Time --
