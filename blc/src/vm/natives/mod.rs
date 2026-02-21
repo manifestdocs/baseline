@@ -170,6 +170,8 @@ impl NativeRegistry {
                         | "Async.parallel!" | "Async.parallel"
                         | "Async.race!" | "Async.race"
                         | "Async.scatter_gather!" | "Async.scatter_gather"
+                        | "Channel.bounded" | "Channel.send!" | "Channel.send"
+                        | "Channel.recv!" | "Channel.recv" | "Channel.close!" | "Channel.close"
                 )
             })
             .unwrap_or(false)
@@ -603,6 +605,14 @@ impl NativeRegistry {
         self.register("Async.race", native_async_placeholder);
         self.register("Async.scatter_gather!", native_async_placeholder);
         self.register("Async.scatter_gather", native_async_placeholder);
+
+        self.register("Channel.bounded", native_async_placeholder);
+        self.register("Channel.send!", native_async_placeholder);
+        self.register("Channel.send", native_async_placeholder);
+        self.register("Channel.recv!", native_async_placeholder);
+        self.register("Channel.recv", native_async_placeholder);
+        self.register("Channel.close!", native_async_placeholder);
+        self.register("Channel.close", native_async_placeholder);
     }
 }
 

@@ -637,6 +637,30 @@ impl super::Vm {
                 })?.clone();
                 fiber::exec_scatter_gather(&args[0], &args[1], program, chunks, line, col)?
             }
+            "Channel.bounded" => {
+                if args.is_empty() {
+                    return Err(self.error("Channel.bounded requires a capacity argument".into(), line, col));
+                }
+                fiber::exec_channel_bounded(&args[0], line, col)?
+            }
+            "Channel.send!" | "Channel.send" => {
+                if args.len() < 2 {
+                    return Err(self.error("Channel.send! requires sender and value arguments".into(), line, col));
+                }
+                fiber::exec_channel_send(&args[0], &args[1], line, col)?
+            }
+            "Channel.recv!" | "Channel.recv" => {
+                if args.is_empty() {
+                    return Err(self.error("Channel.recv! requires a receiver argument".into(), line, col));
+                }
+                fiber::exec_channel_recv(&args[0], line, col)?
+            }
+            "Channel.close!" | "Channel.close" => {
+                if args.is_empty() {
+                    return Err(self.error("Channel.close! requires a sender argument".into(), line, col));
+                }
+                fiber::exec_channel_close(&args[0], line, col)?
+            }
             _ => {
                 return Err(self.error(format!("Unknown async primitive: {}", name), line, col));
             }

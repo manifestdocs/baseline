@@ -452,6 +452,166 @@ pub fn exec_scatter_gather(
 }
 
 // ---------------------------------------------------------------------------
+// Channel State
+// ---------------------------------------------------------------------------
+
+const CHANNEL_TX_TAG: &str = "channel_tx";
+const CHANNEL_RX_TAG: &str = "channel_rx";
+
+pub struct ChannelTxState {
+    sender: Option<tokio::sync::mpsc::Sender<NValue>>,
+}
+
+pub struct ChannelRxState {
+    receiver: tokio::sync::mpsc::Receiver<NValue>,
+}
+
+fn make_channel_tx_nvalue(tx: tokio::sync::mpsc::Sender<NValue>) -> NValue {
+    NValue::native_object(
+        CHANNEL_TX_TAG,
+        Arc::new(Mutex::new(ChannelTxState { sender: Some(tx) })),
+    )
+}
+
+fn make_channel_rx_nvalue(rx: tokio::sync::mpsc::Receiver<NValue>) -> NValue {
+    NValue::native_object(
+        CHANNEL_RX_TAG,
+        Arc::new(Mutex::new(ChannelRxState { receiver: rx })),
+    )
+}
+
+fn extract_channel_tx(nv: &NValue) -> Option<Arc<Mutex<ChannelTxState>>> {
+    if !nv.is_heap() {
+        return None;
+    }
+    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref() {
+        if *tag == CHANNEL_TX_TAG {
+            return data.clone().downcast::<Mutex<ChannelTxState>>().ok();
+        }
+    }
+    None
+}
+
+fn extract_channel_rx(nv: &NValue) -> Option<Arc<Mutex<ChannelRxState>>> {
+    if !nv.is_heap() {
+        return None;
+    }
+    if let HeapObject::NativeObject { tag, data } = nv.as_heap_ref() {
+        if *tag == CHANNEL_RX_TAG {
+            return data.clone().downcast::<Mutex<ChannelRxState>>().ok();
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// Channels API
+// ---------------------------------------------------------------------------
+
+pub fn exec_channel_bounded(
+    cap_nv: &NValue,
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    if !cap_nv.is_int() {
+        return Err(CompileError {
+            message: "Channel.bounded capacity must be an integer".into(),
+            line,
+            col,
+        });
+    }
+    let capacity = cap_nv.as_int();
+
+    if capacity <= 0 {
+        return Err(CompileError {
+            message: "Channel.bounded capacity must be greater than 0".into(),
+            line,
+            col,
+        });
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::channel(capacity as usize);
+
+    let tx_nv = make_channel_tx_nvalue(tx);
+    let rx_nv = make_channel_rx_nvalue(rx);
+
+    // Using list instead of tuple since NValue::tuple inexplicably fails to resolve
+    Ok(NValue::list(vec![tx_nv, rx_nv]))
+}
+
+pub fn exec_channel_send(
+    tx_nv: &NValue,
+    value_nv: &NValue,
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    let tx_state = extract_channel_tx(tx_nv).ok_or_else(|| CompileError {
+        message: "Channel.send! first argument must be a Channel Sender".into(),
+        line,
+        col,
+    })?;
+
+    // Clone the sender so we don't hold the Mutex guard across a blocking operation.
+    let sender = {
+        let state = tx_state.lock().unwrap();
+        match &state.sender {
+            Some(s) => s.clone(),
+            None => {
+                return Err(CompileError {
+                    message: "Channel.send! failed: channel is closed".into(),
+                    line,
+                    col,
+                });
+            }
+        }
+    };
+
+    match sender.blocking_send(value_nv.clone()) {
+        Ok(_) => Ok(NValue::unit()),
+        Err(_) => Err(CompileError {
+            message: "Channel.send! failed: channel is closed".into(),
+            line,
+            col,
+        }),
+    }
+}
+
+pub fn exec_channel_recv(
+    rx_nv: &NValue,
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    let rx_state = extract_channel_rx(rx_nv).ok_or_else(|| CompileError {
+        message: "Channel.recv! argument must be a Channel Receiver".into(),
+        line,
+        col,
+    })?;
+
+    let mut state = rx_state.lock().unwrap();
+    match state.receiver.blocking_recv() {
+        Some(val) => Ok(NValue::enum_val("Some".into(), val)),
+        None => Ok(NValue::enum_val("None".into(), NValue::unit())),
+    }
+}
+
+pub fn exec_channel_close(
+    tx_nv: &NValue,
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    let tx_state = extract_channel_tx(tx_nv).ok_or_else(|| CompileError {
+        message: "Channel.close! argument must be a Channel Sender".into(),
+        line,
+        col,
+    })?;
+
+    let mut state = tx_state.lock().unwrap();
+    state.sender = None; // Drop the sender, closing the channel if no other clones exist
+
+    Ok(NValue::unit())
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
