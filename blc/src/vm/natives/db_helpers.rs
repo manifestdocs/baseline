@@ -14,11 +14,7 @@ use super::{HeapObject, NValue, NativeError, RcStr};
 // ---------------------------------------------------------------------------
 
 /// Find a column by name in a Row, returning its SqlValue.
-fn row_lookup<'a>(
-    columns: &[RcStr],
-    values: &'a [SqlValue],
-    name: &str,
-) -> Option<&'a SqlValue> {
+fn row_lookup<'a>(columns: &[RcStr], values: &'a [SqlValue], name: &str) -> Option<&'a SqlValue> {
     columns
         .iter()
         .position(|c| c.as_ref() == name)
@@ -52,7 +48,10 @@ pub(super) fn native_row_string(args: &[NValue]) -> Result<NValue, NativeError> 
         Some(SqlValue::Float(f)) => Ok(NValue::string(RcStr::from(f.to_string().as_str()))),
         Some(SqlValue::Null) => Ok(NValue::string(RcStr::from(""))),
         Some(SqlValue::Blob(_)) => Ok(NValue::string(RcStr::from("<blob>"))),
-        None => Err(NativeError(format!("Row.string: column '{}' not found", name))),
+        None => Err(NativeError(format!(
+            "Row.string: column '{}' not found",
+            name
+        ))),
     }
 }
 
@@ -73,7 +72,9 @@ pub(super) fn native_row_int(args: &[NValue]) -> Result<NValue, NativeError> {
             let n = s.as_ref().parse::<i64>().unwrap_or(0);
             Ok(NValue::int(n))
         }
-        Some(SqlValue::Blob(_)) => Err(NativeError(format!("Row.int: column '{}' is a blob", name))),
+        Some(SqlValue::Blob(_)) => {
+            Err(NativeError(format!("Row.int: column '{}' is a blob", name)))
+        }
         None => Err(NativeError(format!("Row.int: column '{}' not found", name))),
     }
 }
@@ -95,8 +96,14 @@ pub(super) fn native_row_float(args: &[NValue]) -> Result<NValue, NativeError> {
             let f = s.as_ref().parse::<f64>().unwrap_or(0.0);
             Ok(NValue::float(f))
         }
-        Some(SqlValue::Blob(_)) => Err(NativeError(format!("Row.float: column '{}' is a blob", name))),
-        None => Err(NativeError(format!("Row.float: column '{}' not found", name))),
+        Some(SqlValue::Blob(_)) => Err(NativeError(format!(
+            "Row.float: column '{}' is a blob",
+            name
+        ))),
+        None => Err(NativeError(format!(
+            "Row.float: column '{}' not found",
+            name
+        ))),
     }
 }
 
@@ -115,7 +122,10 @@ pub(super) fn native_row_bool(args: &[NValue]) -> Result<NValue, NativeError> {
         Some(SqlValue::Text(s)) => Ok(NValue::bool(s.as_ref() == "1" || s.as_ref() == "true")),
         Some(SqlValue::Null) => Ok(NValue::bool(false)),
         Some(SqlValue::Blob(_)) => Ok(NValue::bool(false)),
-        None => Err(NativeError(format!("Row.bool: column '{}' not found", name))),
+        None => Err(NativeError(format!(
+            "Row.bool: column '{}' not found",
+            name
+        ))),
     }
 }
 
@@ -180,11 +190,16 @@ pub(super) fn native_row_optional_int(args: &[NValue]) -> Result<NValue, NativeE
 // ---------------------------------------------------------------------------
 
 /// Look up a key in a Map's entries, returning the value if found.
-fn map_lookup<'a>(entries: &'a [(NValue, NValue)], key: &NValue) -> Option<&'a NValue> {
-    entries.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+#[allow(dead_code)]
+fn map_lookup<'a>(
+    entries: &'a std::collections::HashMap<NValue, NValue>,
+    key: &NValue,
+) -> Option<&'a NValue> {
+    entries.get(key)
 }
 
 /// Extract the string content from an NValue, returning None if not a string.
+#[allow(dead_code)]
 fn as_str(val: &NValue) -> Option<&str> {
     val.as_string().map(|s| s.as_ref())
 }
@@ -192,11 +207,14 @@ fn as_str(val: &NValue) -> Option<&str> {
 /// Db.require(row, key: String) -> String
 ///
 /// Get a required string field from a row. Accepts both Row and Map.
+#[allow(dead_code)]
 pub(super) fn native_db_require(args: &[NValue]) -> Result<NValue, NativeError> {
     let key = &args[1];
     match args[0].as_heap_ref() {
         HeapObject::Row { columns, values } => {
-            let name = key.as_string().ok_or_else(|| NativeError("Db.require: key must be String".into()))?;
+            let name = key
+                .as_string()
+                .ok_or_else(|| NativeError("Db.require: key must be String".into()))?;
             match row_lookup(columns, values, name.as_ref()) {
                 Some(SqlValue::Text(s)) => Ok(NValue::string(s.clone())),
                 Some(SqlValue::Int(i)) => Ok(NValue::string(RcStr::from(i.to_string().as_str()))),
@@ -217,17 +235,22 @@ pub(super) fn native_db_require(args: &[NValue]) -> Result<NValue, NativeError> 
 /// Db.optional(row, key: String) -> Option<String>
 ///
 /// Get an optional string field. Returns None if the key is missing or the value is ""/Null.
+#[allow(dead_code)]
 pub(super) fn native_db_optional(args: &[NValue]) -> Result<NValue, NativeError> {
     let key = &args[1];
     match args[0].as_heap_ref() {
         HeapObject::Row { columns, values } => {
-            let name = key.as_string().ok_or_else(|| NativeError("Db.optional: key must be String".into()))?;
+            let name = key
+                .as_string()
+                .ok_or_else(|| NativeError("Db.optional: key must be String".into()))?;
             match row_lookup(columns, values, name.as_ref()) {
                 Some(SqlValue::Null) => Ok(NValue::enum_val("None".into(), NValue::unit())),
                 Some(SqlValue::Text(s)) if s.as_ref().is_empty() => {
                     Ok(NValue::enum_val("None".into(), NValue::unit()))
                 }
-                Some(SqlValue::Text(s)) => Ok(NValue::enum_val("Some".into(), NValue::string(s.clone()))),
+                Some(SqlValue::Text(s)) => {
+                    Ok(NValue::enum_val("Some".into(), NValue::string(s.clone())))
+                }
                 Some(SqlValue::Int(i)) => Ok(NValue::enum_val(
                     "Some".into(),
                     NValue::string(RcStr::from(i.to_string().as_str())),
@@ -244,9 +267,7 @@ pub(super) fn native_db_optional(args: &[NValue]) -> Result<NValue, NativeError>
             }
         }
         HeapObject::Map(entries) => match map_lookup(entries, key) {
-            Some(v) if as_str(v) == Some("") => {
-                Ok(NValue::enum_val("None".into(), NValue::unit()))
-            }
+            Some(v) if as_str(v) == Some("") => Ok(NValue::enum_val("None".into(), NValue::unit())),
             Some(v) => Ok(NValue::enum_val("Some".into(), v.clone())),
             None => Ok(NValue::enum_val("None".into(), NValue::unit())),
         },
@@ -257,11 +278,14 @@ pub(super) fn native_db_optional(args: &[NValue]) -> Result<NValue, NativeError>
 /// Db.int_field(row, key: String) -> Int
 ///
 /// Parse an integer field from a row. Accepts both Row and Map.
+#[allow(dead_code)]
 pub(super) fn native_db_int_field(args: &[NValue]) -> Result<NValue, NativeError> {
     let key = &args[1];
     match args[0].as_heap_ref() {
         HeapObject::Row { columns, values } => {
-            let name = key.as_string().ok_or_else(|| NativeError("Db.int_field: key must be String".into()))?;
+            let name = key
+                .as_string()
+                .ok_or_else(|| NativeError("Db.int_field: key must be String".into()))?;
             match row_lookup(columns, values, name.as_ref()) {
                 Some(SqlValue::Int(i)) => Ok(NValue::int(*i)),
                 Some(SqlValue::Float(f)) => Ok(NValue::int(*f as i64)),
@@ -283,11 +307,14 @@ pub(super) fn native_db_int_field(args: &[NValue]) -> Result<NValue, NativeError
 /// Db.bool_field(row, key: String) -> Boolean
 ///
 /// Parse a boolean field from a row. Accepts both Row and Map.
+#[allow(dead_code)]
 pub(super) fn native_db_bool_field(args: &[NValue]) -> Result<NValue, NativeError> {
     let key = &args[1];
     match args[0].as_heap_ref() {
         HeapObject::Row { columns, values } => {
-            let name = key.as_string().ok_or_else(|| NativeError("Db.bool_field: key must be String".into()))?;
+            let name = key
+                .as_string()
+                .ok_or_else(|| NativeError("Db.bool_field: key must be String".into()))?;
             match row_lookup(columns, values, name.as_ref()) {
                 Some(SqlValue::Int(i)) => Ok(NValue::bool(*i != 0)),
                 Some(SqlValue::Text(s)) => Ok(NValue::bool(s.as_ref() == "1")),
@@ -308,6 +335,7 @@ pub(super) fn native_db_bool_field(args: &[NValue]) -> Result<NValue, NativeErro
 /// Db.first_row(rows: List<Row>) -> Option<Row>
 ///
 /// Return the first row from a query result, or None if empty.
+#[allow(dead_code)]
 pub(super) fn native_db_first_row(args: &[NValue]) -> Result<NValue, NativeError> {
     let list = args[0]
         .as_list()
@@ -322,6 +350,7 @@ pub(super) fn native_db_first_row(args: &[NValue]) -> Result<NValue, NativeError
 /// Db.has_rows(rows: List<Row>) -> Boolean
 ///
 /// Check whether a query result contains any rows.
+#[allow(dead_code)]
 pub(super) fn native_db_has_rows(args: &[NValue]) -> Result<NValue, NativeError> {
     let list = args[0]
         .as_list()
@@ -428,7 +457,9 @@ fn decode_field(
         },
         "Option<String>" => match row_lookup(columns, values, field_name) {
             Some(SqlValue::Null) | None => Ok(NValue::enum_val("None".into(), NValue::unit())),
-            Some(SqlValue::Text(s)) => Ok(NValue::enum_val("Some".into(), NValue::string(s.clone()))),
+            Some(SqlValue::Text(s)) => {
+                Ok(NValue::enum_val("Some".into(), NValue::string(s.clone())))
+            }
             Some(SqlValue::Int(i)) => Ok(NValue::enum_val(
                 "Some".into(),
                 NValue::string(RcStr::from(i.to_string().as_str())),
@@ -449,7 +480,9 @@ fn decode_field(
                 "Some".into(),
                 NValue::bool(s.as_ref() == "1" || s.as_ref() == "true"),
             )),
-            Some(SqlValue::Float(f)) => Ok(NValue::enum_val("Some".into(), NValue::bool(*f != 0.0))),
+            Some(SqlValue::Float(f)) => {
+                Ok(NValue::enum_val("Some".into(), NValue::bool(*f != 0.0)))
+            }
             Some(SqlValue::Blob(_)) => Ok(NValue::enum_val("Some".into(), NValue::bool(false))),
         },
         _ => Err(NativeError(format!(
@@ -484,7 +517,9 @@ pub(crate) fn native_row_decode(args: &[NValue]) -> Result<NValue, NativeError> 
             .as_list()
             .ok_or_else(|| NativeError("Row.decode: field spec entry must be a list".into()))?;
         if pair_list.len() != 2 {
-            return Err(NativeError("Row.decode: field spec entry must have 2 elements".into()));
+            return Err(NativeError(
+                "Row.decode: field spec entry must have 2 elements".into(),
+            ));
         }
         let field_name = pair_list[0]
             .as_string()
@@ -493,7 +528,13 @@ pub(crate) fn native_row_decode(args: &[NValue]) -> Result<NValue, NativeError> 
             .as_string()
             .ok_or_else(|| NativeError("Row.decode: type tag must be String".into()))?;
 
-        let value = decode_field(columns, values, field_name.as_ref(), type_tag.as_ref(), struct_name.as_ref())?;
+        let value = decode_field(
+            columns,
+            values,
+            field_name.as_ref(),
+            type_tag.as_ref(),
+            struct_name.as_ref(),
+        )?;
         fields.push((field_name.clone(), value));
     }
 
@@ -560,9 +601,9 @@ mod tests {
 
     #[test]
     fn row_float_direct() {
-        let row = make_typed_row(&["price"], vec![SqlValue::Float(3.14)]);
+        let row = make_typed_row(&["price"], vec![SqlValue::Float(std::f64::consts::PI)]);
         let result = native_row_float(&[row, NValue::string("price".into())]).unwrap();
-        assert!((result.as_float() - 3.14).abs() < f64::EPSILON);
+        assert!((result.as_float() - std::f64::consts::PI).abs() < f64::EPSILON);
     }
 
     // -- Row.bool --

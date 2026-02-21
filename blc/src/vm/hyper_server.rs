@@ -620,9 +620,19 @@ impl AsyncResponse {
                     }
                     // If the Err payload is an HttpError enum variant (e.g. NotFound("..."))
                     if payload.is_heap() {
-                        if let super::nvalue::HeapObject::Enum { tag: err_tag, payload: err_payload, .. } = payload.as_heap_ref() {
-                            if super::natives::http_error::http_error_status_code(err_tag).is_some() {
-                                let resp = super::natives::http_error::http_error_to_response_record(err_tag, err_payload);
+                        if let super::nvalue::HeapObject::Enum {
+                            tag: err_tag,
+                            payload: err_payload,
+                            ..
+                        } = payload.as_heap_ref()
+                        {
+                            if super::natives::http_error::http_error_status_code(err_tag).is_some()
+                            {
+                                let resp =
+                                    super::natives::http_error::http_error_to_response_record(
+                                        err_tag,
+                                        err_payload,
+                                    );
                                 return Self::from_nvalue(&resp);
                             }
                         }
@@ -703,11 +713,17 @@ impl AsyncResponse {
                     }
                 }
                 // If the Err payload is an HttpError enum variant
-                if let SendableValue::Enum { tag: ref err_tag, payload: ref err_payload } = *payload.as_ref() {
+                if let SendableValue::Enum {
+                    tag: ref err_tag,
+                    payload: ref err_payload,
+                } = *payload.as_ref()
+                {
                     if super::natives::http_error::http_error_status_code(err_tag).is_some() {
                         // Convert to NValue to use shared rendering
                         let nval = err_payload.to_nvalue();
-                        let resp = super::natives::http_error::http_error_to_response_record(err_tag, &nval);
+                        let resp = super::natives::http_error::http_error_to_response_record(
+                            err_tag, &nval,
+                        );
                         return Self::from_nvalue(&resp);
                     }
                 }
@@ -806,8 +822,8 @@ impl AsyncResponse {
 
     /// Create an SSE streaming response from an mpsc::Receiver.
     pub fn sse(rx: tokio::sync::mpsc::Receiver<SseEvent>) -> Response<ServerBody> {
-        use tokio_stream::wrappers::ReceiverStream;
         use tokio_stream::StreamExt;
+        use tokio_stream::wrappers::ReceiverStream;
 
         let stream = ReceiverStream::new(rx);
         let body_stream = stream.map(|event| Ok(Frame::data(event.encode())));
@@ -976,7 +992,11 @@ async fn run_ws_handler<S>(
                     }
                 }
                 Ok(Message::Binary(data)) => {
-                    if evt_tx_clone.send(WsEvent::Binary(data.to_vec())).await.is_err() {
+                    if evt_tx_clone
+                        .send(WsEvent::Binary(data.to_vec()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                 }
@@ -992,7 +1012,9 @@ async fn run_ws_handler<S>(
                     // Raw frames — ignore
                 }
                 Err(e) => {
-                    let _ = evt_tx_clone.send(WsEvent::Closed(Some(e.to_string()))).await;
+                    let _ = evt_tx_clone
+                        .send(WsEvent::Closed(Some(e.to_string())))
+                        .await;
                     break;
                 }
             }
@@ -1018,15 +1040,11 @@ async fn run_ws_handler<S>(
                 }
                 let request_nv = NValue::record(fields);
                 let state_nv = state.to_nvalue();
-                let request_nv = crate::vm::exec::http_helpers::inject_state_nv(&request_nv, &state_nv);
+                let request_nv =
+                    crate::vm::exec::http_helpers::inject_state_nv(&request_nv, &state_nv);
                 let handler_nv = handler.to_nvalue();
 
-                if let Err(e) = vm.call_nvalue(
-                    &handler_nv,
-                    &[request_nv],
-                    &chunks,
-                    0, 0,
-                ) {
+                if let Err(e) = vm.call_nvalue(&handler_nv, &[request_nv], &chunks, 0, 0) {
                     eprintln!("[server] WebSocket handler error: {}", e);
                 }
             });
@@ -1367,7 +1385,13 @@ impl AsyncServerContext {
         middleware: Vec<SendableHandler>,
         config: ServerConfig,
     ) -> Self {
-        Self::with_executor_and_state(routes, chunks, middleware, config, SendableValue::Record(Vec::new()))
+        Self::with_executor_and_state(
+            routes,
+            chunks,
+            middleware,
+            config,
+            SendableValue::Record(Vec::new()),
+        )
     }
 
     /// Create a full server context with VM executor, inline chunks, and shared state.
@@ -1673,9 +1697,7 @@ pub(crate) async fn serve_auto_connection<I>(
     if config.http2_adaptive_window {
         builder.http2().adaptive_window(true);
     }
-    builder
-        .http2()
-        .timer(hyper_util::rt::TokioTimer::new());
+    builder.http2().timer(hyper_util::rt::TokioTimer::new());
 
     let conn = builder.serve_connection(io, service);
     tokio::pin!(conn);
@@ -1889,7 +1911,9 @@ async fn handle_request_with_context(
         for (prefix, dir) in &config.static_dirs {
             let req_path = req.uri().path();
             if req_path.starts_with(prefix.as_str()) {
-                if let Some((mut file_resp, compressible)) = serve_static_file(dir, prefix, req_path).await {
+                if let Some((mut file_resp, compressible)) =
+                    serve_static_file(dir, prefix, req_path).await
+                {
                     insert_request_id(&mut file_resp, &meta);
                     if compressible {
                         file_resp = try_compress_response(file_resp, meta.accepts_gzip);
@@ -1905,7 +1929,9 @@ async fn handle_request_with_context(
     // WebSocket upgrade: check BEFORE body parsing (body is not consumed)
     // -------------------------------------------------------------------
     let is_ws_upgrade = req.method() == hyper::Method::GET
-        && req.headers().get("upgrade")
+        && req
+            .headers()
+            .get("upgrade")
             .and_then(|v| v.to_str().ok())
             .map(|v| v.eq_ignore_ascii_case("websocket"))
             .unwrap_or(false);
@@ -1916,15 +1942,19 @@ async fn handle_request_with_context(
         if let Some((handler, params)) = ctx.routes.find("GET", &req_path) {
             if let AsyncHandler::VmWs(vm_handler) = handler {
                 // Perform the WebSocket upgrade
-                use tokio_tungstenite::tungstenite::protocol::Role;
                 use tokio_tungstenite::WebSocketStream;
+                use tokio_tungstenite::tungstenite::protocol::Role;
 
                 let (response, on_upgrade) = {
                     // Build 101 Switching Protocols response
-                    let key = req.headers().get("sec-websocket-key")
+                    let key = req
+                        .headers()
+                        .get("sec-websocket-key")
                         .and_then(|v| v.to_str().ok())
                         .unwrap_or_default();
-                    let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(key.as_bytes());
+                    let accept = tokio_tungstenite::tungstenite::handshake::derive_accept_key(
+                        key.as_bytes(),
+                    );
 
                     let upgrade = hyper::upgrade::on(req);
 
@@ -1954,9 +1984,19 @@ async fn handle_request_with_context(
                                 hyper_util::rt::TokioIo::new(upgraded),
                                 Role::Server,
                                 None,
-                            ).await;
+                            )
+                            .await;
 
-                            run_ws_handler(ws, handler_clone, params_owned, chunks, middleware, state, path_clone).await;
+                            run_ws_handler(
+                                ws,
+                                handler_clone,
+                                params_owned,
+                                chunks,
+                                middleware,
+                                state,
+                                path_clone,
+                            )
+                            .await;
                         }
                         Err(e) => {
                             eprintln!("[server] WebSocket upgrade failed: {}", e);
@@ -2010,15 +2050,13 @@ async fn handle_request_with_context(
                             match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                                 let mut vm = cell.borrow_mut();
                                 let request_nv = async_req.to_nvalue();
-                                let request_nv = crate::vm::exec::http_helpers::inject_state_nv(&request_nv, &state_nv);
+                                let request_nv = crate::vm::exec::http_helpers::inject_state_nv(
+                                    &request_nv,
+                                    &state_nv,
+                                );
                                 let handler_nv = vm_handler.to_nvalue();
                                 let result = if middleware.is_empty() {
-                                    vm.call_nvalue(
-                                        &handler_nv,
-                                        &[request_nv],
-                                        &chunks,
-                                        0, 0,
-                                    )
+                                    vm.call_nvalue(&handler_nv, &[request_nv], &chunks, 0, 0)
                                 } else {
                                     let mw_nvalues: Vec<NValue> =
                                         middleware.iter().map(|m| m.to_nvalue()).collect();
@@ -2027,7 +2065,8 @@ async fn handle_request_with_context(
                                         &handler_nv,
                                         &request_nv,
                                         &chunks,
-                                        0, 0,
+                                        0,
+                                        0,
                                     )
                                 };
                                 match result {
@@ -2098,9 +2137,13 @@ async fn handle_request_with_context(
 /// Generate an HTML documentation page listing all API routes.
 fn generate_docs_html(routes: &[(String, String)], docs_path: &str) -> String {
     // Group routes by path for cleaner display
-    let mut path_methods: std::collections::BTreeMap<&str, Vec<&str>> = std::collections::BTreeMap::new();
+    let mut path_methods: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
     for (method, path) in routes {
-        path_methods.entry(path.as_str()).or_default().push(method.as_str());
+        path_methods
+            .entry(path.as_str())
+            .or_default()
+            .push(method.as_str());
     }
 
     let openapi_path = format!("{}/openapi.json", docs_path.trim_end_matches('/'));
@@ -2173,7 +2216,8 @@ fn generate_docs_html(routes: &[(String, String)], docs_path: &str) -> String {
 
 /// Generate an OpenAPI 3.0 JSON spec from route metadata.
 fn generate_openapi_json(routes: &[(String, String)]) -> String {
-    let mut paths: std::collections::BTreeMap<String, Vec<&str>> = std::collections::BTreeMap::new();
+    let mut paths: std::collections::BTreeMap<String, Vec<&str>> =
+        std::collections::BTreeMap::new();
     for (method, path) in routes {
         // Convert :param to {param} for OpenAPI spec
         let openapi_path = path
@@ -2195,9 +2239,7 @@ fn generate_openapi_json(routes: &[(String, String)]) -> String {
         // Extract path parameters from {param} segments
         let params: Vec<&str> = path
             .split('/')
-            .filter_map(|seg| {
-                seg.strip_prefix('{').and_then(|s| s.strip_suffix('}'))
-            })
+            .filter_map(|seg| seg.strip_prefix('{').and_then(|s| s.strip_suffix('}')))
             .collect();
 
         let params_json = if params.is_empty() {
@@ -2223,11 +2265,7 @@ fn generate_openapi_json(routes: &[(String, String)]) -> String {
                 params_json,
             ));
         }
-        path_entries.push(format!(
-            r#""{}":{{{}}}"#,
-            path,
-            method_entries.join(",")
-        ));
+        path_entries.push(format!(r#""{}":{{{}}}"#, path, method_entries.join(",")));
     }
 
     format!(
@@ -2606,13 +2644,11 @@ async fn serve_static_file(
 
         let stream = tokio_util::io::ReaderStream::new(file);
         use tokio_stream::StreamExt;
-        let body = http_body_util::StreamBody::new(
-            stream.map(|result| {
-                result
-                    .map(hyper::body::Frame::data)
-                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-            }),
-        );
+        let body = http_body_util::StreamBody::new(stream.map(|result| {
+            result
+                .map(hyper::body::Frame::data)
+                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        }));
 
         let mut builder = Response::builder()
             .status(StatusCode::OK)
@@ -2625,9 +2661,7 @@ async fn serve_static_file(
         }
 
         Some((
-            builder
-                .body(body.boxed())
-                .unwrap(),
+            builder.body(body.boxed()).unwrap(),
             false, // not compressible (streaming)
         ))
     }
@@ -3077,10 +3111,7 @@ mod tests {
     #[test]
     fn test_sse_event_encode_with_retry() {
         let event = SseEvent::new("data").with_retry(5000);
-        assert_eq!(
-            event.encode(),
-            Bytes::from("retry: 5000\ndata: data\n\n")
-        );
+        assert_eq!(event.encode(), Bytes::from("retry: 5000\ndata: data\n\n"));
     }
 
     #[test]
@@ -3131,16 +3162,18 @@ mod tests {
     fn test_insert_request_id_adds_header() {
         let meta = RequestMeta {
             request_id: Some("req-abc-123".to_string()),
-            request_id_hdr: Some(
-                hyper::header::HeaderName::from_static("x-request-id"),
-            ),
+            request_id_hdr: Some(hyper::header::HeaderName::from_static("x-request-id")),
             accepts_gzip: false,
             start: std::time::Instant::now(),
         };
         let mut resp = AsyncResponse::text(200, "ok").into_hyper();
         insert_request_id(&mut resp, &meta);
         assert_eq!(
-            resp.headers().get("x-request-id").unwrap().to_str().unwrap(),
+            resp.headers()
+                .get("x-request-id")
+                .unwrap()
+                .to_str()
+                .unwrap(),
             "req-abc-123"
         );
     }
@@ -3162,9 +3195,7 @@ mod tests {
     fn test_finalize_response_applies_request_id() {
         let meta = RequestMeta {
             request_id: Some("fin-001".to_string()),
-            request_id_hdr: Some(
-                hyper::header::HeaderName::from_static("x-req-id"),
-            ),
+            request_id_hdr: Some(hyper::header::HeaderName::from_static("x-req-id")),
             accepts_gzip: false,
             start: std::time::Instant::now(),
         };
@@ -3179,9 +3210,7 @@ mod tests {
 
     #[test]
     fn test_openapi_no_params() {
-        let routes = vec![
-            ("GET".to_string(), "/health".to_string()),
-        ];
+        let routes = vec![("GET".to_string(), "/health".to_string())];
         let json = generate_openapi_json(&routes);
         assert!(json.contains(r#""/health""#));
         assert!(!json.contains("parameters"));
@@ -3189,23 +3218,38 @@ mod tests {
 
     #[test]
     fn test_openapi_extracts_path_params() {
-        let routes = vec![
-            ("GET".to_string(), "/users/:id".to_string()),
-        ];
+        let routes = vec![("GET".to_string(), "/users/:id".to_string())];
         let json = generate_openapi_json(&routes);
         // :id should become {id} in the path
-        assert!(json.contains(r#"/users/{id}"#), "path param not converted: {}", json);
+        assert!(
+            json.contains(r#"/users/{id}"#),
+            "path param not converted: {}",
+            json
+        );
         // Should include parameters array
-        assert!(json.contains(r#""name":"id""#), "param name missing: {}", json);
-        assert!(json.contains(r#""in":"path""#), "param in missing: {}", json);
-        assert!(json.contains(r#""required":true"#), "required missing: {}", json);
+        assert!(
+            json.contains(r#""name":"id""#),
+            "param name missing: {}",
+            json
+        );
+        assert!(
+            json.contains(r#""in":"path""#),
+            "param in missing: {}",
+            json
+        );
+        assert!(
+            json.contains(r#""required":true"#),
+            "required missing: {}",
+            json
+        );
     }
 
     #[test]
     fn test_openapi_multiple_params() {
-        let routes = vec![
-            ("GET".to_string(), "/orgs/:org_id/users/:user_id".to_string()),
-        ];
+        let routes = vec![(
+            "GET".to_string(),
+            "/orgs/:org_id/users/:user_id".to_string(),
+        )];
         let json = generate_openapi_json(&routes);
         assert!(json.contains(r#"/orgs/{org_id}/users/{user_id}"#));
         assert!(json.contains(r#""name":"org_id""#));

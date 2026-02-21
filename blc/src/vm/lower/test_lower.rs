@@ -79,7 +79,14 @@ impl<'a> super::Lowerer<'a> {
                             }
                             "describe_block" => {
                                 let has_only = self.has_focused_tests(&section_child);
-                                self.collect_describe_tests(&section_child, "", has_only, &[], &[], &mut tests)?;
+                                self.collect_describe_tests(
+                                    &section_child,
+                                    "",
+                                    has_only,
+                                    &[],
+                                    &[],
+                                    &mut tests,
+                                )?;
                             }
                             _ => {}
                         }
@@ -231,7 +238,11 @@ impl<'a> super::Lowerer<'a> {
             match child.kind() {
                 "it_block" => {
                     if let Some(t) = self.lower_it_block(
-                        &child, &full_name, has_only, &local_before, &local_after,
+                        &child,
+                        &full_name,
+                        has_only,
+                        &local_before,
+                        &local_after,
                     )? {
                         out.push(t);
                     }
@@ -244,7 +255,12 @@ impl<'a> super::Lowerer<'a> {
                 }
                 "describe_block" => {
                     self.collect_describe_tests(
-                        &child, &full_name, has_only, &local_before, &local_after, out,
+                        &child,
+                        &full_name,
+                        has_only,
+                        &local_before,
+                        &local_after,
+                        out,
                     )?;
                 }
                 _ => {}

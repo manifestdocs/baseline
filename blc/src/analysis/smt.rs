@@ -97,7 +97,10 @@ fn check_spec_block(
                     "Specification for `{}` could not be verified (solver timeout or undecidable)",
                     spec.name
                 ),
-                context: format!("Try simplifying the specification or increasing the timeout (current: {}ms).", timeout_ms),
+                context: format!(
+                    "Try simplifying the specification or increasing the timeout (current: {}ms).",
+                    timeout_ms
+                ),
                 suggestions: vec![],
             });
         }
@@ -106,10 +109,7 @@ fn check_spec_block(
                 code: "SPEC_003".to_string(),
                 severity: Severity::Warning,
                 location: spec.location.clone(),
-                message: format!(
-                    "SMT verification error for `{}`: {}",
-                    spec.name, msg
-                ),
+                message: format!("SMT verification error for `{}`: {}", spec.name, msg),
                 context: "The SMT solver encountered an error.".to_string(),
                 suggestions: vec![],
             });
@@ -226,13 +226,13 @@ fn parse_spec_block(node: &Node, source: &str, file: &str) -> Option<FuncSpec> {
                             } else {
                                 format!("param_{}", idx)
                             };
-                            
+
                             let ptype = if let Some(t) = p.child_by_field_name("type") {
                                 text(&t, source).to_string()
                             } else {
                                 "Unknown".to_string()
                             };
-                            
+
                             params.push((pname, ptype));
                             idx += 1;
                         }
@@ -356,10 +356,7 @@ fn expr_to_smt(node: &Node, source: &str) -> String {
             let val = text(node, source).replace('_', "");
             // Handle hex/bin/oct
             if val.starts_with("0x") || val.starts_with("0X") {
-                format!(
-                    "{}",
-                    i64::from_str_radix(&val[2..], 16).unwrap_or(0)
-                )
+                format!("{}", i64::from_str_radix(&val[2..], 16).unwrap_or(0))
             } else if val.starts_with("0b") || val.starts_with("0B") {
                 format!("{}", i64::from_str_radix(&val[2..], 2).unwrap_or(0))
             } else if val.starts_with("0o") || val.starts_with("0O") {
@@ -575,11 +572,14 @@ fn format_counter_example(model: &str, spec: &FuncSpec) -> String {
 
             // Check if value is on same line (single-line format)
             // Pattern: (define-fun name () Type value)
-            let paren_depth: i32 = line.chars().map(|c| match c {
-                '(' => 1,
-                ')' => -1,
-                _ => 0,
-            }).sum();
+            let paren_depth: i32 = line
+                .chars()
+                .map(|c| match c {
+                    '(' => 1,
+                    ')' => -1,
+                    _ => 0,
+                })
+                .sum();
 
             if paren_depth == 0 {
                 // Single-line — extract value after the type

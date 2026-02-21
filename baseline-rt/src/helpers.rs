@@ -7,7 +7,9 @@
 use std::cell::{Cell, RefCell};
 use std::sync::Arc;
 
-use crate::nvalue::{HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_MASK, TAG_UNIT};
+use crate::nvalue::{
+    HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT,
+};
 use crate::value::RcStr;
 
 // ---------------------------------------------------------------------------
@@ -400,9 +402,7 @@ pub extern "C" fn jit_list_get(list_bits: u64, index_bits: u64) -> u64 {
         None => Err("ListGet requires a List".to_string()),
     };
     match outcome {
-        Ok(val) => {
-            jit_own(val)
-        }
+        Ok(val) => jit_own(val),
         Err(msg) => {
             jit_set_error(msg);
             NV_UNIT
@@ -466,7 +466,11 @@ pub extern "C" fn jit_closure_upvalue(closure_bits: u64, idx: u64) -> u64 {
                 let val = upvalues[i].clone();
                 jit_own(val)
             } else {
-                jit_set_error(format!("Closure upvalue index {} out of bounds (len {})", i, upvalues.len()));
+                jit_set_error(format!(
+                    "Closure upvalue index {} out of bounds (len {})",
+                    i,
+                    upvalues.len()
+                ));
                 NV_UNIT
             }
         }
@@ -496,19 +500,17 @@ pub extern "C" fn jit_closure_fn_ptr(closure_bits: u64) -> u64 {
         return 0;
     }
     match nv.as_heap_ref() {
-        HeapObject::Closure { chunk_idx, .. } => {
-            JIT_FN_TABLE.with(|table| {
-                let guard = table.borrow();
-                let tbl = guard.as_ref().unwrap();
-                let ptr = tbl.get(*chunk_idx).copied().unwrap_or(std::ptr::null());
-                if ptr.is_null() {
-                    jit_set_error(format!("Closure chunk_idx {} has no JIT code", chunk_idx));
-                    0
-                } else {
-                    ptr as u64
-                }
-            })
-        }
+        HeapObject::Closure { chunk_idx, .. } => JIT_FN_TABLE.with(|table| {
+            let guard = table.borrow();
+            let tbl = guard.as_ref().unwrap();
+            let ptr = tbl.get(*chunk_idx).copied().unwrap_or(std::ptr::null());
+            if ptr.is_null() {
+                jit_set_error(format!("Closure chunk_idx {} has no JIT code", chunk_idx));
+                0
+            } else {
+                ptr as u64
+            }
+        }),
         _ => {
             jit_set_error("closure_fn_ptr on non-closure".to_string());
             0
@@ -680,6 +682,123 @@ pub extern "C" fn jit_is_truthy(val_bits: u64) -> u64 {
 }
 
 // ---------------------------------------------------------------------------
+// Integer arithmetic helpers (handle BigInt overflow transparently)
+// ---------------------------------------------------------------------------
+
+/// Extract a full i64 from a NaN-boxed value (handles both inline int and BigInt).
+#[inline(always)]
+fn nv_as_any_int(bits: u64) -> i64 {
+    if bits & TAG_MASK == TAG_INT {
+        // Inline int: sign-extend from 48 bits
+        ((bits << 16) as i64) >> 16
+    } else {
+        // Must be BigInt on the heap
+        let nv = unsafe { NValue::borrow_from_raw(bits) };
+        nv.as_any_int()
+    }
+}
+
+/// Convert a raw i64 arithmetic result into a properly NaN-boxed integer value.
+/// If the result fits in the 48-bit inline range, returns TAG_INT | payload.
+/// Otherwise, allocates a BigInt on the heap.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_from_i64(val: i64) -> u64 {
+    jit_own(NValue::int(val))
+}
+
+/// Add two NaN-boxed integers (handles BigInt inputs and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_add(a: u64, b: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_add(nv_as_any_int(b));
+    jit_own(NValue::int(result))
+}
+
+/// Subtract two NaN-boxed integers (handles BigInt inputs and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_sub(a: u64, b: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_sub(nv_as_any_int(b));
+    jit_own(NValue::int(result))
+}
+
+/// Multiply two NaN-boxed integers (handles BigInt inputs and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_mul(a: u64, b: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_mul(nv_as_any_int(b));
+    jit_own(NValue::int(result))
+}
+
+/// Divide two NaN-boxed integers (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_div(a: u64, b: u64) -> u64 {
+    let bv = nv_as_any_int(b);
+    if bv == 0 {
+        jit_set_error("Division by zero".to_string());
+        return NV_UNIT;
+    }
+    let result = nv_as_any_int(a) / bv;
+    jit_own(NValue::int(result))
+}
+
+/// Modulo two NaN-boxed integers (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_mod(a: u64, b: u64) -> u64 {
+    let bv = nv_as_any_int(b);
+    if bv == 0 {
+        jit_set_error("Modulo by zero".to_string());
+        return NV_UNIT;
+    }
+    let result = nv_as_any_int(a) % bv;
+    jit_own(NValue::int(result))
+}
+
+/// Negate a NaN-boxed integer (handles BigInt input and overflow).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_neg(a: u64) -> u64 {
+    let result = nv_as_any_int(a).wrapping_neg();
+    jit_own(NValue::int(result))
+}
+
+/// Compare two NaN-boxed integers: a < b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_lt(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) < nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
+}
+
+/// Compare two NaN-boxed integers: a <= b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_le(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) <= nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
+}
+
+/// Compare two NaN-boxed integers: a > b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_gt(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) > nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
+}
+
+/// Compare two NaN-boxed integers: a >= b (handles BigInt inputs).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_int_ge(a: u64, b: u64) -> u64 {
+    if nv_as_any_int(a) >= nv_as_any_int(b) {
+        NV_TRUE
+    } else {
+        NV_FALSE
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Reference counting helpers (for RC-enabled codegen)
 // ---------------------------------------------------------------------------
 
@@ -690,7 +809,9 @@ pub extern "C" fn jit_is_truthy(val_bits: u64) -> u64 {
 pub extern "C" fn jit_rc_incref(bits: u64) -> u64 {
     if bits & TAG_MASK == TAG_HEAP {
         let ptr = (bits & PAYLOAD_MASK) as *const HeapObject;
-        unsafe { Arc::increment_strong_count(ptr); }
+        unsafe {
+            Arc::increment_strong_count(ptr);
+        }
     }
     bits
 }
@@ -701,17 +822,22 @@ pub extern "C" fn jit_rc_incref(bits: u64) -> u64 {
 pub extern "C" fn jit_rc_decref(bits: u64) {
     if bits & TAG_MASK == TAG_HEAP {
         let ptr = (bits & PAYLOAD_MASK) as *const HeapObject;
-        // Track deallocation in alloc_stats (matches NValue::drop logic)
-        let is_last = unsafe {
-            let arc = Arc::from_raw(ptr);
-            let count = Arc::strong_count(&arc);
-            std::mem::forget(arc);
-            count == 1
-        };
-        if is_last {
-            crate::nvalue::record_free();
+        // In debug builds, track deallocation in alloc_stats (matches NValue::drop logic)
+        #[cfg(debug_assertions)]
+        {
+            let is_last = unsafe {
+                let arc = Arc::from_raw(ptr);
+                let count = Arc::strong_count(&arc);
+                std::mem::forget(arc);
+                count == 1
+            };
+            if is_last {
+                crate::nvalue::record_free();
+            }
         }
-        unsafe { Arc::decrement_strong_count(ptr); }
+        unsafe {
+            Arc::decrement_strong_count(ptr);
+        }
     }
 }
 

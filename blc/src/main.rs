@@ -281,7 +281,11 @@ fn main() {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
             rt.block_on(blc::mcp::run_server());
         }
-        Commands::Docs { json, search, query } => {
+        Commands::Docs {
+            json,
+            search,
+            query,
+        } => {
             let docs = blc::docs::generate_docs();
 
             // Apply search/query filter if provided
@@ -462,7 +466,8 @@ fn run_file_jit(file: &PathBuf) {
     let tree = parser.parse(&source, None).expect("Failed to parse");
     let root = tree.root_node();
 
-    let (type_diags, type_map, dict_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let (type_diags, type_map, dict_map) =
+        blc::analysis::check_types_with_map(&root, &source, &file_str);
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
@@ -587,7 +592,8 @@ fn build_file_aot(file: &PathBuf, output: Option<&Path>, trace: bool) {
     let root = tree.root_node();
 
     // Type-check (exit on errors)
-    let (type_diags, type_map, dict_map) = blc::analysis::check_types_with_map(&root, &source, &file_str);
+    let (type_diags, type_map, dict_map) =
+        blc::analysis::check_types_with_map(&root, &source, &file_str);
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
@@ -719,7 +725,10 @@ fn print_human_readable(result: &CheckResult, source: &str) {
 fn print_json_with_context(result: &CheckResult, source: &str) {
     let mut json_val = serde_json::to_value(result).unwrap();
 
-    if let Some(diags) = json_val.get_mut("diagnostics").and_then(|v| v.as_array_mut()) {
+    if let Some(diags) = json_val
+        .get_mut("diagnostics")
+        .and_then(|v| v.as_array_mut())
+    {
         for (i, diag_val) in diags.iter_mut().enumerate() {
             if let Some(diag) = result.diagnostics.get(i)
                 && let Some(ctx) = blc::diagnostic_render::build_source_context(diag, source)

@@ -8,10 +8,10 @@ use crate::test_runner::{TestResult, TestStatus, TestSuiteResult, TestSummary};
 
 use super::chunk::CompileError;
 use super::codegen::Codegen;
+use super::exec::Vm;
 use super::lower::Lowerer;
 use super::natives::NativeRegistry;
 use super::value::Value;
-use super::exec::Vm;
 
 /// Run inline tests using the bytecode VM.
 pub fn run_test_file(path: &Path) -> TestSuiteResult {
@@ -99,7 +99,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 status: "fail".to_string(),
                 tests: vec![TestResult {
                     name: "compilation".to_string(),
-                        status: TestStatus::Fail,
+                    status: TestStatus::Fail,
                     message: Some(format!("Compile error: {}", ce)),
                     location: Location {
                         file: file_str,
@@ -132,7 +132,7 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
                 status: "fail".to_string(),
                 tests: vec![TestResult {
                     name: "compilation".to_string(),
-                        status: TestStatus::Fail,
+                    status: TestStatus::Fail,
                     message: Some(format!("Codegen error: {}", ce)),
                     location: Location {
                         file: file_str,

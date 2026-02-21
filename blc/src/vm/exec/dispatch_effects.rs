@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
+use super::DispatchResult;
 use crate::vm::chunk::{Chunk, CompileError, Op};
 use crate::vm::nvalue::{HeapObject, NValue};
-use super::DispatchResult;
 
 /// Effect handler and control flow opcodes: PushHandler, PushResumableHandler,
 /// PerformEffect, PopHandler, Halt, Return.
@@ -86,7 +86,6 @@ impl super::Vm {
                 };
                 let n = *arg_count as usize;
 
-
                 let (effect_name, method_name) = if let Some(dot) = key.find('.') {
                     (&key[..dot], &key[dot + 1..])
                 } else {
@@ -98,15 +97,18 @@ impl super::Vm {
                     ));
                 };
 
-                if let Some(restart) = self.dispatch_handler_interception(effect_name, method_name, n, ip, chunk_idx, chunks)? {
+                if let Some(restart) = self.dispatch_handler_interception(
+                    effect_name,
+                    method_name,
+                    n,
+                    ip,
+                    chunk_idx,
+                    chunks,
+                )? {
                     return Ok(restart);
                 } else {
                     let (line, col) = chunk.source_map[ip - 1];
-                    return Err(self.error(
-                        format!("Unhandled effect: {}", key),
-                        line,
-                        col,
-                    ));
+                    return Err(self.error(format!("Unhandled effect: {}", key), line, col));
                 }
             }
 

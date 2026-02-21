@@ -490,7 +490,8 @@ impl Chunk {
         }
         // Pass 0: fuse 2-instruction patterns (GetLocal + GetField)
         for i in 0..len - 1 {
-            if let (Op::GetLocal(slot), Op::GetField(field_idx)) = (self.code[i], self.code[i + 1]) {
+            if let (Op::GetLocal(slot), Op::GetField(field_idx)) = (self.code[i], self.code[i + 1])
+            {
                 let source_loc = self.source_map[i + 1];
                 self.code[i] = Op::Jump(0); // no-op
                 self.code[i + 1] = Op::GetLocalGetField(slot, field_idx);

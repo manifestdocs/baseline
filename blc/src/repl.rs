@@ -1,5 +1,5 @@
-use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+use rustyline::error::ReadlineError;
 use tree_sitter::Parser;
 use tree_sitter_baseline::LANGUAGE;
 
@@ -187,8 +187,7 @@ fn compile_and_run(source: &str) -> Result<vm::value::Value, String> {
         analysis::check_types_with_map(&root, source, REPL_FILE);
 
     let mut vm_instance = vm::exec::Vm::new();
-    let mut lowerer =
-        vm::lower::Lowerer::new(source, vm_instance.natives(), Some(type_map));
+    let mut lowerer = vm::lower::Lowerer::new(source, vm_instance.natives(), Some(type_map));
     lowerer.set_dict_map(dict_map);
     let ir_module = lowerer
         .lower_module(&root)
@@ -301,7 +300,10 @@ fn handle_command(cmd: &str, ctx: &mut ReplContext) {
             load_file(arg, ctx);
         }
         _ => {
-            println!("Unknown command: {}. Type :help for available commands.", command);
+            println!(
+                "Unknown command: {}. Type :help for available commands.",
+                command
+            );
         }
     }
 }
@@ -325,13 +327,11 @@ fn load_file(path: &str, ctx: &mut ReplContext) {
         let trimmed = line.trim();
 
         // Skip prelude directives and empty lines at top level
-        if !in_block && current_decl.is_empty() {
-            if trimmed.is_empty()
-                || trimmed.starts_with("//")
-                || trimmed.starts_with("@prelude")
-            {
-                continue;
-            }
+        if !in_block
+            && current_decl.is_empty()
+            && (trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("@prelude"))
+        {
+            continue;
         }
 
         // Skip main function
@@ -415,12 +415,7 @@ pub fn run() {
     let mut rl = DefaultEditor::new().expect("Failed to initialize line editor");
     let mut ctx = ReplContext::new();
 
-    loop {
-        let input = match read_input(&mut rl) {
-            Some(input) => input,
-            None => break, // Ctrl-D
-        };
-
+    while let Some(input) = read_input(&mut rl) {
         match classify_input(&input) {
             InputKind::Empty => continue,
             InputKind::Command(cmd) => handle_command(&cmd, &mut ctx),

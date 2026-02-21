@@ -221,7 +221,7 @@ fn run_json_test() {
          age: 30\n\
          active: true\n\
          nums: [1, 2, 3]\n\
-         null: Null\n\
+         null: ()\n\
          compact: {\"active\":true,\"age\":30,\"name\":\"Alice\"}\n\
          pretty:\n\
          [\n  1,\n  2,\n  3\n]\n\
@@ -555,3 +555,18 @@ fn vm_run_circular_import_detected() {
     );
 }
 
+// ===========================================================================
+// Regression: match-arm stack clobbering (constructor/tuple/list args)
+// ===========================================================================
+
+#[test]
+fn run_match_constructor_args() {
+    // BST with 5 nodes: keys 1,3,5,7,9 values 10,30,50,70,90
+    assert_run_ok("match_constructor_args.bl", "count: 5\nsum: 250\n");
+}
+
+#[test]
+fn run_match_list_args() {
+    // BST in-order traversal should produce sorted list
+    assert_run_ok("match_list_args.bl", "[1, 3, 5, 7]\n");
+}

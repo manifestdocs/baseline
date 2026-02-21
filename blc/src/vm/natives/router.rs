@@ -294,10 +294,7 @@ pub(super) fn native_router_state(args: &[NValue]) -> Result<NValue, NativeError
         }
     }
     if !state_found {
-        new_fields.push((
-            "state".into(),
-            NValue::record(vec![(key, args[2].clone())]),
-        ));
+        new_fields.push(("state".into(), NValue::record(vec![(key, args[2].clone())])));
     }
     Ok(NValue::record(new_fields))
 }
@@ -324,8 +321,14 @@ pub(super) fn native_router_docs_json(args: &[NValue]) -> Result<NValue, NativeE
     let mut entries = Vec::new();
     for route in &routes {
         if let Some(rf) = route.as_record() {
-            let method = rf.iter().find(|(k, _)| &**k == "method").and_then(|(_, v)| v.as_string());
-            let path = rf.iter().find(|(k, _)| &**k == "path").and_then(|(_, v)| v.as_string());
+            let method = rf
+                .iter()
+                .find(|(k, _)| &**k == "method")
+                .and_then(|(_, v)| v.as_string());
+            let path = rf
+                .iter()
+                .find(|(k, _)| &**k == "path")
+                .and_then(|(_, v)| v.as_string());
             if let (Some(m), Some(p)) = (method, path) {
                 entries.push(format!(r#"{{"method":"{}","path":"{}"}}"#, m, p));
             }

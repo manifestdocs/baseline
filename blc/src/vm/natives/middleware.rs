@@ -6,14 +6,12 @@ fn find_auth_header(req: &NValue) -> Option<RcStr> {
     let headers_val = fields.iter().find(|(k, _)| &**k == "headers")?.1.clone();
     let headers = headers_val.as_list()?;
     for h in headers {
-        if let Some(elems) = h.as_tuple() {
-            if elems.len() >= 2 {
-                if let Some(name) = elems[0].as_string() {
-                    if name.eq_ignore_ascii_case("authorization") {
-                        return elems[1].as_string().cloned();
-                    }
-                }
-            }
+        if let Some(elems) = h.as_tuple()
+            && elems.len() >= 2
+            && let Some(name) = elems[0].as_string()
+            && name.eq_ignore_ascii_case("authorization")
+        {
+            return elems[1].as_string().cloned();
         }
     }
     None
@@ -76,13 +74,14 @@ pub(super) fn native_middleware_extract_basic(args: &[NValue]) -> Result<NValue,
                 NValue::string(pass.into()),
             ]),
         )),
-        None => Ok(unauthorized_err("Invalid Basic auth format (expected user:pass)")),
+        None => Ok(unauthorized_err(
+            "Invalid Basic auth format (expected user:pass)",
+        )),
     }
 }
 
 fn base64_decode(input: &str) -> Option<Vec<u8>> {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = Vec::new();
     let mut buf: u32 = 0;
     let mut bits: u32 = 0;

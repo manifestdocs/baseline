@@ -57,10 +57,7 @@ pub fn resolve_sandboxed_path(user_path: &str) -> Result<PathBuf, NativeError> {
                 } else {
                     // Path doesn't exist yet (write case) — canonicalize parent
                     let parent = resolved.parent().ok_or_else(|| {
-                        NativeError(format!(
-                            "Fs sandbox: invalid path \"{}\"",
-                            user_path
-                        ))
+                        NativeError(format!("Fs sandbox: invalid path \"{}\"", user_path))
                     })?;
                     let canon_parent = parent.canonicalize().map_err(|e| {
                         NativeError(format!(
@@ -69,10 +66,7 @@ pub fn resolve_sandboxed_path(user_path: &str) -> Result<PathBuf, NativeError> {
                         ))
                     })?;
                     let filename = resolved.file_name().ok_or_else(|| {
-                        NativeError(format!(
-                            "Fs sandbox: invalid path \"{}\"",
-                            user_path
-                        ))
+                        NativeError(format!("Fs sandbox: invalid path \"{}\"", user_path))
                     })?;
                     canon_parent.join(filename)
                 };
@@ -135,7 +129,11 @@ mod tests {
         });
 
         let result = resolve_sandboxed_path("../../../etc/passwd");
-        assert!(result.is_err(), "Expected Err for escape, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "Expected Err for escape, got: {:?}",
+            result
+        );
 
         FS_SANDBOX_ROOT.with(|cell| *cell.borrow_mut() = None);
     }
@@ -150,7 +148,11 @@ mod tests {
         });
 
         let result = resolve_sandboxed_path("/etc/passwd");
-        assert!(result.is_err(), "Expected Err for absolute escape, got: {:?}", result);
+        assert!(
+            result.is_err(),
+            "Expected Err for absolute escape, got: {:?}",
+            result
+        );
 
         FS_SANDBOX_ROOT.with(|cell| *cell.borrow_mut() = None);
     }

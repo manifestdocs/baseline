@@ -1,0 +1,11 @@
+@prelude(script)
+
+fn test_match(x: Int) -> Int =
+  match List.head([x, 2, 3])
+    None -> 0
+    Some(v) -> v + 100
+
+fn main!() -> {Console} () = {
+  let r = test_match(42)
+  Console.println!("result: ${r}")
+}

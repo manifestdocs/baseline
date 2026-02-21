@@ -3,8 +3,8 @@ use std::rc::Rc;
 use crate::vm::chunk::{Chunk, CompileError};
 use crate::vm::nvalue::{HeapObject, NValue};
 
-use super::frame::{CallFrame, PackedBase};
 use super::MAX_CALL_DEPTH;
+use super::frame::{CallFrame, PackedBase};
 
 impl super::Vm {
     #[inline(always)]
@@ -355,11 +355,18 @@ impl super::Vm {
                     }
                 }
             }
-            "Sqlite.query_map!" | "Sqlite.query_map"
-            | "Postgres.query_map!" | "Postgres.query_map"
-            | "Mysql.query_map!" | "Mysql.query_map" => {
+            "Sqlite.query_map!"
+            | "Sqlite.query_map"
+            | "Postgres.query_map!"
+            | "Postgres.query_map"
+            | "Mysql.query_map!"
+            | "Mysql.query_map" => {
                 if arg_count != 3 {
-                    return Err(self.error("query_map!: expected 3 arguments (sql, params, mapper)".into(), line, col));
+                    return Err(self.error(
+                        "query_map!: expected 3 arguments (sql, params, mapper)".into(),
+                        line,
+                        col,
+                    ));
                 }
                 let mapper = self.pop(line, col)?;
                 let params_val = self.pop(line, col)?;
@@ -368,24 +375,35 @@ impl super::Vm {
                 let sql_str = if sql_val.is_heap() {
                     match sql_val.as_heap_ref() {
                         HeapObject::String(s) => s.as_ref().to_string(),
-                        _ => return Err(self.error("query_map!: first arg must be String".into(), line, col)),
+                        _ => {
+                            return Err(self.error(
+                                "query_map!: first arg must be String".into(),
+                                line,
+                                col,
+                            ));
+                        }
                     }
                 } else {
-                    return Err(self.error("query_map!: first arg must be String".into(), line, col));
+                    return Err(self.error(
+                        "query_map!: first arg must be String".into(),
+                        line,
+                        col,
+                    ));
                 };
 
                 let params: Vec<String> = if params_val.is_heap() {
                     match params_val.as_heap_ref() {
-                        HeapObject::List(items) => {
-                            items.iter().map(|v| {
-                                if v.is_heap() {
-                                    if let HeapObject::String(s) = v.as_heap_ref() {
-                                        return s.as_ref().to_string();
-                                    }
+                        HeapObject::List(items) => items
+                            .iter()
+                            .map(|v| {
+                                if v.is_heap()
+                                    && let HeapObject::String(s) = v.as_heap_ref()
+                                {
+                                    return s.as_ref().to_string();
                                 }
                                 format!("{}", v)
-                            }).collect()
-                        }
+                            })
+                            .collect(),
                         _ => vec![],
                     }
                 } else {

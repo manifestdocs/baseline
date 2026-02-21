@@ -29,7 +29,7 @@ fn parse_multipart(body: &str, boundary: &str) -> Vec<(String, Option<String>, S
         // Strip trailing end delimiter from body if present
         let body_str = body_str
             .trim_end_matches(&end_delimiter)
-            .trim_end_matches(|c: char| c == '\r' || c == '\n');
+            .trim_end_matches(['\r', '\n']);
 
         let mut name = String::new();
         let mut filename: Option<String> = None;
@@ -75,8 +75,7 @@ pub(super) fn native_request_multipart(args: &[NValue]) -> Result<NValue, Native
         .ok_or_else(|| NativeError("Request.multipart: expected Request record".into()))?;
 
     // Get content-type header to extract boundary
-    let content_type = extract_header_value(fields, "content-type")
-        .unwrap_or_default();
+    let content_type = extract_header_value(fields, "content-type").unwrap_or_default();
 
     let boundary = extract_boundary(&content_type).ok_or_else(|| {
         NativeError("Request.multipart: missing or invalid multipart boundary".into())
@@ -107,10 +106,7 @@ pub(super) fn native_request_multipart(args: &[NValue]) -> Result<NValue, Native
         })
         .collect();
 
-    Ok(NValue::enum_val(
-        "Ok".into(),
-        NValue::list(part_values),
-    ))
+    Ok(NValue::enum_val("Ok".into(), NValue::list(part_values)))
 }
 
 /// Extract the boundary parameter from a Content-Type header value.
@@ -132,14 +128,12 @@ fn extract_header_value(fields: &[(RcStr, NValue)], header_name: &str) -> Option
     let headers_val = fields.iter().find(|(k, _)| &**k == "headers")?.1.clone();
     let headers = headers_val.as_list()?;
     for h in headers {
-        if let Some(tuple) = h.as_tuple() {
-            if tuple.len() >= 2 {
-                if let Some(name) = tuple[0].as_string() {
-                    if name.eq_ignore_ascii_case(header_name) {
-                        return tuple[1].as_string().map(|s| s.to_string());
-                    }
-                }
-            }
+        if let Some(tuple) = h.as_tuple()
+            && tuple.len() >= 2
+            && let Some(name) = tuple[0].as_string()
+            && name.eq_ignore_ascii_case(header_name)
+        {
+            return tuple[1].as_string().map(|s| s.to_string());
         }
     }
     None

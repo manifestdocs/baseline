@@ -215,7 +215,6 @@ impl<'a> Formatter<'a> {
             self.push(" = ");
             self.format_expression(&body);
         }
-
     }
 
     fn format_effect_set(&mut self, node: &Node) {

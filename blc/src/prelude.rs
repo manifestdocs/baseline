@@ -27,16 +27,55 @@ impl Prelude {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Crypto"],
-            Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Crypto"]
-            }
+            Prelude::Core => &[
+                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Crypto",
+            ],
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Middleware", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Option",
+                "Result",
+                "String",
+                "List",
+                "Map",
+                "Set",
+                "Weak",
+                "Json",
+                "Int",
+                "Http",
+                "Response",
+                "Request",
+                "HttpError",
+                "Middleware",
+                "Fs",
+                "Cell",
+                "Scope",
+                "DateTime",
+                "Crypto",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Http", "Response",
-                "Request", "HttpError", "Middleware", "Router", "Sqlite", "Postgres", "Mysql", "Ws", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Option",
+                "Result",
+                "String",
+                "List",
+                "Map",
+                "Set",
+                "Weak",
+                "Json",
+                "Int",
+                "Http",
+                "Response",
+                "Request",
+                "HttpError",
+                "Middleware",
+                "Router",
+                "Sqlite",
+                "Postgres",
+                "Mysql",
+                "Ws",
+                "Fs",
+                "Cell",
+                "Scope",
+                "DateTime",
+                "Crypto",
                 "Row",
             ],
         }
@@ -47,9 +86,12 @@ impl Prelude {
         match self {
             Prelude::None | Prelude::Minimal => &[],
             Prelude::Pure | Prelude::Core => &["Math"],
-            Prelude::Script => &["Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Async"],
+            Prelude::Script => &[
+                "Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Async",
+            ],
             Prelude::Server => &[
-                "Math", "Console", "Log", "Time", "Env", "Server", "Sqlite", "Postgres", "Mysql", "Sql", "Metrics", "Async",
+                "Math", "Console", "Log", "Time", "Env", "Server", "Sqlite", "Postgres", "Mysql",
+                "Sql", "Metrics", "Async",
             ],
         }
     }
@@ -59,19 +101,73 @@ impl Prelude {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Math", "Crypto"],
-            Prelude::Core => {
-                &["Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Crypto"]
-            }
+            Prelude::Pure => &[
+                "Option", "Result", "String", "List", "Json", "Math", "Crypto",
+            ],
+            Prelude::Core => &[
+                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int",
+                "Crypto",
+            ],
             Prelude::Script => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Random", "Env", "Fs", "Http", "Response", "Request", "HttpError",
-                "Middleware", "Cell", "Scope", "DateTime", "Crypto",
+                "Option",
+                "Result",
+                "String",
+                "List",
+                "Map",
+                "Set",
+                "Weak",
+                "Json",
+                "Math",
+                "Int",
+                "Console",
+                "Log",
+                "Time",
+                "Random",
+                "Env",
+                "Fs",
+                "Http",
+                "Response",
+                "Request",
+                "HttpError",
+                "Middleware",
+                "Cell",
+                "Scope",
+                "DateTime",
+                "Crypto",
             ],
             Prelude::Server => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int", "Console",
-                "Log", "Time", "Env", "Http", "Response", "Request", "HttpError", "Middleware",
-                "Router", "Server", "Sqlite", "Postgres", "Mysql", "Ws", "Sql", "Metrics", "Fs", "Cell", "Scope", "DateTime", "Crypto",
+                "Option",
+                "Result",
+                "String",
+                "List",
+                "Map",
+                "Set",
+                "Weak",
+                "Json",
+                "Math",
+                "Int",
+                "Console",
+                "Log",
+                "Time",
+                "Env",
+                "Http",
+                "Response",
+                "Request",
+                "HttpError",
+                "Middleware",
+                "Router",
+                "Server",
+                "Sqlite",
+                "Postgres",
+                "Mysql",
+                "Ws",
+                "Sql",
+                "Metrics",
+                "Fs",
+                "Cell",
+                "Scope",
+                "DateTime",
+                "Crypto",
                 "Row",
             ],
         }
@@ -257,7 +353,9 @@ mod tests {
         assert_eq!(p.builtin_modules(), &["Math"]);
         assert_eq!(
             p.type_modules(),
-            &["Option", "Result", "String", "List", "Json", "Math", "Crypto"]
+            &[
+                "Option", "Result", "String", "List", "Json", "Math", "Crypto"
+            ]
         );
     }
 

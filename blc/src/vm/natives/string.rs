@@ -131,13 +131,14 @@ pub(super) fn native_string_char_at(args: &[NValue]) -> Result<NValue, NativeErr
         (Some(s), true) => {
             let idx = args[1].as_any_int() as usize;
             match s.chars().nth(idx) {
-                Some(c) => Ok(NValue::enum_val("Some".into(), NValue::string(c.to_string().into()))),
+                Some(c) => Ok(NValue::enum_val(
+                    "Some".into(),
+                    NValue::string(c.to_string().into()),
+                )),
                 None => Ok(NValue::enum_val("None".into(), NValue::unit())),
             }
         }
-        _ => Err(NativeError(
-            "String.char_at: expected (String, Int)".into(),
-        )),
+        _ => Err(NativeError("String.char_at: expected (String, Int)".into())),
     }
 }
 
@@ -188,9 +189,7 @@ pub(super) fn native_string_char_code(args: &[NValue]) -> Result<NValue, NativeE
     match args[0].as_string() {
         Some(s) => match s.chars().next() {
             Some(c) => Ok(NValue::int(c as i64)),
-            None => Err(NativeError(
-                "String.char_code: empty string".into(),
-            )),
+            None => Err(NativeError("String.char_code: empty string".into())),
         },
         None => Err(NativeError(format!(
             "String.char_code: expected String, got {}",
@@ -200,10 +199,12 @@ pub(super) fn native_string_char_code(args: &[NValue]) -> Result<NValue, NativeE
 }
 
 pub(super) fn native_string_replace(args: &[NValue]) -> Result<NValue, NativeError> {
-    match (args[0].as_string(), args[1].as_string(), args[2].as_string()) {
-        (Some(s), Some(old), Some(new)) => {
-            Ok(NValue::string(s.replace(&**old, new).into()))
-        }
+    match (
+        args[0].as_string(),
+        args[1].as_string(),
+        args[2].as_string(),
+    ) {
+        (Some(s), Some(old), Some(new)) => Ok(NValue::string(s.replace(&**old, new).into())),
         _ => Err(NativeError(
             "String.replace: expected (String, String, String)".into(),
         )),

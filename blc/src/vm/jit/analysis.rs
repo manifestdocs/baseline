@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 
-use crate::analysis::types::Type;
 use super::super::ir::{Expr, IrFunction, IrModule, MatchArm, Pattern};
 use super::super::natives::NativeRegistry;
+use crate::analysis::types::Type;
 
 /// Check if a function can be JIT-compiled.
 pub(super) fn can_jit(func: &IrFunction, natives: Option<&NativeRegistry>) -> bool {
@@ -155,8 +155,7 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
         Expr::GetClosureVar(_) => true,
         // Lambda should be eliminated by lifting; CallIndirect is now compilable
         Expr::Lambda { .. } => false,
-        Expr::CallIndirect { callee, args, .. }
-        | Expr::TailCallIndirect { callee, args, .. } => {
+        Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
             expr_can_jit(callee, natives) && args.iter().all(|a| expr_can_jit(a, natives))
         }
         // WithHandlers, effects, and Expect not yet JIT-supported
@@ -185,9 +184,7 @@ fn pattern_can_jit(pattern: &Pattern) -> bool {
                 .iter()
                 .all(|p| matches!(p, Pattern::Var(_) | Pattern::Wildcard))
         }
-        Pattern::Record(fields) => {
-            fields.iter().all(|(_, sub)| pattern_can_jit(sub))
-        }
+        Pattern::Record(fields) => fields.iter().all(|(_, sub)| pattern_can_jit(sub)),
         // List patterns not yet supported in JIT — fall back to VM
         Pattern::List(_, _) => false,
     }
@@ -323,24 +320,34 @@ fn collect_indirect_targets_expr(
             targets.insert(name.clone());
         }
         // For CallIndirect/TailCallIndirect, callee IS used as a value — recurse into it.
-        Expr::CallIndirect { callee, args, .. }
-        | Expr::TailCallIndirect { callee, args, .. } => {
+        Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
             collect_indirect_targets_expr(callee, func_names, targets);
             for a in args {
                 collect_indirect_targets_expr(a, func_names, targets);
             }
         }
         // For everything else, recurse into all sub-expressions.
-        Expr::BinOp { lhs, rhs, .. } | Expr::And(lhs, rhs) | Expr::Or(lhs, rhs)
+        Expr::BinOp { lhs, rhs, .. }
+        | Expr::And(lhs, rhs)
+        | Expr::Or(lhs, rhs)
         | Expr::MakeRange(lhs, rhs) => {
             collect_indirect_targets_expr(lhs, func_names, targets);
             collect_indirect_targets_expr(rhs, func_names, targets);
         }
-        Expr::UnaryOp { operand, .. } | Expr::GetField { object: operand, .. }
-        | Expr::Try { expr: operand, .. } | Expr::Let { value: operand, .. } => {
+        Expr::UnaryOp { operand, .. }
+        | Expr::GetField {
+            object: operand, ..
+        }
+        | Expr::Try { expr: operand, .. }
+        | Expr::Let { value: operand, .. } => {
             collect_indirect_targets_expr(operand, func_names, targets);
         }
-        Expr::If { condition, then_branch, else_branch, .. } => {
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
             collect_indirect_targets_expr(condition, func_names, targets);
             collect_indirect_targets_expr(then_branch, func_names, targets);
             if let Some(e) = else_branch {
@@ -395,8 +402,14 @@ fn collect_indirect_targets_expr(
             collect_indirect_targets_expr(body, func_names, targets);
         }
         // Leaf nodes — no children
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_)
-        | Expr::Unit | Expr::Hole | Expr::Var(_, _) | Expr::GetClosureVar(_) => {}
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::String(_)
+        | Expr::Bool(_)
+        | Expr::Unit
+        | Expr::Hole
+        | Expr::Var(_, _)
+        | Expr::GetClosureVar(_) => {}
         // Effect handler nodes
         Expr::WithHandlers { handlers, body, .. } => {
             for (_, methods) in handlers {

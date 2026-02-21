@@ -6,8 +6,8 @@
 
 use std::cell::RefCell;
 
-pub use baseline_rt::nvalue::{ColumnNames, SqlValue};
 use super::NativeError;
+pub use baseline_rt::nvalue::{ColumnNames, SqlValue};
 
 /// A typed database row: column names (shared) + typed values.
 #[derive(Debug, Clone)]
@@ -48,7 +48,7 @@ enum ActiveBackendSlot {
 }
 
 thread_local! {
-    static ACTIVE_BACKEND: RefCell<ActiveBackendSlot> = RefCell::new(ActiveBackendSlot::None);
+    static ACTIVE_BACKEND: RefCell<ActiveBackendSlot> = const { RefCell::new(ActiveBackendSlot::None) };
 }
 
 /// Record that the SQLite backend is now active on this thread.

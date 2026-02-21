@@ -48,9 +48,7 @@ pub(super) fn native_env_get(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_string() {
         Some(key) => {
             // Check thread-local overrides first
-            let override_val = ENV_OVERRIDES.with(|cell| {
-                cell.borrow().get(&**key).cloned()
-            });
+            let override_val = ENV_OVERRIDES.with(|cell| cell.borrow().get(&**key).cloned());
             let val = override_val.or_else(|| std::env::var(&**key).ok());
             match val {
                 Some(v) => Ok(NValue::enum_val("Some".into(), NValue::string(v.into()))),
@@ -72,9 +70,6 @@ pub(super) fn native_env_set(args: &[NValue]) -> Result<NValue, NativeError> {
             });
             Ok(NValue::unit())
         }
-        _ => Err(NativeError(
-            "Env.set!: expected (String, String)".into(),
-        )),
+        _ => Err(NativeError("Env.set!: expected (String, String)".into())),
     }
 }
-

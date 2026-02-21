@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::resolver::{ImportKind, ModuleLoader, ResolvedImport, exported_function_names, module_uses_exports};
+use crate::resolver::{
+    ImportKind, ModuleLoader, ResolvedImport, exported_function_names, module_uses_exports,
+};
 
+use super::chunk::CompileError;
 use super::chunk::{Chunk, Program};
 use super::codegen::Codegen;
-use super::chunk::CompileError;
 use super::lower::Lowerer;
 use super::natives::NativeRegistry;
 
@@ -102,7 +104,9 @@ fn compile_module_recursive(
     merged_chunks: &mut Vec<Chunk>,
     merged_functions: &mut HashMap<String, usize>,
 ) -> Result<(), CompileError> {
-    let canonical = module_path.canonicalize().unwrap_or_else(|_| module_path.to_path_buf());
+    let canonical = module_path
+        .canonicalize()
+        .unwrap_or_else(|_| module_path.to_path_buf());
     let canonical_str = canonical.display().to_string();
 
     // Already compiled — skip
@@ -122,11 +126,12 @@ fn compile_module_recursive(
     // Get the module's source and parse tree, then find its own imports.
     // We need to clone source/path to release the borrow on loader for recursion.
     let (mod_source_owned, mod_file_str) = {
-        let (_, mod_source, mod_path) = loader.get_module(module_idx).ok_or_else(|| CompileError {
-            message: format!("Failed to get module {}", module_path.display()),
-            line: 1,
-            col: 0,
-        })?;
+        let (_, mod_source, mod_path) =
+            loader.get_module(module_idx).ok_or_else(|| CompileError {
+                message: format!("Failed to get module {}", module_path.display()),
+                line: 1,
+                col: 0,
+            })?;
         (mod_source.to_string(), mod_path.display().to_string())
     };
 
@@ -181,18 +186,22 @@ fn compile_module_recursive(
     let mut lowerer = Lowerer::new(&mod_source_owned, natives, None);
 
     // Tell the lowerer about functions available from this module's imports
-    let sub_function_names: Vec<String> = sub_imports.iter().flat_map(|(_import, _node)| {
-        // Collect qualified function names this module can call
-        let short_name = _import
-            .module_name
-            .split('.')
-            .next_back()
-            .unwrap_or(&_import.module_name);
-        merged_functions.keys()
-            .filter(move |k| k.starts_with(&format!("{}.", short_name)))
-            .cloned()
-            .collect::<Vec<_>>()
-    }).collect();
+    let sub_function_names: Vec<String> = sub_imports
+        .iter()
+        .flat_map(|(_import, _node)| {
+            // Collect qualified function names this module can call
+            let short_name = _import
+                .module_name
+                .split('.')
+                .next_back()
+                .unwrap_or(&_import.module_name);
+            merged_functions
+                .keys()
+                .filter(move |k| k.starts_with(&format!("{}.", short_name)))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .collect();
     lowerer.add_functions(sub_function_names);
 
     let ir_functions = lowerer.lower_module_functions(&mod_root)?;
@@ -225,10 +234,7 @@ fn compile_module_recursive(
     let offset = merged_chunks.len();
 
     // Cache the compiled module with its offset
-    compiled_cache.insert(canonical_str, CompiledModule {
-        offset,
-        local_map,
-    });
+    compiled_cache.insert(canonical_str, CompiledModule { offset, local_map });
 
     merged_chunks.extend(mod_chunks);
 

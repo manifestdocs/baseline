@@ -12,7 +12,7 @@ use super::{NValue, NativeError, RcStr};
 // ---------------------------------------------------------------------------
 
 thread_local! {
-    static DB_CONNECTION: RefCell<Option<Connection>> = RefCell::new(None);
+    static DB_CONNECTION: RefCell<Option<Connection>> = const { RefCell::new(None) };
 }
 
 // ---------------------------------------------------------------------------
@@ -39,11 +39,9 @@ pub fn sqlite_connect(url: &str) -> Result<(), NativeError> {
 pub fn sqlite_execute(sql: &str, params: &[String]) -> Result<i64, NativeError> {
     DB_CONNECTION.with(|cell| {
         let borrow = cell.borrow();
-        let conn = borrow
-            .as_ref()
-            .ok_or_else(|| NativeError(
-                "SQLite execute: no connection (call Sqlite.connect! first)".into(),
-            ))?;
+        let conn = borrow.as_ref().ok_or_else(|| {
+            NativeError("SQLite execute: no connection (call Sqlite.connect! first)".into())
+        })?;
 
         let affected = conn
             .execute(sql, params_from_iter(params.iter()))
@@ -57,11 +55,9 @@ pub fn sqlite_execute(sql: &str, params: &[String]) -> Result<i64, NativeError> 
 pub fn sqlite_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeError> {
     DB_CONNECTION.with(|cell| {
         let borrow = cell.borrow();
-        let conn = borrow
-            .as_ref()
-            .ok_or_else(|| NativeError(
-                "SQLite query: no connection (call Sqlite.connect! first)".into(),
-            ))?;
+        let conn = borrow.as_ref().ok_or_else(|| {
+            NativeError("SQLite query: no connection (call Sqlite.connect! first)".into())
+        })?;
 
         let mut stmt = conn
             .prepare(sql)
@@ -88,7 +84,10 @@ pub fn sqlite_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeErro
         let mut result = Vec::new();
         for row in rows {
             let values = row.map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
-            result.push(Row { columns: columns.clone(), values });
+            result.push(Row {
+                columns: columns.clone(),
+                values,
+            });
         }
 
         Ok(result)
@@ -139,7 +138,6 @@ fn extract_params(arg: Option<&NValue>) -> Result<Vec<String>, NativeError> {
         .collect()
 }
 
-
 // ---------------------------------------------------------------------------
 // Native entry points: Sqlite.*
 // ---------------------------------------------------------------------------
@@ -159,10 +157,9 @@ pub fn native_sqlite_connect(args: &[NValue]) -> Result<NValue, NativeError> {
 
 /// Sqlite.execute!(sql: String, params: List<String>) -> Int
 pub fn native_sqlite_execute(args: &[NValue]) -> Result<NValue, NativeError> {
-    let sql = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Sqlite.execute!: expected SQL string as first argument".into()))?;
+    let sql = args.first().and_then(|v| v.as_string()).ok_or_else(|| {
+        NativeError("Sqlite.execute!: expected SQL string as first argument".into())
+    })?;
 
     let params = extract_params(args.get(1))?;
     let affected = sqlite_execute(sql.as_ref(), &params)?;
@@ -172,10 +169,9 @@ pub fn native_sqlite_execute(args: &[NValue]) -> Result<NValue, NativeError> {
 
 /// Sqlite.query!(sql: String, params: List<String>) -> List<Row>
 pub fn native_sqlite_query(args: &[NValue]) -> Result<NValue, NativeError> {
-    let sql = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Sqlite.query!: expected SQL string as first argument".into()))?;
+    let sql = args.first().and_then(|v| v.as_string()).ok_or_else(|| {
+        NativeError("Sqlite.query!: expected SQL string as first argument".into())
+    })?;
 
     let params = extract_params(args.get(1))?;
     let rows = sqlite_query(sql.as_ref(), &params)?;
@@ -185,16 +181,18 @@ pub fn native_sqlite_query(args: &[NValue]) -> Result<NValue, NativeError> {
 
 /// Sqlite.query_one!(sql: String, params: List<String>) -> Option<Row>
 pub fn native_sqlite_query_one(args: &[NValue]) -> Result<NValue, NativeError> {
-    let sql = args
-        .first()
-        .and_then(|v| v.as_string())
-        .ok_or_else(|| NativeError("Sqlite.query_one!: expected SQL string as first argument".into()))?;
+    let sql = args.first().and_then(|v| v.as_string()).ok_or_else(|| {
+        NativeError("Sqlite.query_one!: expected SQL string as first argument".into())
+    })?;
 
     let params = extract_params(args.get(1))?;
     let rows = sqlite_query(sql.as_ref(), &params)?;
 
     match rows.into_iter().next() {
-        Some(row) => Ok(NValue::enum_val("Some".into(), NValue::row(row.columns, row.values))),
+        Some(row) => Ok(NValue::enum_val(
+            "Some".into(),
+            NValue::row(row.columns, row.values),
+        )),
         None => Ok(NValue::enum_val("None".into(), NValue::unit())),
     }
 }
@@ -212,7 +210,10 @@ pub fn native_query_one(args: &[NValue]) -> Result<NValue, NativeError> {
     let rows = db_backend::active_query(sql.as_ref(), &params)?;
 
     match rows.into_iter().next() {
-        Some(row) => Ok(NValue::enum_val("Some".into(), NValue::row(row.columns, row.values))),
+        Some(row) => Ok(NValue::enum_val(
+            "Some".into(),
+            NValue::row(row.columns, row.values),
+        )),
         None => Ok(NValue::enum_val("None".into(), NValue::unit())),
     }
 }
@@ -274,20 +275,16 @@ mod tests {
         });
         db_backend::set_active_sqlite(); // backend set but no connection
         // Need to reset active backend too for clean error
-        let result = native_sqlite_execute(&[
-            NValue::string("SELECT 1".into()),
-            NValue::list(vec![]),
-        ]);
+        let result =
+            native_sqlite_execute(&[NValue::string("SELECT 1".into()), NValue::list(vec![])]);
         assert!(result.is_err());
     }
 
     #[test]
     fn execute_invalid_sql_errors() {
         native_sqlite_connect(&[NValue::string(":memory:".into())]).unwrap();
-        let result = native_sqlite_execute(&[
-            NValue::string("NOT VALID SQL".into()),
-            NValue::list(vec![]),
-        ]);
+        let result =
+            native_sqlite_execute(&[NValue::string("NOT VALID SQL".into()), NValue::list(vec![])]);
         assert!(result.is_err());
     }
 
@@ -366,10 +363,8 @@ mod tests {
         DB_CONNECTION.with(|cell| {
             *cell.borrow_mut() = None;
         });
-        let result = native_sqlite_query(&[
-            NValue::string("SELECT 1".into()),
-            NValue::list(vec![]),
-        ]);
+        let result =
+            native_sqlite_query(&[NValue::string("SELECT 1".into()), NValue::list(vec![])]);
         assert!(result.is_err());
     }
 
@@ -406,16 +401,19 @@ mod tests {
         native_sqlite_execute(&[
             NValue::string("CREATE TABLE qo (id INTEGER, name TEXT)".into()),
             NValue::list(vec![]),
-        ]).unwrap();
+        ])
+        .unwrap();
         native_sqlite_execute(&[
             NValue::string("INSERT INTO qo VALUES (1, 'Alice')".into()),
             NValue::list(vec![]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let result = native_sqlite_query_one(&[
             NValue::string("SELECT * FROM qo WHERE id = ?1".into()),
             NValue::list(vec![NValue::string("1".into())]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let (tag, payload) = result.as_enum().unwrap();
         assert_eq!(tag.as_ref(), "Some");
@@ -431,12 +429,14 @@ mod tests {
         native_sqlite_execute(&[
             NValue::string("CREATE TABLE qo2 (id INTEGER)".into()),
             NValue::list(vec![]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let result = native_sqlite_query_one(&[
             NValue::string("SELECT * FROM qo2 WHERE id = ?1".into()),
             NValue::list(vec![NValue::string("999".into())]),
-        ]).unwrap();
+        ])
+        .unwrap();
 
         let (tag, _) = result.as_enum().unwrap();
         assert_eq!(tag.as_ref(), "None");

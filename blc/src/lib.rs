@@ -6,11 +6,11 @@ pub mod docs;
 pub mod format;
 pub mod lsp;
 pub mod manifest;
+#[cfg(feature = "mcp")]
+pub mod mcp;
 pub mod parse;
 pub mod prelude;
 pub mod repl;
 pub mod resolver;
 pub mod test_runner;
-#[cfg(feature = "mcp")]
-pub mod mcp;
 pub mod vm;

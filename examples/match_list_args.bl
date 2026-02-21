@@ -1,0 +1,31 @@
+@prelude(script)
+
+// Regression test: list/tuple construction with function calls inside match arms
+// Same class of bug as match_constructor_args.bl but for list literals.
+
+type Tree =
+  | Leaf
+  | Node(Int, Tree, Tree)
+
+fn insert(tree: Tree, key: Int) -> Tree =
+  match tree
+    Leaf -> Node(key, Leaf, Leaf)
+    Node(k, left, right) ->
+      if key < k then Node(k, insert(left, key), right)
+      else if key > k then Node(k, left, insert(right, key))
+      else tree
+
+fn to_sorted_list(tree: Tree) -> List<Int> =
+  match tree
+    Leaf -> []
+    Node(v, left, right) ->
+      List.concat(List.concat(to_sorted_list(left), [v]), to_sorted_list(right))
+
+fn main!() -> {Console} () = {
+  let t = Leaf
+  let t = insert(t, 5)
+  let t = insert(t, 3)
+  let t = insert(t, 7)
+  let t = insert(t, 1)
+  Console.println!("${to_sorted_list(t)}")
+}

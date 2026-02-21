@@ -22,10 +22,8 @@ pub(super) fn native_crypto_sha256(args: &[NValue]) -> Result<NValue, NativeErro
 pub(super) fn native_crypto_hmac_sha256(args: &[NValue]) -> Result<NValue, NativeError> {
     match (args[0].as_string(), args[1].as_string()) {
         (Some(key), Some(message)) => {
-            let mut mac =
-                Hmac::<Sha256>::new_from_slice(key.as_bytes()).map_err(|e| {
-                    NativeError(format!("Crypto.hmac_sha256: invalid key: {}", e))
-                })?;
+            let mut mac = Hmac::<Sha256>::new_from_slice(key.as_bytes())
+                .map_err(|e| NativeError(format!("Crypto.hmac_sha256: invalid key: {}", e)))?;
             mac.update(message.as_bytes());
             let result = mac.finalize().into_bytes();
             let hex = hex_encode(&result);
@@ -66,7 +64,7 @@ pub(super) fn native_random_bytes(args: &[NValue]) -> Result<NValue, NativeError
         )));
     }
     let n = args[0].as_any_int();
-    if n < 0 || n > 1024 {
+    if !(0..=1024).contains(&n) {
         return Err(NativeError(format!(
             "Random.bytes!: n must be 0..1024, got {}",
             n

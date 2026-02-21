@@ -1,0 +1,43 @@
+@prelude(script)
+
+// Binary search tree — insert N keys, then sum all values
+// Tests: allocation pressure (node creation), sum types, pattern matching, recursion
+
+type Tree =
+  | Leaf
+  | Node(Int, Int, Tree, Tree)
+
+fn insert(tree: Tree, key: Int, val: Int) -> Tree =
+  match tree
+    Leaf -> Node(key, val, Leaf, Leaf)
+    Node(k, v, left, right) ->
+      if key < k then Node(k, v, insert(left, key, val), right)
+      else if key > k then Node(k, v, left, insert(right, key, val))
+      else Node(k, val, left, right)
+
+fn tree_sum(tree: Tree) -> Int =
+  match tree
+    Leaf -> 0
+    Node(_, v, left, right) -> v + tree_sum(left) + tree_sum(right)
+
+// Simple PRNG (xorshift-like with modular arithmetic)
+fn next_rand(seed: Int) -> Int = {
+  let s = seed * 1103515245 + 12345
+  // Keep positive and bounded
+  let s = if s < 0 then 0 - s else s
+  s % 1000000007
+}
+
+fn build_tree(n: Int, seed: Int, tree: Tree) -> Tree =
+  if n <= 0 then tree
+  else {
+    let s = next_rand(seed)
+    let key = s % 100000
+    build_tree(n - 1, s, insert(tree, key, key))
+  }
+
+fn main!() -> {Console} () = {
+  let tree = build_tree(100000, 42, Leaf)
+  let total = tree_sum(tree)
+  Console.println!("${total}")
+}

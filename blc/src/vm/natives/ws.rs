@@ -4,17 +4,15 @@
 // a VmWs handler. Provides `Ws.send!`, `Ws.receive!`, and `Ws.close!`
 // that operate on a thread-local active WebSocket connection.
 
-use super::{NValue, NativeError};
 #[cfg(any(feature = "async-server", test))]
 use super::RcStr;
+use super::{NValue, NativeError};
 
 #[cfg(feature = "async-server")]
 use std::cell::RefCell;
 
 #[cfg(feature = "async-server")]
 use tokio::sync::mpsc;
-
-
 
 // ---------------------------------------------------------------------------
 // WebSocket message types exchanged between the VM handler and the WS task
@@ -54,10 +52,7 @@ thread_local! {
 
 /// Install WS channels for the current handler invocation.
 #[cfg(feature = "async-server")]
-pub fn set_ws_channels(
-    cmd_tx: mpsc::Sender<WsCommand>,
-    evt_rx: mpsc::Receiver<WsEvent>,
-) {
+pub fn set_ws_channels(cmd_tx: mpsc::Sender<WsCommand>, evt_rx: mpsc::Receiver<WsEvent>) {
     WS_CMD_TX.with(|cell| *cell.borrow_mut() = Some(cmd_tx));
     WS_EVT_RX.with(|cell| *cell.borrow_mut() = Some(evt_rx));
 }
@@ -120,7 +115,9 @@ pub fn native_ws_receive(args: &[NValue]) -> Result<NValue, NativeError> {
     #[cfg(not(feature = "async-server"))]
     {
         let _ = args;
-        Err(NativeError("Ws.receive! requires async-server feature".into()))
+        Err(NativeError(
+            "Ws.receive! requires async-server feature".into(),
+        ))
     }
 
     #[cfg(feature = "async-server")]
@@ -171,7 +168,9 @@ pub fn native_ws_close(args: &[NValue]) -> Result<NValue, NativeError> {
     #[cfg(not(feature = "async-server"))]
     {
         let _ = args;
-        Err(NativeError("Ws.close! requires async-server feature".into()))
+        Err(NativeError(
+            "Ws.close! requires async-server feature".into(),
+        ))
     }
 
     #[cfg(feature = "async-server")]

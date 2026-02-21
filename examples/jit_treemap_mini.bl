@@ -1,0 +1,41 @@
+@prelude(script)
+
+// Minimal treemap to test JIT correctness
+
+type Tree =
+  | Leaf
+  | Node(Int, Int, Tree, Tree)
+
+fn insert(tree: Tree, key: Int, val: Int) -> Tree =
+  match tree
+    Leaf -> Node(key, val, Leaf, Leaf)
+    Node(k, v, left, right) ->
+      if key < k then Node(k, v, insert(left, key, val), right)
+      else if key > k then Node(k, v, left, insert(right, key, val))
+      else Node(k, val, left, right)
+
+fn tree_sum(tree: Tree) -> Int =
+  match tree
+    Leaf -> 0
+    Node(_, v, left, right) -> v + tree_sum(left) + tree_sum(right)
+
+fn main!() -> {Console} () = {
+  let t = Leaf
+  let t = insert(t, 5, 50)
+  let t = insert(t, 3, 30)
+  let t = insert(t, 7, 70)
+  let t = insert(t, 1, 10)
+  let t = insert(t, 9, 90)
+  Console.println!("sum: ${tree_sum(t)}")
+
+  // Larger test
+  let t2 = Leaf
+  let t2 = insert(t2, 50, 500)
+  let t2 = insert(t2, 25, 250)
+  let t2 = insert(t2, 75, 750)
+  let t2 = insert(t2, 12, 120)
+  let t2 = insert(t2, 37, 370)
+  let t2 = insert(t2, 62, 620)
+  let t2 = insert(t2, 87, 870)
+  Console.println!("sum2: ${tree_sum(t2)}")
+}

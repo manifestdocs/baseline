@@ -1,0 +1,21 @@
+@prelude(script)
+
+// Count primes up to N using trial division
+// Tests: nested loops via recursion, modular arithmetic, conditionals
+// A fair benchmark because every language uses the same algorithm
+
+fn is_prime_helper(n: Int, d: Int) -> Bool =
+  if d * d > n then true
+  else if n % d == 0 then false
+  else is_prime_helper(n, d + 1)
+
+fn is_prime(n: Int) -> Bool =
+  if n < 2 then false
+  else is_prime_helper(n, 2)
+
+fn count_primes(limit: Int, n: Int, count: Int) -> Int =
+  if n > limit then count
+  else if is_prime(n) then count_primes(limit, n + 1, count + 1)
+  else count_primes(limit, n + 1, count)
+
+fn main!() -> {Console} () = Console.println!("${count_primes(200000, 2, 0)}")

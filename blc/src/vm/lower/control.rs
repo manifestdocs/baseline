@@ -143,10 +143,14 @@ impl<'a> super::Lowerer<'a> {
             let mut pattern_end = body_idx;
             for child in &arm_children[1..body_idx] {
                 if child.kind() == "match_guard" {
-                    let guard_expr_node = child.named_child(0)
-                        .ok_or_else(|| self.error("Match guard missing expression".into(), child))?;
+                    let guard_expr_node = child.named_child(0).ok_or_else(|| {
+                        self.error("Match guard missing expression".into(), child)
+                    })?;
                     guard = Some(self.lower_expression(&guard_expr_node)?);
-                    pattern_end = arm_children.iter().position(|c| c.id() == child.id()).unwrap();
+                    pattern_end = arm_children
+                        .iter()
+                        .position(|c| c.id() == child.id())
+                        .unwrap();
                 }
             }
 
@@ -162,7 +166,11 @@ impl<'a> super::Lowerer<'a> {
             // sharing the same guard and body.
             for pat_node in &pattern_nodes {
                 let pattern = self.lower_pattern(pat_node)?;
-                arms.push(MatchArm { pattern, guard: guard.clone(), body: body.clone() });
+                arms.push(MatchArm {
+                    pattern,
+                    guard: guard.clone(),
+                    body: body.clone(),
+                });
             }
         }
 
@@ -177,8 +185,14 @@ impl<'a> super::Lowerer<'a> {
         match node.kind() {
             "wildcard_pattern" => Ok(Pattern::Wildcard),
             "identifier" => Ok(Pattern::Var(self.node_text(node))),
-            "literal" | "integer_literal" | "float_literal" | "boolean_literal"
-            | "string_literal" | "multiline_string_literal" | "raw_string_literal" | "raw_hash_string_literal" => {
+            "literal"
+            | "integer_literal"
+            | "float_literal"
+            | "boolean_literal"
+            | "string_literal"
+            | "multiline_string_literal"
+            | "raw_string_literal"
+            | "raw_hash_string_literal" => {
                 let expr =
                     match node.kind() {
                         "integer_literal" => {
@@ -247,13 +261,20 @@ impl<'a> super::Lowerer<'a> {
                 for field_node in &field_nodes {
                     if field_node.kind() == "record_pattern_field" {
                         let named_count = field_node.named_child_count();
-                        let name_node = field_node.child_by_field_name("name")
-                            .ok_or_else(|| self.error("Record pattern field missing name".into(), field_node))?;
+                        let name_node =
+                            field_node.child_by_field_name("name").ok_or_else(|| {
+                                self.error("Record pattern field missing name".into(), field_node)
+                            })?;
                         let name = self.node_text(&name_node);
                         if named_count > 1 {
                             // { x: pat } form
-                            let pat_node = field_node.child_by_field_name("pattern")
-                                .ok_or_else(|| self.error("Record pattern field missing pattern".into(), field_node))?;
+                            let pat_node =
+                                field_node.child_by_field_name("pattern").ok_or_else(|| {
+                                    self.error(
+                                        "Record pattern field missing pattern".into(),
+                                        field_node,
+                                    )
+                                })?;
                             let sub_pattern = self.lower_pattern(&pat_node)?;
                             fields.push((name, sub_pattern));
                         } else {
@@ -271,8 +292,9 @@ impl<'a> super::Lowerer<'a> {
                 let mut rest = None;
                 for child in &children {
                     if child.kind() == "rest_pattern" {
-                        let id_node = child.named_child(0)
-                            .ok_or_else(|| self.error("Rest pattern missing identifier".into(), child))?;
+                        let id_node = child.named_child(0).ok_or_else(|| {
+                            self.error("Rest pattern missing identifier".into(), child)
+                        })?;
                         rest = Some(self.node_text(&id_node));
                     } else {
                         element_pats.push(self.lower_pattern(child)?);

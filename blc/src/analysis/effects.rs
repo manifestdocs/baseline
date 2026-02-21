@@ -207,7 +207,7 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
                     check_transitive_effects(
                         func,
                         &name_str,
-                        &mode.unwrap(),
+                        mode.unwrap(),
                         source,
                         file,
                         &transitive_effects,
@@ -718,10 +718,10 @@ fn extract_restrict_effects(node: Node, source: &str) -> Vec<String> {
     let mut effects = Vec::new();
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        if child.kind() == "type_identifier" {
-            if let Ok(name) = child.utf8_text(source.as_bytes()) {
-                effects.push(name.to_string());
-            }
+        if child.kind() == "type_identifier"
+            && let Ok(name) = child.utf8_text(source.as_bytes())
+        {
+            effects.push(name.to_string());
         }
     }
     effects
@@ -783,23 +783,19 @@ fn check_effectful_call(
                 ),
                 context: format!(
                     "This restrict block allows {}, but '{}' requires {{{}}}.",
-                    allowed_str,
-                    call_name,
-                    required_effect
+                    allowed_str, call_name, required_effect
                 ),
-                suggestions: vec![
-                    Suggestion {
-                        strategy: "remove_call".to_string(),
-                        description: "Remove the effectful call from the restrict block".to_string(),
-                        confidence: None,
-                        patch: Some(Patch {
-                            start_line: start.row + 1,
-                            original_text: Some(call_name.to_string()),
-                            replacement_text: None,
-                            operation: Some("delete".to_string()),
-                        }),
-                    },
-                ],
+                suggestions: vec![Suggestion {
+                    strategy: "remove_call".to_string(),
+                    description: "Remove the effectful call from the restrict block".to_string(),
+                    confidence: None,
+                    patch: Some(Patch {
+                        start_line: start.row + 1,
+                        original_text: Some(call_name.to_string()),
+                        replacement_text: None,
+                        operation: Some("delete".to_string()),
+                    }),
+                }],
             });
         } else {
             // CAP_001: Undeclared effect in function signature

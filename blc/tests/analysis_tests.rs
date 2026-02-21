@@ -1689,7 +1689,9 @@ fn effect_pure_annotation_violation() {
 #[test]
 fn effect_ambient_no_declaration_needed() {
     // Log, Time, Random are ambient — no declaration needed even with explicit effects
-    check_ok("fn logged() -> {Console} () = {\n  Log.info!(\"test\")\n  Console.println!(\"hi\")\n}");
+    check_ok(
+        "fn logged() -> {Console} () = {\n  Log.info!(\"test\")\n  Console.println!(\"hi\")\n}",
+    );
 }
 
 #[test]

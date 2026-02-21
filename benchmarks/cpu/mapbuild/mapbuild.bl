@@ -1,0 +1,26 @@
+@prelude(script)
+
+// Build a Map by inserting N key-value pairs, then sum all values
+// Tests: functional data structure overhead (ordered map),
+//        allocation pressure from functional updates, string key creation
+
+fn next_rand(seed: Int) -> Int = {
+  let s = seed * 1103515245 + 12345
+  let s = if s < 0 then 0 - s else s
+  s % 1000000007
+}
+
+fn build_map(n: Int, seed: Int, m: Map<String, Int>) -> Map<String, Int> =
+  if n <= 0 then m
+  else {
+    let s = next_rand(seed)
+    let key = "key_${s % 5000}"
+    build_map(n - 1, s, Map.insert(m, key, s % 10000))
+  }
+
+fn main!() -> {Console} () = {
+  let m = build_map(20000, 42, Map.empty())
+  let vals = Map.values(m)
+  let total = List.fold(vals, 0, |acc, v| acc + v)
+  Console.println!("${total}")
+}

@@ -85,8 +85,15 @@ pub(super) fn native_list_sort(args: &[NValue]) -> Result<NValue, NativeError> {
 pub(super) fn native_list_concat(args: &[NValue]) -> Result<NValue, NativeError> {
     match (args[0].as_list(), args[1].as_list()) {
         (Some(a), Some(b)) => {
-            let mut result = a.clone();
-            result.extend(b.iter().cloned());
+            if a.is_empty() {
+                return Ok(args[1].clone());
+            }
+            if b.is_empty() {
+                return Ok(args[0].clone());
+            }
+            let mut result = Vec::with_capacity(a.len() + b.len());
+            result.extend_from_slice(a);
+            result.extend_from_slice(b);
             Ok(NValue::list(result))
         }
         _ => Err(NativeError("List.concat: expected (List, List)".into())),

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use super::{HeapObject, NValue, NativeError};
 use super::super::nvalue::{TAG_HEAP, TAG_MASK};
+use super::{HeapObject, NValue, NativeError};
 
 /// Weak.downgrade(value) -> Weak<T>
 /// Creates a weak reference from a heap-allocated value.
@@ -33,6 +33,8 @@ pub(super) fn native_weak_upgrade(args: &[NValue]) -> Result<NValue, NativeError
                 None => Ok(NValue::enum_val("None".into(), NValue::unit())),
             }
         }
-        _ => Err(NativeError("Weak.upgrade: expected a Weak reference".into())),
+        _ => Err(NativeError(
+            "Weak.upgrade: expected a Weak reference".into(),
+        )),
     }
 }

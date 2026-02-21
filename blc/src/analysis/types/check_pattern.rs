@@ -200,8 +200,7 @@ pub(super) fn check_match_exhaustiveness(
         // (e.g. `_ if cond -> ...`) does not cover the pattern.
         let has_guard = {
             let mut cursor = arm.walk();
-            arm.children(&mut cursor)
-                .any(|c| c.kind() == "match_guard")
+            arm.children(&mut cursor).any(|c| c.kind() == "match_guard")
         };
         if has_guard {
             continue;
@@ -210,7 +209,8 @@ pub(super) fn check_match_exhaustiveness(
         // Collect all pattern nodes in this arm (or-patterns have multiple)
         let body = arm.child(arm.child_count() - 1).unwrap();
         let mut pat_cursor = arm.walk();
-        let pat_nodes: Vec<Node> = arm.named_children(&mut pat_cursor)
+        let pat_nodes: Vec<Node> = arm
+            .named_children(&mut pat_cursor)
             .filter(|c| c.kind() != "match_guard" && c.id() != body.id())
             .collect();
 
@@ -280,7 +280,7 @@ pub(super) fn check_match_exhaustiveness(
     diagnostics.push(Diagnostic {
         code: "TYP_022".to_string(),
         severity: Severity::Error,
-        location: Location::from_node(file,node),
+        location: Location::from_node(file, node),
         message: format!(
             "Non-exhaustive match on '{}': missing variant(s) {}",
             type_name, missing_str

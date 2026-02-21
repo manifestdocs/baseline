@@ -1,0 +1,40 @@
+@prelude(script)
+
+// Regression test: constructor calls with sub-expressions inside match arms
+// must not clobber match-bound variables on the stack.
+//
+// Bug: Node(k, v, insert(left, key, val), right) would lose k/v/right
+// because the insert() call shifts the stack, displacing match bindings.
+
+type Tree =
+  | Leaf
+  | Node(Int, Int, Tree, Tree)
+
+fn insert(tree: Tree, key: Int, val: Int) -> Tree =
+  match tree
+    Leaf -> Node(key, val, Leaf, Leaf)
+    Node(k, v, left, right) ->
+      if key < k then Node(k, v, insert(left, key, val), right)
+      else if key > k then Node(k, v, left, insert(right, key, val))
+      else Node(k, val, left, right)
+
+fn tree_count(tree: Tree) -> Int =
+  match tree
+    Leaf -> 0
+    Node(_, _, left, right) -> 1 + tree_count(left) + tree_count(right)
+
+fn tree_sum(tree: Tree) -> Int =
+  match tree
+    Leaf -> 0
+    Node(_, v, left, right) -> v + tree_sum(left) + tree_sum(right)
+
+fn main!() -> {Console} () = {
+  let t = Leaf
+  let t = insert(t, 5, 50)
+  let t = insert(t, 3, 30)
+  let t = insert(t, 7, 70)
+  let t = insert(t, 1, 10)
+  let t = insert(t, 9, 90)
+  Console.println!("count: ${tree_count(t)}")
+  Console.println!("sum: ${tree_sum(t)}")
+}

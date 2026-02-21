@@ -37,7 +37,9 @@ fn generate_session_id() -> String {
         u16::from_be_bytes([bytes[4], bytes[5]]),
         u16::from_be_bytes([bytes[6], bytes[7]]) & 0x0FFF,
         (u16::from_be_bytes([bytes[8], bytes[9]]) & 0x3FFF) | 0x8000,
-        u64::from_be_bytes([0, 0, bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]])
+        u64::from_be_bytes([
+            0, 0, bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15]
+        ])
     )
 }
 
@@ -163,7 +165,7 @@ mod tests {
         let id_str = id_val.as_str().unwrap();
         assert!(!id_str.is_empty());
 
-        let result = native_session_get(&[id_val.clone()]).unwrap();
+        let result = native_session_get(std::slice::from_ref(&id_val)).unwrap();
         let (tag, payload) = result.as_enum().unwrap();
         assert_eq!(&**tag, "Some");
         let fields = payload.as_record().unwrap();
@@ -173,12 +175,10 @@ mod tests {
 
     #[test]
     fn delete_session() {
-        let data = NValue::record(vec![
-            ("x".into(), NValue::int(1)),
-        ]);
+        let data = NValue::record(vec![("x".into(), NValue::int(1))]);
         let id_val = native_session_create(&[data]).unwrap();
 
-        native_session_delete(&[id_val.clone()]).unwrap();
+        native_session_delete(std::slice::from_ref(&id_val)).unwrap();
 
         let result = native_session_get(&[id_val]).unwrap();
         let (tag, _) = result.as_enum().unwrap();
@@ -187,9 +187,7 @@ mod tests {
 
     #[test]
     fn set_updates_field() {
-        let data = NValue::record(vec![
-            ("count".into(), NValue::int(0)),
-        ]);
+        let data = NValue::record(vec![("count".into(), NValue::int(0))]);
         let id_val = native_session_create(&[data]).unwrap();
 
         native_session_set(&[
@@ -209,8 +207,7 @@ mod tests {
 
     #[test]
     fn get_nonexistent_returns_none() {
-        let result =
-            native_session_get(&[NValue::string("nonexistent-id".into())]).unwrap();
+        let result = native_session_get(&[NValue::string("nonexistent-id".into())]).unwrap();
         let (tag, _) = result.as_enum().unwrap();
         assert_eq!(&**tag, "None");
     }

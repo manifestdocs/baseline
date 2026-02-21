@@ -43,9 +43,7 @@ pub(super) fn native_option_ok_or(args: &[NValue]) -> Result<NValue, NativeError
         Some((tag, payload)) if &**tag == "Some" => {
             Ok(NValue::enum_val("Ok".into(), payload.clone()))
         }
-        Some((tag, _)) if &**tag == "None" => {
-            Ok(NValue::enum_val("Err".into(), args[1].clone()))
-        }
+        Some((tag, _)) if &**tag == "None" => Ok(NValue::enum_val("Err".into(), args[1].clone())),
         _ => Err(NativeError(format!(
             "Option.ok_or: expected Option, got {}",
             args[0]

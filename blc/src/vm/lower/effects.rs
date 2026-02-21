@@ -89,9 +89,10 @@ impl<'a> super::Lowerer<'a> {
                         .child_by_field_name("effect")
                         .map(|n| self.node_text(&n))
                         .unwrap_or_default();
-                    let handler_expr_node = child
-                        .child_by_field_name("handler")
-                        .ok_or_else(|| self.error("handler_binding missing handler".into(), &child))?;
+                    let handler_expr_node =
+                        child.child_by_field_name("handler").ok_or_else(|| {
+                            self.error("handler_binding missing handler".into(), &child)
+                        })?;
                     let handler_expr = self.lower_expression(&handler_expr_node)?;
                     // Single handler expression treated as the whole record
                     handlers.push((effect_name, vec![("__record__".to_string(), handler_expr)]));
@@ -127,13 +128,17 @@ impl<'a> super::Lowerer<'a> {
                     .unwrap_or_default();
                 let method_node = child.child_by_field_name("method").unwrap();
                 let method_name = self.node_text(&method_node);
-                let method_key = method_name.strip_suffix('!').unwrap_or(&method_name).to_string();
+                let method_key = method_name
+                    .strip_suffix('!')
+                    .unwrap_or(&method_name)
+                    .to_string();
 
                 // Extract parameter names
                 let mut params = Vec::new();
                 let mut pcursor = child.walk();
                 for pchild in child.named_children(&mut pcursor) {
-                    if pchild.kind() == "identifier" && pchild.start_byte() > method_node.end_byte() {
+                    if pchild.kind() == "identifier" && pchild.start_byte() > method_node.end_byte()
+                    {
                         params.push(self.node_text(&pchild));
                     }
                 }
@@ -184,10 +189,7 @@ impl<'a> super::Lowerer<'a> {
     ///
     /// Effect narrowing is enforced at analysis time by the effect checker.
     /// At the IR level, restrict is transparent — it's just the body expression.
-    pub(super) fn lower_restrict_expression(
-        &mut self,
-        node: &Node,
-    ) -> Result<Expr, CompileError> {
+    pub(super) fn lower_restrict_expression(&mut self, node: &Node) -> Result<Expr, CompileError> {
         let body_node = node
             .child_by_field_name("body")
             .ok_or_else(|| self.error("restrict_expression missing body".into(), node))?;
@@ -200,9 +202,7 @@ impl<'a> super::Lowerer<'a> {
             Expr::CallIndirect { callee, args, .. } => {
                 matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") && args.len() == 1
             }
-            Expr::Block(stmts, _) if stmts.len() == 1 => {
-                Self::is_tail_resumptive_body(&stmts[0])
-            }
+            Expr::Block(stmts, _) if stmts.len() == 1 => Self::is_tail_resumptive_body(&stmts[0]),
             _ => false,
         }
     }

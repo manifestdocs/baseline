@@ -103,8 +103,7 @@ pub fn mysql_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeError
                         .collect(),
                 );
 
-                let rows: Vec<mysql_async::Row> =
-                    conn.exec(stmt, mysql_params).await?;
+                let rows: Vec<mysql_async::Row> = conn.exec(stmt, mysql_params).await?;
 
                 let mut result = Vec::with_capacity(rows.len());
                 for row in rows {
@@ -121,7 +120,10 @@ pub fn mysql_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeError
                         };
                         values.push(val);
                     }
-                    result.push(Row { columns: columns.clone(), values });
+                    result.push(Row {
+                        columns: columns.clone(),
+                        values,
+                    });
                 }
                 Ok::<_, mysql_async::Error>(result)
             })
