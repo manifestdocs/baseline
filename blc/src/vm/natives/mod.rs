@@ -170,6 +170,9 @@ impl NativeRegistry {
                         | "Async.parallel!" | "Async.parallel"
                         | "Async.race!" | "Async.race"
                         | "Async.scatter_gather!" | "Async.scatter_gather"
+                        | "Async.delay!" | "Async.delay"
+                        | "Async.interval!" | "Async.interval"
+                        | "Async.timeout!" | "Async.timeout"
                         | "Channel.bounded" | "Channel.send!" | "Channel.send"
                         | "Channel.recv!" | "Channel.recv" | "Channel.close!" | "Channel.close"
                 )
@@ -613,6 +616,13 @@ impl NativeRegistry {
         self.register("Channel.recv", native_async_placeholder);
         self.register("Channel.close!", native_async_placeholder);
         self.register("Channel.close", native_async_placeholder);
+
+        self.register("Async.delay!", native_async_placeholder);
+        self.register("Async.delay", native_async_placeholder);
+        self.register("Async.interval!", native_async_placeholder);
+        self.register("Async.interval", native_async_placeholder);
+        self.register("Async.timeout!", native_async_placeholder);
+        self.register("Async.timeout", native_async_placeholder);
     }
 }
 

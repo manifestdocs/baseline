@@ -1,0 +1,12 @@
+@prelude(core)
+module DelayTest
+
+test "delay executes closure after wait" = scope!(|s| {
+    let result = Async.delay!(10, || 42)
+    result == 42
+})
+
+test "delay with zero ms runs immediately" = scope!(|s| {
+    let result = Async.delay!(0, || "hello")
+    result == "hello"
+})

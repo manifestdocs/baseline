@@ -1116,6 +1116,42 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
                 Box::new(Type::Unknown),
             ),
         );
+        sigs.insert(
+            "Async.delay!".into(),
+            Type::Function(
+                vec![
+                    Type::Int,
+                    Type::Function(vec![], Box::new(Type::Unknown)),
+                ],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Async.interval!".into(),
+            Type::Function(
+                vec![
+                    Type::Int,
+                    Type::Function(vec![], Box::new(Type::Unit)),
+                ],
+                Box::new(Type::Unit),
+            ),
+        );
+        sigs.insert(
+            "Async.timeout!".into(),
+            Type::Function(
+                vec![
+                    Type::Int,
+                    Type::Function(vec![], Box::new(Type::Unknown)),
+                ],
+                Box::new(Type::Enum(
+                    "Result".to_string(),
+                    vec![
+                        ("Ok".to_string(), vec![Type::Unknown]),
+                        ("Err".to_string(), vec![Type::String]),
+                    ],
+                )),
+            ),
+        );
     }
 
     // -- Cell native methods (effect: Async) --
