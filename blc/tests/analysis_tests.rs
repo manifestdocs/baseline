@@ -1394,13 +1394,15 @@ fn wrap() -> Result<Int, String> = {
 
 #[test]
 fn infer_list_head_concrete() {
-    // List.head([1, 2, 3]) should return Int
+    // List.head([1, 2, 3]) returns Option<Int>; pattern match extracts Int
     check_ok(
         r#"
 @prelude(core)
 fn main() -> Int = {
     let first = List.head([1, 2, 3])
-    first + 1
+    match first
+        Some(x) -> x + 1
+        None -> 0
 }
 "#,
     );
@@ -1408,13 +1410,15 @@ fn main() -> Int = {
 
 #[test]
 fn infer_let_propagation() {
-    // let x = List.head([1,2,3]) then x + 1 type-checks (Int + Int)
+    // let x = List.head([1,2,3]) infers Option<Int>; pattern match extracts Int
     check_ok(
         r#"
 @prelude(core)
 fn main() -> Int = {
     let x = List.head([1, 2, 3])
-    x + 1
+    match x
+        Some(n) -> n + 1
+        None -> 0
 }
 "#,
     );
@@ -1422,11 +1426,13 @@ fn main() -> Int = {
 
 #[test]
 fn infer_nested_generic_calls() {
-    // List.head(List.map([1,2], |x| x > 0)) should return Bool (nested call triggers STY_001)
+    // List.head(List.map([1,2], |x| x > 0)) should return Option<Bool>
     check_no_errors(
         r#"
 @prelude(core)
-fn main() -> Bool = List.head(List.map([1, 2], |x| x > 0))
+fn main() -> () = {
+    let _ = List.head(List.map([1, 2], |x| x > 0))
+}
 "#,
     );
 }
@@ -1457,14 +1463,16 @@ fn main() -> Int = List.fold([1, 2, 3], 0, |acc, x| acc + x)
 
 #[test]
 fn infer_list_tail_preserves_type() {
-    // List.tail([1,2,3]) should return List<Int>
+    // List.tail([1,2,3]) returns List<Int>; List.head of that is Option<Int>
     check_ok(
         r#"
 @prelude(core)
 fn main() -> () = {
     let rest = List.tail([1, 2, 3])
     let first = List.head(rest)
-    let sum = first + 1
+    let _ = match first
+        Some(x) -> x + 1
+        None -> 0
 }
 "#,
     );
@@ -1472,13 +1480,15 @@ fn main() -> () = {
 
 #[test]
 fn infer_list_concat_types() {
-    // List.concat([1,2], [3,4]) should return List<Int>
+    // List.concat([1,2], [3,4]) returns List<Int>; List.head gives Option<Int>
     check_ok(
         r#"
 @prelude(core)
 fn main() -> Int = {
     let combined = List.concat([1, 2], [3, 4])
-    List.head(combined)
+    match List.head(combined)
+        Some(x) -> x
+        None -> 0
 }
 "#,
     );
@@ -1500,12 +1510,15 @@ fn main() -> Int = {
 
 #[test]
 fn infer_list_reverse_preserves_type() {
+    // List.reverse preserves element type: List.head of reversed List<Int> is Option<Int>
     check_ok(
         r#"
 @prelude(core)
 fn main() -> Int = {
     let rev = List.reverse([1, 2, 3])
-    List.head(rev)
+    match List.head(rev)
+        Some(x) -> x
+        None -> 0
 }
 "#,
     );
@@ -1513,12 +1526,15 @@ fn main() -> Int = {
 
 #[test]
 fn infer_list_sort_preserves_type() {
+    // List.sort preserves element type: List.head of sorted List<Int> is Option<Int>
     check_ok(
         r#"
 @prelude(core)
 fn main() -> Int = {
     let sorted = List.sort([3, 1, 2])
-    List.head(sorted)
+    match List.head(sorted)
+        Some(x) -> x
+        None -> 0
 }
 "#,
     );
