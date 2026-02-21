@@ -221,7 +221,7 @@ fn run_json_test() {
          age: 30\n\
          active: true\n\
          nums: [1, 2, 3]\n\
-         null: Null\n\
+         null: ()\n\
          compact: {\"active\":true,\"age\":30,\"name\":\"Alice\"}\n\
          pretty:\n\
          [\n  1,\n  2,\n  3\n]\n\
