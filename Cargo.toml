@@ -11,3 +11,6 @@ repository = "https://github.com/baseline-lang/baseline"
 [workspace.dependencies]
 tree-sitter = "0.25"
 tree-sitter-language = "0.1"
+
+# Security: force lru to patched version (transitive via mysql_async)
+lru = "0.16.3"

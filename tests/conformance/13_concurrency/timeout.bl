@@ -1,0 +1,19 @@
+@prelude(core)
+module TimeoutTest
+
+test "timeout succeeds for fast task" = scope!(|s| {
+    let result = Async.timeout!(500, || 42)
+    match result
+        Ok(v) -> v == 42
+        Err(_) -> false
+})
+
+test "timeout fails for slow task" = scope!(|s| {
+    let result = Async.timeout!(10, || {
+        Time.sleep!(200)
+        99
+    })
+    match result
+        Ok(_) -> false
+        Err(msg) -> msg == "timeout"
+})

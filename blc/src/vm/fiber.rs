@@ -612,6 +612,202 @@ pub fn exec_channel_close(
 }
 
 // ---------------------------------------------------------------------------
+// Background Tasks & Timers
+// ---------------------------------------------------------------------------
+
+/// Execute `Async.delay!(duration_ms, closure)` — run closure after N ms.
+///
+/// The delay runs on the current fiber's tokio runtime. Returns the closure's result.
+pub fn exec_delay(
+    duration_nv: &NValue,
+    body: NValue,
+    program: Arc<Program>,
+    chunks: &[Chunk],
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    if !duration_nv.is_int() {
+        return Err(CompileError {
+            message: "Async.delay! first argument must be an Int (milliseconds)".into(),
+            line,
+            col,
+        });
+    }
+    let duration_ms = duration_nv.as_int();
+    if duration_ms < 0 {
+        return Err(CompileError {
+            message: "Async.delay! duration must be non-negative".into(),
+            line,
+            col,
+        });
+    }
+
+    let rt = tokio::runtime::Handle::try_current().map_err(|_| CompileError {
+        message: "Async.delay! requires a tokio runtime".into(),
+        line,
+        col,
+    })?;
+
+    rt.block_on(async {
+        tokio::time::sleep(std::time::Duration::from_millis(duration_ms as u64)).await;
+    });
+
+    // After the delay, run the closure
+    let mut fiber_vm = Vm::new();
+    fiber_vm.call_nvalue(&body, &[], &program.chunks, line, col)
+}
+
+/// Execute `Async.interval!(duration_ms, closure)` — run closure every N ms.
+///
+/// The interval runs on the current runtime. The closure is called repeatedly
+/// at the given interval. If the closure errors, the interval stops and the
+/// error propagates. Otherwise, the interval runs until interrupted by scope exit.
+///
+/// For structured concurrency safety, when used inside a `scope!` block,
+/// the scope's cancellation will terminate the interval naturally.
+pub fn exec_interval(
+    _vm: &mut Vm,
+    duration_nv: &NValue,
+    body: NValue,
+    program: Arc<Program>,
+    _chunks: &[Chunk],
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    if !duration_nv.is_int() {
+        return Err(CompileError {
+            message: "Async.interval! first argument must be an Int (milliseconds)".into(),
+            line,
+            col,
+        });
+    }
+    let duration_ms = duration_nv.as_int();
+    if duration_ms <= 0 {
+        return Err(CompileError {
+            message: "Async.interval! duration must be positive".into(),
+            line,
+            col,
+        });
+    }
+
+    let rt = tokio::runtime::Handle::try_current().map_err(|_| CompileError {
+        message: "Async.interval! requires a tokio runtime".into(),
+        line,
+        col,
+    })?;
+
+    let duration = std::time::Duration::from_millis(duration_ms as u64);
+
+    rt.block_on(async {
+        let mut interval = tokio::time::interval(duration);
+        // Skip the initial immediate tick
+        interval.tick().await;
+
+        // Run a limited number of ticks to prevent infinite loops outside scopes.
+        // In structured concurrency (scope! + spawn!), the scope cancels this task.
+        const MAX_TICKS: usize = 1_000_000;
+        for _ in 0..MAX_TICKS {
+            interval.tick().await;
+
+            // Run the closure synchronously on a blocking thread
+            let body_inner = body.clone();
+            let program_inner = program.clone();
+            let result = tokio::task::spawn_blocking(move || {
+                let mut fiber_vm = Vm::new();
+                fiber_vm.call_nvalue(&body_inner, &[], &program_inner.chunks, line, col)
+            }).await;
+
+            match result {
+                Ok(Ok(_)) => {} // Continue
+                Ok(Err(e)) => return Err(e),
+                Err(join_err) => {
+                    return Err(CompileError {
+                        message: format!("Async.interval! fiber panicked: {}", join_err),
+                        line,
+                        col,
+                    });
+                }
+            }
+        }
+        Ok(())
+    })?;
+
+    Ok(NValue::unit())
+}
+
+/// Execute `Async.timeout!(duration_ms, closure)` — run closure with time limit.
+///
+/// Returns `Ok(result)` if the closure completes within the time limit,
+/// or `Err("timeout")` if it exceeds the limit.
+pub fn exec_timeout(
+    duration_nv: &NValue,
+    body: NValue,
+    program: Arc<Program>,
+    _chunks: &[Chunk],
+    line: usize,
+    col: usize,
+) -> Result<NValue, CompileError> {
+    if !duration_nv.is_int() {
+        return Err(CompileError {
+            message: "Async.timeout! first argument must be an Int (milliseconds)".into(),
+            line,
+            col,
+        });
+    }
+    let duration_ms = duration_nv.as_int();
+    if duration_ms <= 0 {
+        return Err(CompileError {
+            message: "Async.timeout! duration must be positive".into(),
+            line,
+            col,
+        });
+    }
+
+    let rt = tokio::runtime::Handle::try_current().map_err(|_| CompileError {
+        message: "Async.timeout! requires a tokio runtime".into(),
+        line,
+        col,
+    })?;
+
+    let duration = std::time::Duration::from_millis(duration_ms as u64);
+
+    let result = rt.block_on(async {
+        let task = tokio::task::spawn_blocking(move || {
+            let mut fiber_vm = Vm::new();
+            fiber_vm.call_nvalue(&body, &[], &program.chunks, line, col)
+        });
+
+        match tokio::time::timeout(duration, task).await {
+            Ok(Ok(Ok(value))) => {
+                // Closure completed successfully within timeout
+                Ok(NValue::enum_val("Ok".into(), value))
+            }
+            Ok(Ok(Err(e))) => {
+                // Closure errored
+                Err(e)
+            }
+            Ok(Err(join_err)) => {
+                // Task panicked
+                Err(CompileError {
+                    message: format!("Async.timeout! fiber panicked: {}", join_err),
+                    line,
+                    col,
+                })
+            }
+            Err(_elapsed) => {
+                // Timeout exceeded
+                Ok(NValue::enum_val(
+                    "Err".into(),
+                    NValue::string("timeout".into()),
+                ))
+            }
+        }
+    })?;
+
+    Ok(result)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

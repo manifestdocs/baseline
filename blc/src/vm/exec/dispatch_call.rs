@@ -661,6 +661,33 @@ impl super::Vm {
                 }
                 fiber::exec_channel_close(&args[0], line, col)?
             }
+            "Async.delay!" | "Async.delay" => {
+                if args.len() < 2 {
+                    return Err(self.error("Async.delay! requires duration (ms) and closure arguments".into(), line, col));
+                }
+                let program = self.program.as_ref().ok_or_else(|| {
+                    self.error("Async.delay! requires a program context".into(), line, col)
+                })?.clone();
+                fiber::exec_delay(&args[0], args[1].clone(), program, chunks, line, col)?
+            }
+            "Async.interval!" | "Async.interval" => {
+                if args.len() < 2 {
+                    return Err(self.error("Async.interval! requires duration (ms) and closure arguments".into(), line, col));
+                }
+                let program = self.program.as_ref().ok_or_else(|| {
+                    self.error("Async.interval! requires a program context".into(), line, col)
+                })?.clone();
+                fiber::exec_interval(self, &args[0], args[1].clone(), program, chunks, line, col)?
+            }
+            "Async.timeout!" | "Async.timeout" => {
+                if args.len() < 2 {
+                    return Err(self.error("Async.timeout! requires duration (ms) and closure arguments".into(), line, col));
+                }
+                let program = self.program.as_ref().ok_or_else(|| {
+                    self.error("Async.timeout! requires a program context".into(), line, col)
+                })?.clone();
+                fiber::exec_timeout(&args[0], args[1].clone(), program, chunks, line, col)?
+            }
             _ => {
                 return Err(self.error(format!("Unknown async primitive: {}", name), line, col));
             }
