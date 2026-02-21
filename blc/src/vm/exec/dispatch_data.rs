@@ -120,44 +120,97 @@ impl super::Vm {
             Op::ListConcat => {
                 let right = self.stack.pop().unwrap();
                 let left = self.stack.pop().unwrap();
-                let r_items = right.as_list().unwrap();
-                let l_items = left.as_list().unwrap();
-                // Fast path: [x] ++ list — avoid cloning left, build from right
-                if l_items.len() == 1 {
-                    let mut result = Vec::with_capacity(1 + r_items.len());
-                    result.push(l_items[0].clone());
-                    result.extend_from_slice(r_items);
-                    self.stack.push(NValue::list(result));
-                // Fast path: list ++ [x] — avoid cloning right
-                } else if r_items.len() == 1 {
-                    let mut result = l_items.clone();
-                    result.push(r_items[0].clone());
-                    self.stack.push(NValue::list(result));
+
+                // Read lengths/items before attempting CoW (borrows are needed first)
+                let l_len = left.as_list().unwrap().len();
+                let r_len = right.as_list().unwrap().len();
+
                 // Fast path: [] ++ list or list ++ []
-                } else if l_items.is_empty() {
+                if l_len == 0 {
                     self.stack.push(right);
-                } else if r_items.is_empty() {
+                } else if r_len == 0 {
                     self.stack.push(left);
+                // CoW fast path: [x] ++ list — if right is uniquely owned, insert(0, x) in-place
+                } else if l_len == 1 {
+                    let x = left.as_list().unwrap()[0].clone();
+                    match right.try_unwrap_heap() {
+                        Ok(HeapObject::List(mut vec)) => {
+                            vec.insert(0, x);
+                            self.stack.push(NValue::list(vec));
+                        }
+                        Ok(_) => unreachable!(),
+                        Err(right) => {
+                            let r_items = right.as_list().unwrap();
+                            let mut result = Vec::with_capacity(1 + r_items.len());
+                            result.push(x);
+                            result.extend_from_slice(r_items);
+                            self.stack.push(NValue::list(result));
+                        }
+                    }
+                // CoW fast path: list ++ [x] — if left is uniquely owned, push(x) in-place
+                } else if r_len == 1 {
+                    let x = right.as_list().unwrap()[0].clone();
+                    match left.try_unwrap_heap() {
+                        Ok(HeapObject::List(mut vec)) => {
+                            vec.push(x);
+                            self.stack.push(NValue::list(vec));
+                        }
+                        Ok(_) => unreachable!(),
+                        Err(left) => {
+                            let mut result = left.as_list().unwrap().clone();
+                            result.push(x);
+                            self.stack.push(NValue::list(result));
+                        }
+                    }
                 } else {
-                    let mut result = Vec::with_capacity(l_items.len() + r_items.len());
-                    result.extend_from_slice(l_items);
-                    result.extend_from_slice(r_items);
-                    self.stack.push(NValue::list(result));
+                    // General case: try CoW on left, extend with right
+                    let r_items_cloned: Vec<NValue> = right.as_list().unwrap().to_vec();
+                    match left.try_unwrap_heap() {
+                        Ok(HeapObject::List(mut vec)) => {
+                            vec.extend(r_items_cloned);
+                            self.stack.push(NValue::list(vec));
+                        }
+                        Ok(_) => unreachable!(),
+                        Err(left) => {
+                            let l_items = left.as_list().unwrap();
+                            let mut result = Vec::with_capacity(l_items.len() + r_items_cloned.len());
+                            result.extend_from_slice(l_items);
+                            result.extend(r_items_cloned);
+                            self.stack.push(NValue::list(result));
+                        }
+                    }
                 }
             }
             Op::ListTailFrom(n) => {
                 let list_val = self.pop_fast();
-                if let Some(items) = list_val.as_list() {
-                    let from = *n as usize;
-                    let tail: Vec<NValue> = items[from..].to_vec();
-                    self.stack.push(NValue::list(tail));
-                } else {
-                    let (line, col) = chunk.source_map[ip - 1];
-                    return Err(self.error(
-                        format!("ListTailFrom requires List, got {}", list_val),
-                        line,
-                        col,
-                    ));
+                let from = *n as usize;
+                // CoW: if uniquely owned, drain the prefix in-place
+                match list_val.try_unwrap_heap() {
+                    Ok(HeapObject::List(mut vec)) => {
+                        vec.drain(..from);
+                        self.stack.push(NValue::list(vec));
+                    }
+                    Ok(_) => {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            "ListTailFrom requires List".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                    Err(list_val) => {
+                        if let Some(items) = list_val.as_list() {
+                            let tail: Vec<NValue> = items[from..].to_vec();
+                            self.stack.push(NValue::list(tail));
+                        } else {
+                            let (line, col) = chunk.source_map[ip - 1];
+                            return Err(self.error(
+                                format!("ListTailFrom requires List, got {}", list_val),
+                                line,
+                                col,
+                            ));
+                        }
+                    }
                 }
             }
             Op::MakeRecord(n) => {

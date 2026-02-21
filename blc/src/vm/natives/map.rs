@@ -20,6 +20,37 @@ pub(super) fn native_map_insert(args: &[NValue]) -> Result<NValue, NativeError> 
     }
 }
 
+/// Owning CoW variant of Map.insert. When the map is uniquely owned
+/// (Arc refcount == 1), mutates the HashMap in-place (O(1) amortized).
+/// Otherwise falls back to clone (O(n)).
+pub(super) fn native_map_insert_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let mut args = args;
+    let val = args.pop().unwrap();
+    let key = args.pop().unwrap();
+    let map_val = args.pop().unwrap();
+
+    // Try CoW: unwrap the heap object if we're the sole owner
+    match map_val.try_unwrap_heap() {
+        Ok(HeapObject::Map(mut entries)) => {
+            // Sole owner — mutate in place, no clone needed
+            entries.insert(key, val);
+            Ok(NValue::map_from_hashmap(entries))
+        }
+        Ok(_) => Err(NativeError("Map.insert: expected Map".into())),
+        Err(map_val) => {
+            // Aliased — fall back to clone
+            match map_val.as_heap_ref() {
+                HeapObject::Map(entries) => {
+                    let mut new_map = entries.clone();
+                    new_map.insert(key, val);
+                    Ok(NValue::map_from_hashmap(new_map))
+                }
+                _ => Err(NativeError("Map.insert: expected Map".into())),
+            }
+        }
+    }
+}
+
 pub(super) fn native_map_get(args: &[NValue]) -> Result<NValue, NativeError> {
     let map_val = &args[0];
     let key = &args[1];
@@ -42,6 +73,32 @@ pub(super) fn native_map_remove(args: &[NValue]) -> Result<NValue, NativeError> 
             Ok(NValue::map_from_hashmap(new_map))
         }
         _ => Err(NativeError("Map.remove: expected Map".into())),
+    }
+}
+
+/// Owning CoW variant of Map.remove. When the map is uniquely owned,
+/// removes the key in-place (O(1)). Otherwise falls back to clone.
+pub(super) fn native_map_remove_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let mut args = args;
+    let key = args.pop().unwrap();
+    let map_val = args.pop().unwrap();
+
+    match map_val.try_unwrap_heap() {
+        Ok(HeapObject::Map(mut entries)) => {
+            entries.remove(&key);
+            Ok(NValue::map_from_hashmap(entries))
+        }
+        Ok(_) => Err(NativeError("Map.remove: expected Map".into())),
+        Err(map_val) => {
+            match map_val.as_heap_ref() {
+                HeapObject::Map(entries) => {
+                    let mut new_map = entries.clone();
+                    new_map.remove(&key);
+                    Ok(NValue::map_from_hashmap(new_map))
+                }
+                _ => Err(NativeError("Map.remove: expected Map".into())),
+            }
+        }
     }
 }
 

@@ -173,6 +173,18 @@ impl super::Vm {
                     caller.chunk_idx = chunk_idx as u32;
                     let (line, col) = chunk.source_map[ip - 1];
                     self.dispatch_async(*fn_id, n, chunks, line, col)?;
+                } else if self.natives.is_owning(*fn_id) {
+                    // Owning (CoW) dispatch: drain args off the stack into a Vec
+                    // so the native can take ownership and mutate in-place when
+                    // the Arc refcount is 1.
+                    let start = self.stack.len() - n;
+                    let args: Vec<NValue> = self.stack.drain(start..).collect();
+                    let result = self.natives.call_owning(*fn_id, args);
+                    let result = result.map_err(|e| {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        self.error(format!("{}: {}", self.natives.name(*fn_id), e.0), line, col)
+                    })?;
+                    self.stack.push(result);
                 } else {
                     let start = self.stack.len() - n;
                     let result = self.natives.call(*fn_id, &self.stack[start..]);

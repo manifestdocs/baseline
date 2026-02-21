@@ -56,10 +56,15 @@ pub struct NativeError(pub String);
 /// A native function: takes NValue args, returns an NValue.
 type SimpleFn = fn(&[NValue]) -> Result<NValue, NativeError>;
 
+/// An owning native function: takes owned Vec<NValue> args for CoW optimizations.
+type OwningFn = fn(Vec<NValue>) -> Result<NValue, NativeError>;
+
 /// A native function entry.
 struct NativeEntry {
     pub name: &'static str,
     pub func: SimpleFn,
+    /// Optional owning variant for CoW dispatch.
+    pub owning_func: Option<OwningFn>,
     /// Expected argument count (None = variadic/unchecked).
     pub arity: Option<u8>,
     /// Pre-computed dispatch flags.
@@ -70,6 +75,8 @@ struct NativeEntry {
 const FLAG_HOF: u8 = 0x01;
 const FLAG_ASYNC: u8 = 0x02;
 const FLAG_SERVER_LISTEN: u8 = 0x04;
+/// Flag indicating the native has an owning variant for clone-on-write dispatch.
+const FLAG_OWNING: u8 = 0x08;
 
 /// Registry of native functions callable from bytecode via CallNative.
 pub struct NativeRegistry {
@@ -133,6 +140,29 @@ impl NativeRegistry {
         unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_ASYNC != 0 }
     }
 
+    /// Check if a function has an owning (CoW) variant — O(1) flag lookup.
+    #[inline(always)]
+    pub fn is_owning(&self, id: u16) -> bool {
+        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_OWNING != 0 }
+    }
+
+    /// Call the owning variant of a native function by ID.
+    /// The caller must drain the args off the stack into a Vec before calling.
+    pub fn call_owning(&self, id: u16, args: Vec<NValue>) -> Result<NValue, NativeError> {
+        let entry = unsafe { self.entries.get_unchecked(id as usize) };
+        if let Some(arity) = entry.arity
+            && args.len() != arity as usize
+        {
+            return Err(NativeError(format!(
+                "{}: expected {} argument(s), got {}",
+                entry.name,
+                arity,
+                args.len()
+            )));
+        }
+        (entry.owning_func.unwrap())(args)
+    }
+
     /// Get the function name by ID (for error messages).
     #[inline(always)]
     pub fn name(&self, id: u16) -> &str {
@@ -145,6 +175,7 @@ impl NativeRegistry {
         self.entries.push(NativeEntry {
             name,
             func,
+            owning_func: None,
             arity: None,
             flags,
         });
@@ -158,7 +189,28 @@ impl NativeRegistry {
         self.entries.push(NativeEntry {
             name,
             func,
+            owning_func: None,
             arity: Some(arity),
+            flags,
+        });
+        self.name_index.insert(name, idx);
+    }
+
+    /// Register a native with both borrowed and owning (CoW) variants.
+    fn register_owning(
+        &mut self,
+        name: &'static str,
+        func: SimpleFn,
+        owning: OwningFn,
+    ) {
+        let mut flags = Self::compute_flags(name);
+        flags |= FLAG_OWNING;
+        let idx = self.entries.len() as u16;
+        self.entries.push(NativeEntry {
+            name,
+            func,
+            owning_func: Some(owning),
+            arity: None,
             flags,
         });
         self.name_index.insert(name, idx);
@@ -318,9 +370,9 @@ impl NativeRegistry {
         self.register("List.length", native_list_length);
         self.register("List.head", native_list_head);
         self.register("List.tail", native_list_tail);
-        self.register("List.reverse", native_list_reverse);
-        self.register("List.sort", native_list_sort);
-        self.register("List.concat", native_list_concat);
+        self.register_owning("List.reverse", native_list_reverse, native_list_reverse_owning);
+        self.register_owning("List.sort", native_list_sort, native_list_sort_owning);
+        self.register_owning("List.concat", native_list_concat, native_list_concat_owning);
         self.register("List.contains", native_list_contains);
         self.register("List.get", native_list_get);
 
@@ -587,15 +639,15 @@ impl NativeRegistry {
 
         // -- Map --
         self.register("Map.empty", native_map_empty);
-        self.register("Map.insert", native_map_insert);
+        self.register_owning("Map.insert", native_map_insert, native_map_insert_owning);
         self.register("Map.get", native_map_get);
-        self.register("Map.remove", native_map_remove);
+        self.register_owning("Map.remove", native_map_remove, native_map_remove_owning);
         self.register("Map.contains", native_map_contains);
         self.register("Map.keys", native_map_keys);
         self.register("Map.values", native_map_values);
         self.register("Map.len", native_map_len);
         // Spec-aligned aliases
-        self.register("Map.set", native_map_insert);
+        self.register_owning("Map.set", native_map_insert, native_map_insert_owning);
         self.register("Map.has", native_map_contains);
         self.register("Map.size", native_map_len);
         self.register("Map.from_list", native_map_from_list);
