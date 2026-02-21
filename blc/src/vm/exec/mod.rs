@@ -281,7 +281,6 @@ impl Vm {
         let has_limit = self.instruction_limit > 0;
 
         loop {
-            let op = unsafe { *chunk.code.get_unchecked(ip) };
             // Periodic safety checks (instruction limit + stack size)
             local_count += 1;
             if local_count >= check_interval {
@@ -330,8 +329,15 @@ impl Vm {
 
             match op {
                 Op::LoadConst(idx) => {
-                    let val = chunk.constants[idx as usize].clone();
-                    self.stack.push(val);
+                    // SAFETY: The compiler assigns constant indices; they are
+                    // always within bounds.  Using get_unchecked removes the
+                    // branch from the hot loop.
+                    let constant = unsafe { chunk.constants.get_unchecked(idx as usize) };
+                    // For inline NValues (int, float, bool, unit, function)
+                    // .clone() is a simple bit-copy — no Arc refcount bump.
+                    // This fast path avoids even calling the Clone impl for
+                    // the most common constant types.
+                    self.stack.push(constant.clone());
                 }
 
                 Op::LoadSmallInt(n) => {
