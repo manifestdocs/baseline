@@ -1,0 +1,46 @@
+@prelude(core)
+module ChannelTest
+
+fn is_some_eq(opt: Option<Int>, expected: Int) -> Bool =
+  match opt
+    Some(x) -> x == expected
+    None -> false
+
+fn is_none(opt: Option<Int>) -> Bool =
+  match opt
+    Some(_) -> false
+    None -> true
+
+test "channel send and receive" = scope!(|s| {
+    let (tx, rx) = Channel.bounded(2)
+
+    let _ = Scope.spawn!(s, || {
+        let _ = Channel.send!(tx, 42)
+        let _ = Channel.send!(tx, 55)
+        // Close signals no more values will be sent
+        Channel.close!(tx)
+    })
+
+    let v1 = Channel.recv!(rx)
+    let v2 = Channel.recv!(rx)
+    let closed_val = Channel.recv!(rx)
+
+    is_some_eq(v1, 42) && is_some_eq(v2, 55) && is_none(closed_val)
+})
+
+test "channel backpressure blocks sender" = scope!(|s| {
+    let (tx, rx) = Channel.bounded(1)
+
+    let cell = Scope.spawn!(s, || {
+        let _ = Channel.send!(tx, 1)
+        let _ = Channel.send!(tx, 2)
+        3
+    })
+
+    let v1 = Channel.recv!(rx)
+    let v2 = Channel.recv!(rx)
+    
+    let result = Cell.await!(cell)
+
+    is_some_eq(v1, 1) && is_some_eq(v2, 2) && (result == 3)
+})
