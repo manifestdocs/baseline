@@ -16,9 +16,9 @@
 <main id="main-content" class="site-main">
 	<div class="container">
 		<Hero />
+		<GetStarted />
 		<Benefits />
 		<CodeExamples />
-		<GetStarted />
 		<Cta />
 	</div>
 </main>

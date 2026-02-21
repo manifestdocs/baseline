@@ -1,5 +1,5 @@
 <section id="start" aria-labelledby="start-heading">
-	<span class="overline">Get Started</span>
+	<span class="overline">Install</span>
 	<h2 id="start-heading">Up and running</h2>
 	<div class="install-cards">
 

@@ -258,6 +258,11 @@ $ blc check app.bl --json --level skip          # Types only, specs unchecked</c
                     prompts and context windows. It covers syntax, types,
                     patterns, and common mistakes in under 200 lines.
                 </p>
+                <p>
+                    Download directly:
+                    <a href="/llms.txt"><code>llms.txt</code></a> (compact reference) or
+                    <a href="/llms-full.txt"><code>llms-full.txt</code></a> (with full API reference).
+                </p>
                 <pre><code
                         >{@html `<span class="comment">-- From llms.txt:</span>
 

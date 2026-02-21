@@ -41,7 +41,7 @@
     <span class="fn">code</span> <span class="op">-&gt;</span> <span class="type">Err</span><span class="punct">(</span><span class="str">"HTTP \${code}"</span><span class="punct">)</span>`}</code
                 ></pre>
             <div class="btn-group" style="margin-top: var(--sp-4);">
-                <a href="#start" class="button button-primary">Get Started</a>
+                <a href="#start" class="button button-primary">Install</a>
                 <a
                     href="https://github.com/manifestdocs/baseline"
                     class="button"

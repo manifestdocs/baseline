@@ -19,4 +19,7 @@
 	</div>
 </section>
 
-<footer class="site-footer">&copy; Dawson Design Ltd.</footer>
+<footer class="site-footer">
+	<span>&copy; Dawson Design Ltd.</span>
+	<a href="/llms.txt">llms.txt</a>
+</footer>
