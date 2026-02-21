@@ -122,9 +122,28 @@ impl super::Vm {
                 let left = self.stack.pop().unwrap();
                 let r_items = right.as_list().unwrap();
                 let l_items = left.as_list().unwrap();
-                let mut result = l_items.clone();
-                result.extend_from_slice(r_items);
-                self.stack.push(NValue::list(result));
+                // Fast path: [x] ++ list — avoid cloning left, build from right
+                if l_items.len() == 1 {
+                    let mut result = Vec::with_capacity(1 + r_items.len());
+                    result.push(l_items[0].clone());
+                    result.extend_from_slice(r_items);
+                    self.stack.push(NValue::list(result));
+                // Fast path: list ++ [x] — avoid cloning right
+                } else if r_items.len() == 1 {
+                    let mut result = l_items.clone();
+                    result.push(r_items[0].clone());
+                    self.stack.push(NValue::list(result));
+                // Fast path: [] ++ list or list ++ []
+                } else if l_items.is_empty() {
+                    self.stack.push(right);
+                } else if r_items.is_empty() {
+                    self.stack.push(left);
+                } else {
+                    let mut result = Vec::with_capacity(l_items.len() + r_items.len());
+                    result.extend_from_slice(l_items);
+                    result.extend_from_slice(r_items);
+                    self.stack.push(NValue::list(result));
+                }
             }
             Op::ListTailFrom(n) => {
                 let list_val = self.pop_fast();
