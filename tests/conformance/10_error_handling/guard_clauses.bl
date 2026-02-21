@@ -1,0 +1,72 @@
+@prelude(core)
+
+// Conformance: Result.ensure and Option.ok_or — guard clause combinators
+
+// --- Result.ensure ---
+
+fn validate_age(age: Int) -> Result<(), String> =
+  Result.ensure(age >= 18, "too young")
+
+fn validate_range(n: Int) -> Result<(), String> = {
+  Result.ensure(n > 0, "must be positive")?
+  Result.ensure(n <= 100, "must be <= 100")
+}
+
+test "ensure true returns Ok" =
+  Result.is_ok(Result.ensure(true, "err"))
+
+test "ensure false returns Err" =
+  match Result.ensure(false, "bad")
+    Err(msg) -> msg == "bad"
+    _ -> false
+
+test "ensure in function - pass" =
+  Result.is_ok(validate_age(21))
+
+test "ensure in function - fail" =
+  match validate_age(15)
+    Err(msg) -> msg == "too young"
+    _ -> false
+
+test "chained ensure - both pass" =
+  Result.is_ok(validate_range(50))
+
+test "chained ensure - first fails" =
+  match validate_range(0)
+    Err(msg) -> msg == "must be positive"
+    _ -> false
+
+test "chained ensure - second fails" =
+  match validate_range(200)
+    Err(msg) -> msg == "must be <= 100"
+    _ -> false
+
+// --- Option.ok_or ---
+
+test "ok_or Some returns Ok" =
+  match Option.ok_or(Some(42), "missing")
+    Ok(n) -> n == 42
+    _ -> false
+
+test "ok_or None returns Err" =
+  match Option.ok_or(None, "missing")
+    Err(msg) -> msg == "missing"
+    _ -> false
+
+// --- Combined pattern: guard clauses with ? ---
+
+fn find_and_validate(items: List<Int>, target: Int) -> Result<Int, String> = {
+  let item = Option.ok_or(List.find(items, |x| x == target), "not found")?
+  Result.ensure(item > 0, "must be positive")?
+  Ok(item * 2)
+}
+
+test "combined guard - happy path" =
+  match find_and_validate([1, 2, 3], 2)
+    Ok(n) -> n == 4
+    _ -> false
+
+test "combined guard - not found" =
+  match find_and_validate([1, 2, 3], 99)
+    Err(msg) -> msg == "not found"
+    _ -> false
