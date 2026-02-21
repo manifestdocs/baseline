@@ -69,6 +69,8 @@ impl<'a> super::Lowerer<'a> {
 
     pub(super) fn lower_map_literal(&mut self, node: &Node) -> Result<Expr, CompileError> {
         // Desugar #{ k1: v1, k2: v2 } into Map.insert(Map.insert(Map.empty(), k1, v1), k2, v2)
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         let mut result = Expr::CallNative {
             module: "Map".to_string(),
             method: "empty".to_string(),
@@ -96,11 +98,14 @@ impl<'a> super::Lowerer<'a> {
             }
         }
 
+        self.tail_position = was_tail;
         Ok(result)
     }
 
     pub(super) fn lower_set_literal(&mut self, node: &Node) -> Result<Expr, CompileError> {
         // Desugar #{ v1, v2 } into Set.insert(Set.insert(Set.empty(), v1), v2)
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         let mut result = Expr::CallNative {
             module: "Set".to_string(),
             method: "empty".to_string(),
@@ -119,19 +124,25 @@ impl<'a> super::Lowerer<'a> {
             };
         }
 
+        self.tail_position = was_tail;
         Ok(result)
     }
 
     pub(super) fn lower_list(&mut self, node: &Node) -> Result<Expr, CompileError> {
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         let mut elems = Vec::new();
         for i in 0..node.named_child_count() {
             let child = node.named_child(i).unwrap();
             elems.push(self.lower_expression(&child)?);
         }
+        self.tail_position = was_tail;
         Ok(Expr::MakeList(elems, None))
     }
 
     pub(super) fn lower_record(&mut self, node: &Node) -> Result<Expr, CompileError> {
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         let mut fields = Vec::new();
         for i in 0..node.named_child_count() {
             let field_init = node.named_child(i).unwrap();
@@ -148,6 +159,7 @@ impl<'a> super::Lowerer<'a> {
             let val = self.lower_expression(&val_node)?;
             fields.push((key, val));
         }
+        self.tail_position = was_tail;
         Ok(Expr::MakeRecord(fields, None))
     }
 
@@ -161,15 +173,21 @@ impl<'a> super::Lowerer<'a> {
             let inner = node.named_child(0).unwrap();
             return self.lower_expression(&inner);
         }
+        let was_tail = self.tail_position;
+        self.tail_position = false;
         let mut elems = Vec::new();
         for i in 0..count {
             let child = node.named_child(i).unwrap();
             elems.push(self.lower_expression(&child)?);
         }
+        self.tail_position = was_tail;
         Ok(Expr::MakeTuple(elems, None))
     }
 
     pub(super) fn lower_field_access(&mut self, node: &Node) -> Result<Expr, CompileError> {
+        let was_tail = self.tail_position;
+        self.tail_position = false;
+
         let obj = node
             .named_child(0)
             .ok_or_else(|| self.error("Field access missing object".into(), node))?;
@@ -179,6 +197,8 @@ impl<'a> super::Lowerer<'a> {
 
         let object = self.lower_expression(&obj)?;
         let field_name = self.node_text(&field);
+
+        self.tail_position = was_tail;
 
         // Look up the resolved type of this field_expression from the type checker.
         let ty = self
@@ -195,6 +215,9 @@ impl<'a> super::Lowerer<'a> {
     }
 
     pub(super) fn lower_struct_expression(&mut self, node: &Node) -> Result<Expr, CompileError> {
+        let was_tail = self.tail_position;
+        self.tail_position = false;
+
         let type_node = node
             .named_child(0)
             .ok_or_else(|| self.error("Struct expression missing type".into(), node))?;
@@ -212,6 +235,8 @@ impl<'a> super::Lowerer<'a> {
             let val = self.lower_expression(&val_node)?;
             fields.push((key, val));
         }
+
+        self.tail_position = was_tail;
 
         if !fields.is_empty() {
             Ok(Expr::MakeStruct {
@@ -250,6 +275,9 @@ impl<'a> super::Lowerer<'a> {
     }
 
     pub(super) fn lower_record_update(&mut self, node: &Node) -> Result<Expr, CompileError> {
+        let was_tail = self.tail_position;
+        self.tail_position = false;
+
         let mut cursor = node.walk();
         let children: Vec<Node> = node.named_children(&mut cursor).collect();
 
@@ -269,6 +297,8 @@ impl<'a> super::Lowerer<'a> {
                 updates.push((key_name, val_expr));
             }
         }
+
+        self.tail_position = was_tail;
 
         Ok(Expr::UpdateRecord {
             base: Box::new(base),

@@ -2,11 +2,6 @@
 
 // Binary search tree — insert N keys, then sum all values
 // Tests: allocation pressure (node creation), sum types, pattern matching, recursion
-//
-// NOTE: Uses explicit let bindings in match arms to work around VM bug where
-// constructor calls with sub-expressions inside match arms clobber match-bound
-// variables on the stack. See: Node(k, v, insert(left, key, val), right) fails
-// but let new_left = insert(left, key, val); Node(k, v, new_left, right) works.
 
 type Tree =
   | Leaf
@@ -16,13 +11,9 @@ fn insert(tree: Tree, key: Int, val: Int) -> Tree =
   match tree
     Leaf -> Node(key, val, Leaf, Leaf)
     Node(k, v, left, right) ->
-      if key < k then {
-        let new_left = insert(left, key, val)
-        Node(k, v, new_left, right)
-      } else if key > k then {
-        let new_right = insert(right, key, val)
-        Node(k, v, left, new_right)
-      } else Node(k, val, left, right)
+      if key < k then Node(k, v, insert(left, key, val), right)
+      else if key > k then Node(k, v, left, insert(right, key, val))
+      else Node(k, val, left, right)
 
 fn tree_sum(tree: Tree) -> Int =
   match tree

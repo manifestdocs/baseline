@@ -20,8 +20,12 @@ impl<'a> super::Lowerer<'a> {
         // The VM handles resume by calling the continuation value.
 
         // Constructor call: type_identifier(args) -> MakeEnum
+        // Constructor arguments are never in tail position — they produce
+        // the payload for a data constructor, not the function's return value.
         if callee.kind() == "type_identifier" {
             let tag = self.node_text(callee);
+            let was_tail = self.tail_position;
+            self.tail_position = false;
             let payload = if arg_nodes.len() == 1 {
                 self.lower_expression(&arg_nodes[0])?
             } else if arg_nodes.is_empty() {
@@ -33,6 +37,7 @@ impl<'a> super::Lowerer<'a> {
                 }
                 Expr::MakeTuple(elems, None)
             };
+            self.tail_position = was_tail;
             return Ok(Expr::MakeEnum {
                 tag,
                 payload: Box::new(payload),
