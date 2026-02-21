@@ -1,0 +1,28 @@
+@prelude(script)
+
+// String reversal benchmark
+// Build a string, reverse it character by character, repeat N times
+// Tests: string allocation, character iteration, string building
+
+fn reverse_string(s: String) -> String = {
+  let chars = String.chars(s)
+  let reversed = List.reverse(chars)
+  String.join(reversed, "")
+}
+
+fn build_string(n: Int, acc: String) -> String =
+  if n <= 0 then acc
+  else build_string(n - 1, "${acc}${n % 10}")
+
+fn repeat_reverse(s: String, n: Int, acc: String) -> String =
+  if n <= 0 then acc
+  else {
+    let rev = reverse_string(s)
+    repeat_reverse(rev, n - 1, rev)
+  }
+
+fn main!() -> {Console} () = {
+  let s = build_string(1000, "")
+  let result = repeat_reverse(s, 200, "")
+  Console.println!("${String.length(result)}")
+}
