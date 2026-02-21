@@ -347,7 +347,10 @@ fn decode_field(
         "Int" => match row_lookup(columns, values, field_name) {
             Some(SqlValue::Int(i)) => Ok(NValue::int(*i)),
             Some(SqlValue::Float(f)) => Ok(NValue::int(*f as i64)),
-            Some(SqlValue::Null) => Ok(NValue::int(0)),
+            Some(SqlValue::Null) => Err(NativeError(format!(
+                "Row.decode: column '{}' is NULL but struct {} declares it as Int — use Option<Int> for nullable columns",
+                field_name, struct_name
+            ))),
             Some(SqlValue::Text(s)) => Ok(NValue::int(s.as_ref().parse::<i64>().unwrap_or(0))),
             Some(SqlValue::Blob(_)) => Err(NativeError(format!(
                 "Row.decode: column '{}' is a blob (struct {} requires Int)",
@@ -361,7 +364,10 @@ fn decode_field(
         "Float" => match row_lookup(columns, values, field_name) {
             Some(SqlValue::Float(f)) => Ok(NValue::float(*f)),
             Some(SqlValue::Int(i)) => Ok(NValue::float(*i as f64)),
-            Some(SqlValue::Null) => Ok(NValue::float(0.0)),
+            Some(SqlValue::Null) => Err(NativeError(format!(
+                "Row.decode: column '{}' is NULL but struct {} declares it as Float — use Option<Float> for nullable columns",
+                field_name, struct_name
+            ))),
             Some(SqlValue::Text(s)) => Ok(NValue::float(s.as_ref().parse::<f64>().unwrap_or(0.0))),
             Some(SqlValue::Blob(_)) => Err(NativeError(format!(
                 "Row.decode: column '{}' is a blob (struct {} requires Float)",
@@ -376,7 +382,10 @@ fn decode_field(
             Some(SqlValue::Text(s)) => Ok(NValue::string(s.clone())),
             Some(SqlValue::Int(i)) => Ok(NValue::string(RcStr::from(i.to_string().as_str()))),
             Some(SqlValue::Float(f)) => Ok(NValue::string(RcStr::from(f.to_string().as_str()))),
-            Some(SqlValue::Null) => Ok(NValue::string(RcStr::from(""))),
+            Some(SqlValue::Null) => Err(NativeError(format!(
+                "Row.decode: column '{}' is NULL but struct {} declares it as String — use Option<String> for nullable columns",
+                field_name, struct_name
+            ))),
             Some(SqlValue::Blob(_)) => Ok(NValue::string(RcStr::from("<blob>"))),
             None => Err(NativeError(format!(
                 "Row.decode: column '{}' not found in row (struct {} requires it)",
@@ -387,7 +396,10 @@ fn decode_field(
             Some(SqlValue::Int(i)) => Ok(NValue::bool(*i != 0)),
             Some(SqlValue::Float(f)) => Ok(NValue::bool(*f != 0.0)),
             Some(SqlValue::Text(s)) => Ok(NValue::bool(s.as_ref() == "1" || s.as_ref() == "true")),
-            Some(SqlValue::Null) => Ok(NValue::bool(false)),
+            Some(SqlValue::Null) => Err(NativeError(format!(
+                "Row.decode: column '{}' is NULL but struct {} declares it as Bool — use Option<Bool> for nullable columns",
+                field_name, struct_name
+            ))),
             Some(SqlValue::Blob(_)) => Ok(NValue::bool(false)),
             None => Err(NativeError(format!(
                 "Row.decode: column '{}' not found in row (struct {} requires it)",
