@@ -187,7 +187,7 @@ echo -e "  ${GREEN}✓${NC} Baseline (VM)"
 LANGS_AVAILABLE+=(baseline_vm)
 
 # Check for JIT (must actually produce correct output, not just exit 0)
-JIT_TEST_OUTPUT=$("$BLC" run --jit "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null)
+JIT_TEST_OUTPUT=$("$BLC" run --jit "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null || true)
 if [ "$JIT_TEST_OUTPUT" = "9227465" ]; then
     echo -e "  ${GREEN}✓${NC} Baseline (JIT)"
     LANGS_AVAILABLE+=(baseline_jit)
@@ -196,7 +196,7 @@ else
 fi
 
 # Check for LLVM JIT
-LLVM_TEST_OUTPUT=$("$BLC" run --llvm "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null)
+LLVM_TEST_OUTPUT=$("$BLC" run --llvm "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null || true)
 if [ "$LLVM_TEST_OUTPUT" = "9227465" ]; then
     echo -e "  ${GREEN}✓${NC} Baseline (LLVM)"
     LANGS_AVAILABLE+=(baseline_llvm)
