@@ -61,7 +61,14 @@ struct NativeEntry {
     pub func: SimpleFn,
     /// Expected argument count (None = variadic/unchecked).
     pub arity: Option<u8>,
+    /// Pre-computed dispatch flags.
+    pub flags: u8,
 }
+
+/// Dispatch flag constants — pre-computed at registration time.
+const FLAG_HOF: u8 = 0x01;
+const FLAG_ASYNC: u8 = 0x02;
+const FLAG_SERVER_LISTEN: u8 = 0x04;
 
 /// Registry of native functions callable from bytecode via CallNative.
 pub struct NativeRegistry {
@@ -93,9 +100,7 @@ impl NativeRegistry {
 
     /// Call a native function by ID.
     pub fn call(&self, id: u16, args: &[NValue]) -> Result<NValue, NativeError> {
-        let entry = self.entries.get(id as usize).ok_or_else(|| {
-            NativeError(format!("Invalid native function id: {}", id))
-        })?;
+        let entry = unsafe { self.entries.get_unchecked(id as usize) };
         if let Some(arity) = entry.arity
             && args.len() != arity as usize
         {
@@ -107,106 +112,100 @@ impl NativeRegistry {
         (entry.func)(args)
     }
 
-    /// Check if a function is a HOF (returns true for List.map, List.filter, etc.).
+    /// Check if a function is a HOF — O(1) flag lookup.
+    #[inline(always)]
     pub fn is_hof(&self, id: u16) -> bool {
-        self.entries
-            .get(id as usize)
-            .map(|e| {
-                matches!(
-                    e.name,
-                    "List.map"
-                        | "List.filter"
-                        | "List.fold"
-                        | "List.find"
-                        | "Option.map"
-                        | "Option.flat_map"
-                        | "Result.map"
-                        | "Result.map_err"
-                        | "Result.and_then"
-                        | "Fs.with_file!"
-                        | "Fs.with_file"
-                        | "Sqlite.query_map!"
-                        | "Sqlite.query_map"
-                        | "Postgres.query_map!"
-                        | "Postgres.query_map"
-                        | "Mysql.query_map!"
-                        | "Mysql.query_map"
-                        | "Sqlite.query_as!"
-                        | "Sqlite.query_as"
-                        | "Postgres.query_as!"
-                        | "Postgres.query_as"
-                        | "Mysql.query_as!"
-                        | "Mysql.query_as"
-                        | "Sqlite.query_one_as!"
-                        | "Sqlite.query_one_as"
-                        | "Postgres.query_one_as!"
-                        | "Postgres.query_one_as"
-                        | "Mysql.query_one_as!"
-                        | "Mysql.query_one_as"
-                )
-            })
-            .unwrap_or(false)
+        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_HOF != 0 }
     }
 
-    /// Check if a function requires VM re-entrancy (server dispatch).
+    /// Check if a function requires VM re-entrancy — O(1) flag lookup.
+    #[inline(always)]
     pub fn is_server_listen(&self, id: u16) -> bool {
-        self.entries
-            .get(id as usize)
-            .map(|e| matches!(e.name, "Server.listen!" | "Server.listen" | "Server.listen_async!" | "Server.listen_async"))
-            .unwrap_or(false)
+        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_SERVER_LISTEN != 0 }
     }
 
-    /// Check if a function is an async fiber primitive (scope!, spawn!, await!, cancel!).
+    /// Check if a function is an async fiber primitive — O(1) flag lookup.
+    #[inline(always)]
     pub fn is_async(&self, id: u16) -> bool {
-        self.entries
-            .get(id as usize)
-            .map(|e| {
-                matches!(
-                    e.name,
-                    "scope!" | "scope"
-                        | "Scope.spawn!" | "Scope.spawn"
-                        | "Cell.await!" | "Cell.await"
-                        | "Cell.cancel!" | "Cell.cancel"
-                        | "Async.parallel!" | "Async.parallel"
-                        | "Async.race!" | "Async.race"
-                        | "Async.scatter_gather!" | "Async.scatter_gather"
-                        | "Async.delay!" | "Async.delay"
-                        | "Async.interval!" | "Async.interval"
-                        | "Async.timeout!" | "Async.timeout"
-                        | "Channel.bounded" | "Channel.send!" | "Channel.send"
-                        | "Channel.recv!" | "Channel.recv" | "Channel.close!" | "Channel.close"
-                )
-            })
-            .unwrap_or(false)
+        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_ASYNC != 0 }
     }
 
     /// Get the function name by ID (for error messages).
+    #[inline(always)]
     pub fn name(&self, id: u16) -> &str {
-        self.entries
-            .get(id as usize)
-            .map(|e| e.name)
-            .unwrap_or("<unknown>")
+        unsafe { self.entries.get_unchecked(id as usize).name }
     }
 
     fn register(&mut self, name: &'static str, func: SimpleFn) {
+        let flags = Self::compute_flags(name);
         let idx = self.entries.len() as u16;
         self.entries.push(NativeEntry {
             name,
             func,
             arity: None,
+            flags,
         });
         self.name_index.insert(name, idx);
     }
 
     #[allow(dead_code)]
     fn register_with_arity(&mut self, name: &'static str, func: SimpleFn, arity: u8) {
+        let flags = Self::compute_flags(name);
         let idx = self.entries.len() as u16;
         self.entries.push(NativeEntry {
             name,
             func,
             arity: Some(arity),
+            flags,
         });
         self.name_index.insert(name, idx);
+    }
+
+    /// Compute dispatch flags from function name at registration time.
+    fn compute_flags(name: &str) -> u8 {
+        let mut flags = 0u8;
+        if matches!(
+            name,
+            "List.map" | "List.filter" | "List.fold" | "List.find"
+                | "Option.map" | "Option.flat_map"
+                | "Result.map" | "Result.map_err" | "Result.and_then"
+                | "Fs.with_file!" | "Fs.with_file"
+                | "Sqlite.query_map!" | "Sqlite.query_map"
+                | "Postgres.query_map!" | "Postgres.query_map"
+                | "Mysql.query_map!" | "Mysql.query_map"
+                | "Sqlite.query_as!" | "Sqlite.query_as"
+                | "Postgres.query_as!" | "Postgres.query_as"
+                | "Mysql.query_as!" | "Mysql.query_as"
+                | "Sqlite.query_one_as!" | "Sqlite.query_one_as"
+                | "Postgres.query_one_as!" | "Postgres.query_one_as"
+                | "Mysql.query_one_as!" | "Mysql.query_one_as"
+        ) {
+            flags |= FLAG_HOF;
+        }
+        if matches!(
+            name,
+            "scope!" | "scope"
+                | "Scope.spawn!" | "Scope.spawn"
+                | "Cell.await!" | "Cell.await"
+                | "Cell.cancel!" | "Cell.cancel"
+                | "Async.parallel!" | "Async.parallel"
+                | "Async.race!" | "Async.race"
+                | "Async.scatter_gather!" | "Async.scatter_gather"
+                | "Async.delay!" | "Async.delay"
+                | "Async.interval!" | "Async.interval"
+                | "Async.timeout!" | "Async.timeout"
+                | "Channel.bounded" | "Channel.send!" | "Channel.send"
+                | "Channel.recv!" | "Channel.recv" | "Channel.close!" | "Channel.close"
+        ) {
+            flags |= FLAG_ASYNC;
+        }
+        if matches!(
+            name,
+            "Server.listen!" | "Server.listen" | "Server.listen_async!" | "Server.listen_async"
+        ) {
+            flags |= FLAG_SERVER_LISTEN;
+        }
+        flags
     }
 
     fn register_all(&mut self) {
