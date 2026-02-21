@@ -132,80 +132,22 @@ fn main() -> () = {
 
 /// Generate the content of the default `CLAUDE.md` agent instruction file.
 pub fn claude_md_template() -> &'static str {
-    r#"# CLAUDE.md
-
-This file provides guidance to Claude Code when working with this Baseline project.
-
-## Language Overview
-Baseline is a strongly typed, effect-based functional programming language.
-For the full language reference, common mistakes, and standard library overview,
-**ALWAYS read `llms.txt` in the project root first.**
-
-## Key Syntax Rules
-- `!` means EFFECTS, not negation. Use `not` for boolean negation.
-- NO method syntax. Write `String.to_upper(name)`, never `name.to_upper()`.
-- NO `+` for strings. Write `"Hello, ${name}!"`.
-- NO classes, `try`/`catch`, or `null`. Use records, `Result<T,E>`, and `Option<T>`.
-
-## MCP Tools Workflow
-The `blc mcp` server provides tools to close the compile-check-repair loop.
-Recommended workflow:
-1. **Reference**: Fetch documentation via MCP or `llms.txt`
-2. **Write**: Implement the code
-3. **Check**: Run the `check` tool to type-check
-4. **Fix**: Address any errors returned by the compiler
-5. **Test**: Run the `test` tool
-"#
+    include_str!("templates/CLAUDE.md")
 }
 
 /// Generate the content of the GitHub Copilot instruction file.
 pub fn copilot_instructions_template() -> &'static str {
-    r#"This project uses the Baseline programming language.
-
-## Critical Syntax Rules
-- `!` means EFFECTS, not negation. Use `not` for boolean negation. `!valid` is a parse error.
-- NO method syntax. Write `String.to_upper(name)`, never `name.to_upper()`.
-- NO `+` for string concatenation. Use string interpolation: `"Hello, ${name}!"`.
-- NO classes. Use records and sum types.
-- NO `try`/`catch`. Use `Result<T, E>` and `?`.
-- NO `null` or `undefined`. Use `Option<T>`.
-
-## Common Mistakes
-WRONG: `user.to_string()`   -> RIGHT: `String.from(user)`
-WRONG: `!valid`             -> RIGHT: `not valid`
-WRONG: `"a" + "b"`          -> RIGHT: `"${a}${b}"`
-WRONG: `return x`           -> RIGHT: `x` (last expression is the return value)
-
-For the full language specification, **ALWAYS read `llms.txt`** in the project root.
-"#
+    include_str!("templates/copilot-instructions.md")
 }
 
 /// Generate the content of the Cursor rules file.
 pub fn cursor_rules_template() -> &'static str {
-    copilot_instructions_template()
+    include_str!("templates/cursor-rules.md")
 }
 
 /// Generate the content of the generic `.ai-instructions.md` fallback file.
 pub fn ai_instructions_template() -> &'static str {
-    r#"# AI Instructions for Baseline
-
-This project uses Baseline, a strongly typed, effect-based functional programming language.
-
-## Key Syntax Rules
-- `!` means EFFECTS, not negation. Use `not` for boolean negation.
-- NO method syntax. Write `String.to_upper(name)`, never `name.to_upper()`.
-- NO `+` for strings. Write `"Hello, ${name}!"`.
-- NO classes, `try`/`catch`, or `null`. Use records, `Result<T,E>`, and `Option<T>`.
-
-## Full Reference
-For the complete language reference, standard library, and a Rosetta Stone,
-**ALWAYS read `llms.txt` in the project root** before writing code.
-
-## MCP Server
-If your environment supports Model Context Protocol (MCP), configure it to use:
-`{"command": "blc", "args": ["mcp"]}`
-This provides tools for type-checking (`check`) and documentation lookup (`docs`).
-"#
+    include_str!("templates/ai-instructions.md")
 }
 
 #[cfg(test)]
@@ -282,7 +224,8 @@ name = "should-be-ignored"
         assert!(copilot.contains("WRONG:"));
 
         let cursor = cursor_rules_template();
-        assert_eq!(copilot, cursor);
+        assert!(cursor.contains("llms.txt"));
+        assert!(cursor.contains("Critical Syntax Rules"));
 
         let ai = ai_instructions_template();
         assert!(ai.contains("llms.txt"));
