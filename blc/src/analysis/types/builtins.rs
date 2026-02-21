@@ -1078,6 +1078,46 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
+    // -- Async builtins (effect: Async) --
+    if builtin_modules.contains(&"Async") {
+        sigs.insert(
+            "Async.parallel!".into(),
+            Type::Function(
+                vec![Type::List(Box::new(Type::Function(
+                    vec![],
+                    Box::new(Type::Unknown),
+                )))],
+                Box::new(Type::List(Box::new(Type::Unknown))),
+            ),
+        );
+        sigs.insert(
+            "Async.race!".into(),
+            Type::Function(
+                vec![Type::List(Box::new(Type::Function(
+                    vec![],
+                    Box::new(Type::Unknown),
+                )))],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "Async.scatter_gather!".into(),
+            Type::Function(
+                vec![
+                    Type::List(Box::new(Type::Function(
+                        vec![],
+                        Box::new(Type::Unknown),
+                    ))),
+                    Type::Function(
+                        vec![Type::List(Box::new(Type::Unknown))],
+                        Box::new(Type::Unknown),
+                    ),
+                ],
+                Box::new(Type::Unknown),
+            ),
+        );
+    }
+
     // -- Cell native methods (effect: Async) --
     if native_modules.contains(&"Cell") {
         sigs.insert(
@@ -1195,6 +1235,41 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Row.optional_int".into(),
             Type::Function(vec![Type::Row, Type::String], Box::new(option_int)),
         );
+        // Row.decode is special-cased in the type checker (check_node.rs)
+        // but we add a fallback signature so it's recognized as a known function
+        sigs.insert(
+            "Row.decode".into(),
+            Type::Function(vec![Type::Row, Type::Unknown], Box::new(Type::Unknown)),
+        );
+    }
+
+    // -- query_as! / query_one_as! (special-cased in type checker, fallback signatures here) --
+    if builtin_modules.contains(&"Sqlite") {
+        let query_as_fallback = Type::Function(
+            vec![Type::Unknown, Type::String, Type::List(Box::new(Type::String))],
+            Box::new(Type::List(Box::new(Type::Unknown))),
+        );
+        let query_one_as_fallback = Type::Function(
+            vec![Type::Unknown, Type::String, Type::List(Box::new(Type::String))],
+            Box::new(Type::Enum(
+                "Option".to_string(),
+                vec![
+                    ("Some".to_string(), vec![Type::Unknown]),
+                    ("None".to_string(), vec![]),
+                ],
+            )),
+        );
+
+        for backend in &["Sqlite", "Postgres", "Mysql"] {
+            sigs.insert(
+                format!("{}.query_as!", backend),
+                query_as_fallback.clone(),
+            );
+            sigs.insert(
+                format!("{}.query_one_as!", backend),
+                query_one_as_fallback.clone(),
+            );
+        }
     }
 
     // -- Db helpers (pure row-parsing functions) --
