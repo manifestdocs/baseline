@@ -62,7 +62,7 @@ const MAX_STRING_SIZE: usize = 100 * 1024 * 1024; // 100 MB
 #[allow(dead_code)]
 const MAX_LIST_SIZE: usize = 10_000_000; // 10M elements
 
-use frame::{CallFrame, FrameStack, FRAME_HAS_FUNC, FRAME_FLAGS_MASK};
+use frame::{CallFrame, FrameStack, PackedBase};
 
 // ---------------------------------------------------------------------------
 // VM
@@ -77,6 +77,10 @@ pub(crate) struct HandlerBoundary {
     /// IP to jump to when the handler returns without calling resume (abort).
     /// Set from PushResumableHandler's skip offset.
     pub(crate) return_ip: usize,
+    /// Base slot of the frame that installed this handler. Used to determine
+    /// the start of the stack segment to capture when building a continuation.
+    /// Stored explicitly to avoid unsafe frame-stack arithmetic at capture time.
+    pub(crate) original_base_slot: usize,
 }
 
 /// The VM execution engine. Each fiber gets its own `Vm` instance.
@@ -177,7 +181,7 @@ impl Vm {
         self.frames.push(CallFrame {
             chunk_idx: 0,
             ip: 0,
-            base_slot: 0,
+            base_slot: PackedBase::from_slot(0),
             upvalue_idx: u32::MAX,
         });
         let result = self.run(std::slice::from_ref(chunk))?;
@@ -202,7 +206,7 @@ impl Vm {
         self.frames.push(CallFrame {
             chunk_idx: program.entry as u32,
             ip: 0,
-            base_slot: 0,
+            base_slot: PackedBase::from_slot(0),
             upvalue_idx: u32::MAX,
         });
         let result = self.run(&program.chunks)?;
@@ -224,7 +228,7 @@ impl Vm {
         self.frames.push(CallFrame {
             chunk_idx: chunk_idx as u32,
             ip: 0,
-            base_slot: 0,
+            base_slot: PackedBase::from_slot(0),
             upvalue_idx: u32::MAX,
         });
         let result = self.run(chunks)?;
@@ -260,7 +264,7 @@ impl Vm {
         let frame = self.frames.last();
         let mut ip = frame.ip as usize;
         let mut chunk_idx = frame.chunk_idx as usize;
-        let mut base_slot = (frame.base_slot & !FRAME_FLAGS_MASK) as usize;
+        let mut base_slot = frame.base_slot.slot();
         let mut chunk = &chunks[chunk_idx];
 
         // SAFETY: Every chunk is guaranteed to end with Op::Return (see

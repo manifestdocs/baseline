@@ -5,7 +5,7 @@ use crate::vm::chunk::{Chunk, CompileError, Op};
 use crate::vm::fiber;
 use crate::vm::nvalue::{HeapObject, NValue};
 
-use super::frame::{CallFrame, FRAME_HAS_FUNC};
+use super::frame::{CallFrame, PackedBase};
 use super::{DispatchResult, MAX_CALL_DEPTH};
 
 /// Function call opcodes: Call, CallDirect, CallNative, TailCall,
@@ -71,17 +71,17 @@ impl super::Vm {
                 caller.ip = ip as u32;
                 caller.chunk_idx = chunk_idx as u32;
 
-                let new_base = (func_pos + 1) as u32;
+                let new_base = PackedBase::from_slot(func_pos + 1).with_has_func();
                 self.frames.push(CallFrame {
                     chunk_idx: new_chunk_idx as u32,
                     ip: 0,
-                    base_slot: new_base | FRAME_HAS_FUNC,
+                    base_slot: new_base,
                     upvalue_idx: new_upvalue_idx,
                 });
                 return Ok(DispatchResult::Restart {
                     ip: 0,
                     chunk_idx: new_chunk_idx,
-                    base_slot: new_base as usize,
+                    base_slot: new_base.slot(),
                 });
             }
 
@@ -95,7 +95,7 @@ impl super::Vm {
                     ));
                 }
                 let n = *arg_count as usize;
-                let new_base = (self.stack.len() - n) as u32;
+                let new_base = PackedBase::from_slot(self.stack.len() - n);
 
                 let caller = self.frames.last_mut();
                 caller.ip = ip as u32;
@@ -110,7 +110,7 @@ impl super::Vm {
                 return Ok(DispatchResult::Restart {
                     ip: 0,
                     chunk_idx: *target_chunk as usize,
-                    base_slot: new_base as usize,
+                    base_slot: new_base.slot(),
                 });
             }
 
@@ -304,16 +304,17 @@ impl super::Vm {
         self.stack.extend(ss);
 
         for (i, &(ci, fip, fbs, fuv)) in fs.iter().enumerate() {
-            let mut new_base = (fbs & !super::frame::FRAME_FLAGS_MASK) + stack_offset as u32;
-            if fbs & super::frame::FRAME_HAS_FUNC != 0 {
-                new_base |= super::frame::FRAME_HAS_FUNC;
+            let fbs_packed = PackedBase(fbs);
+            let new_slot = fbs_packed.slot() + stack_offset;
+            let mut new_base = PackedBase::from_slot(new_slot);
+            if fbs_packed.has_func() {
+                new_base = new_base.with_has_func();
             }
             if i == 0 {
-                new_base |= super::frame::FRAME_IS_CONT;
-                new_base |= super::frame::FRAME_HAS_FUNC;
+                // Mark as continuation boundary and ensure has-func flag is set
+                // so the stack cleanup on return removes the slot below args.
+                new_base = new_base.with_is_cont().with_has_func();
             }
-            // Adjust the base_slot by the stack_offset so local variable accesses
-            // point to the shifted stack segment.
             self.frames.push(CallFrame {
                 chunk_idx: ci,
                 ip: fip,
@@ -329,13 +330,14 @@ impl super::Vm {
         for h in hs {
             self.handler_stack.push(h);
         }
-        for (sd, fd, ud, hsi, rip) in hbs {
+        for (sd, fd, ud, hsi, rip, obs_rel) in hbs {
             self.handler_boundaries.push(super::HandlerBoundary {
                 stack_depth: sd + stack_offset,
                 frame_depth: fd + caller_frame_idx,
                 upvalue_depth: ud,
                 handler_stack_idx: hsi,
                 return_ip: rip,
+                original_base_slot: obs_rel + stack_offset + original_base_slot,
             });
         }
 
@@ -344,7 +346,7 @@ impl super::Vm {
         let new_ip = r_ip as usize;
         let new_ci = r_ci as usize;
         let top = self.frames.last();
-        let new_bs = (top.base_slot & !super::frame::FRAME_FLAGS_MASK) as usize;
+        let new_bs = top.base_slot.slot();
 
         DispatchResult::Restart {
             ip: new_ip,
@@ -371,15 +373,15 @@ impl super::Vm {
                 let bd_upvalue = boundary.upvalue_depth;
                 let handler_depth = boundary.handler_stack_idx;
                 let return_ip = boundary.return_ip;
+                let original_base_slot_usize = boundary.original_base_slot;
 
                 let resume_ip = ip as u32;
                 let resume_chunk_idx = chunk_idx as u32;
 
                 let args_start = self.stack.len() - n;
 
+                // The frame that installed the handler is at index bd_frame - 1.
                 let frame_idx_start = bd_frame.saturating_sub(1);
-                let original_base_slot = unsafe { self.frames.frames.get_unchecked(frame_idx_start) }.base_slot & !super::frame::FRAME_FLAGS_MASK;
-                let original_base_slot_usize = original_base_slot as usize;
 
                 // Sync current IP before capturing
                 self.frames.last_mut().ip = ip as u32;
@@ -393,13 +395,13 @@ impl super::Vm {
                     .map(|i| {
                         let f =
                             unsafe { *self.frames.frames.get_unchecked(i) };
-                        (f.chunk_idx, f.ip, f.base_slot, f.upvalue_idx)
+                        (f.chunk_idx, f.ip, f.base_slot.raw(), f.upvalue_idx)
                     })
                     .collect();
 
                 // NOW set the abort target on the frame that holds the handle block
                 let abort_frame = unsafe { self.frames.frames.get_unchecked_mut(frame_idx_start) };
-                if abort_frame.base_slot & super::frame::FRAME_IS_CONT != 0 {
+                if abort_frame.base_slot.is_cont() {
                     // This is a continuation frame! It's not allowed to execute past the handle block.
                     // If a sub-handler aborts, the continuation itself must abort and return the value.
                     // We point it to the chunk's guaranteed terminal Return opcode.
@@ -422,7 +424,7 @@ impl super::Vm {
 
                 let handler_stack_segment: Vec<HashMap<String, NValue>> =
                     self.handler_stack[handler_depth..].to_vec();
-                let handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)> =
+                let handler_boundary_segment: Vec<(usize, usize, usize, usize, usize, usize)> =
                     self.handler_boundaries[bi..]
                         .iter()
                         .map(|b| (
@@ -430,7 +432,8 @@ impl super::Vm {
                             b.frame_depth - frame_idx_start,
                             b.upvalue_depth,
                             b.handler_stack_idx,
-                            b.return_ip
+                            b.return_ip,
+                            b.original_base_slot - original_base_slot_usize,
                         ))
                         .collect();
 
@@ -460,8 +463,7 @@ impl super::Vm {
                 let total_args = n + 1;
                 if handler_fn.is_function() {
                     let fn_idx = handler_fn.as_function();
-                    let new_base =
-                        (self.stack.len() - total_args) as u32;
+                    let new_base = PackedBase::from_slot(self.stack.len() - total_args);
                     self.frames.push(CallFrame {
                         chunk_idx: fn_idx as u32,
                         ip: 0,
@@ -471,7 +473,7 @@ impl super::Vm {
                     return Ok(Some(DispatchResult::Restart {
                         ip: 0,
                         chunk_idx: fn_idx,
-                        base_slot: new_base as usize,
+                        base_slot: new_base.slot(),
                     }));
                 } else if let HeapObject::Closure {
                     chunk_idx: cidx,
@@ -479,8 +481,7 @@ impl super::Vm {
                 } = handler_fn.as_heap_ref()
                 {
                     let fn_idx = *cidx;
-                    let new_base =
-                        (self.stack.len() - total_args) as u32;
+                    let new_base = PackedBase::from_slot(self.stack.len() - total_args);
                     self.upvalue_stack
                         .push(Rc::new(upvalues.clone()));
                     let uv_idx =
@@ -494,7 +495,7 @@ impl super::Vm {
                     return Ok(Some(DispatchResult::Restart {
                         ip: 0,
                         chunk_idx: fn_idx,
-                        base_slot: new_base as usize,
+                        base_slot: new_base.slot(),
                     }));
                 }
             } else {
@@ -505,16 +506,17 @@ impl super::Vm {
                     let caller = self.frames.last_mut();
                     caller.ip = ip as u32;
                     caller.chunk_idx = chunk_idx as u32;
+                    let new_base = PackedBase::from_slot(start);
                     self.frames.push(CallFrame {
                         chunk_idx: fn_idx as u32,
                         ip: 0,
-                        base_slot: start as u32,
+                        base_slot: new_base,
                         upvalue_idx: u32::MAX,
                     });
                     return Ok(Some(DispatchResult::Restart {
                         ip: 0,
                         chunk_idx: fn_idx,
-                        base_slot: start,
+                        base_slot: new_base.slot(),
                     }));
                 } else if handler_fn.is_heap()
                     && let HeapObject::Closure {
@@ -529,16 +531,17 @@ impl super::Vm {
                     self.upvalue_stack
                         .push(Rc::new(upvalues.clone()));
                     let uv_idx = self.upvalue_stack.len() - 1;
+                    let new_base = PackedBase::from_slot(start);
                     self.frames.push(CallFrame {
                         chunk_idx: fn_idx as u32,
                         ip: 0,
-                        base_slot: start as u32,
+                        base_slot: new_base,
                         upvalue_idx: uv_idx as u32,
                     });
                     return Ok(Some(DispatchResult::Restart {
                         ip: 0,
                         chunk_idx: fn_idx,
-                        base_slot: start,
+                        base_slot: new_base.slot(),
                     }));
                 }
             }

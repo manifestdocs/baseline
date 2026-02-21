@@ -171,7 +171,6 @@ pub fn run_test_file(path: &Path) -> TestSuiteResult {
     // Run each test expression chunk in a fresh VM
     let mut results = Vec::new();
     let chunks = &test_program.program.chunks;
-    let chunks = &test_program.program.chunks;
 
     for test in &test_program.tests {
         let location = Location {

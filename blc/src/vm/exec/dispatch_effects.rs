@@ -1,10 +1,7 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use crate::vm::chunk::{Chunk, CompileError, Op};
 use crate::vm::nvalue::{HeapObject, NValue};
-
-use super::frame::{CallFrame, FRAME_HAS_FUNC};
 use super::DispatchResult;
 
 /// Effect handler and control flow opcodes: PushHandler, PushResumableHandler,
@@ -61,6 +58,7 @@ impl super::Vm {
                             upvalue_depth: self.upvalue_stack.len(),
                             handler_stack_idx,
                             return_ip,
+                            original_base_slot: self.frames.last().base_slot.slot(),
                         });
                     }
                     _ => {
@@ -126,12 +124,12 @@ impl super::Vm {
                 }
 
                 let top_frame = self.frames.last();
-                if top_frame.base_slot & super::frame::FRAME_IS_CONT != 0 {
-                    // This frame was the bottom-most frame of a continuation!
-                    // The inline handle block has finished! Return the value directly to the resume() caller.
+                if top_frame.base_slot.is_cont() {
+                    // This frame was the bottom-most frame of a resumed continuation.
+                    // The handle block has finished — return the value to the resume() caller.
                     let result = self.stack.pop().unwrap_or_else(NValue::unit);
                     let frame = self.frames.pop();
-                    
+
                     if frame.upvalue_idx != u32::MAX
                         && frame.upvalue_idx as usize == self.upvalue_stack.len() - 1
                     {
@@ -142,26 +140,19 @@ impl super::Vm {
                         return Ok(DispatchResult::Return(result));
                     }
 
-                    let raw_base = frame.base_slot;
-                    let has_func = raw_base & super::frame::FRAME_HAS_FUNC != 0;
-                    let frame_base = (raw_base & !super::frame::FRAME_FLAGS_MASK) as usize;
-                    
-                    if has_func {
-                        self.stack.truncate(frame_base.saturating_sub(1));
+                    let base = frame.base_slot;
+                    if base.has_func() {
+                        self.stack.truncate(base.slot().saturating_sub(1));
                     } else {
-                        self.stack.truncate(frame_base);
+                        self.stack.truncate(base.slot());
                     }
                     self.stack.push(result);
 
                     let caller = self.frames.last();
-                    let restart_ip = caller.ip as usize;
-                    let restart_ci = caller.chunk_idx as usize;
-                    let restart_bs = (caller.base_slot & !super::frame::FRAME_FLAGS_MASK) as usize;
-
                     return Ok(DispatchResult::Restart {
-                        ip: restart_ip,
-                        chunk_idx: restart_ci,
-                        base_slot: restart_bs,
+                        ip: caller.ip as usize,
+                        chunk_idx: caller.chunk_idx as usize,
+                        base_slot: caller.base_slot.slot(),
                     });
                 }
             }
@@ -189,25 +180,19 @@ impl super::Vm {
                     return Ok(DispatchResult::Return(result));
                 }
 
-                let raw_base = frame.base_slot;
-                let has_func = raw_base & super::frame::FRAME_HAS_FUNC != 0;
-                let frame_base = (raw_base & !super::frame::FRAME_FLAGS_MASK) as usize;
-                if has_func {
-                    self.stack.truncate(frame_base.saturating_sub(1));
+                let base = frame.base_slot;
+                if base.has_func() {
+                    self.stack.truncate(base.slot().saturating_sub(1));
                 } else {
-                    self.stack.truncate(frame_base);
+                    self.stack.truncate(base.slot());
                 }
                 self.stack.push(result);
 
                 let caller = self.frames.last();
-                let restart_ip = caller.ip as usize;
-                let restart_ci = caller.chunk_idx as usize;
-                let restart_bs = (caller.base_slot & !super::frame::FRAME_FLAGS_MASK) as usize;
-                
                 return Ok(DispatchResult::Restart {
-                    ip: restart_ip,
-                    chunk_idx: restart_ci,
-                    base_slot: restart_bs,
+                    ip: caller.ip as usize,
+                    chunk_idx: caller.chunk_idx as usize,
+                    base_slot: caller.base_slot.slot(),
                 });
             }
 

@@ -178,8 +178,9 @@ pub enum HeapObject {
         /// Handler stack entries captured between boundary and perform site.
         handler_stack_segment: Vec<std::collections::HashMap<String, NValue>>,
         /// Handler boundaries captured between boundary index and current.
-        /// Stored as (stack_depth, frame_depth, upvalue_depth, handler_stack_idx, return_ip).
-        handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)>,
+        /// Stored as (stack_depth, frame_depth, upvalue_depth, handler_stack_idx, return_ip, original_base_slot).
+        /// All values are relative to the segment base for position-independent restoration.
+        handler_boundary_segment: Vec<(usize, usize, usize, usize, usize, usize)>,
         /// IP to resume execution at (past PerformEffect in the body).
         resume_ip: u32,
         /// Chunk index for the resume point.
@@ -365,7 +366,7 @@ impl NValue {
         handler_stack_depth: usize,
         base_stack_depth: usize,
         handler_stack_segment: Vec<std::collections::HashMap<String, NValue>>,
-        handler_boundary_segment: Vec<(usize, usize, usize, usize, usize)>,
+        handler_boundary_segment: Vec<(usize, usize, usize, usize, usize, usize)>,
         resume_ip: u32,
         resume_chunk_idx: u32,
     ) -> Self {
