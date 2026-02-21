@@ -3,7 +3,7 @@ use std::rc::Rc;
 use crate::vm::chunk::{Chunk, CompileError};
 use crate::vm::nvalue::{HeapObject, NValue};
 
-use super::frame::{CallFrame, FRAME_HAS_FUNC};
+use super::frame::{CallFrame, PackedBase};
 use super::MAX_CALL_DEPTH;
 
 impl super::Vm {
@@ -404,112 +404,6 @@ impl super::Vm {
                 }
                 self.stack.push(NValue::list(results));
             }
-            "Sqlite.query_as!" | "Sqlite.query_as"
-            | "Postgres.query_as!" | "Postgres.query_as"
-            | "Mysql.query_as!" | "Mysql.query_as" => {
-                // Args (from lowerer): field_spec, struct_name, sql, params
-                if arg_count != 4 {
-                    return Err(self.error("query_as!: expected 4 arguments (field_spec, struct_name, sql, params)".into(), line, col));
-                }
-                let params_val = self.pop(line, col)?;
-                let sql_val = self.pop(line, col)?;
-                let struct_name = self.pop(line, col)?;
-                let field_spec = self.pop(line, col)?;
-
-                let sql_str = if sql_val.is_heap() {
-                    match sql_val.as_heap_ref() {
-                        HeapObject::String(s) => s.as_ref().to_string(),
-                        _ => return Err(self.error("query_as!: sql arg must be String".into(), line, col)),
-                    }
-                } else {
-                    return Err(self.error("query_as!: sql arg must be String".into(), line, col));
-                };
-
-                let params: Vec<String> = if params_val.is_heap() {
-                    match params_val.as_heap_ref() {
-                        HeapObject::List(items) => {
-                            items.iter().map(|v| {
-                                if v.is_heap() {
-                                    if let HeapObject::String(s) = v.as_heap_ref() {
-                                        return s.as_ref().to_string();
-                                    }
-                                }
-                                format!("{}", v)
-                            }).collect()
-                        }
-                        _ => vec![],
-                    }
-                } else {
-                    vec![]
-                };
-
-                use crate::vm::natives::db_backend;
-                use crate::vm::natives::db_helpers;
-                let rows = db_backend::active_query(&sql_str, &params)
-                    .map_err(|e| self.error(format!("query_as!: {}", e.0), line, col))?;
-
-                let mut results = Vec::with_capacity(rows.len());
-                for row in rows {
-                    let row_val = NValue::row(row.columns, row.values);
-                    let decoded = db_helpers::native_row_decode(&[row_val, field_spec.clone(), struct_name.clone()])
-                        .map_err(|e| self.error(format!("query_as!: {}", e.0), line, col))?;
-                    results.push(decoded);
-                }
-                self.stack.push(NValue::list(results));
-            }
-            "Sqlite.query_one_as!" | "Sqlite.query_one_as"
-            | "Postgres.query_one_as!" | "Postgres.query_one_as"
-            | "Mysql.query_one_as!" | "Mysql.query_one_as" => {
-                // Args (from lowerer): field_spec, struct_name, sql, params
-                if arg_count != 4 {
-                    return Err(self.error("query_one_as!: expected 4 arguments (field_spec, struct_name, sql, params)".into(), line, col));
-                }
-                let params_val = self.pop(line, col)?;
-                let sql_val = self.pop(line, col)?;
-                let struct_name = self.pop(line, col)?;
-                let field_spec = self.pop(line, col)?;
-
-                let sql_str = if sql_val.is_heap() {
-                    match sql_val.as_heap_ref() {
-                        HeapObject::String(s) => s.as_ref().to_string(),
-                        _ => return Err(self.error("query_one_as!: sql arg must be String".into(), line, col)),
-                    }
-                } else {
-                    return Err(self.error("query_one_as!: sql arg must be String".into(), line, col));
-                };
-
-                let params: Vec<String> = if params_val.is_heap() {
-                    match params_val.as_heap_ref() {
-                        HeapObject::List(items) => {
-                            items.iter().map(|v| {
-                                if v.is_heap() {
-                                    if let HeapObject::String(s) = v.as_heap_ref() {
-                                        return s.as_ref().to_string();
-                                    }
-                                }
-                                format!("{}", v)
-                            }).collect()
-                        }
-                        _ => vec![],
-                    }
-                } else {
-                    vec![]
-                };
-
-                use crate::vm::natives::db_backend;
-                use crate::vm::natives::db_helpers;
-                let rows = db_backend::active_query(&sql_str, &params)
-                    .map_err(|e| self.error(format!("query_one_as!: {}", e.0), line, col))?;
-
-                if let Some(row) = rows.into_iter().next() {
-                    let row_val = NValue::row(row.columns, row.values);
-                    let decoded = db_helpers::native_row_decode(&[row_val, field_spec, struct_name])
-                        .map_err(|e| self.error(format!("query_one_as!: {}", e.0), line, col))?;
-                    self.stack.push(NValue::enum_val("Some".into(), decoded));
-                } else {
-                    self.stack.push(NValue::enum_val("None".into(), NValue::unit()));
-                }
-            }
             "Fs.with_file!" | "Fs.with_file" => {
                 if arg_count != 2 {
                     return Err(self.error(
@@ -621,8 +515,7 @@ impl super::Vm {
         self.frames.push(CallFrame {
             chunk_idx: ci as u32,
             ip: 0,
-            // Bit 31 set: function value sits at base_slot - 1
-            base_slot: bs as u32 | FRAME_HAS_FUNC,
+            base_slot: PackedBase::from_slot(bs).with_has_func(),
             upvalue_idx: uv_idx,
         });
 

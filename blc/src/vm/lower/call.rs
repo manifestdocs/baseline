@@ -137,36 +137,6 @@ impl<'a> super::Lowerer<'a> {
                 }
             }
 
-            // query_as! / query_one_as! — rewrite: inject field_spec + struct_name before sql/params
-            let is_query_as = matches!(
-                qualified.as_str(),
-                "Sqlite.query_as!" | "Sqlite.query_as"
-                | "Postgres.query_as!" | "Postgres.query_as"
-                | "Mysql.query_as!" | "Mysql.query_as"
-                | "Sqlite.query_one_as!" | "Sqlite.query_one_as"
-                | "Postgres.query_one_as!" | "Postgres.query_one_as"
-                | "Mysql.query_one_as!" | "Mysql.query_one_as"
-            );
-            if is_query_as && arg_nodes.len() == 3 {
-                if let Some(struct_type) = self.type_map.as_ref().and_then(|tm| tm.get(&node.start_byte())) {
-                    if let crate::analysis::types::Type::Struct(name, fields) = struct_type.clone() {
-                        let (module, method, _) = self.try_resolve_qualified(callee).unwrap();
-                        // arg_nodes[0] = TypeName (skip — we generate field_spec instead)
-                        // arg_nodes[1] = sql, arg_nodes[2] = params
-                        let field_spec = build_field_spec_expr(&fields);
-                        let name_expr = Expr::String(name.clone());
-                        let sql_expr = self.lower_expression(&arg_nodes[1])?;
-                        let params_expr = self.lower_expression(&arg_nodes[2])?;
-                        self.tail_position = was_tail;
-                        return Ok(Expr::CallNative {
-                            module,
-                            method,
-                            args: vec![field_spec, name_expr, sql_expr, params_expr],
-                            ty: None,
-                        });
-                    }
-                }
-            }
         }
 
         // Native call: Module.method(args)

@@ -1,6 +1,6 @@
 @prelude(server)
 
-// Row.decode and query_as!/query_one_as! — type checker positive tests
+// Row.decode — type checker positive tests
 
 type User = { id: Int, name: String, age: Int, active: Bool }
 type Profile = { bio: Option<String>, score: Option<Int> }
@@ -12,18 +12,20 @@ fn decode_user!(row: Row) -> {Console} User = {
   user
 }
 
-// query_as! returns List<Struct>
+// query! + List.map + Row.decode is the idiomatic typed query pattern
 fn fetch_users!() -> {Sqlite, Console} List<User> = {
   Sqlite.connect!(":memory:")
-  let users = Sqlite.query_as!(User, "SELECT * FROM users", [])
+  let rows = Sqlite.query!("SELECT * FROM users", [])
+  let users = List.map(rows, |row| Row.decode(row, User))
   Console.println!("ok")
   users
 }
 
-// query_one_as! returns Option<Struct>
+// query_one! + Option.map + Row.decode for optional single-row fetch
 fn fetch_user!() -> {Sqlite, Console} Option<User> = {
   Sqlite.connect!(":memory:")
-  let user = Sqlite.query_one_as!(User, "SELECT * FROM users WHERE id = ?1", ["1"])
+  let row = Sqlite.query_one!("SELECT * FROM users WHERE id = ?1", ["1"])
+  let user = Option.map(row, |r| Row.decode(r, User))
   Console.println!("ok")
   user
 }
