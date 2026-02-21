@@ -43,13 +43,13 @@ BLC="$REPO_DIR/target/release/blc"
 
 # Detect JIT availability (must produce correct output, not just exit 0)
 HAS_JIT=false
-JIT_OUT=$($BLC run --jit "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null)
+JIT_OUT=$($BLC run --jit "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null || true)
 if [ "$JIT_OUT" = "9227465" ]; then
     HAS_JIT=true
 fi
 
 HAS_LLVM=false
-LLVM_OUT=$($BLC run --llvm "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null)
+LLVM_OUT=$($BLC run --llvm "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null || true)
 if [ "$LLVM_OUT" = "9227465" ]; then
     HAS_LLVM=true
 fi
@@ -142,7 +142,7 @@ print(f'{diff:+.1f}')
         fi
 
         printf "${GREEN}%8ss${NC}  %6s KB" "$time_s" "$mem_kb"
-        [ -n "$delta" ] && printf "  $delta"
+        [ -n "$delta" ] && echo -ne "  $delta"
         printf "\n"
 
         ENTRIES+=("{\"lang\": \"$label\", \"bench\": \"$bench\", \"time_s\": $time_s, \"mem_kb\": $mem_kb}")
