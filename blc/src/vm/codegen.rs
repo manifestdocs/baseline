@@ -1317,7 +1317,6 @@ impl<'a> Codegen<'a> {
         self.emit(Op::MakeRecord(grouped.len() as u16), span);
 
 
-        eprintln!("[DEBUG codegen] all_tail_resumptive={}, clauses={}", all_tail_resumptive, clauses.len());
         if all_tail_resumptive {
             // All handlers are tail-resumptive: no continuation capture needed.
             // Use PushHandler/PopHandler (like `with` form).
