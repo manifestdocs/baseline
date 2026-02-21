@@ -17,6 +17,91 @@ pub fn optimize_for_bytecode(module: &mut IrModule) {
     optimize_inner(module, false);
 }
 
+/// Detect mutually-capturing closure pairs in a module.
+///
+/// Scans each function body for `Block` sequences where two or more
+/// `let name = |..| ...` bindings form a mutual capture cycle:
+///   `a`'s body references `b` AND `b`'s body references `a`.
+///
+/// Returns `(name_a, name_b)` pairs (lexicographically ordered, deduplicated).
+/// These are the only reference cycles possible in today's Baseline language
+/// (no mutable refs, no lazy thunks).
+pub fn detect_module_closure_cycles(module: &IrModule) -> Vec<(String, String)> {
+    let top_level: HashSet<String> = module.functions.iter().map(|f| f.name.clone()).collect();
+    let mut all_cycles: Vec<(String, String)> = Vec::new();
+    for func in &module.functions {
+        detect_closure_cycles_in_expr(&func.body, &top_level, &mut all_cycles);
+    }
+    // Deduplicate (a,b) vs (b,a): canonical form is alpha-sorted
+    all_cycles.sort();
+    all_cycles.dedup();
+    all_cycles
+}
+
+/// Recursively scan an expression for mutual closure captures.
+fn detect_closure_cycles_in_expr(
+    expr: &Expr,
+    top_level: &HashSet<String>,
+    out: &mut Vec<(String, String)>,
+) {
+    match expr {
+        Expr::Block(exprs, _) => {
+            detect_cycles_in_block(exprs, top_level, out);
+            // Also recurse into non-Lambda children
+            for e in exprs {
+                detect_closure_cycles_in_expr(e, top_level, out);
+            }
+        }
+        Expr::Lambda { body, .. } => {
+            detect_closure_cycles_in_expr(body, top_level, out);
+        }
+        other => {
+            visit_expr_children(other, &mut |child| {
+                detect_closure_cycles_in_expr(child, top_level, out);
+            });
+        }
+    }
+}
+
+/// Scan a flat list of Block expressions for mutually-capturing Lambda lets.
+fn detect_cycles_in_block(
+    exprs: &[Expr],
+    top_level: &HashSet<String>,
+    out: &mut Vec<(String, String)>,
+) {
+    // Collect (name, free_vars_of_lambda_body) for each let-bound Lambda
+    let mut lambda_lets: Vec<(String, HashSet<String>)> = Vec::new();
+
+    for e in exprs {
+        if let Expr::Let { pattern, value, .. } = e {
+            if let Pattern::Var(name) = pattern.as_ref() {
+                if let Expr::Lambda { params, body, .. } = value.as_ref() {
+                    let params_set: HashSet<String> = params.iter().cloned().collect();
+                    let fvs = free_vars(body, &params_set, top_level);
+                    lambda_lets.push((name.clone(), fvs));
+                }
+            }
+        }
+    }
+
+    // Check every pair for mutual capture
+    for i in 0..lambda_lets.len() {
+        for j in (i + 1)..lambda_lets.len() {
+            let (ref name_a, ref fvs_a) = lambda_lets[i];
+            let (ref name_b, ref fvs_b) = lambda_lets[j];
+            if fvs_a.contains(name_b) && fvs_b.contains(name_a) {
+                // Canonical: alphabetical order
+                let pair = if name_a <= name_b {
+                    (name_a.clone(), name_b.clone())
+                } else {
+                    (name_b.clone(), name_a.clone())
+                };
+                out.push(pair);
+            }
+        }
+    }
+}
+
 fn optimize_inner(module: &mut IrModule, lift: bool) {
     // Pass 1-2: Constant propagation + folding
     for func in &mut module.functions {
