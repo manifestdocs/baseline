@@ -197,12 +197,7 @@ impl NativeRegistry {
     }
 
     /// Register a native with both borrowed and owning (CoW) variants.
-    fn register_owning(
-        &mut self,
-        name: &'static str,
-        func: SimpleFn,
-        owning: OwningFn,
-    ) {
+    fn register_owning(&mut self, name: &'static str, func: SimpleFn, owning: OwningFn) {
         let mut flags = Self::compute_flags(name);
         flags |= FLAG_OWNING;
         let idx = self.entries.len() as u16;
@@ -370,7 +365,11 @@ impl NativeRegistry {
         self.register("List.length", native_list_length);
         self.register("List.head", native_list_head);
         self.register("List.tail", native_list_tail);
-        self.register_owning("List.reverse", native_list_reverse, native_list_reverse_owning);
+        self.register_owning(
+            "List.reverse",
+            native_list_reverse,
+            native_list_reverse_owning,
+        );
         self.register_owning("List.sort", native_list_sort, native_list_sort_owning);
         self.register_owning("List.concat", native_list_concat, native_list_concat_owning);
         self.register("List.contains", native_list_contains);

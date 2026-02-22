@@ -173,7 +173,8 @@ impl super::Vm {
                         Ok(_) => unreachable!(),
                         Err(left) => {
                             let l_items = left.as_list().unwrap();
-                            let mut result = Vec::with_capacity(l_items.len() + r_items_cloned.len());
+                            let mut result =
+                                Vec::with_capacity(l_items.len() + r_items_cloned.len());
                             result.extend_from_slice(l_items);
                             result.extend(r_items_cloned);
                             self.stack.push(NValue::list(result));
@@ -192,11 +193,7 @@ impl super::Vm {
                     }
                     Ok(_) => {
                         let (line, col) = chunk.source_map[ip - 1];
-                        return Err(self.error(
-                            "ListTailFrom requires List".into(),
-                            line,
-                            col,
-                        ));
+                        return Err(self.error("ListTailFrom requires List".into(), line, col));
                     }
                     Err(list_val) => {
                         if let Some(items) = list_val.as_list() {

@@ -65,19 +65,17 @@ pub(super) fn native_list_reverse_owning(args: Vec<NValue>) -> Result<NValue, Na
             Ok(NValue::list(vec))
         }
         Ok(_) => Err(NativeError("List.reverse: expected List".into())),
-        Err(list_val) => {
-            match list_val.as_list() {
-                Some(items) => {
-                    let mut reversed = items.clone();
-                    reversed.reverse();
-                    Ok(NValue::list(reversed))
-                }
-                None => Err(NativeError(format!(
-                    "List.reverse: expected List, got {}",
-                    list_val
-                ))),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                let mut reversed = items.clone();
+                reversed.reverse();
+                Ok(NValue::list(reversed))
             }
-        }
+            None => Err(NativeError(format!(
+                "List.reverse: expected List, got {}",
+                list_val
+            ))),
+        },
     }
 }
 
@@ -118,19 +116,17 @@ pub(super) fn native_list_sort_owning(args: Vec<NValue>) -> Result<NValue, Nativ
             Ok(NValue::list(vec))
         }
         Ok(_) => Err(NativeError("List.sort: expected List".into())),
-        Err(list_val) => {
-            match list_val.as_list() {
-                Some(items) => {
-                    let mut sorted = items.clone();
-                    sorted.sort_by(sort_comparator);
-                    Ok(NValue::list(sorted))
-                }
-                None => Err(NativeError(format!(
-                    "List.sort: expected List, got {}",
-                    list_val
-                ))),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                let mut sorted = items.clone();
+                sorted.sort_by(sort_comparator);
+                Ok(NValue::list(sorted))
             }
-        }
+            None => Err(NativeError(format!(
+                "List.sort: expected List, got {}",
+                list_val
+            ))),
+        },
     }
 }
 

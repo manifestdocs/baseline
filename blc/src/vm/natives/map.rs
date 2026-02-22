@@ -89,16 +89,14 @@ pub(super) fn native_map_remove_owning(args: Vec<NValue>) -> Result<NValue, Nati
             Ok(NValue::map_from_hashmap(entries))
         }
         Ok(_) => Err(NativeError("Map.remove: expected Map".into())),
-        Err(map_val) => {
-            match map_val.as_heap_ref() {
-                HeapObject::Map(entries) => {
-                    let mut new_map = entries.clone();
-                    new_map.remove(&key);
-                    Ok(NValue::map_from_hashmap(new_map))
-                }
-                _ => Err(NativeError("Map.remove: expected Map".into())),
+        Err(map_val) => match map_val.as_heap_ref() {
+            HeapObject::Map(entries) => {
+                let mut new_map = entries.clone();
+                new_map.remove(&key);
+                Ok(NValue::map_from_hashmap(new_map))
             }
-        }
+            _ => Err(NativeError("Map.remove: expected Map".into())),
+        },
     }
 }
 
