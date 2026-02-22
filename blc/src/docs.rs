@@ -97,8 +97,12 @@ fn module_descriptions() -> HashMap<&'static str, &'static str> {
         "Store and retrieve values by key in immutable dictionaries.",
     );
     m.insert(
+        "Float",
+        "Convert between Int and Float, and format floating-point numbers.",
+    );
+    m.insert(
         "Math",
-        "Perform common calculations like absolute value, min/max, and exponentiation.",
+        "Perform common calculations like absolute value, min/max, trigonometry, and exponentiation.",
     );
     m.insert(
         "Middleware",
@@ -153,6 +157,26 @@ fn module_descriptions() -> HashMap<&'static str, &'static str> {
         "Row",
         "Extract typed values from database query result rows without string parsing.",
     );
+    m.insert(
+        "Jwt",
+        "Sign, verify, and decode JSON Web Tokens using HS256.",
+    );
+    m.insert(
+        "Session",
+        "Create, read, update, and delete server-side sessions with automatic expiration.",
+    );
+    m.insert(
+        "Validate",
+        "Validate request fields with type checks, length constraints, and allowed-value rules.",
+    );
+    m.insert(
+        "Ws",
+        "Send and receive WebSocket messages and close connections.",
+    );
+    m.insert(
+        "Sql",
+        "Run database migrations from a directory of SQL files.",
+    );
     m
 }
 
@@ -173,6 +197,10 @@ fn module_categories() -> HashMap<&'static str, &'static str> {
     m.insert("Mysql", "database");
     m.insert("Sql", "database");
     m.insert("Row", "database");
+    m.insert("Jwt", "web");
+    m.insert("Session", "web");
+    m.insert("Validate", "web");
+    m.insert("Ws", "web");
     // Everything else is "language"
     m
 }
@@ -322,6 +350,55 @@ fn known_functions() -> Vec<(
             "Raise a base to an exponent.",
             Some("Math.pow(2, 10)  // => 1024"),
         ),
+        (
+            "Math",
+            "sqrt",
+            "Return the square root of a number.",
+            Some("Math.sqrt(9.0)  // => 3.0"),
+        ),
+        (
+            "Math",
+            "sin",
+            "Return the sine of a number (radians).",
+            Some("Math.sin(0.0)  // => 0.0"),
+        ),
+        (
+            "Math",
+            "cos",
+            "Return the cosine of a number (radians).",
+            Some("Math.cos(0.0)  // => 1.0"),
+        ),
+        (
+            "Math",
+            "atan2",
+            "Return the arctangent of y/x (radians).",
+            Some("Math.atan2(1.0, 1.0)"),
+        ),
+        (
+            "Math",
+            "floor",
+            "Round a number down to the nearest integer.",
+            Some("Math.floor(3.7)  // => 3.0"),
+        ),
+        (
+            "Math",
+            "ceil",
+            "Round a number up to the nearest integer.",
+            Some("Math.ceil(3.2)  // => 4.0"),
+        ),
+        // -- Float --
+        (
+            "Float",
+            "from_int",
+            "Convert an Int to a Float.",
+            Some("Float.from_int(42)  // => 42.0"),
+        ),
+        (
+            "Float",
+            "format",
+            "Format a Float with a specified number of decimal places.",
+            Some("Float.format(3.14159, 2)  // => \"3.14\""),
+        ),
         // -- String --
         (
             "String",
@@ -424,6 +501,24 @@ fn known_functions() -> Vec<(
             "replace",
             "Replace all occurrences of a pattern with a replacement.",
             Some("String.replace(\"hello world\", \"world\", \"there\")  // => \"hello there\""),
+        ),
+        (
+            "String",
+            "matches",
+            "Test if a string matches a regular expression pattern.",
+            Some("String.matches(\"hello123\", \"[a-z]+[0-9]+\")  // => true"),
+        ),
+        (
+            "String",
+            "find_matches",
+            "Return all substrings matching a regular expression pattern.",
+            Some("String.find_matches(\"a1 b2 c3\", \"[a-z][0-9]\")  // => [\"a1\", \"b2\", \"c3\"]"),
+        ),
+        (
+            "String",
+            "replace_regex",
+            "Replace all matches of a regular expression with a replacement.",
+            Some("String.replace_regex(\"a1b2c3\", \"[0-9]\", \"X\")  // => \"aXbXcX\""),
         ),
         // -- List --
         (
@@ -621,6 +716,12 @@ fn known_functions() -> Vec<(
             "Parse a string as an integer.",
             Some("Int.parse(\"42\")  // => 42"),
         ),
+        (
+            "Int",
+            "from_float",
+            "Convert a Float to an Int (truncates toward zero).",
+            Some("Int.from_float(3.7)  // => 3"),
+        ),
         // -- Json --
         (
             "Json",
@@ -641,6 +742,18 @@ fn known_functions() -> Vec<(
             "to_string_pretty",
             "Serialize a value to a pretty-printed JSON string.",
             Some("Json.to_string_pretty({ name: \"Alice\" })"),
+        ),
+        (
+            "Json",
+            "to_camel_case",
+            "Convert all record keys from snake_case to camelCase.",
+            Some("Json.to_camel_case({ user_name: \"Alice\" })\n// => { userName: \"Alice\" }"),
+        ),
+        (
+            "Json",
+            "to_snake_case",
+            "Convert all record keys from camelCase to snake_case.",
+            Some("Json.to_snake_case({ userName: \"Alice\" })\n// => { user_name: \"Alice\" }"),
         ),
         // -- Map --
         ("Map", "empty", "Create an empty map.", None),
@@ -807,6 +920,12 @@ fn known_functions() -> Vec<(
             "Generate a random UUID v4 string.",
             Some("let id = Random.uuid!()"),
         ),
+        (
+            "Random",
+            "bytes!",
+            "Generate a string of random bytes (hex-encoded) of the given length.",
+            Some("let token = Random.bytes!(32)"),
+        ),
         // -- Crypto --
         (
             "Crypto",
@@ -838,6 +957,12 @@ fn known_functions() -> Vec<(
             "set!",
             "Set an environment variable.",
             Some("Env.set!(\"NODE_ENV\", \"production\")"),
+        ),
+        (
+            "Env",
+            "args!",
+            "Return program arguments as a list of strings.",
+            Some("let args = Env.args!()"),
         ),
         // -- Fs --
         (
@@ -877,6 +1002,12 @@ fn known_functions() -> Vec<(
             "list_dir!",
             "List the entries in a directory.",
             Some("Fs.list_dir!(\"./src\")"),
+        ),
+        (
+            "Fs",
+            "delete!",
+            "Delete a file at the given path.",
+            Some("Fs.delete!(\"tmp/output.txt\")"),
         ),
         (
             "Fs",
@@ -988,6 +1119,72 @@ fn known_functions() -> Vec<(
             "Create a 301 permanent redirect to a URL.",
             None,
         ),
+        (
+            "Response",
+            "redirect_temporary",
+            "Create a 307 temporary redirect that preserves the HTTP method.",
+            None,
+        ),
+        (
+            "Response",
+            "unauthorized",
+            "Create a 401 Unauthorized response.",
+            Some("Response.unauthorized(\"Invalid credentials\")"),
+        ),
+        (
+            "Response",
+            "forbidden",
+            "Create a 403 Forbidden response.",
+            Some("Response.forbidden(\"Access denied\")"),
+        ),
+        (
+            "Response",
+            "conflict",
+            "Create a 409 Conflict response.",
+            Some("Response.conflict(\"Email already exists\")"),
+        ),
+        (
+            "Response",
+            "unprocessable",
+            "Create a 422 Unprocessable Entity response.",
+            Some("Response.unprocessable(\"Invalid field: email\")"),
+        ),
+        (
+            "Response",
+            "method_not_allowed",
+            "Create a 405 Method Not Allowed response.",
+            None,
+        ),
+        (
+            "Response",
+            "too_many_requests",
+            "Create a 429 Too Many Requests response.",
+            None,
+        ),
+        (
+            "Response",
+            "bad_gateway",
+            "Create a 502 Bad Gateway response.",
+            None,
+        ),
+        (
+            "Response",
+            "service_unavailable",
+            "Create a 503 Service Unavailable response.",
+            None,
+        ),
+        (
+            "Response",
+            "gateway_timeout",
+            "Create a 504 Gateway Timeout response.",
+            None,
+        ),
+        (
+            "Response",
+            "set_cookie",
+            "Set a cookie on the response with a name and value.",
+            Some("Response.ok(\"done\")\n|> Response.set_cookie(\"session\", token)"),
+        ),
         // -- Request --
         (
             "Request",
@@ -1006,6 +1203,54 @@ fn known_functions() -> Vec<(
             "body_json",
             "Parse the request body as JSON.",
             Some("let data = Request.body_json(req)"),
+        ),
+        (
+            "Request",
+            "param",
+            "Extract a path parameter by name, returning Result<String, String>.",
+            Some("let id = Request.param(req, \"id\")?"),
+        ),
+        (
+            "Request",
+            "param_int",
+            "Extract a path parameter as an Int, returning Result<Int, String>.",
+            Some("let id = Request.param_int(req, \"id\")?"),
+        ),
+        (
+            "Request",
+            "query",
+            "Extract a query string parameter by name, returning Option<String>.",
+            Some("let page = Request.query(req, \"page\")"),
+        ),
+        (
+            "Request",
+            "query_int",
+            "Extract a query string parameter as an Int, returning Result<Int, String>.",
+            Some("let page = Request.query_int(req, \"page\")?"),
+        ),
+        (
+            "Request",
+            "decode",
+            "Validate and decode the request body into a typed record.",
+            Some("let user = Request.decode(req, \"User\")?"),
+        ),
+        (
+            "Request",
+            "multipart",
+            "Parse a multipart/form-data request body.",
+            Some("let parts = Request.multipart(req)"),
+        ),
+        (
+            "Request",
+            "with_state",
+            "Attach a named state value to a request record.",
+            None,
+        ),
+        (
+            "Request",
+            "state",
+            "Retrieve a named state value from a request record.",
+            Some("let db_url = Request.state(req, \"db_url\")"),
         ),
         // -- Router --
         (
@@ -1081,6 +1326,30 @@ fn known_functions() -> Vec<(
             Some(
                 "router |> Router.group(\"/api\", |r|\n  r |> Router.get(\"/users\", list_users)\n    |> Router.post(\"/users\", create_user)\n)",
             ),
+        ),
+        (
+            "Router",
+            "resources",
+            "Register RESTful CRUD routes for a resource path.",
+            Some("router |> Router.resources(\"/users\", {\n  index: list_users,\n  show: get_user,\n  create: create_user,\n  update: update_user,\n  destroy: delete_user\n})"),
+        ),
+        (
+            "Router",
+            "state",
+            "Attach a named state value to the router, available in handlers via Request.state.",
+            Some("Router.new()\n|> Router.state(\"db_url\", db_url)"),
+        ),
+        (
+            "Router",
+            "docs_json",
+            "Generate an OpenAPI-style JSON description of all registered routes.",
+            Some("let spec = Router.docs_json(router)"),
+        ),
+        (
+            "Router",
+            "ws",
+            "Register a WebSocket handler at a path.",
+            Some("router |> Router.ws(\"/ws\", ws_handler)"),
         ),
         // -- Middleware --
         (
@@ -1180,6 +1449,24 @@ fn known_functions() -> Vec<(
             "Create a 504 Gateway Timeout error.",
             None,
         ),
+        (
+            "HttpError",
+            "with_context",
+            "Add context information to an HttpError.",
+            Some("HttpError.bad_request(\"invalid\") |> HttpError.with_context(\"user signup\")"),
+        ),
+        (
+            "HttpError",
+            "with_code",
+            "Add an application-specific error code to an HttpError.",
+            Some("HttpError.bad_request(\"invalid\") |> HttpError.with_code(\"VALIDATION_ERROR\")"),
+        ),
+        (
+            "HttpError",
+            "to_response",
+            "Convert an HttpError to an HTTP Response record.",
+            Some("HttpError.not_found(\"User not found\") |> HttpError.to_response"),
+        ),
         // -- Db --
         (
             "Db",
@@ -1232,6 +1519,18 @@ fn known_functions() -> Vec<(
                 "Sqlite.query_map!(\"SELECT * FROM users\", [], |row|\n  User { name: Row.string(row, \"name\"), age: Row.int(row, \"age\") }\n)",
             ),
         ),
+        (
+            "Sqlite",
+            "query_as!",
+            "Run a SQL query and decode each row into a typed record using a schema.",
+            Some("Sqlite.query_as!(User, \"SELECT * FROM users\", [])"),
+        ),
+        (
+            "Sqlite",
+            "query_one_as!",
+            "Run a SQL query and decode the first row into a typed record, returning Option.",
+            Some("Sqlite.query_one_as!(User, \"SELECT * FROM users WHERE id = ?1\", [id])"),
+        ),
         // -- Row --
         (
             "Row",
@@ -1269,6 +1568,12 @@ fn known_functions() -> Vec<(
             "Extract a column value as Option<Int> (Null becomes None).",
             Some("Row.optional_int(row, \"age\")  // => Some(30)"),
         ),
+        (
+            "Row",
+            "decode",
+            "Decode a row into a typed record using a schema function.",
+            Some("Row.decode(row, user_schema)"),
+        ),
         // -- Server --
         (
             "Server",
@@ -1277,6 +1582,137 @@ fn known_functions() -> Vec<(
             Some(
                 "let app = Router.new()\n  |> Router.get(\"/\", |req| Response.ok(\"Hello!\"))\n\nServer.listen!(app, 3000)",
             ),
+        ),
+        // -- Jwt --
+        (
+            "Jwt",
+            "sign",
+            "Sign a claims record as a JWT using HS256.",
+            Some("let token = Jwt.sign({ sub: \"user123\", role: \"admin\" }, secret)"),
+        ),
+        (
+            "Jwt",
+            "sign_with",
+            "Sign a JWT with options such as expiration time.",
+            Some("let token = Jwt.sign_with(claims, secret, { expires_in: 3600 })"),
+        ),
+        (
+            "Jwt",
+            "verify",
+            "Verify a JWT signature and check expiration, returning Result<Record, String>.",
+            Some("let claims = Jwt.verify(token, secret)?"),
+        ),
+        (
+            "Jwt",
+            "decode",
+            "Decode a JWT payload without verifying the signature.",
+            Some("let claims = Jwt.decode(token)?"),
+        ),
+        // -- Session --
+        (
+            "Session",
+            "create!",
+            "Create a new session with the given data record, returning a session ID.",
+            Some("let session_id = Session.create!({ user_id: 42, role: \"admin\" })"),
+        ),
+        (
+            "Session",
+            "get!",
+            "Retrieve session data by ID, returning None if expired or not found.",
+            Some("let data = Session.get!(session_id)"),
+        ),
+        (
+            "Session",
+            "set!",
+            "Update a single field in an existing session.",
+            Some("Session.set!(session_id, \"last_seen\", Time.now!())"),
+        ),
+        (
+            "Session",
+            "delete!",
+            "Remove a session by ID.",
+            Some("Session.delete!(session_id)"),
+        ),
+        // -- Validate --
+        (
+            "Validate",
+            "required",
+            "Check that a value is not None, returning Result<T, HttpError>.",
+            Some("Validate.required(name, \"name\")?"),
+        ),
+        (
+            "Validate",
+            "string",
+            "Check that a value is a String, returning Result<String, HttpError>.",
+            Some("Validate.string(val, \"email\")?"),
+        ),
+        (
+            "Validate",
+            "int",
+            "Check that a value is an Int (or parseable as one), returning Result<Int, HttpError>.",
+            Some("Validate.int(val, \"age\")?"),
+        ),
+        (
+            "Validate",
+            "boolean",
+            "Check that a value is a Boolean, returning Result<Boolean, HttpError>.",
+            Some("Validate.boolean(val, \"active\")?"),
+        ),
+        (
+            "Validate",
+            "min_length",
+            "Check that a string has at least the given number of characters.",
+            Some("Validate.min_length(password, 8, \"password\")?"),
+        ),
+        (
+            "Validate",
+            "max_length",
+            "Check that a string has at most the given number of characters.",
+            Some("Validate.max_length(username, 50, \"username\")?"),
+        ),
+        (
+            "Validate",
+            "min",
+            "Check that an integer is at least the given minimum.",
+            Some("Validate.min(age, 0, \"age\")?"),
+        ),
+        (
+            "Validate",
+            "max",
+            "Check that an integer is at most the given maximum.",
+            Some("Validate.max(quantity, 100, \"quantity\")?"),
+        ),
+        (
+            "Validate",
+            "one_of",
+            "Check that a string value is one of the allowed options.",
+            Some("Validate.one_of(role, [\"admin\", \"user\", \"guest\"], \"role\")?"),
+        ),
+        // -- Ws --
+        (
+            "Ws",
+            "send!",
+            "Send a message through a WebSocket connection.",
+            Some("Ws.send!(\"Hello from server\")"),
+        ),
+        (
+            "Ws",
+            "receive!",
+            "Receive the next message from a WebSocket connection.",
+            Some("let msg = Ws.receive!()"),
+        ),
+        (
+            "Ws",
+            "close!",
+            "Close a WebSocket connection.",
+            Some("Ws.close!()"),
+        ),
+        // -- Sql --
+        (
+            "Sql",
+            "migrate!",
+            "Run all pending SQL migration files from a directory.",
+            Some("Sql.migrate!(\"./migrations\")"),
         ),
     ]
 }
@@ -1459,6 +1895,52 @@ fn build_type_signatures() -> HashMap<String, Type> {
         "Math.pow".into(),
         Type::Function(vec![Type::Int, Type::Int], Box::new(Type::Int)),
     );
+    sigs.insert(
+        "Math.sqrt".into(),
+        Type::Function(vec![Type::Float], Box::new(Type::Float)),
+    );
+    sigs.insert(
+        "Math.sin".into(),
+        Type::Function(vec![Type::Float], Box::new(Type::Float)),
+    );
+    sigs.insert(
+        "Math.cos".into(),
+        Type::Function(vec![Type::Float], Box::new(Type::Float)),
+    );
+    sigs.insert(
+        "Math.atan2".into(),
+        Type::Function(vec![Type::Float, Type::Float], Box::new(Type::Float)),
+    );
+    sigs.insert(
+        "Math.floor".into(),
+        Type::Function(vec![Type::Float], Box::new(Type::Float)),
+    );
+    sigs.insert(
+        "Math.ceil".into(),
+        Type::Function(vec![Type::Float], Box::new(Type::Float)),
+    );
+
+    // Float
+    sigs.insert(
+        "Float.from_int".into(),
+        Type::Function(vec![Type::Int], Box::new(Type::Float)),
+    );
+    sigs.insert(
+        "Float.format".into(),
+        Type::Function(vec![Type::Float, Type::Int], Box::new(Type::String)),
+    );
+
+    // Random
+    sigs.insert(
+        "Random.bytes!".into(),
+        Type::Function(vec![Type::Int], Box::new(Type::String)),
+    );
+
+    // Env
+    sigs.insert(
+        "Env.args!".into(),
+        Type::Function(vec![], Box::new(Type::List(Box::new(Type::String)))),
+    );
 
     // String
     sigs.insert(
@@ -1544,6 +2026,24 @@ fn build_type_signatures() -> HashMap<String, Type> {
             Box::new(Type::String),
         ),
     );
+    sigs.insert(
+        "String.matches".into(),
+        Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)),
+    );
+    sigs.insert(
+        "String.find_matches".into(),
+        Type::Function(
+            vec![Type::String, Type::String],
+            Box::new(Type::List(Box::new(Type::String))),
+        ),
+    );
+    sigs.insert(
+        "String.replace_regex".into(),
+        Type::Function(
+            vec![Type::String, Type::String, Type::String],
+            Box::new(Type::String),
+        ),
+    );
 
     // Int
     sigs.insert(
@@ -1553,6 +2053,10 @@ fn build_type_signatures() -> HashMap<String, Type> {
     sigs.insert(
         "Int.parse".into(),
         Type::Function(vec![Type::String], Box::new(Type::Int)),
+    );
+    sigs.insert(
+        "Int.from_float".into(),
+        Type::Function(vec![Type::Float], Box::new(Type::Int)),
     );
 
     // Json
@@ -1567,6 +2071,14 @@ fn build_type_signatures() -> HashMap<String, Type> {
     sigs.insert(
         "Json.to_string_pretty".into(),
         Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+    );
+    sigs.insert(
+        "Json.to_camel_case".into(),
+        Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Json.to_snake_case".into(),
+        Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
     );
 
     // Option (non-generic fallbacks)
@@ -1933,6 +2445,268 @@ fn build_type_signatures() -> HashMap<String, Type> {
     sigs.insert(
         "Server.listen!".into(),
         Type::Function(vec![Type::Unknown, Type::Int], Box::new(Type::Unit)),
+    );
+
+    // Response (additional)
+    sigs.insert(
+        "Response.unauthorized".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.forbidden".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.conflict".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.unprocessable".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.method_not_allowed".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.too_many_requests".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.bad_gateway".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.service_unavailable".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.gateway_timeout".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.redirect_temporary".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Response.set_cookie".into(),
+        Type::Function(
+            vec![Type::Unknown, Type::String, Type::String],
+            Box::new(Type::Unknown),
+        ),
+    );
+
+    // Request (additional)
+    sigs.insert(
+        "Request.param".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Request.param_int".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Request.query".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Request.query_int".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Request.decode".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Request.multipart".into(),
+        Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+    );
+
+    // Router (additional)
+    sigs.insert(
+        "Router.resources".into(),
+        Type::Function(
+            vec![Type::Unknown, Type::String, Type::Unknown],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Router.state".into(),
+        Type::Function(
+            vec![Type::Unknown, Type::String, Type::Unknown],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Router.docs_json".into(),
+        Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+    );
+    sigs.insert(
+        "Router.ws".into(),
+        Type::Function(
+            vec![Type::Unknown, Type::String, Type::Unknown],
+            Box::new(Type::Unknown),
+        ),
+    );
+
+    // HttpError (additional)
+    sigs.insert(
+        "HttpError.with_context".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "HttpError.with_code".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "HttpError.to_response".into(),
+        Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
+    );
+
+    // Jwt
+    sigs.insert(
+        "Jwt.sign".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::String)),
+    );
+    sigs.insert(
+        "Jwt.sign_with".into(),
+        Type::Function(
+            vec![Type::Unknown, Type::String, Type::Unknown],
+            Box::new(Type::String),
+        ),
+    );
+    sigs.insert(
+        "Jwt.verify".into(),
+        Type::Function(
+            vec![Type::String, Type::String],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Jwt.decode".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+
+    // Session
+    sigs.insert(
+        "Session.create!".into(),
+        Type::Function(vec![Type::Unknown], Box::new(Type::String)),
+    );
+    sigs.insert(
+        "Session.get!".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Session.set!".into(),
+        Type::Function(
+            vec![Type::String, Type::String, Type::Unknown],
+            Box::new(Type::Unit),
+        ),
+    );
+    sigs.insert(
+        "Session.delete!".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unit)),
+    );
+
+    // Validate
+    sigs.insert(
+        "Validate.required".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Validate.string".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Validate.int".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Validate.boolean".into(),
+        Type::Function(vec![Type::Unknown, Type::String], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Validate.min_length".into(),
+        Type::Function(
+            vec![Type::String, Type::Int, Type::String],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Validate.max_length".into(),
+        Type::Function(
+            vec![Type::String, Type::Int, Type::String],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Validate.min".into(),
+        Type::Function(
+            vec![Type::Int, Type::Int, Type::String],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Validate.max".into(),
+        Type::Function(
+            vec![Type::Int, Type::Int, Type::String],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Validate.one_of".into(),
+        Type::Function(
+            vec![Type::String, Type::List(Box::new(Type::String)), Type::String],
+            Box::new(Type::Unknown),
+        ),
+    );
+
+    // Ws (WebSocket)
+    sigs.insert(
+        "Ws.send!".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unit)),
+    );
+    sigs.insert(
+        "Ws.receive!".into(),
+        Type::Function(vec![], Box::new(Type::Unknown)),
+    );
+    sigs.insert(
+        "Ws.close!".into(),
+        Type::Function(vec![], Box::new(Type::Unit)),
+    );
+
+    // Sql
+    sigs.insert(
+        "Sql.migrate!".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+    );
+
+    // Fs (additional)
+    sigs.insert(
+        "Fs.delete!".into(),
+        Type::Function(vec![Type::String], Box::new(Type::Unit)),
+    );
+
+    // Row (additional)
+    sigs.insert(
+        "Row.decode".into(),
+        Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
+    );
+
+    // Sqlite (additional)
+    sigs.insert(
+        "Sqlite.query_as!".into(),
+        Type::Function(
+            vec![Type::Unknown, Type::String, Type::Unknown],
+            Box::new(Type::Unknown),
+        ),
+    );
+    sigs.insert(
+        "Sqlite.query_one_as!".into(),
+        Type::Function(
+            vec![Type::Unknown, Type::String, Type::Unknown],
+            Box::new(Type::Unknown),
+        ),
     );
 
     sigs

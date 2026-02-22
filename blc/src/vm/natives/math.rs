@@ -62,3 +62,66 @@ pub(super) fn native_math_pow(args: &[NValue]) -> Result<NValue, NativeError> {
         Err(NativeError("Math.pow: expected two numbers".into()))
     }
 }
+
+pub(super) fn native_math_sqrt(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_number() {
+        Ok(NValue::float(args[0].as_f64().sqrt()))
+    } else {
+        Err(NativeError(format!(
+            "Math.sqrt: expected number, got {}",
+            args[0]
+        )))
+    }
+}
+
+pub(super) fn native_math_sin(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_number() {
+        Ok(NValue::float(args[0].as_f64().sin()))
+    } else {
+        Err(NativeError(format!(
+            "Math.sin: expected number, got {}",
+            args[0]
+        )))
+    }
+}
+
+pub(super) fn native_math_cos(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_number() {
+        Ok(NValue::float(args[0].as_f64().cos()))
+    } else {
+        Err(NativeError(format!(
+            "Math.cos: expected number, got {}",
+            args[0]
+        )))
+    }
+}
+
+pub(super) fn native_math_atan2(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_number() && args[1].is_number() {
+        Ok(NValue::float(args[0].as_f64().atan2(args[1].as_f64())))
+    } else {
+        Err(NativeError("Math.atan2: expected two numbers".into()))
+    }
+}
+
+pub(super) fn native_math_floor(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_number() {
+        Ok(NValue::float(args[0].as_f64().floor()))
+    } else {
+        Err(NativeError(format!(
+            "Math.floor: expected number, got {}",
+            args[0]
+        )))
+    }
+}
+
+pub(super) fn native_math_ceil(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args[0].is_number() {
+        Ok(NValue::float(args[0].as_f64().ceil()))
+    } else {
+        Err(NativeError(format!(
+            "Math.ceil: expected number, got {}",
+            args[0]
+        )))
+    }
+}

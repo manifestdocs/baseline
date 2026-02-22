@@ -467,6 +467,42 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             "Math.pow".into(),
             Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
         );
+        sigs.insert(
+            "Math.sqrt".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Float)),
+        );
+        sigs.insert(
+            "Math.sin".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Float)),
+        );
+        sigs.insert(
+            "Math.cos".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Float)),
+        );
+        sigs.insert(
+            "Math.atan2".into(),
+            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Float)),
+        );
+        sigs.insert(
+            "Math.floor".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Float)),
+        );
+        sigs.insert(
+            "Math.ceil".into(),
+            Type::Function(vec![Type::Unknown], Box::new(Type::Float)),
+        );
+    }
+
+    // -- Float (pure, no effect) --
+    if native_modules.contains(&"Float") {
+        sigs.insert(
+            "Float.from_int".into(),
+            Type::Function(vec![Type::Int], Box::new(Type::Float)),
+        );
+        sigs.insert(
+            "Float.format".into(),
+            Type::Function(vec![Type::Float, Type::Int], Box::new(Type::String)),
+        );
     }
 
     // -- Json native methods (pure) --
@@ -607,6 +643,10 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         sigs.insert(
             "Int.parse".into(),
             Type::Function(vec![Type::String], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "Int.from_float".into(),
+            Type::Function(vec![Type::Float], Box::new(Type::Int)),
         );
     }
 

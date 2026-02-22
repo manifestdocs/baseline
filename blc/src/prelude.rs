@@ -26,9 +26,9 @@ impl Prelude {
         match self {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
-            Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Crypto"],
+            Prelude::Pure => &["Option", "Result", "String", "List", "Json", "Crypto", "Float"],
             Prelude::Core => &[
-                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Crypto",
+                "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Int", "Crypto", "Float",
             ],
             Prelude::Script => &[
                 "Option",
@@ -40,6 +40,7 @@ impl Prelude {
                 "Weak",
                 "Json",
                 "Int",
+                "Float",
                 "Http",
                 "Response",
                 "Request",
@@ -61,6 +62,7 @@ impl Prelude {
                 "Weak",
                 "Json",
                 "Int",
+                "Float",
                 "Http",
                 "Response",
                 "Request",
@@ -102,11 +104,11 @@ impl Prelude {
             Prelude::None => &[],
             Prelude::Minimal => &["Option", "Result"],
             Prelude::Pure => &[
-                "Option", "Result", "String", "List", "Json", "Math", "Crypto",
+                "Option", "Result", "String", "List", "Json", "Math", "Crypto", "Float",
             ],
             Prelude::Core => &[
                 "Option", "Result", "String", "List", "Map", "Set", "Weak", "Json", "Math", "Int",
-                "Crypto",
+                "Crypto", "Float",
             ],
             Prelude::Script => &[
                 "Option",
@@ -119,6 +121,7 @@ impl Prelude {
                 "Json",
                 "Math",
                 "Int",
+                "Float",
                 "Console",
                 "Log",
                 "Time",
@@ -146,6 +149,7 @@ impl Prelude {
                 "Json",
                 "Math",
                 "Int",
+                "Float",
                 "Console",
                 "Log",
                 "Time",
@@ -348,13 +352,13 @@ mod tests {
         let p = Prelude::Pure;
         assert_eq!(
             p.native_modules(),
-            &["Option", "Result", "String", "List", "Json", "Crypto"]
+            &["Option", "Result", "String", "List", "Json", "Crypto", "Float"]
         );
         assert_eq!(p.builtin_modules(), &["Math"]);
         assert_eq!(
             p.type_modules(),
             &[
-                "Option", "Result", "String", "List", "Json", "Math", "Crypto"
+                "Option", "Result", "String", "List", "Json", "Math", "Crypto", "Float"
             ]
         );
     }

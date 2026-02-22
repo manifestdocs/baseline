@@ -11,6 +11,7 @@ mod db_mysql;
 mod db_postgres;
 mod env;
 pub use env::set_program_args;
+mod float;
 mod fs;
 pub(crate) mod fs_sandbox;
 pub(crate) mod http_error;
@@ -334,6 +335,12 @@ impl NativeRegistry {
         self.register("Math.max", native_math_max);
         self.register("Math.clamp", native_math_clamp);
         self.register("Math.pow", native_math_pow);
+        self.register("Math.sqrt", native_math_sqrt);
+        self.register("Math.sin", native_math_sin);
+        self.register("Math.cos", native_math_cos);
+        self.register("Math.atan2", native_math_atan2);
+        self.register("Math.floor", native_math_floor);
+        self.register("Math.ceil", native_math_ceil);
 
         // -- String --
         self.register("String.length", native_string_length);
@@ -450,6 +457,11 @@ impl NativeRegistry {
         // -- Int/String conversion --
         self.register("Int.to_string", native_int_to_string);
         self.register("Int.parse", native_int_parse);
+        self.register("Int.from_float", float::native_int_from_float);
+
+        // -- Float --
+        self.register("Float.from_int", float::native_float_from_int);
+        self.register("Float.format", float::native_float_format);
 
         // -- Json --
         self.register("Json.parse", native_json_parse);
