@@ -87,7 +87,7 @@ print(f'{statistics.median(times):.3f}')
 
 # ── Run benchmarks ───────────────────────────────────────────────────
 
-BENCHES=(fib tak divsum)
+BENCHES=(fib tak divsum primes treemap mergesort strrev mapbuild)
 ENTRIES=()
 HAS_REGRESSION=false
 

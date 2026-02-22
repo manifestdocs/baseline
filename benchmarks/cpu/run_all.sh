@@ -122,7 +122,12 @@ LANGS_AVAILABLE=()
 if compile_if_available "C (clang -O2)" \
     "clang -O2 -o $BUILD_DIR/fib_c $SCRIPT_DIR/fib/fib.c && \
      clang -O2 -o $BUILD_DIR/tak_c $SCRIPT_DIR/tak/tak.c && \
-     clang -O2 -o $BUILD_DIR/divsum_c $SCRIPT_DIR/divsum/divsum.c" \
+     clang -O2 -o $BUILD_DIR/divsum_c $SCRIPT_DIR/divsum/divsum.c && \
+     clang -O2 -o $BUILD_DIR/primes_c $SCRIPT_DIR/primes/primes.c && \
+     clang -O2 -o $BUILD_DIR/treemap_c $SCRIPT_DIR/treemap/treemap.c && \
+     clang -O2 -o $BUILD_DIR/mergesort_c $SCRIPT_DIR/mergesort/mergesort.c && \
+     clang -O2 -o $BUILD_DIR/strrev_c $SCRIPT_DIR/strrev/strrev.c && \
+     clang -O2 -o $BUILD_DIR/mapbuild_c $SCRIPT_DIR/mapbuild/mapbuild.c" \
     ""; then
     LANGS_AVAILABLE+=(c)
 fi
@@ -131,7 +136,12 @@ fi
 if compile_if_available "Rust (rustc -O)" \
     "rustc -O -o $BUILD_DIR/fib_rust $SCRIPT_DIR/fib/fib.rs && \
      rustc -O -o $BUILD_DIR/tak_rust $SCRIPT_DIR/tak/tak.rs && \
-     rustc -O -o $BUILD_DIR/divsum_rust $SCRIPT_DIR/divsum/divsum.rs" \
+     rustc -O -o $BUILD_DIR/divsum_rust $SCRIPT_DIR/divsum/divsum.rs && \
+     rustc -O -o $BUILD_DIR/primes_rust $SCRIPT_DIR/primes/primes.rs && \
+     rustc -O -o $BUILD_DIR/treemap_rust $SCRIPT_DIR/treemap/treemap.rs && \
+     rustc -O -o $BUILD_DIR/mergesort_rust $SCRIPT_DIR/mergesort/mergesort.rs && \
+     rustc -O -o $BUILD_DIR/strrev_rust $SCRIPT_DIR/strrev/strrev.rs && \
+     rustc -O -o $BUILD_DIR/mapbuild_rust $SCRIPT_DIR/mapbuild/mapbuild.rs" \
     ""; then
     LANGS_AVAILABLE+=(rust)
 fi
@@ -140,7 +150,12 @@ fi
 if compile_if_available "Go" \
     "cd $SCRIPT_DIR/fib && go build -o $BUILD_DIR/fib_go fib.go && \
      cd $SCRIPT_DIR/tak && go build -o $BUILD_DIR/tak_go tak.go && \
-     cd $SCRIPT_DIR/divsum && go build -o $BUILD_DIR/divsum_go divsum.go" \
+     cd $SCRIPT_DIR/divsum && go build -o $BUILD_DIR/divsum_go divsum.go && \
+     cd $SCRIPT_DIR/primes && go build -o $BUILD_DIR/primes_go primes.go && \
+     cd $SCRIPT_DIR/treemap && go build -o $BUILD_DIR/treemap_go treemap.go && \
+     cd $SCRIPT_DIR/mergesort && go build -o $BUILD_DIR/mergesort_go mergesort.go && \
+     cd $SCRIPT_DIR/strrev && go build -o $BUILD_DIR/strrev_go strrev.go && \
+     cd $SCRIPT_DIR/mapbuild && go build -o $BUILD_DIR/mapbuild_go mapbuild.go" \
     ""; then
     LANGS_AVAILABLE+=(go)
 fi
@@ -223,7 +238,7 @@ run_bench() {
     ENTRIES+=("$(json_entry "$lang" "$bench" "$time_s" "$mem_kb")")
 }
 
-BENCHES=(fib tak divsum)
+BENCHES=(fib tak divsum primes treemap mergesort strrev mapbuild)
 
 for bench in "${BENCHES[@]}"; do
     echo -e "${BOLD}$bench${NC}"

@@ -1,0 +1,205 @@
+@prelude(script)
+
+// N-Body benchmark — hanabi1224/Programming-Language-Benchmarks
+// Solar system simulation: advance N steps, compute energy.
+
+// Constants
+fn pi() -> Float = 3.141592653589793
+fn solar_mass() -> Float = 4.0 * pi() * pi()
+fn days_per_year() -> Float = 365.24
+
+// Body: x y z vx vy vz mass
+type Body = { x: Float, y: Float, z: Float, vx: Float, vy: Float, vz: Float, mass: Float }
+
+fn sun() -> Body = {
+  x: 0.0, y: 0.0, z: 0.0,
+  vx: 0.0, vy: 0.0, vz: 0.0,
+  mass: solar_mass()
+}
+
+fn jupiter() -> Body = {
+  x: 4.84143144246472090,
+  y: 0.0 - 1.16032004402742839,
+  z: 0.0 - 1.03622044471123109e-1,
+  vx: 1.66007664274403694e-3 * days_per_year(),
+  vy: 7.69901118419740425e-3 * days_per_year(),
+  vz: 0.0 - 6.90460016972063023e-5 * days_per_year(),
+  mass: 9.54791938424326609e-4 * solar_mass()
+}
+
+fn saturn() -> Body = {
+  x: 8.34336671824457987,
+  y: 4.12479856412430479,
+  z: 0.0 - 4.03523417114321381e-1,
+  vx: 0.0 - 2.76742510726862411e-3 * days_per_year(),
+  vy: 4.99852801234917238e-3 * days_per_year(),
+  vz: 2.30417297573763929e-5 * days_per_year(),
+  mass: 2.85885980666130812e-4 * solar_mass()
+}
+
+fn uranus() -> Body = {
+  x: 1.28943695621391310e1,
+  y: 0.0 - 1.51111514016986312e1,
+  z: 0.0 - 2.23307578892655734e-1,
+  vx: 2.96460137564761618e-3 * days_per_year(),
+  vy: 2.37847173959480950e-3 * days_per_year(),
+  vz: 0.0 - 2.96589568540237556e-5 * days_per_year(),
+  mass: 4.36624404335156298e-5 * solar_mass()
+}
+
+fn neptune() -> Body = {
+  x: 1.53796971148509165e1,
+  y: 0.0 - 2.59193146099879641e1,
+  z: 1.79258772950371181e-1,
+  vx: 2.68067772490389322e-3 * days_per_year(),
+  vy: 1.62824170038242295e-3 * days_per_year(),
+  vz: 0.0 - 9.51592254519715870e-5 * days_per_year(),
+  mass: 5.15138902046611451e-5 * solar_mass()
+}
+
+// Offset momentum of the sun so total system momentum is zero
+fn offset_momentum(bodies: List<Body>) -> List<Body> = {
+  let px = sum_field_px(bodies, 0.0)
+  let py = sum_field_py(bodies, 0.0)
+  let pz = sum_field_pz(bodies, 0.0)
+  let sun_body = Option.unwrap(List.get(bodies, 0))
+  let new_sun = { ..sun_body,
+    vx: 0.0 - px / solar_mass(),
+    vy: 0.0 - py / solar_mass(),
+    vz: 0.0 - pz / solar_mass()
+  }
+  set_at(bodies, 0, new_sun)
+}
+
+fn sum_field_px(bodies: List<Body>, acc: Float) -> Float =
+  match List.head(bodies)
+    Some(b) -> sum_field_px(List.tail(bodies), acc + b.vx * b.mass)
+    None -> acc
+
+fn sum_field_py(bodies: List<Body>, acc: Float) -> Float =
+  match List.head(bodies)
+    Some(b) -> sum_field_py(List.tail(bodies), acc + b.vy * b.mass)
+    None -> acc
+
+fn sum_field_pz(bodies: List<Body>, acc: Float) -> Float =
+  match List.head(bodies)
+    Some(b) -> sum_field_pz(List.tail(bodies), acc + b.vz * b.mass)
+    None -> acc
+
+// Set element at index (rebuild list via indexed fold)
+fn set_at(lst: List<Body>, idx: Int, val: Body) -> List<Body> =
+  set_at_inner(lst, idx, val, 0, [])
+
+fn set_at_inner(lst: List<Body>, idx: Int, val: Body, i: Int, acc: List<Body>) -> List<Body> =
+  match List.head(lst)
+    Some(h) ->
+      if i == idx then {
+        let new_acc = List.concat(acc, [val])
+        List.concat(new_acc, List.tail(lst))
+      }
+      else {
+        let new_acc = List.concat(acc, [h])
+        set_at_inner(List.tail(lst), idx, val, i + 1, new_acc)
+      }
+    None -> acc
+
+// Advance simulation by dt
+fn advance(bodies: List<Body>, dt: Float) -> List<Body> = {
+  let bodies = apply_forces(bodies, 0, dt)
+  move_all(bodies, dt, 0)
+}
+
+fn apply_forces(bodies: List<Body>, i: Int, dt: Float) -> List<Body> =
+  if i >= List.length(bodies) then bodies
+  else apply_forces(apply_forces_j(bodies, i, i + 1, dt), i + 1, dt)
+
+fn apply_forces_j(bodies: List<Body>, i: Int, j: Int, dt: Float) -> List<Body> =
+  if j >= List.length(bodies) then bodies
+  else {
+    let bi = Option.unwrap(List.get(bodies, i))
+    let bj = Option.unwrap(List.get(bodies, j))
+    let dx = bi.x - bj.x
+    let dy = bi.y - bj.y
+    let dz = bi.z - bj.z
+    let dist2 = dx * dx + dy * dy + dz * dz
+    let dist = Math.sqrt(dist2)
+    let mag = dt / (dist2 * dist)
+    let new_bi = { ..bi,
+      vx: bi.vx - dx * bj.mass * mag,
+      vy: bi.vy - dy * bj.mass * mag,
+      vz: bi.vz - dz * bj.mass * mag
+    }
+    let new_bj = { ..bj,
+      vx: bj.vx + dx * bi.mass * mag,
+      vy: bj.vy + dy * bi.mass * mag,
+      vz: bj.vz + dz * bi.mass * mag
+    }
+    let bodies = set_at(bodies, i, new_bi)
+    let bodies = set_at(bodies, j, new_bj)
+    apply_forces_j(bodies, i, j + 1, dt)
+  }
+
+fn move_all(bodies: List<Body>, dt: Float, i: Int) -> List<Body> =
+  if i >= List.length(bodies) then bodies
+  else {
+    let b = Option.unwrap(List.get(bodies, i))
+    let new_b = { ..b,
+      x: b.x + dt * b.vx,
+      y: b.y + dt * b.vy,
+      z: b.z + dt * b.vz
+    }
+    move_all(set_at(bodies, i, new_b), dt, i + 1)
+  }
+
+// Compute total system energy
+fn energy(bodies: List<Body>) -> Float =
+  kinetic(bodies, 0.0) + potential(bodies, 0, 0.0)
+
+fn kinetic(bodies: List<Body>, acc: Float) -> Float =
+  match List.head(bodies)
+    Some(b) -> {
+      let ke = 0.5 * b.mass * (b.vx * b.vx + b.vy * b.vy + b.vz * b.vz)
+      kinetic(List.tail(bodies), acc + ke)
+    }
+    None -> acc
+
+fn potential(bodies: List<Body>, i: Int, acc: Float) -> Float =
+  if i >= List.length(bodies) then acc
+  else potential(bodies, i + 1, acc + pot_j(bodies, i, i + 1, 0.0))
+
+fn pot_j(bodies: List<Body>, i: Int, j: Int, acc: Float) -> Float =
+  if j >= List.length(bodies) then acc
+  else {
+    let bi = Option.unwrap(List.get(bodies, i))
+    let bj = Option.unwrap(List.get(bodies, j))
+    let dx = bi.x - bj.x
+    let dy = bi.y - bj.y
+    let dz = bi.z - bj.z
+    let dist = Math.sqrt(dx * dx + dy * dy + dz * dz)
+    pot_j(bodies, i, j + 1, acc - bi.mass * bj.mass / dist)
+  }
+
+// Main loop
+fn run_steps(bodies: List<Body>, n: Int, dt: Float) -> List<Body> =
+  if n <= 0 then bodies
+  else run_steps(advance(bodies, dt), n - 1, dt)
+
+fn main!() -> () = {
+  let args = Env.args!()
+  let n_str = Option.unwrap_or(List.get(args, 0), "1000")
+  let n = match Int.parse(n_str)
+    Ok(v) -> v
+    Err(_) -> 1000
+
+  let b0 = sun()
+  let b1 = jupiter()
+  let b2 = saturn()
+  let b3 = uranus()
+  let b4 = neptune()
+  let bodies = [b0, b1, b2, b3, b4]
+  let bodies = offset_momentum(bodies)
+
+  Console.println!(Float.format(energy(bodies), 9))
+  let bodies = run_steps(bodies, n, 0.01)
+  Console.println!(Float.format(energy(bodies), 9))
+}
