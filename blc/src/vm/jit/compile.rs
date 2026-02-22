@@ -1237,11 +1237,35 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let native_id = registry
                     .lookup(&qualified)
                     .ok_or_else(|| format!("Unknown native: {}", qualified))?;
+                let is_owning = self.rc_enabled && registry.is_owning(native_id);
 
-                let arg_vals: Vec<CValue> = args
-                    .iter()
-                    .map(|a| self.compile_expr(a))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let arg_vals: Vec<CValue> = if is_owning {
+                    // Owning (CoW) dispatch: "move" the first arg (container)
+                    // instead of copying it. This avoids the incref that would
+                    // prevent in-place mutation in the native.
+                    let mut vals = Vec::with_capacity(args.len());
+                    for (i, a) in args.iter().enumerate() {
+                        if i == 0 {
+                            if let Expr::Var(name, _) = a {
+                                // Move: read without incref, then null out the var
+                                if let Some(&var) = self.vars.get(name.as_str()) {
+                                    let val = self.builder.use_var(var);
+                                    let unit =
+                                        self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                                    self.builder.def_var(var, unit);
+                                    vals.push(val);
+                                    continue;
+                                }
+                            }
+                        }
+                        vals.push(self.compile_expr(a)?);
+                    }
+                    vals
+                } else {
+                    args.iter()
+                        .map(|a| self.compile_expr(a))
+                        .collect::<Result<Vec<_>, _>>()?
+                };
 
                 let args_addr = self.spill_to_stack(&arg_vals);
                 let registry_ptr = self
@@ -1251,8 +1275,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let id_val = self.builder.ins().iconst(types::I64, native_id as i64);
                 let count_val = self.builder.ins().iconst(types::I64, arg_vals.len() as i64);
 
+                let helper = if is_owning {
+                    "jit_call_native_owning"
+                } else {
+                    "jit_call_native"
+                };
                 Ok(self.call_helper(
-                    "jit_call_native",
+                    helper,
                     &[registry_ptr, id_val, args_addr, count_val],
                 ))
             }

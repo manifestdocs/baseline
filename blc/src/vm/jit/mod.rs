@@ -164,6 +164,7 @@ impl JitProgram {
 /// Names of all runtime helper functions we register with Cranelift.
 pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_call_native",
+    "jit_call_native_owning",
     "jit_concat",
     "jit_make_enum",
     "jit_make_enum_with_id",
@@ -276,6 +277,7 @@ fn compile_inner(
 
     // Register runtime helper symbols
     builder.symbol("jit_call_native", jit_call_native as *const u8);
+    builder.symbol("jit_call_native_owning", jit_call_native_owning as *const u8);
     builder.symbol("jit_concat", jit_concat as *const u8);
     builder.symbol("jit_make_enum", jit_make_enum as *const u8);
     builder.symbol("jit_make_enum_with_id", jit_make_enum_with_id as *const u8);
@@ -659,7 +661,7 @@ pub(super) fn make_helper_sig<M: Module>(
     // Matches the `extern "C"` ABI of our Rust runtime helper functions.
 
     match name {
-        "jit_call_native" => {
+        "jit_call_native" | "jit_call_native_owning" => {
             // (registry_ptr, id, args_ptr, count) -> u64
             sig.params.push(AbiParam::new(ptr_type));
             sig.params.push(AbiParam::new(types::I64));
