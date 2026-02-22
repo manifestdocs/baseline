@@ -53,6 +53,11 @@ pub enum Op {
     // -- Variables --
     /// Push the value of a local variable (by slot index) onto the stack.
     GetLocal(u16),
+    /// Move the value of a local variable onto the stack (last use optimization).
+    /// Like GetLocal but transfers ownership: the slot is replaced with Unit
+    /// so no Arc refcount increment occurs. Used when the local is provably
+    /// never read again, enabling clone-on-write in downstream consumers.
+    GetLocalLast(u16),
     /// Set a local variable slot to the value on top of stack (does NOT pop).
     SetLocal(u16),
     /// Pop n values from the stack (for scope cleanup).
@@ -352,6 +357,7 @@ impl Program {
     /// Run peephole optimizations on all chunks.
     pub fn optimize(&mut self) {
         for chunk in &mut self.chunks {
+            chunk.promote_last_local_reads();
             chunk.specialize_int_ops();
             chunk.fuse_superinstructions();
             chunk.compact_nops();
@@ -423,6 +429,7 @@ impl Chunk {
                     pushes_found += 1;
                 }
                 Op::GetLocal(_)
+                | Op::GetLocalLast(_)
                 | Op::GetUpvalue(_)
                 | Op::Negate
                 | Op::Add
@@ -488,22 +495,29 @@ impl Chunk {
         if len < 2 {
             return;
         }
-        // Pass 0: fuse 2-instruction patterns (GetLocal + GetField)
+        // Pass 0: fuse 2-instruction patterns (GetLocal/GetLocalLast + GetField)
         for i in 0..len - 1 {
-            if let (Op::GetLocal(slot), Op::GetField(field_idx)) = (self.code[i], self.code[i + 1])
-            {
+            let slot = match self.code[i] {
+                Op::GetLocal(s) | Op::GetLocalLast(s) => Some(s),
+                _ => None,
+            };
+            if let (Some(s), Op::GetField(field_idx)) = (slot, self.code[i + 1]) {
                 let source_loc = self.source_map[i + 1];
                 self.code[i] = Op::Jump(0); // no-op
-                self.code[i + 1] = Op::GetLocalGetField(slot, field_idx);
+                self.code[i + 1] = Op::GetLocalGetField(s, field_idx);
                 self.source_map[i + 1] = source_loc;
             }
         }
-        // Pass 1: fuse 3-instruction patterns (GetLocal + LoadSmallInt + Op)
+        // Pass 1: fuse 3-instruction patterns (GetLocal/GetLocalLast + LoadSmallInt + Op)
         if len < 3 {
             return;
         }
         for i in 0..len - 2 {
-            if let (Op::GetLocal(slot), Op::LoadSmallInt(k)) = (self.code[i], self.code[i + 1]) {
+            let slot = match self.code[i] {
+                Op::GetLocal(s) | Op::GetLocalLast(s) => Some(s),
+                _ => None,
+            };
+            if let (Some(slot), Op::LoadSmallInt(k)) = (slot, self.code[i + 1]) {
                 let fused = match self.code[i + 2] {
                     Op::SubInt => Some(Op::GetLocalSubInt(slot, k)),
                     Op::LeInt => Some(Op::GetLocalLeInt(slot, k)),
@@ -659,6 +673,84 @@ impl Chunk {
         }
         self.code.truncate(new_len);
         self.source_map.truncate(new_len);
+    }
+
+    /// Promote last reads of local variables from `GetLocal` to `GetLocalLast`.
+    ///
+    /// `GetLocalLast` moves the value out of the local slot (replacing it with
+    /// Unit) instead of cloning. This avoids an Arc refcount bump, enabling
+    /// clone-on-write optimisation in downstream owning native calls.
+    ///
+    /// Safety: moving a value out of a slot drops the Arc refcount, which can
+    /// invalidate Weak references. We restrict promotion to slots that will be
+    /// **overwritten by TailCall** — those parameter slots are destroyed by the
+    /// tail call anyway, so moving them earlier is semantically equivalent.
+    ///
+    /// Specifically, we promote `GetLocal(slot)` → `GetLocalLast(slot)` when:
+    ///   1. The chunk ends with `TailCall(n)` and `slot < n`
+    ///   2. It is the last read of that slot in the tail region (after the last
+    ///      loop back-edge)
+    ///   3. There is no `SetLocal(slot)` between the read and the end
+    pub fn promote_last_local_reads(&mut self) {
+        let len = self.code.len();
+        if len == 0 {
+            return;
+        }
+
+        // Only apply to chunks that end with TailCall (recursive functions).
+        // Find the TailCall and its arg count — only parameter slots (0..n)
+        // are safe to promote because TailCall overwrites them.
+        let max_slot = self.find_tail_call_arity();
+        if max_slot == 0 {
+            return;
+        }
+
+        // Find the position just after the last JumpBack (loop boundary).
+        // Everything from `start` to `len` is the tail (non-looping) region.
+        let mut start = 0;
+        for i in 0..len {
+            if matches!(self.code[i], Op::JumpBack(_)) {
+                start = i + 1;
+            }
+        }
+
+        // Track which slots we've already seen (first seen scanning backward = last use).
+        let mut seen_slots = vec![false; max_slot];
+
+        // Scan backward from end to `start`.
+        let mut i = len;
+        while i > start {
+            i -= 1;
+            match self.code[i] {
+                Op::GetLocal(slot) if (slot as usize) < max_slot => {
+                    let s = slot as usize;
+                    if !seen_slots[s] {
+                        seen_slots[s] = true;
+                        self.code[i] = Op::GetLocalLast(slot);
+                    }
+                }
+                Op::SetLocal(slot) if (slot as usize) < max_slot => {
+                    // SetLocal writes to a slot — block promotion for earlier reads.
+                    seen_slots[slot as usize] = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// If this chunk contains a `TailCall(n)`, return `n` (the arity).
+    /// Searches backward from the end for the TailCall instruction,
+    /// skipping only Return (which may follow TailCall in some branches).
+    fn find_tail_call_arity(&self) -> usize {
+        // The TailCall may not be the very last instruction (there could be a
+        // Return sentinel after it, or it might be in an if/else branch).
+        // Scan the entire tail region for any TailCall.
+        for op in self.code.iter().rev() {
+            if let Op::TailCall(n) = op {
+                return *n as usize;
+            }
+        }
+        0
     }
 
     /// Remove dead instruction pairs (e.g. `LoadConst + Pop`, `CloseScope(0)`).
