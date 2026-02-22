@@ -66,10 +66,21 @@ impl SendableValue {
                 HeapObject::Tuple(items) => {
                     SendableValue::Tuple(items.iter().map(SendableValue::from_nvalue).collect())
                 }
-                HeapObject::Enum { tag, payload, .. } => SendableValue::Enum {
-                    tag: tag.to_string(),
-                    payload: Box::new(SendableValue::from_nvalue(payload)),
-                },
+                HeapObject::Enum { tag, payload, .. } => {
+                    let sv = if payload.is_empty() {
+                        SendableValue::Unit
+                    } else if payload.len() == 1 {
+                        SendableValue::from_nvalue(&payload[0])
+                    } else {
+                        SendableValue::Tuple(
+                            payload.iter().map(SendableValue::from_nvalue).collect(),
+                        )
+                    };
+                    SendableValue::Enum {
+                        tag: tag.to_string(),
+                        payload: Box::new(sv),
+                    }
+                }
                 HeapObject::Closure { chunk_idx, .. } => SendableValue::Function(*chunk_idx),
                 HeapObject::BigInt(i) => SendableValue::Int(*i),
                 _ => SendableValue::Unit,

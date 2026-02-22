@@ -95,8 +95,14 @@ pub(crate) fn nvalue_to_serde(value: &NValue) -> Result<serde_json::Value, Nativ
                     "type".to_string(),
                     serde_json::Value::String(tag.to_string()),
                 );
-                if !payload.is_unit() {
-                    map.insert("value".to_string(), nvalue_to_serde(payload)?);
+                if !payload.is_empty() {
+                    if payload.len() == 1 {
+                        map.insert("value".to_string(), nvalue_to_serde(&payload[0])?);
+                    } else {
+                        let arr: Result<Vec<_>, _> =
+                            payload.iter().map(nvalue_to_serde).collect();
+                        map.insert("value".to_string(), serde_json::Value::Array(arr?));
+                    }
                 }
                 return Ok(serde_json::Value::Object(map));
             }

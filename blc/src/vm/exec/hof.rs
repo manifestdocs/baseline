@@ -193,7 +193,7 @@ impl super::Vm {
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Some" => {
                         let result = self.call_nvalue(
                             &func,
-                            std::slice::from_ref(payload),
+                            payload.as_slice(),
                             chunks,
                             line,
                             col,
@@ -230,7 +230,7 @@ impl super::Vm {
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
                         let result = self.call_nvalue(
                             &func,
-                            std::slice::from_ref(payload),
+                            payload.as_slice(),
                             chunks,
                             line,
                             col,
@@ -239,7 +239,7 @@ impl super::Vm {
                     }
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
                         self.stack
-                            .push(NValue::enum_val("Err".into(), payload.clone()));
+                            .push(NValue::enum_val("Err".into(), payload[0].clone()));
                     }
                     _ => {
                         return Err(self.error(
@@ -271,7 +271,7 @@ impl super::Vm {
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Some" => {
                         let result = self.call_nvalue(
                             &func,
-                            std::slice::from_ref(payload),
+                            payload.as_slice(),
                             chunks,
                             line,
                             col,
@@ -313,7 +313,7 @@ impl super::Vm {
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
                         let result = self.call_nvalue(
                             &func,
-                            std::slice::from_ref(payload),
+                            payload.as_slice(),
                             chunks,
                             line,
                             col,
@@ -323,7 +323,7 @@ impl super::Vm {
                     }
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
                         self.stack
-                            .push(NValue::enum_val("Err".into(), payload.clone()));
+                            .push(NValue::enum_val("Err".into(), payload[0].clone()));
                     }
                     _ => {
                         return Err(self.error(
@@ -355,7 +355,7 @@ impl super::Vm {
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
                         let result = self.call_nvalue(
                             &func,
-                            std::slice::from_ref(payload),
+                            payload.as_slice(),
                             chunks,
                             line,
                             col,
@@ -364,7 +364,7 @@ impl super::Vm {
                     }
                     HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
                         self.stack
-                            .push(NValue::enum_val("Ok".into(), payload.clone()));
+                            .push(NValue::enum_val("Ok".into(), payload[0].clone()));
                     }
                     _ => {
                         return Err(self.error(

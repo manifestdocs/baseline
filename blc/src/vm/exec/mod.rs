@@ -459,6 +459,19 @@ impl Vm {
                     }
                 }
 
+                Op::EnumFieldDrop(slot, field_idx) => {
+                    let idx = base_slot + slot as usize;
+                    let fi = field_idx as usize;
+                    let local = unsafe { self.stack.get_unchecked_mut(idx) };
+                    if let Some(heap) = local.as_heap_mut() {
+                        if let HeapObject::Enum { payload, .. } = heap {
+                            if fi < payload.len() {
+                                payload[fi] = NValue::unit();
+                            }
+                        }
+                    }
+                }
+
                 Op::PopN(n) => {
                     let count = n as usize;
                     let new_len = self.stack.len().saturating_sub(count);
@@ -513,10 +526,14 @@ impl Vm {
                 | Op::GetFieldIdx(_, _)
                 | Op::MakeTuple(_)
                 | Op::TupleGet(_)
-                | Op::MakeEnum(_)
+                | Op::MakeEnum(_, _)
                 | Op::MakeStruct(_)
                 | Op::EnumTag
+                | Op::EnumTagId
                 | Op::EnumPayload
+                | Op::MakeEnumN(_, _, _)
+                | Op::EnumFieldGet(_)
+                | Op::EnumFieldSet(_)
                 | Op::UpdateRecord(_) => {
                     self.dispatch_data_structures(&op, chunk, ip)?;
                 }

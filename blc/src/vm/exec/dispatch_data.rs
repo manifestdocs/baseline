@@ -372,7 +372,7 @@ impl super::Vm {
                     ));
                 }
             }
-            Op::MakeEnum(tag_idx) => {
+            Op::MakeEnum(tag_idx, tag_id) => {
                 let tag = match chunk.constants[*tag_idx as usize].as_string() {
                     Some(s) => s.clone(),
                     None => {
@@ -385,7 +385,8 @@ impl super::Vm {
                     }
                 };
                 let payload = self.pop_fast();
-                self.stack.push(NValue::enum_val(tag, payload));
+                self.stack
+                    .push(NValue::enum_val_with_id(tag, *tag_id as u32, payload));
             }
             Op::MakeStruct(tag_idx) => {
                 let tag = match chunk.constants[*tag_idx as usize].as_string() {
@@ -442,11 +443,40 @@ impl super::Vm {
                     ));
                 }
             }
+            Op::EnumTagId => {
+                let val = self.pop_fast();
+                if val.is_heap() {
+                    if let HeapObject::Enum { tag_id, .. } = val.as_heap_ref() {
+                        self.stack.push(NValue::int(*tag_id as i64));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("EnumTagId requires Enum, got {}", val),
+                            line,
+                            col,
+                        ));
+                    }
+                } else {
+                    let (line, col) = chunk.source_map[ip - 1];
+                    return Err(self.error(
+                        format!("EnumTagId requires Enum, got {}", val),
+                        line,
+                        col,
+                    ));
+                }
+            }
             Op::EnumPayload => {
                 let val = self.pop_fast();
                 if val.is_heap() {
                     if let HeapObject::Enum { payload, .. } = val.as_heap_ref() {
-                        self.stack.push(payload.clone());
+                        // Backward compat: single-element → push that element,
+                        // empty → push Unit, multi → wrap as Tuple.
+                        let result = match payload.len() {
+                            0 => NValue::unit(),
+                            1 => payload[0].clone(),
+                            _ => NValue::tuple(payload.clone()),
+                        };
+                        self.stack.push(result);
                     } else {
                         let (line, col) = chunk.source_map[ip - 1];
                         return Err(self.error(
@@ -459,6 +489,105 @@ impl super::Vm {
                     let (line, col) = chunk.source_map[ip - 1];
                     return Err(self.error(
                         format!("EnumPayload requires Enum, got {}", val),
+                        line,
+                        col,
+                    ));
+                }
+            }
+            Op::MakeEnumN(tag_idx, tag_id, arg_count) => {
+                let n = *arg_count as usize;
+                let tag = match chunk.constants[*tag_idx as usize].as_string() {
+                    Some(s) => s.clone(),
+                    None => {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            "MakeEnumN constant must be String".into(),
+                            line,
+                            col,
+                        ));
+                    }
+                };
+                let start = self.stack.len() - n;
+                let payload: Vec<NValue> = self.stack.drain(start..).collect();
+                let id = if *tag_id == u16::MAX {
+                    u32::MAX
+                } else {
+                    *tag_id as u32
+                };
+                self.stack.push(NValue::enum_val_flat(tag, id, payload));
+            }
+            Op::EnumFieldGet(idx) => {
+                let val = self.pop_fast();
+                if val.is_heap() {
+                    if let HeapObject::Enum { payload, .. } = val.as_heap_ref() {
+                        let i = *idx as usize;
+                        if i < payload.len() {
+                            self.stack.push(payload[i].clone());
+                        } else {
+                            // Empty payload (nullary or Unit-wrapped) → return Unit.
+                            // This handles Ok(()) and similar cases where the ? operator
+                            // extracts field 0 from an enum with Unit payload.
+                            self.stack.push(NValue::unit());
+                        }
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("EnumFieldGet requires Enum, got {}", val),
+                            line,
+                            col,
+                        ));
+                    }
+                } else {
+                    let (line, col) = chunk.source_map[ip - 1];
+                    return Err(self.error(
+                        format!("EnumFieldGet requires Enum, got {}", val),
+                        line,
+                        col,
+                    ));
+                }
+            }
+            Op::EnumFieldSet(idx) => {
+                // Stack: [new_value, enum] → [updated_enum]
+                let mut enum_val = self.pop_fast();
+                let new_value = self.pop_fast();
+                let i = *idx as usize;
+                if let Some(heap) = enum_val.as_heap_mut() {
+                    // Sole owner — update field in place
+                    if let HeapObject::Enum { payload, .. } = heap {
+                        if i < payload.len() {
+                            payload[i] = new_value;
+                        }
+                    }
+                    self.stack.push(enum_val);
+                } else if enum_val.is_heap() {
+                    // Shared — clone payload and construct new enum
+                    if let HeapObject::Enum {
+                        tag,
+                        tag_id,
+                        payload,
+                    } = enum_val.as_heap_ref()
+                    {
+                        let mut new_payload = payload.clone();
+                        if i < new_payload.len() {
+                            new_payload[i] = new_value;
+                        }
+                        self.stack.push(NValue::enum_val_flat(
+                            tag.clone(),
+                            *tag_id,
+                            new_payload,
+                        ));
+                    } else {
+                        let (line, col) = chunk.source_map[ip - 1];
+                        return Err(self.error(
+                            format!("EnumFieldSet requires Enum, got {}", enum_val),
+                            line,
+                            col,
+                        ));
+                    }
+                } else {
+                    let (line, col) = chunk.source_map[ip - 1];
+                    return Err(self.error(
+                        format!("EnumFieldSet requires Enum, got {}", enum_val),
                         line,
                         col,
                     ));

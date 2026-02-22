@@ -6,6 +6,7 @@ use super::chunk::{Chunk, CompileError, Op, Program};
 use super::ir::*;
 use super::natives::NativeRegistry;
 use super::nvalue::NValue;
+use super::value::RcStr;
 
 // ---------------------------------------------------------------------------
 // Local / Upvalue / Frame (same semantics as the old compiler)
@@ -46,6 +47,8 @@ pub struct Codegen<'a> {
     natives: &'a NativeRegistry,
     /// Function name → chunk index.
     functions: HashMap<String, usize>,
+    /// Enum tag → integer ID mapping for fast pattern matching.
+    tags: TagRegistry,
 }
 
 impl<'a> Codegen<'a> {
@@ -59,6 +62,7 @@ impl<'a> Codegen<'a> {
             upvalues: Vec::new(),
             natives,
             functions: HashMap::new(),
+            tags: TagRegistry::new(),
         }
     }
 
@@ -74,6 +78,7 @@ impl<'a> Codegen<'a> {
 
     /// Generate a complete Program from an IrModule.
     pub fn generate_program(mut self, module: &IrModule) -> Result<Program, CompileError> {
+        self.tags = module.tags.clone();
         let chunk_offset = self.compiled_chunks.len();
 
         // First pass: register all function names with chunk indices
@@ -209,9 +214,31 @@ impl<'a> Codegen<'a> {
             }
 
             Expr::MakeEnum { tag, payload, .. } => {
-                self.gen_expr(payload, span)?;
-                let tag_idx = self.chunk.add_constant(NValue::string(tag.as_str().into()));
-                self.emit(Op::MakeEnum(tag_idx), span);
+                let tag_str: RcStr = tag.as_str().into();
+                let tag_id = self.tags.get_id(tag).unwrap_or(u32::MAX);
+                let id16 = if tag_id <= u16::MAX as u32 { tag_id as u16 } else { u16::MAX };
+                if matches!(payload.as_ref(), Expr::Unit) {
+                    // Nullary variant (e.g., Leaf, None): pre-construct as constant
+                    // to avoid repeated heap allocations.
+                    let const_val =
+                        NValue::enum_val_flat(tag_str, tag_id, vec![]);
+                    let idx = self.chunk.add_constant(const_val);
+                    self.emit(Op::LoadConst(idx), span);
+                } else if let Expr::MakeTuple(elems, _) = payload.as_ref() {
+                    // Multi-arg constructor: emit args directly + MakeEnumN
+                    // to avoid intermediate Tuple allocation.
+                    for elem in elems {
+                        self.gen_expr(elem, span)?;
+                    }
+                    let const_idx =
+                        self.chunk.add_constant(NValue::string(tag_str));
+                    self.emit(Op::MakeEnumN(const_idx, id16, elems.len() as u8), span);
+                } else {
+                    self.gen_expr(payload, span)?;
+                    let const_idx =
+                        self.chunk.add_constant(NValue::string(tag_str));
+                    self.emit(Op::MakeEnum(const_idx, id16), span);
+                }
             }
             Expr::MakeStruct { name, fields, .. } => {
                 // Pre-evaluate values into temp locals so untracked key
@@ -631,11 +658,13 @@ impl<'a> Codegen<'a> {
         arms: &[MatchArm],
         span: &Span,
     ) -> Result<(), CompileError> {
+        let subject_read_pos = self.chunk.code.len();
         self.gen_expr(subject, span)?;
         self.declare_local("__match_subject");
         let subject_slot = (self.locals.len() - 1) as u16;
 
         let mut end_jumps = Vec::new();
+        let mut used_enum_update = false;
 
         for arm in arms {
             match &arm.pattern {
@@ -661,7 +690,7 @@ impl<'a> Codegen<'a> {
                         self.gen_expr(guard, span)?;
                         let skip_jump = self.emit(Op::JumpIfFalse(0), span);
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                         self.chunk.patch_jump(skip_jump);
                         // Clean up bindings on guard-failure path
@@ -670,7 +699,7 @@ impl<'a> Codegen<'a> {
                         }
                     } else {
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                     }
                 }
@@ -694,35 +723,41 @@ impl<'a> Codegen<'a> {
                     self.chunk.patch_jump(skip_jump);
                 }
                 Pattern::Constructor(tag, sub_patterns) => {
-                    // Check tag matches
-                    self.emit(Op::GetLocal(subject_slot), span);
-                    self.emit(Op::EnumTag, span);
-                    let tag_const = self.chunk.add_constant(NValue::string(tag.as_str().into()));
-                    self.emit(Op::LoadConst(tag_const), span);
-                    self.emit(Op::Eq, span);
-                    let skip_jump = self.emit(Op::JumpIfFalse(0), span);
+                    // Check tag matches using integer tag IDs when available
+                    let skip_jump = if let Some(id) = self.tags.get_id(tag) {
+                        self.emit(Op::GetLocal(subject_slot), span);
+                        self.emit(Op::EnumTagId, span);
+                        self.emit(Op::LoadSmallInt(id as i16), span);
+                        self.emit(Op::Eq, span);
+                        self.emit(Op::JumpIfFalse(0), span)
+                    } else {
+                        // Fallback: string-based tag comparison
+                        self.emit(Op::GetLocal(subject_slot), span);
+                        self.emit(Op::EnumTag, span);
+                        let tag_const =
+                            self.chunk.add_constant(NValue::string(tag.as_str().into()));
+                        self.emit(Op::LoadConst(tag_const), span);
+                        self.emit(Op::Eq, span);
+                        self.emit(Op::JumpIfFalse(0), span)
+                    };
 
                     let scope_start = self.locals.len();
                     self.begin_scope();
                     if sub_patterns.len() == 1 {
                         // Single binding: Some(v)
                         self.emit(Op::GetLocal(subject_slot), span);
-                        self.emit(Op::EnumPayload, span);
+                        self.emit(Op::EnumFieldGet(0), span);
                         match &sub_patterns[0] {
                             Pattern::Var(name) => self.declare_local(name),
                             Pattern::Wildcard => self.declare_local("_"),
                             _ => {}
                         }
                     } else if sub_patterns.len() > 1 {
-                        // Multi-binding: Rectangle(w, h)
-                        self.emit(Op::GetLocal(subject_slot), span);
-                        self.emit(Op::EnumPayload, span);
-                        self.declare_local("__payload");
-                        let payload_slot = (self.locals.len() - 1) as u16;
-
+                        // Multi-binding: Node(k, v, l, r)
+                        // Use EnumFieldGet to access fields directly (no Tuple intermediate).
                         for (i, pat) in sub_patterns.iter().enumerate() {
-                            self.emit(Op::GetLocal(payload_slot), span);
-                            self.emit(Op::TupleGet(i as u16), span);
+                            self.emit(Op::GetLocal(subject_slot), span);
+                            self.emit(Op::EnumFieldGet(i as u8), span);
                             match pat {
                                 Pattern::Var(name) => self.declare_local(name),
                                 Pattern::Wildcard => self.declare_local("_"),
@@ -731,12 +766,19 @@ impl<'a> Codegen<'a> {
                         }
                     }
 
+                    // Collect binding names for enum update detection
+                    let all_var_bindings =
+                        sub_patterns.len() > 1
+                            && sub_patterns
+                                .iter()
+                                .all(|p| matches!(p, Pattern::Var(_)));
+
                     if let Some(ref guard) = arm.guard {
                         let num_bindings = self.locals.len() - scope_start;
                         self.gen_expr(guard, span)?;
                         let guard_skip = self.emit(Op::JumpIfFalse(0), span);
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                         self.chunk.patch_jump(guard_skip);
                         // Clean up bindings on guard-failure path
@@ -744,8 +786,31 @@ impl<'a> Codegen<'a> {
                             self.emit(Op::Pop, span);
                         }
                     } else {
-                        self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        // Try enum field update optimization (clone-on-write)
+                        let mut optimized = false;
+                        if all_var_bindings {
+                            let bindings: Vec<String> = sub_patterns
+                                .iter()
+                                .map(|p| match p {
+                                    Pattern::Var(name) => name.clone(),
+                                    _ => String::new(),
+                                })
+                                .collect();
+                            if self.try_gen_enum_update(
+                                &arm.body,
+                                tag,
+                                &bindings,
+                                subject_slot,
+                                span,
+                            )? {
+                                optimized = true;
+                                used_enum_update = true;
+                            }
+                        }
+                        if !optimized {
+                            self.gen_expr(&arm.body, span)?;
+                        }
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                     }
 
@@ -768,7 +833,7 @@ impl<'a> Codegen<'a> {
                         self.gen_expr(guard, span)?;
                         let skip_jump = self.emit(Op::JumpIfFalse(0), span);
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                         self.chunk.patch_jump(skip_jump);
                         // Clean up bindings on guard-failure path
@@ -777,7 +842,7 @@ impl<'a> Codegen<'a> {
                         }
                     } else {
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                     }
                 }
@@ -823,7 +888,7 @@ impl<'a> Codegen<'a> {
                         self.gen_expr(guard, span)?;
                         let guard_skip = self.emit(Op::JumpIfFalse(0), span);
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                         self.chunk.patch_jump(guard_skip);
                         for _ in 0..num_bindings {
@@ -831,7 +896,7 @@ impl<'a> Codegen<'a> {
                         }
                     } else {
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                     }
 
@@ -884,7 +949,7 @@ impl<'a> Codegen<'a> {
                         self.gen_expr(guard, span)?;
                         let guard_skip = self.emit(Op::JumpIfFalse(0), span);
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                         self.chunk.patch_jump(guard_skip);
                         for _ in 0..num_bindings {
@@ -892,7 +957,7 @@ impl<'a> Codegen<'a> {
                         }
                     } else {
                         self.gen_expr(&arm.body, span)?;
-                        self.end_scope(span);
+                        self.end_scope_annotated(span);
                         end_jumps.push(self.emit(Op::Jump(0), span));
                     }
 
@@ -910,6 +975,22 @@ impl<'a> Codegen<'a> {
 
         for jump in &end_jumps {
             self.chunk.patch_jump(*jump);
+        }
+
+        // If enum field update optimization was used, try to promote the
+        // subject read to GetLocalLast so the enum has refcount == 1
+        // (enabling true in-place update at runtime).
+        if used_enum_update {
+            if let Some(&Op::GetLocal(s)) = self.chunk.code.get(subject_read_pos) {
+                // Verify the source slot is not read again after the subject read.
+                // This ensures GetLocalLast is safe (the slot is dead after the match).
+                let safe = (subject_read_pos + 1..self.chunk.code.len()).all(|j| {
+                    !matches!(self.chunk.code[j], Op::GetLocal(x) | Op::GetLocalLast(x) if x == s)
+                });
+                if safe {
+                    self.chunk.code[subject_read_pos] = Op::GetLocalLast(s);
+                }
+            }
         }
 
         // Clean up subject
@@ -1116,31 +1197,31 @@ impl<'a> Codegen<'a> {
         self.declare_local("__try_val");
         let val_slot = (self.locals.len() - 1) as u16;
 
-        // Check Err
+        // Check Err — well-known tag (id=3 in TagRegistry::new())
         self.emit(Op::GetLocal(val_slot), span);
-        self.emit(Op::EnumTag, span);
-        let err_tag = self.chunk.add_constant(NValue::string("Err".into()));
-        self.emit(Op::LoadConst(err_tag), span);
+        self.emit(Op::EnumTagId, span);
+        let err_id = self.tags.get_id("Err").unwrap_or(3);
+        self.emit(Op::LoadSmallInt(err_id as i16), span);
         self.emit(Op::Eq, span);
         let not_err = self.emit(Op::JumpIfFalse(0), span);
         self.emit(Op::GetLocal(val_slot), span);
         self.emit(Op::Return, span);
         self.chunk.patch_jump(not_err);
 
-        // Check None
+        // Check None — well-known tag (id=0 in TagRegistry::new())
         self.emit(Op::GetLocal(val_slot), span);
-        self.emit(Op::EnumTag, span);
-        let none_tag = self.chunk.add_constant(NValue::string("None".into()));
-        self.emit(Op::LoadConst(none_tag), span);
+        self.emit(Op::EnumTagId, span);
+        let none_id = self.tags.get_id("None").unwrap_or(0);
+        self.emit(Op::LoadSmallInt(none_id as i16), span);
         self.emit(Op::Eq, span);
         let not_none = self.emit(Op::JumpIfFalse(0), span);
         self.emit(Op::GetLocal(val_slot), span);
         self.emit(Op::Return, span);
         self.chunk.patch_jump(not_none);
 
-        // Extract payload
+        // Extract payload (single-arg enum: Ok(val) or Some(val))
         self.emit(Op::GetLocal(val_slot), span);
-        self.emit(Op::EnumPayload, span);
+        self.emit(Op::EnumFieldGet(0), span);
 
         self.locals.pop();
         self.emit(Op::CloseScope(1), span);
@@ -1396,25 +1477,24 @@ impl<'a> Codegen<'a> {
                 self.emit(Op::Eq, span);
             }
             Matcher::BeOk => {
-                // Check if result is Ok variant
                 self.gen_expr(actual, span)?;
-                self.emit(Op::EnumTag, span);
-                let tag = self.chunk.add_constant(NValue::string("Ok".into()));
-                self.emit(Op::LoadConst(tag), span);
+                self.emit(Op::EnumTagId, span);
+                let ok_id = self.tags.get_id("Ok").unwrap_or(2);
+                self.emit(Op::LoadSmallInt(ok_id as i16), span);
                 self.emit(Op::Eq, span);
             }
             Matcher::BeSome => {
                 self.gen_expr(actual, span)?;
-                self.emit(Op::EnumTag, span);
-                let tag = self.chunk.add_constant(NValue::string("Some".into()));
-                self.emit(Op::LoadConst(tag), span);
+                self.emit(Op::EnumTagId, span);
+                let some_id = self.tags.get_id("Some").unwrap_or(1);
+                self.emit(Op::LoadSmallInt(some_id as i16), span);
                 self.emit(Op::Eq, span);
             }
             Matcher::BeNone => {
                 self.gen_expr(actual, span)?;
-                self.emit(Op::EnumTag, span);
-                let tag = self.chunk.add_constant(NValue::string("None".into()));
-                self.emit(Op::LoadConst(tag), span);
+                self.emit(Op::EnumTagId, span);
+                let none_id = self.tags.get_id("None").unwrap_or(0);
+                self.emit(Op::LoadSmallInt(none_id as i16), span);
                 self.emit(Op::Eq, span);
             }
             Matcher::BeEmpty => {
@@ -1481,6 +1561,7 @@ impl<'a> Codegen<'a> {
         mut self,
         module: &IrTestModule,
     ) -> Result<super::chunk::TestProgram, CompileError> {
+        self.tags = module.tags.clone();
         let chunk_offset = self.compiled_chunks.len();
 
         // Register all function names
@@ -1566,6 +1647,18 @@ impl<'a> Codegen<'a> {
     }
 
     fn end_scope(&mut self, span: &Span) {
+        self.end_scope_inner(span, false);
+    }
+
+    /// End scope and annotate for last-use promotion.
+    /// Only use this for scopes where slot indices reliably match stack positions
+    /// (e.g., match arm scopes, let-binding scopes). Do NOT use for internal scopes
+    /// like MakeRecord/MakeStruct temps that may have unnamed stack values below them.
+    fn end_scope_annotated(&mut self, span: &Span) {
+        self.end_scope_inner(span, true);
+    }
+
+    fn end_scope_inner(&mut self, span: &Span, annotate: bool) {
         self.scope_depth -= 1;
         let mut pop_count = 0u16;
         while let Some(local) = self.locals.last() {
@@ -1576,9 +1669,167 @@ impl<'a> Codegen<'a> {
             pop_count += 1;
         }
         if pop_count > 0 {
-            self.chunk
+            let base_slot = self.locals.len() as u16;
+            let pos = self
+                .chunk
                 .emit(Op::CloseScope(pop_count), span.line, span.col);
+            if annotate {
+                self.chunk
+                    .scope_slots
+                    .push((pos, base_slot, pop_count));
+            }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Enum field update optimization (clone-on-write for match arms)
+    // -----------------------------------------------------------------------
+
+    /// Detect if a match arm body (or nested if/else leaves) reconstructs
+    /// the same enum variant with exactly one field changed. Returns true
+    /// if optimized code was emitted.
+    ///
+    /// Pattern detected:
+    ///   match subject { Tag(a, b, c) -> Tag(a, f(b), c) }
+    /// Emits EnumFieldSet instead of full MakeEnumN.
+    fn try_gen_enum_update(
+        &mut self,
+        body: &Expr,
+        tag: &str,
+        bindings: &[String],
+        subject_slot: u16,
+        span: &Span,
+    ) -> Result<bool, CompileError> {
+        match body {
+            Expr::MakeEnum {
+                tag: body_tag,
+                payload,
+                ..
+            } if body_tag == tag => {
+                if let Expr::MakeTuple(fields, _) = payload.as_ref() {
+                    if let Some((field_idx, new_value)) =
+                        Self::detect_single_field_update(fields, bindings)
+                    {
+                        // Null out the updated field in the subject to reduce
+                        // the extracted value's refcount to 1 (enables cascading
+                        // in-place updates through recursive calls).
+                        self.emit(
+                            Op::EnumFieldDrop(subject_slot, field_idx as u8),
+                            span,
+                        );
+                        // Compute new_value (pattern bindings now have refcount 1)
+                        self.gen_expr(new_value, span)?;
+                        // Move subject for sole ownership
+                        self.emit(Op::GetLocalLast(subject_slot), span);
+                        // In-place field update
+                        self.emit(Op::EnumFieldSet(field_idx as u8), span);
+                        return Ok(true);
+                    }
+                }
+                Ok(false)
+            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                // Check if at least one branch is optimizable
+                let then_opt = Self::can_enum_update(then_branch, tag, bindings);
+                let else_opt = else_branch
+                    .as_ref()
+                    .is_some_and(|e| Self::can_enum_update(e, tag, bindings));
+                if !then_opt && !else_opt {
+                    return Ok(false);
+                }
+
+                // Generate condition normally
+                self.gen_expr(condition, span)?;
+                let then_jump = self.emit(Op::JumpIfFalse(0), span);
+
+                // Then branch
+                if !self.try_gen_enum_update(then_branch, tag, bindings, subject_slot, span)? {
+                    self.gen_expr(then_branch, span)?;
+                }
+
+                let else_jump = self.emit(Op::Jump(0), span);
+                self.chunk.patch_jump(then_jump);
+
+                // Else branch
+                if let Some(else_branch) = else_branch {
+                    if !self.try_gen_enum_update(
+                        else_branch,
+                        tag,
+                        bindings,
+                        subject_slot,
+                        span,
+                    )? {
+                        self.gen_expr(else_branch, span)?;
+                    }
+                } else {
+                    let idx = self.chunk.add_constant(NValue::unit());
+                    self.emit(Op::LoadConst(idx), span);
+                }
+
+                self.chunk.patch_jump(else_jump);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Check if an expression can be optimized as an enum field update
+    /// (without generating code). Used to decide whether to enter the
+    /// optimization path for if/else trees.
+    fn can_enum_update(expr: &Expr, tag: &str, bindings: &[String]) -> bool {
+        match expr {
+            Expr::MakeEnum {
+                tag: t, payload, ..
+            } if t == tag => {
+                if let Expr::MakeTuple(fields, _) = payload.as_ref() {
+                    Self::detect_single_field_update(fields, bindings).is_some()
+                } else {
+                    false
+                }
+            }
+            Expr::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                Self::can_enum_update(then_branch, tag, bindings)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| Self::can_enum_update(e, tag, bindings))
+            }
+            _ => false,
+        }
+    }
+
+    /// Detect if fields represent a single-field-update pattern.
+    /// Returns (field_index, new_value_expr) if exactly one field differs
+    /// from the corresponding pattern binding.
+    fn detect_single_field_update<'b>(
+        fields: &'b [Expr],
+        bindings: &[String],
+    ) -> Option<(usize, &'b Expr)> {
+        if fields.len() != bindings.len() {
+            return None;
+        }
+        let mut update_idx = None;
+        for (i, (field, binding)) in fields.iter().zip(bindings.iter()).enumerate() {
+            if let Expr::Var(name, _) = field {
+                if name == binding {
+                    continue; // pass-through field
+                }
+            }
+            // This field is different
+            if update_idx.is_some() {
+                return None; // more than one changed field
+            }
+            update_idx = Some(i);
+        }
+        update_idx.map(|i| (i, &fields[i]))
     }
 
     // -----------------------------------------------------------------------

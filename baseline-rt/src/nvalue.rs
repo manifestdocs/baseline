@@ -150,7 +150,9 @@ pub enum HeapObject {
     Enum {
         tag: RcStr,
         tag_id: u32,
-        payload: NValue,
+        /// Flat payload: empty for nullary, one element for single-arg,
+        /// multiple elements for multi-arg constructors (no intermediate Tuple).
+        payload: Vec<NValue>,
     },
     Struct {
         name: RcStr,
@@ -390,14 +392,36 @@ impl NValue {
             "Err" => 3,
             _ => u32::MAX,
         };
+        // Unit payload → empty Vec (nullary semantics).
+        // This means Ok(()) and None both have empty payload Vecs.
+        // EnumFieldGet handles this by returning Unit for out-of-bounds field 0.
+        let payload_vec = if payload.is_unit() {
+            vec![]
+        } else {
+            vec![payload]
+        };
         Self::from_heap(HeapObject::Enum {
             tag,
             tag_id,
-            payload,
+            payload: payload_vec,
         })
     }
 
     pub fn enum_val_with_id(tag: RcStr, tag_id: u32, payload: NValue) -> Self {
+        let payload_vec = if payload.is_unit() {
+            vec![]
+        } else {
+            vec![payload]
+        };
+        Self::from_heap(HeapObject::Enum {
+            tag,
+            tag_id,
+            payload: payload_vec,
+        })
+    }
+
+    /// Construct an enum with a flat list of payload values (no intermediate Tuple).
+    pub fn enum_val_flat(tag: RcStr, tag_id: u32, payload: Vec<NValue>) -> Self {
         Self::from_heap(HeapObject::Enum {
             tag,
             tag_id,
@@ -610,6 +634,35 @@ impl NValue {
         }
     }
 
+    /// Get mutable access to the heap object if this NValue is the sole owner
+    /// (Arc strong count == 1). Returns None for non-heap values or shared values.
+    ///
+    /// This enables clone-on-write optimizations: when deconstructing and
+    /// reconstructing an enum value, if this is the sole reference, we can
+    /// mutate the fields in place instead of allocating a new HeapObject.
+    #[inline]
+    pub fn as_heap_mut(&mut self) -> Option<&mut HeapObject> {
+        if !self.is_heap() {
+            return None;
+        }
+        let ptr = (self.0 & PAYLOAD_MASK) as *mut HeapObject;
+        // SAFETY: We reconstruct the Arc from the raw pointer, attempt get_mut,
+        // then convert back to raw to avoid dropping. The NValue owns one strong ref.
+        unsafe {
+            let mut arc = Arc::from_raw(ptr);
+            let result = Arc::get_mut(&mut arc);
+            let got_mut = result.is_some();
+            // Convert back to raw pointer (don't drop the Arc)
+            let _ = Arc::into_raw(arc);
+            if got_mut {
+                // We confirmed strong_count == 1, so we have exclusive access.
+                Some(&mut *ptr)
+            } else {
+                None
+            }
+        }
+    }
+
     #[inline]
     pub fn as_string(&self) -> Option<&RcStr> {
         if !self.is_heap() {
@@ -643,13 +696,45 @@ impl NValue {
         }
     }
 
+    /// Extract enum tag and payload (backward-compatible: returns first element).
+    /// For nullary variants, returns a reference to a static Unit sentinel.
     #[inline]
     pub fn as_enum(&self) -> Option<(&RcStr, &NValue)> {
+        // Thread-local sentinel for nullary variants so we can return a
+        // stable &NValue reference without storing Unit in the Vec.
+        thread_local! {
+            static UNIT_SENTINEL: NValue = NValue::unit();
+        }
         if !self.is_heap() {
             return None;
         }
         match self.as_heap_ref() {
-            HeapObject::Enum { tag, payload, .. } => Some((tag, payload)),
+            HeapObject::Enum { tag, payload, .. } => {
+                if let Some(first) = payload.first() {
+                    Some((tag, first))
+                } else {
+                    UNIT_SENTINEL.with(|u| {
+                        // SAFETY: The thread-local lives for the thread's lifetime,
+                        // which is longer than any single call's use of the reference.
+                        let r: &NValue = unsafe { &*(u as *const NValue) };
+                        Some((tag, r))
+                    })
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Extract enum tag and flat payload slice.
+    /// Returns the full payload: empty for nullary, 1 element for single-arg,
+    /// N elements for multi-arg constructors.
+    #[inline]
+    pub fn as_enum_fields(&self) -> Option<(&RcStr, &[NValue])> {
+        if !self.is_heap() {
+            return None;
+        }
+        match self.as_heap_ref() {
+            HeapObject::Enum { tag, payload, .. } => Some((tag, payload.as_slice())),
             _ => None,
         }
     }
@@ -872,10 +957,13 @@ impl fmt::Display for NValue {
                     write!(f, "({})", s.join(", "))
                 }
                 HeapObject::Enum { tag, payload, .. } => {
-                    if payload.is_unit() {
+                    if payload.is_empty() {
                         write!(f, "{}", tag)
+                    } else if payload.len() == 1 {
+                        write!(f, "{}({})", tag, payload[0])
                     } else {
-                        write!(f, "{}({})", tag, payload)
+                        let s: Vec<String> = payload.iter().map(|v| v.to_string()).collect();
+                        write!(f, "{}({})", tag, s.join(", "))
                     }
                 }
                 HeapObject::Struct { name, fields } => {
@@ -969,7 +1057,15 @@ impl NValue {
                 Value::Tuple(Arc::new(items.iter().map(|v| v.to_value()).collect()))
             }
             HeapObject::Enum { tag, payload, .. } => {
-                Value::Enum(tag.clone(), Arc::new(payload.to_value()))
+                // Reconstruct the old single-NValue format for Value::Enum.
+                let val = if payload.is_empty() {
+                    Value::Unit
+                } else if payload.len() == 1 {
+                    payload[0].to_value()
+                } else {
+                    Value::Tuple(Arc::new(payload.iter().map(|v| v.to_value()).collect()))
+                };
+                Value::Enum(tag.clone(), Arc::new(val))
             }
             HeapObject::Struct { name, fields } => Value::Struct(
                 name.clone(),

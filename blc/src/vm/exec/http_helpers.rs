@@ -72,22 +72,25 @@ pub(crate) fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>
     if value.is_heap() {
         match value.as_heap_ref() {
             HeapObject::Enum { tag, payload, .. } if &**tag == "Ok" => {
-                return extract_response_nv(payload);
+                let p = &payload[0];
+                return extract_response_nv(p);
             }
             HeapObject::Enum { tag, payload, .. } if &**tag == "Err" => {
+                let p = &payload[0];
                 // Check if the Err payload is an HttpError variant (e.g., BadRequest, NotFound).
                 // Map it to the correct HTTP status code with a JSON error body.
-                if payload.is_heap()
+                if p.is_heap()
                     && let HeapObject::Enum {
                         tag: err_tag,
-                        payload: err_msg,
+                        payload: err_fields,
                         ..
-                    } = payload.as_heap_ref()
+                    } = p.as_heap_ref()
                     && let Some(status) = http_error_status_code(err_tag)
                 {
-                    let msg = match err_msg.as_string() {
+                    let err_msg = err_fields.first();
+                    let msg = match err_msg.and_then(|m| m.as_string()) {
                         Some(s) => s.to_string(),
-                        None => format!("{}", err_msg),
+                        None => err_msg.map_or(String::new(), |m| format!("{}", m)),
                     };
                     let title = http_error_title(err_tag);
                     let body = format!(
@@ -104,12 +107,12 @@ pub(crate) fn extract_response_nv(value: &NValue) -> (u16, Vec<(String, String)>
                 }
                 // If the Err payload is a Response record (has status field),
                 // extract it as a proper HTTP response instead of returning 500.
-                if let Some(fields) = payload.as_record()
+                if let Some(fields) = p.as_record()
                     && fields.iter().any(|(k, _)| &**k == "status")
                 {
-                    return extract_response_nv(payload);
+                    return extract_response_nv(p);
                 }
-                return (500, Vec::new(), format!("{}", payload));
+                return (500, Vec::new(), format!("{}", p));
             }
             _ => {}
         }

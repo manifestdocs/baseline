@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use super::nvalue::NValue;
+use super::nvalue::{HeapObject, NValue};
 use super::value::RcStr;
 
 // ---------------------------------------------------------------------------
@@ -106,16 +106,39 @@ pub enum Op {
     MakeTuple(u16),
     /// Pop Tuple from stack, push element at index.
     TupleGet(u16),
-    /// Pop value and tag from stack, push as Enum { tag, payload }.
-    /// Tag is a constant index (string). Payload is the value (or Unit for nullary).
-    MakeEnum(u16),
+    /// Pop value and tag from stack, push as Enum { tag, tag_id, payload }.
+    /// First arg: constant index for tag string. Second arg: tag_id from TagRegistry
+    /// (u16::MAX if unregistered). Payload is the value on top of stack.
+    MakeEnum(u16, u16),
     /// Pop Record and tag from stack, push as Struct { name, fields }.
     /// Tag is a constant index (string).
     MakeStruct(u16),
     /// Pop Enum from stack, push its tag as String.
     EnumTag,
+    /// Pop Enum from stack, push its tag_id as Int.
+    /// Used for fast integer-based pattern matching (avoids string comparison).
+    EnumTagId,
     /// Pop Enum from stack, push its payload.
     EnumPayload,
+    /// Pop N values from stack, push as Enum with flat payload (no Tuple intermediate).
+    /// Args: constant index for tag string, tag_id from TagRegistry, arg count.
+    /// Stack: [arg0, arg1, ..., argN-1] → Enum { tag, tag_id, payload: [arg0..argN-1] }
+    MakeEnumN(u16, u16, u8),
+    /// Pop Enum from stack, push payload field at given index.
+    /// Direct access into the flat payload Vec — no Tuple destructuring needed.
+    EnumFieldGet(u8),
+    /// In-place enum field update for clone-on-write optimization.
+    /// Stack: [new_value, enum] → [updated_enum]
+    /// If the enum Arc has strong_count == 1 (sole owner), overwrites payload[idx]
+    /// in place and pushes the same enum. Otherwise, clones the payload, updates
+    /// the clone, and constructs a new enum.
+    EnumFieldSet(u8),
+    /// Null out a field in a local slot's enum value (clone-on-write preparation).
+    /// Args: local_slot (u16), field_idx (u8).
+    /// If the local's enum Arc has strong_count == 1, replaces payload[field_idx]
+    /// with Unit (dropping the old field value, reducing its refcount). If shared, no-op.
+    /// Used before a recursive call to ensure the extracted child field has refcount 1.
+    EnumFieldDrop(u16, u8),
     /// Pop N key-value updates + base record, push new record with fields merged.
     /// Stack: [base_record, key0, val0, key1, val1, ...] → updated record
     UpdateRecord(u16),
@@ -204,6 +227,8 @@ enum ConstKey {
     Bool(bool),
     Unit,
     Function(usize),
+    /// Nullary enum variant (tag with Unit payload) — for singleton deduplication.
+    NullaryEnum(RcStr),
 }
 
 impl ConstKey {
@@ -216,9 +241,18 @@ impl ConstKey {
             Some(ConstKey::Unit)
         } else if value.is_function() {
             Some(ConstKey::Function(value.as_function()))
+        } else if value.is_heap() {
+            match value.as_heap_ref() {
+                HeapObject::String(s) => Some(ConstKey::String(s.clone())),
+                // Nullary enum variants (Unit payload) are deduplicated so
+                // repeated uses of e.g. `Leaf` share the same Arc.
+                HeapObject::Enum { tag, payload, .. } if payload.is_empty() => {
+                    Some(ConstKey::NullaryEnum(tag.clone()))
+                }
+                _ => None, // Float, List, Record, etc. — rare in constant pools
+            }
         } else {
-            value.as_string().map(|s| ConstKey::String(s.clone()))
-            // Float, List, Record, etc. — rare in constant pools
+            None
         }
     }
 }
@@ -232,6 +266,9 @@ pub struct Chunk {
     pub source_map: Vec<(usize, usize)>,
     /// Dedup index for O(1) constant pool lookups (common types only).
     const_index: HashMap<ConstKey, u16>,
+    /// Scope annotations for last-use promotion: (close_scope_pos, base_slot, count).
+    /// Recorded during codegen so the optimizer knows which slots each CloseScope destroys.
+    pub scope_slots: Vec<(usize, u16, u16)>,
 }
 
 impl Chunk {
@@ -257,6 +294,7 @@ impl Chunk {
             constants,
             source_map,
             const_index,
+            scope_slots: Vec::new(),
         }
     }
 
@@ -358,6 +396,7 @@ impl Program {
     pub fn optimize(&mut self) {
         for chunk in &mut self.chunks {
             chunk.promote_last_local_reads();
+            chunk.promote_scope_last_reads();
             chunk.specialize_int_ops();
             chunk.fuse_superinstructions();
             chunk.compact_nops();
@@ -450,6 +489,7 @@ impl Chunk {
                 | Op::GeInt
                 | Op::ListLen
                 | Op::EnumTag
+                | Op::EnumTagId
                 | Op::EnumPayload
                 | Op::Concat
                 | Op::ListConcat
@@ -462,9 +502,12 @@ impl Chunk {
                 | Op::MakeList(_)
                 | Op::MakeRecord(_)
                 | Op::MakeTuple(_)
-                | Op::MakeEnum(_)
+                | Op::MakeEnum(_, _)
+                | Op::MakeEnumN(_, _, _)
                 | Op::MakeStruct(_)
                 | Op::UpdateRecord(_)
+                | Op::EnumFieldGet(_)
+                | Op::EnumFieldSet(_)
                 | Op::MakeClosure(_, _)
                 | Op::GetLocalSubInt(_, _)
                 | Op::GetLocalLeInt(_, _)
@@ -734,6 +777,92 @@ impl Chunk {
                     seen_slots[slot as usize] = true;
                 }
                 _ => {}
+            }
+        }
+    }
+
+    /// Promote last reads of scope-local variables from `GetLocal` to `GetLocalLast`.
+    ///
+    /// Uses `scope_slots` annotations (populated during codegen) to know exactly which
+    /// slots each `CloseScope` destroys. For each annotated scope, promotes the last
+    /// `GetLocal` of each scope-local slot within each branch leading to the CloseScope.
+    ///
+    /// Since branches in match/if-else are mutually exclusive, promoting the last read
+    /// in each branch independently is safe — the slot is moved exactly once per execution.
+    pub fn promote_scope_last_reads(&mut self) {
+        if self.scope_slots.is_empty() {
+            return;
+        }
+
+        // Build merge points — targets of unconditional forward Jump.
+        // At merge points, reset per-slot tracking because the preceding branch
+        // is independent (only one branch executes).
+        let len = self.code.len();
+        let mut merge_points = std::collections::HashSet::new();
+        for i in 0..len {
+            if let Op::Jump(o) = self.code[i] {
+                if o > 0 {
+                    merge_points.insert(i + 1 + o as usize);
+                }
+            }
+        }
+
+        // Process each annotated scope, but SKIP outermost scopes.
+        // An outermost scope's CloseScope is followed only by other CloseScopes and/or
+        // Return. Moving values in outermost scopes is unsafe because locals may have
+        // aliased Weak references that depend on the strong ref staying alive.
+        for &(close_pos, base_slot, count) in &self.scope_slots.clone() {
+            if count == 0 {
+                continue;
+            }
+
+            // Skip outermost scopes: check if everything after close_pos is
+            // CloseScope, TailCall, or Return.
+            let is_outermost = (close_pos + 1..len).all(|j| {
+                matches!(
+                    self.code[j],
+                    Op::CloseScope(_) | Op::Return | Op::TailCall(_)
+                )
+            });
+            if is_outermost {
+                continue;
+            }
+
+            // For each scope-local slot, walk backward from close_pos and promote
+            // the last GetLocal in each branch.
+            for slot in base_slot..base_slot + count {
+                let mut promoted = false;
+                let mut i = close_pos;
+                while i > 0 {
+                    i -= 1;
+
+                    // At a merge point, reset — preceding branch is independent.
+                    if merge_points.contains(&i) {
+                        promoted = false;
+                    }
+
+                    match self.code[i] {
+                        Op::GetLocal(s) if s == slot => {
+                            if !promoted {
+                                promoted = true;
+                                self.code[i] = Op::GetLocalLast(s);
+                            }
+                        }
+                        Op::GetLocalLast(s) if s == slot => {
+                            // Already promoted by another pass.
+                            promoted = true;
+                        }
+                        Op::SetLocal(s) if s == slot => {
+                            promoted = true; // Block promotion for earlier reads.
+                        }
+                        Op::JumpBack(_) => break,
+                        Op::Return => {
+                            // Different exit path — reset for the preceding code.
+                            promoted = false;
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
     }
