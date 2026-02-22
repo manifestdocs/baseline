@@ -179,6 +179,8 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_enum_tag_id",
     "jit_enum_payload",
     "jit_enum_field_get",
+    "jit_enum_field_drop",
+    "jit_enum_field_set",
     "jit_tuple_get",
     "jit_list_length",
     "jit_list_get",
@@ -289,6 +291,8 @@ fn compile_inner(
     builder.symbol("jit_enum_tag_id", jit_enum_tag_id as *const u8);
     builder.symbol("jit_enum_payload", jit_enum_payload as *const u8);
     builder.symbol("jit_enum_field_get", jit_enum_field_get as *const u8);
+    builder.symbol("jit_enum_field_drop", jit_enum_field_drop as *const u8);
+    builder.symbol("jit_enum_field_set", jit_enum_field_set as *const u8);
     builder.symbol("jit_tuple_get", jit_tuple_get as *const u8);
     builder.symbol("jit_list_length", jit_list_length as *const u8);
     builder.symbol("jit_list_get", jit_list_get as *const u8);
@@ -697,12 +701,17 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "jit_make_enum_with_id" => {
-            // (tag_bits, tag_id, payload_bits) -> u64
+        "jit_make_enum_with_id" | "jit_enum_field_set" => {
+            // (a, b, c) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_enum_field_drop" => {
+            // (enum_bits, field_idx) -> void
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
         }
         "jit_update_record" => {
             // (base, updates_ptr, count) -> u64

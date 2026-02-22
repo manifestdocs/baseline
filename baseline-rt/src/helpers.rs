@@ -200,6 +200,65 @@ pub extern "C" fn jit_enum_field_get(subject_bits: u64, index: u64) -> u64 {
     }
 }
 
+/// Null out a field in a flat enum payload to reduce the field's refcount.
+/// Used before a recursive call so the extracted binding becomes sole owner,
+/// enabling cascading in-place updates (clone-on-write).
+///
+/// Uses raw pointer mutation to bypass Arc::get_mut(). This is safe because:
+/// 1. The field was already extracted via jit_enum_field_get (clone) before this call
+/// 2. Extra Arc refs are "ghost" refs from the JIT's RC incref-on-read model
+/// 3. Those ghost refs only participate in decref at scope exit, never read the payload
+/// 4. Execution is single-threaded (no data races)
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_enum_field_drop(enum_bits: u64, field_idx: u64) {
+    if enum_bits & TAG_MASK != TAG_HEAP {
+        return;
+    }
+    let fi = field_idx as usize;
+    // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
+    let ptr = (enum_bits & PAYLOAD_MASK) as *mut HeapObject;
+    unsafe {
+        if let HeapObject::Enum { payload, .. } = &mut *ptr {
+            if fi < payload.len() {
+                payload[fi] = NValue::unit();
+            }
+        }
+    }
+}
+
+/// Update a single field in a flat enum via in-place mutation.
+/// Takes ownership of new_value_bits. The enum is mutated in place via raw pointer.
+///
+/// Uses raw pointer mutation to bypass Arc::get_mut(). This is safe because:
+/// 1. jit_enum_field_drop already nulled the old field value
+/// 2. Extra Arc refs are "ghost" refs from the JIT's RC incref-on-read model
+/// 3. Those ghost refs only participate in decref at scope exit, never read the payload
+/// 4. Execution is single-threaded (no data races)
+///
+/// Returns the same enum_bits (the Arc pointer is unchanged).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_enum_field_set(
+    enum_bits: u64,
+    field_idx: u64,
+    new_value_bits: u64,
+) -> u64 {
+    if enum_bits & TAG_MASK != TAG_HEAP {
+        return NV_UNIT;
+    }
+    let new_value = unsafe { jit_take_arg(new_value_bits) };
+    let i = field_idx as usize;
+    // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
+    let ptr = (enum_bits & PAYLOAD_MASK) as *mut HeapObject;
+    unsafe {
+        if let HeapObject::Enum { payload, .. } = &mut *ptr {
+            if i < payload.len() {
+                payload[i] = new_value;
+            }
+        }
+    }
+    enum_bits
+}
+
 /// Extract the integer tag_id from a NaN-boxed enum value.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_enum_tag_id(subject_bits: u64) -> u64 {

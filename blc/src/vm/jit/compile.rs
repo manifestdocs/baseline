@@ -2307,7 +2307,36 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             if self.rc_enabled {
                 self.push_rc_scope();
                 self.bind_pattern_vars_rc(&arms[*arm_idx].pattern, subj_again)?;
-                let mut body_val = self.compile_expr(&arms[*arm_idx].body)?;
+
+                // Try CoW optimization for constructor patterns
+                let mut body_val =
+                    if let Pattern::Constructor(tag, sub_pats) = &arms[*arm_idx].pattern {
+                        let bindings: Vec<String> = sub_pats
+                            .iter()
+                            .map(|p| match p {
+                                Pattern::Var(name) => name.clone(),
+                                _ => String::new(),
+                            })
+                            .collect();
+                        if let Some(val) = self.try_gen_enum_update(
+                            &arms[*arm_idx].body,
+                            tag,
+                            &bindings,
+                            subj_var,
+                        )? {
+                            // CoW consumed subject ownership — null out subj_var
+                            // so the merge-block decref is a no-op.
+                            let unit_val =
+                                self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                            self.builder.def_var(subj_var, unit_val);
+                            val
+                        } else {
+                            self.compile_expr(&arms[*arm_idx].body)?
+                        }
+                    } else {
+                        self.compile_expr(&arms[*arm_idx].body)?
+                    };
+
                 let ret_var = self.new_var();
                 self.builder.def_var(ret_var, body_val);
                 self.pop_rc_scope(Some(ret_var));
@@ -3028,6 +3057,184 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         }
         self.sra_records.insert(name.clone(), field_vars);
         Ok(true)
+    }
+
+    // -- Clone-on-Write enum optimization --
+
+    /// Detect if fields represent a single-field-update pattern.
+    /// Returns (field_index, new_value_expr) if exactly one field differs
+    /// from the corresponding pattern binding.
+    fn detect_single_field_update<'e>(
+        fields: &'e [Expr],
+        bindings: &[String],
+    ) -> Option<(usize, &'e Expr)> {
+        if fields.len() != bindings.len() {
+            return None;
+        }
+        let mut update_idx = None;
+        for (i, (field, binding)) in fields.iter().zip(bindings.iter()).enumerate() {
+            if let Expr::Var(name, _) = field {
+                if name == binding {
+                    continue; // pass-through field
+                }
+            }
+            // This field is different
+            if update_idx.is_some() {
+                return None; // more than one changed field
+            }
+            update_idx = Some(i);
+        }
+        update_idx.map(|i| (i, &fields[i]))
+    }
+
+    /// Check if an expression can be optimized as an enum field update
+    /// (without generating code). Used to decide whether to enter the
+    /// optimization path for if/else trees.
+    fn can_enum_update(expr: &Expr, tag: &str, bindings: &[String]) -> bool {
+        match expr {
+            Expr::MakeEnum {
+                tag: t, payload, ..
+            } if t == tag => {
+                if let Expr::MakeTuple(fields, _) = payload.as_ref() {
+                    Self::detect_single_field_update(fields, bindings).is_some()
+                } else {
+                    false
+                }
+            }
+            Expr::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                Self::can_enum_update(then_branch, tag, bindings)
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|e| Self::can_enum_update(e, tag, bindings))
+            }
+            _ => false,
+        }
+    }
+
+    /// Try to compile an enum update body using CoW (clone-on-write).
+    /// Returns Some(result_val) if optimized, None if not applicable.
+    ///
+    /// Pattern detected:
+    ///   match subject { Tag(a, b, c) -> Tag(a, f(b), c) }
+    /// Emits jit_enum_field_drop + jit_enum_field_set instead of full MakeEnum.
+    fn try_gen_enum_update(
+        &mut self,
+        body: &Expr,
+        tag: &str,
+        bindings: &[String],
+        subj_var: Variable,
+    ) -> Result<Option<CValue>, String> {
+        match body {
+            Expr::MakeEnum {
+                tag: body_tag,
+                payload,
+                ..
+            } if body_tag == tag => {
+                if let Expr::MakeTuple(fields, _) = payload.as_ref() {
+                    if let Some((field_idx, new_value)) =
+                        Self::detect_single_field_update(fields, bindings)
+                    {
+                        let idx_val = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, field_idx as i64);
+
+                        // Null out the updated field to reduce its refcount
+                        let subj = self.builder.use_var(subj_var);
+                        self.call_helper_void("jit_enum_field_drop", &[subj, idx_val]);
+
+                        // Compile the new value (pattern bindings now have refcount 1)
+                        let new_val = self.compile_expr(new_value)?;
+
+                        // In-place field update (or clone if shared)
+                        let subj = self.builder.use_var(subj_var);
+                        let result =
+                            self.call_helper("jit_enum_field_set", &[subj, idx_val, new_val]);
+                        return Ok(Some(result));
+                    }
+                }
+                Ok(None)
+            }
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                // Check if at least one branch is optimizable
+                let then_opt = Self::can_enum_update(then_branch, tag, bindings);
+                let else_opt = else_branch
+                    .as_ref()
+                    .is_some_and(|e| Self::can_enum_update(e, tag, bindings));
+                if !then_opt && !else_opt {
+                    return Ok(None);
+                }
+
+                let cond_val = self.compile_expr(condition)?;
+
+                let then_block = self.builder.create_block();
+                let else_block = self.builder.create_block();
+                let merge_block = self.builder.create_block();
+                self.builder.append_block_param(merge_block, types::I64);
+
+                let cmp = self.is_truthy(cond_val);
+                if self.rc_enabled {
+                    self.emit_decref(cond_val);
+                }
+                self.builder
+                    .ins()
+                    .brif(cmp, then_block, &[], else_block, &[]);
+
+                // Then branch
+                self.builder.switch_to_block(then_block);
+                self.builder.seal_block(then_block);
+                let then_val = if then_opt {
+                    if let Some(v) =
+                        self.try_gen_enum_update(then_branch, tag, bindings, subj_var)?
+                    {
+                        v
+                    } else {
+                        self.compile_expr(then_branch)?
+                    }
+                } else {
+                    self.compile_expr(then_branch)?
+                };
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(then_val)]);
+
+                // Else branch
+                self.builder.switch_to_block(else_block);
+                self.builder.seal_block(else_block);
+                let else_val = if let Some(else_expr) = else_branch {
+                    if else_opt {
+                        if let Some(v) =
+                            self.try_gen_enum_update(else_expr, tag, bindings, subj_var)?
+                        {
+                            v
+                        } else {
+                            self.compile_expr(else_expr)?
+                        }
+                    } else {
+                        self.compile_expr(else_expr)?
+                    }
+                } else {
+                    self.builder.ins().iconst(types::I64, NV_UNIT as i64)
+                };
+                self.builder
+                    .ins()
+                    .jump(merge_block, &[BlockArg::Value(else_val)]);
+
+                self.builder.switch_to_block(merge_block);
+                self.builder.seal_block(merge_block);
+                Ok(Some(self.builder.block_params(merge_block)[0]))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Find SRA candidates in a block: Let bindings to MakeRecord where the
