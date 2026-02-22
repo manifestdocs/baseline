@@ -202,7 +202,7 @@ pub(super) fn is_scalar_only(func: &IrFunction) -> bool {
 
 fn type_is_scalar(ty: Option<&Type>) -> bool {
     match ty {
-        None => true, // No type info — optimistic (other exprs will catch heap usage)
+        None => false, // No type info — pessimistic to avoid misclassifying heap pointers as scalars
         Some(Type::Int | Type::Float | Type::Bool | Type::Unit) => true,
         Some(_) => false, // String, List, Record, Enum, etc. → heap
     }

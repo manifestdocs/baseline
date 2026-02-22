@@ -1,4 +1,4 @@
-use super::{NValue, NativeError};
+use super::{HeapObject, NValue, NativeError};
 
 pub(super) fn native_list_length(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_list() {
@@ -56,29 +56,77 @@ pub(super) fn native_list_reverse(args: &[NValue]) -> Result<NValue, NativeError
     }
 }
 
+/// Owning CoW variant of List.reverse. Reverses in-place when uniquely owned.
+pub(super) fn native_list_reverse_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let list_val = args.into_iter().next().unwrap();
+    match list_val.try_unwrap_heap() {
+        Ok(HeapObject::List(mut vec)) => {
+            vec.reverse();
+            Ok(NValue::list(vec))
+        }
+        Ok(_) => Err(NativeError("List.reverse: expected List".into())),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                let mut reversed = items.clone();
+                reversed.reverse();
+                Ok(NValue::list(reversed))
+            }
+            None => Err(NativeError(format!(
+                "List.reverse: expected List, got {}",
+                list_val
+            ))),
+        },
+    }
+}
+
+fn sort_comparator(a: &NValue, b: &NValue) -> std::cmp::Ordering {
+    if a.is_any_int() && b.is_any_int() {
+        a.as_any_int().cmp(&b.as_any_int())
+    } else if a.is_float() && b.is_float() {
+        a.as_float()
+            .partial_cmp(&b.as_float())
+            .unwrap_or(std::cmp::Ordering::Equal)
+    } else if let (Some(x), Some(y)) = (a.as_string(), b.as_string()) {
+        x.cmp(y)
+    } else {
+        std::cmp::Ordering::Equal
+    }
+}
+
 pub(super) fn native_list_sort(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_list() {
         Some(items) => {
             let mut sorted = items.clone();
-            sorted.sort_by(|a, b| {
-                if a.is_any_int() && b.is_any_int() {
-                    a.as_any_int().cmp(&b.as_any_int())
-                } else if a.is_float() && b.is_float() {
-                    a.as_float()
-                        .partial_cmp(&b.as_float())
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                } else if let (Some(x), Some(y)) = (a.as_string(), b.as_string()) {
-                    x.cmp(y)
-                } else {
-                    std::cmp::Ordering::Equal
-                }
-            });
+            sorted.sort_by(sort_comparator);
             Ok(NValue::list(sorted))
         }
         None => Err(NativeError(format!(
             "List.sort: expected List, got {}",
             args[0]
         ))),
+    }
+}
+
+/// Owning CoW variant of List.sort. Sorts in-place when uniquely owned.
+pub(super) fn native_list_sort_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let list_val = args.into_iter().next().unwrap();
+    match list_val.try_unwrap_heap() {
+        Ok(HeapObject::List(mut vec)) => {
+            vec.sort_by(sort_comparator);
+            Ok(NValue::list(vec))
+        }
+        Ok(_) => Err(NativeError("List.sort: expected List".into())),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                let mut sorted = items.clone();
+                sorted.sort_by(sort_comparator);
+                Ok(NValue::list(sorted))
+            }
+            None => Err(NativeError(format!(
+                "List.sort: expected List, got {}",
+                list_val
+            ))),
+        },
     }
 }
 
@@ -97,6 +145,42 @@ pub(super) fn native_list_concat(args: &[NValue]) -> Result<NValue, NativeError>
             Ok(NValue::list(result))
         }
         _ => Err(NativeError("List.concat: expected (List, List)".into())),
+    }
+}
+
+/// Owning CoW variant of List.concat. Extends the first list in-place when uniquely owned.
+pub(super) fn native_list_concat_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let mut args = args;
+    let b_val = args.pop().unwrap();
+    let a_val = args.pop().unwrap();
+
+    let b_items: Vec<NValue> = match b_val.as_list() {
+        Some(b) => {
+            if b.is_empty() {
+                return Ok(a_val);
+            }
+            b.to_vec()
+        }
+        None => return Err(NativeError("List.concat: expected (List, List)".into())),
+    };
+
+    if a_val.as_list().unwrap().is_empty() {
+        return Ok(b_val);
+    }
+
+    match a_val.try_unwrap_heap() {
+        Ok(HeapObject::List(mut vec)) => {
+            vec.extend(b_items);
+            Ok(NValue::list(vec))
+        }
+        Ok(_) => Err(NativeError("List.concat: expected (List, List)".into())),
+        Err(a_val) => {
+            let a = a_val.as_list().unwrap();
+            let mut result = Vec::with_capacity(a.len() + b_items.len());
+            result.extend_from_slice(a);
+            result.extend(b_items);
+            Ok(NValue::list(result))
+        }
     }
 }
 

@@ -632,6 +632,49 @@ impl NValue {
         matches!(self.as_heap_ref(), HeapObject::Continuation { .. })
     }
 
+    /// Attempt to unwrap the inner HeapObject if this NValue is the sole owner.
+    ///
+    /// Uses `Arc::try_unwrap` under the hood. On success (strong_count == 1),
+    /// the NValue is consumed and the inner HeapObject is returned directly
+    /// without cloning. On failure (aliased), returns `Err(self)` so the
+    /// caller can fall back to a clone-based path.
+    ///
+    /// # Safety
+    ///
+    /// This method uses `std::mem::forget(self)` after extracting the Arc
+    /// pointer to prevent the NValue destructor from decrementing the
+    /// refcount a second time. The forget is safe because Arc::try_unwrap
+    /// already takes ownership of that refcount.
+    #[inline]
+    pub fn try_unwrap_heap(self) -> Result<HeapObject, Self> {
+        if !self.is_heap() {
+            return Err(self);
+        }
+        let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
+        // SAFETY: is_heap() guarantees ptr is a valid Arc pointer.
+        // We reconstruct the Arc (taking ownership of one refcount),
+        // then forget `self` so Drop doesn't decrement a second time.
+        let arc = unsafe { Arc::from_raw(ptr) };
+        // Prevent double-decrement: self's Drop would decrement, but
+        // Arc::try_unwrap already consumed the refcount.
+        let bits = self.0;
+        std::mem::forget(self);
+        match Arc::try_unwrap(arc) {
+            Ok(inner) => {
+                #[cfg(debug_assertions)]
+                ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
+                Ok(inner)
+            }
+            Err(arc) => {
+                // Re-leak the Arc so the NValue can continue to reference it.
+                let _ = Arc::into_raw(arc);
+                // SAFETY: bits is the original valid NValue encoding;
+                // the Arc is still live with the same pointer.
+                Err(unsafe { NValue::from_raw(bits) })
+            }
+        }
+    }
+
     /// Reconstruct the Arc<HeapObject> from a heap NValue (increments strong count).
     /// Returns None for non-heap values.
     #[inline]

@@ -667,6 +667,34 @@ impl NValue {
         matches!(self.as_heap_ref(), HeapObject::Continuation { .. })
     }
 
+    /// Attempt to unwrap the inner HeapObject if this NValue is the sole owner.
+    ///
+    /// Uses `Arc::try_unwrap` under the hood. On success (strong_count == 1),
+    /// the NValue is consumed and the inner HeapObject is returned directly
+    /// without cloning. On failure (aliased), returns `Err(self)` so the
+    /// caller can fall back to a clone-based path.
+    #[inline]
+    pub fn try_unwrap_heap(self) -> Result<HeapObject, Self> {
+        if !self.is_heap() {
+            return Err(self);
+        }
+        let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
+        let arc = unsafe { Arc::from_raw(ptr) };
+        let bits = self.0;
+        std::mem::forget(self);
+        match Arc::try_unwrap(arc) {
+            Ok(inner) => {
+                #[cfg(debug_assertions)]
+                ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
+                Ok(inner)
+            }
+            Err(arc) => {
+                let _ = Arc::into_raw(arc);
+                Err(unsafe { NValue::from_raw(bits) })
+            }
+        }
+    }
+
     /// Reconstruct the Arc<HeapObject> from a heap NValue (increments strong count).
     /// Returns None for non-heap values.
     #[inline]

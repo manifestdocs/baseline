@@ -440,6 +440,16 @@ impl Vm {
                     self.stack.push(val);
                 }
 
+                Op::GetLocalLast(slot) => {
+                    let idx = base_slot + slot as usize;
+                    debug_assert!(idx < self.stack.len());
+                    let val = std::mem::replace(
+                        unsafe { self.stack.get_unchecked_mut(idx) },
+                        NValue::unit(),
+                    );
+                    self.stack.push(val);
+                }
+
                 Op::SetLocal(slot) => {
                     let idx = base_slot + slot as usize;
                     debug_assert!(idx < self.stack.len());

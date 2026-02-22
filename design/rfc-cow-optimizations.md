@@ -1,6 +1,6 @@
 # RFC: Clone-on-Write Optimizations for Heap-Heavy Workloads
 
-**Status:** Proposed
+**Status:** Implemented
 **Date:** 2026-02-21
 
 ## Problem

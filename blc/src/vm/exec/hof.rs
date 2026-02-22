@@ -49,8 +49,8 @@ impl super::Vm {
                 if !list.is_heap() {
                     return Err(self.error("List.map: first arg must be List".into(), line, col));
                 }
-                let items = match list.as_heap_ref() {
-                    HeapObject::List(v) => v.clone(),
+                let len = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.len(),
                     _ => {
                         return Err(self.error(
                             "List.map: first arg must be List".into(),
@@ -59,10 +59,18 @@ impl super::Vm {
                         ));
                     }
                 };
-                let mut results = Vec::with_capacity(items.len());
-                for item in &items {
+                // Index-based iteration: borrow items from the list by index
+                // instead of cloning the entire Vec upfront. The list NValue
+                // stays alive on the stack (via `list` binding) so the borrow
+                // is safe across call_nvalue re-entrancy.
+                let mut results = Vec::with_capacity(len);
+                for i in 0..len {
+                    let item = match list.as_heap_ref() {
+                        HeapObject::List(v) => v[i].clone(),
+                        _ => unreachable!(),
+                    };
                     let result =
-                        self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
+                        self.call_nvalue(&func, std::slice::from_ref(&item), chunks, line, col)?;
                     results.push(result);
                 }
                 self.stack.push(NValue::list(results));
@@ -80,8 +88,8 @@ impl super::Vm {
                         col,
                     ));
                 }
-                let items = match list.as_heap_ref() {
-                    HeapObject::List(v) => v.clone(),
+                let len = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.len(),
                     _ => {
                         return Err(self.error(
                             "List.filter: first arg must be List".into(),
@@ -91,11 +99,15 @@ impl super::Vm {
                     }
                 };
                 let mut results = Vec::new();
-                for item in &items {
+                for i in 0..len {
+                    let item = match list.as_heap_ref() {
+                        HeapObject::List(v) => v[i].clone(),
+                        _ => unreachable!(),
+                    };
                     let result =
-                        self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
+                        self.call_nvalue(&func, std::slice::from_ref(&item), chunks, line, col)?;
                     if result.is_truthy() {
-                        results.push(item.clone());
+                        results.push(item);
                     }
                 }
                 self.stack.push(NValue::list(results));
@@ -110,8 +122,8 @@ impl super::Vm {
                 if !list.is_heap() {
                     return Err(self.error("List.fold: first arg must be List".into(), line, col));
                 }
-                let items = match list.as_heap_ref() {
-                    HeapObject::List(v) => v.clone(),
+                let len = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.len(),
                     _ => {
                         return Err(self.error(
                             "List.fold: first arg must be List".into(),
@@ -121,8 +133,12 @@ impl super::Vm {
                     }
                 };
                 let mut acc = initial;
-                for item in &items {
-                    acc = self.call_nvalue(&func, &[acc, item.clone()], chunks, line, col)?;
+                for i in 0..len {
+                    let item = match list.as_heap_ref() {
+                        HeapObject::List(v) => v[i].clone(),
+                        _ => unreachable!(),
+                    };
+                    acc = self.call_nvalue(&func, &[acc, item], chunks, line, col)?;
                 }
                 self.stack.push(acc);
             }
@@ -135,8 +151,8 @@ impl super::Vm {
                 if !list.is_heap() {
                     return Err(self.error("List.find: first arg must be List".into(), line, col));
                 }
-                let items = match list.as_heap_ref() {
-                    HeapObject::List(v) => v.clone(),
+                let len = match list.as_heap_ref() {
+                    HeapObject::List(v) => v.len(),
                     _ => {
                         return Err(self.error(
                             "List.find: first arg must be List".into(),
@@ -146,11 +162,15 @@ impl super::Vm {
                     }
                 };
                 let mut found = NValue::enum_val("None".into(), NValue::unit());
-                for item in &items {
+                for i in 0..len {
+                    let item = match list.as_heap_ref() {
+                        HeapObject::List(v) => v[i].clone(),
+                        _ => unreachable!(),
+                    };
                     let result =
-                        self.call_nvalue(&func, std::slice::from_ref(item), chunks, line, col)?;
+                        self.call_nvalue(&func, std::slice::from_ref(&item), chunks, line, col)?;
                     if result.is_truthy() {
-                        found = NValue::enum_val("Some".into(), item.clone());
+                        found = NValue::enum_val("Some".into(), item);
                         break;
                     }
                 }
