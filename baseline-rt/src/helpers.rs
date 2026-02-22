@@ -158,6 +158,48 @@ pub extern "C" fn jit_make_enum_with_id(tag_bits: u64, tag_id: u64, payload_bits
     jit_own(result)
 }
 
+/// Build a flat enum variant directly from individual field values (no Tuple intermediate).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_enum_flat(
+    tag_bits: u64,
+    tag_id: u64,
+    items: *const u64,
+    count: u64,
+) -> u64 {
+    let tag_nv = unsafe { jit_take_arg(tag_bits) };
+    let Some(tag_str) = tag_nv.as_string().cloned() else {
+        jit_set_error("enum tag must be a string".to_string());
+        return NV_UNIT;
+    };
+    let slice = unsafe { std::slice::from_raw_parts(items, count as usize) };
+    let payload: Vec<NValue> = slice
+        .iter()
+        .map(|&bits| unsafe { jit_take_arg(bits) })
+        .collect();
+    let result = NValue::enum_val_flat(tag_str, tag_id as u32, payload);
+    jit_own(result)
+}
+
+/// Get a field directly from a flat enum payload by index.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_enum_field_get(subject_bits: u64, index: u64) -> u64 {
+    let subject = unsafe { NValue::borrow_from_raw(subject_bits) };
+    if !subject.is_heap() {
+        return NV_UNIT;
+    }
+    match subject.as_heap_ref() {
+        HeapObject::Enum { payload, .. } => {
+            let i = index as usize;
+            if i < payload.len() {
+                jit_own(payload[i].clone())
+            } else {
+                NV_UNIT
+            }
+        }
+        _ => NV_UNIT,
+    }
+}
+
 /// Extract the integer tag_id from a NaN-boxed enum value.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_enum_tag_id(subject_bits: u64) -> u64 {

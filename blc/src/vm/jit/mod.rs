@@ -167,6 +167,7 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_concat",
     "jit_make_enum",
     "jit_make_enum_with_id",
+    "jit_make_enum_flat",
     "jit_make_tuple",
     "jit_make_list",
     "jit_make_record",
@@ -177,6 +178,7 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_enum_tag_eq",
     "jit_enum_tag_id",
     "jit_enum_payload",
+    "jit_enum_field_get",
     "jit_tuple_get",
     "jit_list_length",
     "jit_list_get",
@@ -275,6 +277,7 @@ fn compile_inner(
     builder.symbol("jit_concat", jit_concat as *const u8);
     builder.symbol("jit_make_enum", jit_make_enum as *const u8);
     builder.symbol("jit_make_enum_with_id", jit_make_enum_with_id as *const u8);
+    builder.symbol("jit_make_enum_flat", jit_make_enum_flat as *const u8);
     builder.symbol("jit_make_tuple", jit_make_tuple as *const u8);
     builder.symbol("jit_make_list", jit_make_list as *const u8);
     builder.symbol("jit_make_record", jit_make_record as *const u8);
@@ -285,6 +288,7 @@ fn compile_inner(
     builder.symbol("jit_enum_tag_eq", jit_enum_tag_eq as *const u8);
     builder.symbol("jit_enum_tag_id", jit_enum_tag_id as *const u8);
     builder.symbol("jit_enum_payload", jit_enum_payload as *const u8);
+    builder.symbol("jit_enum_field_get", jit_enum_field_get as *const u8);
     builder.symbol("jit_tuple_get", jit_tuple_get as *const u8);
     builder.symbol("jit_list_length", jit_list_length as *const u8);
     builder.symbol("jit_list_get", jit_list_get as *const u8);
@@ -679,9 +683,17 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.returns.push(AbiParam::new(types::I64));
         }
         "jit_make_enum" | "jit_make_range" | "jit_get_field" | "jit_enum_tag_eq"
-        | "jit_values_equal" | "jit_list_get" => {
+        | "jit_values_equal" | "jit_list_get" | "jit_enum_field_get" => {
             // (a, b) -> u64
             sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_enum_flat" => {
+            // (tag_bits, tag_id, items_ptr, count) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

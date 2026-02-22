@@ -14,6 +14,7 @@ use cranelift_module::{DataId, FuncId, Module};
 use super::super::ir::{BinOp, Expr, IrFunction, MatchArm, Pattern, TagRegistry, UnaryOp};
 use super::super::natives::NativeRegistry;
 use super::super::nvalue::{NValue, PAYLOAD_MASK, TAG_BOOL, TAG_INT};
+use super::super::value::RcStr;
 use super::analysis::expr_only_refs_params;
 use super::helpers::{NV_FALSE, NV_TRUE, NV_UNIT};
 use crate::analysis::types::Type;
@@ -1272,12 +1273,37 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             // -- Phase 3: Constructors --
             Expr::MakeEnum { tag, payload, .. } => {
-                let tag_val = self.emit_string_value(tag)?;
-                let payload_val = self.compile_expr(payload)?;
                 if let Some(id) = self.tags.get_id(tag) {
+                    // Multi-arg: MakeEnum { payload: MakeTuple([...]) } → flat enum
+                    if let Expr::MakeTuple(items, _) = payload.as_ref() {
+                        let item_vals: Vec<CValue> = items
+                            .iter()
+                            .map(|e| self.compile_expr(e))
+                            .collect::<Result<Vec<_>, _>>()?;
+                        let tag_val = self.emit_string_value(tag)?;
+                        let id_val = self.builder.ins().iconst(types::I64, id as i64);
+                        let addr = self.spill_to_stack(&item_vals);
+                        let count =
+                            self.builder.ins().iconst(types::I64, item_vals.len() as i64);
+                        return Ok(self.call_helper(
+                            "jit_make_enum_flat",
+                            &[tag_val, id_val, addr, count],
+                        ));
+                    }
+                    // Nullary: MakeEnum { payload: Unit } → baked constant
+                    if matches!(payload.as_ref(), Expr::Unit) {
+                        let tag_str: RcStr = tag.as_str().into();
+                        let nv = NValue::enum_val_flat(tag_str, id, vec![]);
+                        return Ok(self.emit_heap_nvalue(nv));
+                    }
+                    // Single-arg: existing path
+                    let tag_val = self.emit_string_value(tag)?;
+                    let payload_val = self.compile_expr(payload)?;
                     let id_val = self.builder.ins().iconst(types::I64, id as i64);
                     Ok(self.call_helper("jit_make_enum_with_id", &[tag_val, id_val, payload_val]))
                 } else {
+                    let tag_val = self.emit_string_value(tag)?;
+                    let payload_val = self.compile_expr(payload)?;
                     Ok(self.call_helper("jit_make_enum", &[tag_val, payload_val]))
                 }
             }
@@ -2577,16 +2603,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Pattern::Literal(_) => {}
             Pattern::Constructor(_, sub_patterns) => {
                 if !sub_patterns.is_empty() {
-                    let payload = self.call_helper("jit_enum_payload", &[subject]);
-                    if sub_patterns.len() == 1 {
-                        self.bind_pattern_vars(&sub_patterns[0], payload)?;
-                    } else {
-                        // Payload is a tuple — extract each element
-                        for (i, sub) in sub_patterns.iter().enumerate() {
-                            let idx = self.builder.ins().iconst(types::I64, i as i64);
-                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
-                            self.bind_pattern_vars(sub, elem)?;
-                        }
+                    // Extract fields directly from flat enum payload
+                    for (i, sub) in sub_patterns.iter().enumerate() {
+                        let idx = self.builder.ins().iconst(types::I64, i as i64);
+                        let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
+                        self.bind_pattern_vars(sub, elem)?;
                     }
                 }
             }
@@ -2630,17 +2651,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Pattern::Literal(_) => {}
             Pattern::Constructor(_, sub_patterns) => {
                 if !sub_patterns.is_empty() {
-                    let payload = self.call_helper("jit_enum_payload", &[subject]);
-                    if sub_patterns.len() == 1 {
-                        self.bind_pattern_vars_rc(&sub_patterns[0], payload)?;
-                    } else {
-                        for (i, sub) in sub_patterns.iter().enumerate() {
-                            let idx = self.builder.ins().iconst(types::I64, i as i64);
-                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
-                            self.bind_pattern_vars_rc(sub, elem)?;
-                        }
-                        // Decref the payload tuple after extracting elements
-                        self.emit_decref(payload);
+                    // Extract fields directly from flat enum payload
+                    for (i, sub) in sub_patterns.iter().enumerate() {
+                        let idx = self.builder.ins().iconst(types::I64, i as i64);
+                        let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
+                        self.bind_pattern_vars_rc(sub, elem)?;
                     }
                 }
             }
@@ -2683,18 +2698,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
             }
             Pattern::Constructor(_, sub_patterns) => {
-                if sub_patterns.is_empty() {
-                    // Nothing to bind
-                } else {
-                    let payload = self.call_helper("jit_enum_payload", &[val]);
-                    if sub_patterns.len() == 1 {
-                        self.bind_pattern(&sub_patterns[0], payload)?;
-                    } else {
-                        for (i, sub) in sub_patterns.iter().enumerate() {
-                            let idx = self.builder.ins().iconst(types::I64, i as i64);
-                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
-                            self.bind_pattern(sub, elem)?;
-                        }
+                if !sub_patterns.is_empty() {
+                    // Extract fields directly from flat enum payload
+                    for (i, sub) in sub_patterns.iter().enumerate() {
+                        let idx = self.builder.ins().iconst(types::I64, i as i64);
+                        let elem = self.call_helper("jit_enum_field_get", &[val, idx]);
+                        self.bind_pattern(sub, elem)?;
                     }
                 }
             }
@@ -2735,18 +2744,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     // Enum with no payload — decref it
                     self.emit_decref(val);
                 } else {
-                    let payload = self.call_helper("jit_enum_payload", &[val]);
-                    // jit_enum_payload increfs the payload
-                    if sub_patterns.len() == 1 {
-                        self.bind_pattern_rc(&sub_patterns[0], payload)?;
-                    } else {
-                        for (i, sub) in sub_patterns.iter().enumerate() {
-                            let idx = self.builder.ins().iconst(types::I64, i as i64);
-                            let elem = self.call_helper("jit_tuple_get", &[payload, idx]);
-                            self.bind_pattern_rc(sub, elem)?;
-                        }
-                        // Decref the payload tuple after extracting elements
-                        self.emit_decref(payload);
+                    // Extract fields directly from flat enum payload
+                    for (i, sub) in sub_patterns.iter().enumerate() {
+                        let idx = self.builder.ins().iconst(types::I64, i as i64);
+                        let elem = self.call_helper("jit_enum_field_get", &[val, idx]);
+                        self.bind_pattern_rc(sub, elem)?;
                     }
                     // Decref the enum container
                     self.emit_decref(val);
