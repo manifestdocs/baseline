@@ -51,6 +51,10 @@ pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     /// AOT native function IDs: maps qualified name → FuncId for direct calls.
     /// When Some, CallNative emits direct calls instead of going through NativeRegistry.
     pub(super) aot_native_ids: Option<&'a HashMap<String, FuncId>>,
+    /// JIT string constant pool: deduplicates heap allocations for repeated string literals.
+    pub(super) string_pool: HashMap<String, CValue>,
+    /// Reusable scratch stack slot for spill_to_stack (slot, size in bytes).
+    pub(super) scratch_slot: Option<(cranelift_codegen::ir::StackSlot, u32)>,
     /// Whether RC codegen is enabled (scope-based incref/decref).
     pub(super) rc_enabled: bool,
     /// Stack of scope frames tracking owned variables for RC cleanup.
@@ -160,8 +164,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             let len = self.builder.ins().iconst(types::I64, s.len() as i64);
             Ok(self.call_helper("jit_make_string", &[addr, len]))
         } else {
+            // JIT path: deduplicate string allocations via pool
+            if let Some(&cached) = self.string_pool.get(s) {
+                return Ok(cached);
+            }
             let nv = NValue::string(s.into());
-            Ok(self.emit_heap_nvalue(nv))
+            let val = self.emit_heap_nvalue(nv);
+            self.string_pool.insert(s.to_string(), val);
+            Ok(val)
         }
     }
 
@@ -234,13 +244,21 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Spill values to a stack slot and return the address.
+    /// Reuses a scratch slot when possible to avoid creating many stack slots.
     fn spill_to_stack(&mut self, values: &[CValue]) -> CValue {
         let size = (values.len() * 8) as u32;
-        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
-            StackSlotKind::ExplicitSlot,
-            size,
-            3, // 8-byte alignment
-        ));
+        let slot = match self.scratch_slot {
+            Some((existing, existing_size)) if existing_size >= size => existing,
+            _ => {
+                let s = self.builder.create_sized_stack_slot(StackSlotData::new(
+                    StackSlotKind::ExplicitSlot,
+                    size,
+                    3, // 8-byte alignment
+                ));
+                self.scratch_slot = Some((s, size));
+                s
+            }
+        };
         for (i, &v) in values.iter().enumerate() {
             let offset = (i * 8) as i32;
             self.builder.ins().stack_store(v, slot, offset);
@@ -321,6 +339,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             .map(|a| self.compile_expr(a))
             .collect::<Result<_, _>>()?;
 
+        // Bind param vars so condition and base_expr can reference them
         let mut saved_vars = HashMap::new();
         for (i, param_name) in func.params.iter().enumerate() {
             let var = self.new_var();
@@ -331,15 +350,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         }
 
         let cond_val = self.compile_expr(cond_expr)?;
-        let base_val = self.compile_expr(base_expr)?;
 
-        for param_name in &func.params {
-            self.vars.remove(param_name);
-        }
-        for (name, old_var) in saved_vars {
-            self.vars.insert(name, old_var);
-        }
-
+        let base_block = self.builder.create_block();
         let call_block = self.builder.create_block();
         let merge_block = self.builder.create_block();
         self.builder.append_block_param(merge_block, types::I64);
@@ -347,24 +359,25 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let cmp = self.is_truthy(cond_val);
         if base_in_then {
             // Base case in then: branch to base when cond is true
-            self.builder.ins().brif(
-                cmp,
-                merge_block,
-                &[BlockArg::Value(base_val)],
-                call_block,
-                &[],
-            );
+            self.builder
+                .ins()
+                .brif(cmp, base_block, &[], call_block, &[]);
         } else {
             // Base case in else: branch to base when cond is false
-            self.builder.ins().brif(
-                cmp,
-                call_block,
-                &[],
-                merge_block,
-                &[BlockArg::Value(base_val)],
-            );
+            self.builder
+                .ins()
+                .brif(cmp, call_block, &[], base_block, &[]);
         }
 
+        // base_block: compile base_expr only when the base case is taken
+        self.builder.switch_to_block(base_block);
+        self.builder.seal_block(base_block);
+        let base_val = self.compile_expr(base_expr)?;
+        self.builder
+            .ins()
+            .jump(merge_block, &[BlockArg::Value(base_val)]);
+
+        // call_block: emit the actual recursive call
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);
         let func_id = self.func_ids[func_idx].unwrap();
@@ -383,6 +396,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder
             .ins()
             .jump(merge_block, &[BlockArg::Value(call_result)]);
+
+        // Restore original vars after both blocks are compiled
+        for param_name in &func.params {
+            self.vars.remove(param_name);
+        }
+        for (name, old_var) in saved_vars {
+            self.vars.insert(name, old_var);
+        }
 
         self.builder.switch_to_block(merge_block);
         self.builder.seal_block(merge_block);
@@ -1402,21 +1423,6 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
 
             Expr::UpdateRecord { base, updates, .. } => {
-                // SRA: if base is a scalar-replaced record, update field variables directly
-                if let Expr::Var(name, _) = base.as_ref() {
-                    if self.sra_records.contains_key(name.as_str()) {
-                        // Compile updated field values and def_var them
-                        for (fname, fexpr) in updates {
-                            let val = self.compile_expr(fexpr)?;
-                            if let Some(field_vars) = self.sra_records.get(name.as_str()) {
-                                if let Some(&var) = field_vars.get(fname.as_str()) {
-                                    self.builder.def_var(var, val);
-                                }
-                            }
-                        }
-                        return Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64));
-                    }
-                }
                 let base_val = self.compile_expr(base)?;
 
                 let mut pair_vals = Vec::with_capacity(updates.len() * 2);
@@ -2663,6 +2669,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 if !sub_patterns.is_empty() {
                     // Extract fields directly from flat enum payload
                     for (i, sub) in sub_patterns.iter().enumerate() {
+                        if matches!(sub, Pattern::Wildcard) {
+                            continue; // skip extraction for wildcards — no binding needed
+                        }
                         let idx = self.builder.ins().iconst(types::I64, i as i64);
                         let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
                         self.bind_pattern_vars(sub, elem)?;
@@ -2671,6 +2680,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
             Pattern::Tuple(sub_patterns) => {
                 for (i, sub) in sub_patterns.iter().enumerate() {
+                    if matches!(sub, Pattern::Wildcard) {
+                        continue; // skip extraction for wildcards — no binding needed
+                    }
                     let idx = self.builder.ins().iconst(types::I64, i as i64);
                     let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
                     self.bind_pattern_vars(sub, elem)?;
@@ -2711,6 +2723,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 if !sub_patterns.is_empty() {
                     // Extract fields directly from flat enum payload
                     for (i, sub) in sub_patterns.iter().enumerate() {
+                        if matches!(sub, Pattern::Wildcard) {
+                            continue; // skip extraction for wildcards — avoids leaked owned clone
+                        }
                         let idx = self.builder.ins().iconst(types::I64, i as i64);
                         let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
                         self.bind_pattern_vars_rc(sub, elem)?;
@@ -2719,6 +2734,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
             Pattern::Tuple(sub_patterns) => {
                 for (i, sub) in sub_patterns.iter().enumerate() {
+                    if matches!(sub, Pattern::Wildcard) {
+                        continue; // skip extraction for wildcards — avoids leaked owned clone
+                    }
                     let idx = self.builder.ins().iconst(types::I64, i as i64);
                     let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
                     self.bind_pattern_vars_rc(sub, elem)?;
@@ -2956,107 +2974,6 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
     // -- SRA (Scalar Replacement of Aggregates) --
 
-    /// Check if a variable only appears in GetField or UpdateRecord base positions.
-    /// Returns false (escapes) if the variable is used in any other context.
-    fn var_escapes_in_expr(expr: &Expr, name: &str) -> bool {
-        match expr {
-            Expr::Var(n, _) if n == name => true, // bare use = escape
-            Expr::GetField { object, .. } => {
-                // GetField on our var is fine — but check if var appears elsewhere in field subtree
-                if let Expr::Var(n, _) = object.as_ref() {
-                    if n == name {
-                        return false; // this is a safe use
-                    }
-                }
-                Self::var_escapes_in_expr(object, name)
-            }
-            Expr::UpdateRecord { base, updates, .. } => {
-                // UpdateRecord with our var as base is fine
-                let base_escapes = if let Expr::Var(n, _) = base.as_ref() {
-                    if n == name {
-                        false // safe use
-                    } else {
-                        Self::var_escapes_in_expr(base, name)
-                    }
-                } else {
-                    Self::var_escapes_in_expr(base, name)
-                };
-                if base_escapes {
-                    return true;
-                }
-                updates
-                    .iter()
-                    .any(|(_, v)| Self::var_escapes_in_expr(v, name))
-            }
-            // Recurse into all children
-            Expr::Int(_)
-            | Expr::Float(_)
-            | Expr::String(_)
-            | Expr::Bool(_)
-            | Expr::Unit
-            | Expr::Hole => false,
-            Expr::Var(_, _) => false, // different name
-            Expr::BinOp { lhs, rhs, .. } => {
-                Self::var_escapes_in_expr(lhs, name) || Self::var_escapes_in_expr(rhs, name)
-            }
-            Expr::UnaryOp { operand, .. } => Self::var_escapes_in_expr(operand, name),
-            Expr::And(l, r) | Expr::Or(l, r) => {
-                Self::var_escapes_in_expr(l, name) || Self::var_escapes_in_expr(r, name)
-            }
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                Self::var_escapes_in_expr(condition, name)
-                    || Self::var_escapes_in_expr(then_branch, name)
-                    || else_branch
-                        .as_ref()
-                        .is_some_and(|e| Self::var_escapes_in_expr(e, name))
-            }
-            Expr::Block(exprs, _) => exprs.iter().any(|e| Self::var_escapes_in_expr(e, name)),
-            Expr::Let { value, .. } => Self::var_escapes_in_expr(value, name),
-            Expr::CallDirect { args, .. }
-            | Expr::CallNative { args, .. }
-            | Expr::TailCall { args, .. } => {
-                args.iter().any(|a| Self::var_escapes_in_expr(a, name))
-            }
-            Expr::CallIndirect { callee, args, .. }
-            | Expr::TailCallIndirect { callee, args, .. } => {
-                Self::var_escapes_in_expr(callee, name)
-                    || args.iter().any(|a| Self::var_escapes_in_expr(a, name))
-            }
-            Expr::MakeEnum { payload, .. } => Self::var_escapes_in_expr(payload, name),
-            Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => fields
-                .iter()
-                .any(|(_, v)| Self::var_escapes_in_expr(v, name)),
-            Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
-                items.iter().any(|e| Self::var_escapes_in_expr(e, name))
-            }
-            Expr::MakeRange(s, e) => {
-                Self::var_escapes_in_expr(s, name) || Self::var_escapes_in_expr(e, name)
-            }
-            Expr::Match { subject, arms, .. } => {
-                Self::var_escapes_in_expr(subject, name)
-                    || arms
-                        .iter()
-                        .any(|a| Self::var_escapes_in_expr(&a.body, name))
-            }
-            Expr::For { iterable, body, .. } => {
-                Self::var_escapes_in_expr(iterable, name) || Self::var_escapes_in_expr(body, name)
-            }
-            Expr::Lambda { body, .. } => Self::var_escapes_in_expr(body, name),
-            Expr::Try { expr, .. } => Self::var_escapes_in_expr(expr, name),
-            Expr::Concat(parts) => parts.iter().any(|p| Self::var_escapes_in_expr(p, name)),
-            Expr::MakeClosure { captures, .. } => {
-                captures.iter().any(|c| Self::var_escapes_in_expr(c, name))
-            }
-            Expr::GetClosureVar(_) => false,
-            _ => true, // conservative: escape for anything else
-        }
-    }
-
     /// Try to compile an expression as an SRA Let binding.
     /// Returns `true` if the expression was intercepted and compiled as scalar
     /// field variables (skipping the MakeRecord allocation), `false` otherwise.
@@ -3267,20 +3184,25 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Find SRA candidates in a block: Let bindings to MakeRecord where the
-    /// variable never escapes (only used in GetField/UpdateRecord).
+    /// variable never escapes (only used in GetField positions).
+    ///
+    /// Uses a single pass to collect all escaping variable names, then filters
+    /// candidates by checking set membership. O(N) instead of O(N²).
     pub(super) fn find_sra_candidates(exprs: &[Expr]) -> Vec<(String, Vec<String>)> {
+        // Single pass: collect all variable names that appear in escaping positions
+        let mut escaping = std::collections::HashSet::new();
+        for expr in exprs {
+            Self::collect_escaping_vars(expr, &mut escaping);
+        }
+
         let mut candidates = Vec::new();
-        for (i, expr) in exprs.iter().enumerate() {
+        for expr in exprs {
             if let Expr::Let { pattern, value, .. } = expr {
                 if let Pattern::Var(name) = pattern.as_ref() {
                     if let Expr::MakeRecord(fields, _) = value.as_ref() {
-                        let field_names: Vec<String> =
-                            fields.iter().map(|(k, _)| k.clone()).collect();
-                        // Check if variable escapes in subsequent expressions
-                        let escapes = exprs[i + 1..]
-                            .iter()
-                            .any(|e| Self::var_escapes_in_expr(e, name));
-                        if !escapes {
+                        if !escaping.contains(name.as_str()) {
+                            let field_names: Vec<String> =
+                                fields.iter().map(|(k, _)| k.clone()).collect();
                             candidates.push((name.clone(), field_names));
                         }
                     }
@@ -3288,5 +3210,129 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
         }
         candidates
+    }
+
+    /// Collect variable names that appear in escaping positions (anything other
+    /// than GetField base). A single walk of the expression tree.
+    fn collect_escaping_vars<'c>(expr: &'c Expr, escaping: &mut std::collections::HashSet<&'c str>) {
+        match expr {
+            Expr::Var(name, _) => {
+                // Bare variable reference = escapes
+                escaping.insert(name.as_str());
+            }
+            Expr::GetField { object, .. } => {
+                // GetField on a bare var is a safe (non-escaping) use — skip it.
+                // But recurse into nested expressions.
+                if let Expr::Var(_, _) = object.as_ref() {
+                    // Safe use: record.field — do NOT mark as escaping
+                } else {
+                    Self::collect_escaping_vars(object, escaping);
+                }
+            }
+            Expr::UpdateRecord { base, updates, .. } => {
+                // UpdateRecord base always escapes (immutability — see 1A fix)
+                Self::collect_escaping_vars(base, escaping);
+                for (_, v) in updates {
+                    Self::collect_escaping_vars(v, escaping);
+                }
+            }
+            // Recurse into all children
+            Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::String(_)
+            | Expr::Bool(_)
+            | Expr::Unit
+            | Expr::Hole
+            | Expr::GetClosureVar(_) => {}
+            Expr::BinOp { lhs, rhs, .. } | Expr::And(lhs, rhs) | Expr::Or(lhs, rhs) => {
+                Self::collect_escaping_vars(lhs, escaping);
+                Self::collect_escaping_vars(rhs, escaping);
+            }
+            Expr::UnaryOp { operand, .. } => Self::collect_escaping_vars(operand, escaping),
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                Self::collect_escaping_vars(condition, escaping);
+                Self::collect_escaping_vars(then_branch, escaping);
+                if let Some(e) = else_branch {
+                    Self::collect_escaping_vars(e, escaping);
+                }
+            }
+            Expr::Block(exprs, _) | Expr::MakeList(exprs, _) | Expr::MakeTuple(exprs, _) => {
+                for e in exprs {
+                    Self::collect_escaping_vars(e, escaping);
+                }
+            }
+            Expr::Concat(parts) => {
+                for p in parts {
+                    Self::collect_escaping_vars(p, escaping);
+                }
+            }
+            Expr::Let { value, .. } => Self::collect_escaping_vars(value, escaping),
+            Expr::CallDirect { args, .. }
+            | Expr::CallNative { args, .. }
+            | Expr::TailCall { args, .. } => {
+                for a in args {
+                    Self::collect_escaping_vars(a, escaping);
+                }
+            }
+            Expr::CallIndirect { callee, args, .. }
+            | Expr::TailCallIndirect { callee, args, .. } => {
+                Self::collect_escaping_vars(callee, escaping);
+                for a in args {
+                    Self::collect_escaping_vars(a, escaping);
+                }
+            }
+            Expr::Match { subject, arms, .. } => {
+                Self::collect_escaping_vars(subject, escaping);
+                for arm in arms {
+                    Self::collect_escaping_vars(&arm.body, escaping);
+                }
+            }
+            Expr::MakeEnum { payload, .. } => Self::collect_escaping_vars(payload, escaping),
+            Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
+                for (_, v) in fields {
+                    Self::collect_escaping_vars(v, escaping);
+                }
+            }
+            Expr::MakeRange(a, b) => {
+                Self::collect_escaping_vars(a, escaping);
+                Self::collect_escaping_vars(b, escaping);
+            }
+            Expr::For { iterable, body, .. } => {
+                Self::collect_escaping_vars(iterable, escaping);
+                Self::collect_escaping_vars(body, escaping);
+            }
+            Expr::Try { expr, .. } => Self::collect_escaping_vars(expr, escaping),
+            Expr::MakeClosure { captures, .. } => {
+                for c in captures {
+                    Self::collect_escaping_vars(c, escaping);
+                }
+            }
+            Expr::Lambda { body, .. } => Self::collect_escaping_vars(body, escaping),
+            Expr::WithHandlers { handlers, body, .. } => {
+                for (_, methods) in handlers {
+                    for (_, h) in methods {
+                        Self::collect_escaping_vars(h, escaping);
+                    }
+                }
+                Self::collect_escaping_vars(body, escaping);
+            }
+            Expr::HandleEffect { body, clauses, .. } => {
+                Self::collect_escaping_vars(body, escaping);
+                for clause in clauses {
+                    Self::collect_escaping_vars(&clause.body, escaping);
+                }
+            }
+            Expr::PerformEffect { args, .. } => {
+                for a in args {
+                    Self::collect_escaping_vars(a, escaping);
+                }
+            }
+            Expr::Expect { actual, .. } => Self::collect_escaping_vars(actual, escaping),
+        }
     }
 }

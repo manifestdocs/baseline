@@ -465,6 +465,8 @@ fn compile_inner(
                 sra_records: HashMap::new(),
                 aot_strings: None,
                 aot_native_ids: None,
+                string_pool: HashMap::new(),
+                scratch_slot: None,
                 rc_enabled,
                 rc_scope_stack: Vec::new(),
                 func_call_conv: CallConv::Tail,

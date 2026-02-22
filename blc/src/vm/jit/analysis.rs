@@ -203,8 +203,11 @@ pub(super) fn is_scalar_only(func: &IrFunction) -> bool {
 fn type_is_scalar(ty: Option<&Type>) -> bool {
     match ty {
         None => false, // No type info — pessimistic to avoid misclassifying heap pointers as scalars
-        Some(Type::Int | Type::Float | Type::Bool | Type::Unit) => true,
-        Some(_) => false, // String, List, Record, Enum, etc. → heap
+        Some(Type::Int | Type::Bool | Type::Unit) => true,
+        // Float excluded: unboxed BinOp uses integer instructions (iadd, sdiv)
+        // which produce wrong results on float bit patterns. Proper float unboxed
+        // support (bitcast + fadd/fsub/fmul/fdiv) can be added later.
+        Some(_) => false, // String, List, Record, Enum, Float, etc. → not scalar
     }
 }
 
@@ -463,20 +466,30 @@ pub(super) fn compute_unboxed_flags(module: &IrModule) -> Vec<bool> {
         })
         .collect();
 
+    // Pre-compute call graph: for each function, collect the indices of callees.
+    // This avoids re-walking the AST on every fixed-point iteration.
+    let call_graph: Vec<Vec<usize>> = module
+        .functions
+        .iter()
+        .map(|func| {
+            let mut names = Vec::new();
+            collect_called_functions(&func.body, &mut names);
+            names
+                .iter()
+                .filter_map(|n| func_names.get(n).copied())
+                .collect()
+        })
+        .collect();
+
     // Fixed-point: remove functions whose callees aren't all unboxed
     loop {
         let mut changed = false;
-        for (i, func) in module.functions.iter().enumerate() {
+        for (i, callees) in call_graph.iter().enumerate() {
             if !unboxed[i] {
                 continue;
             }
-            let mut callees = Vec::new();
-            collect_called_functions(&func.body, &mut callees);
-            for callee_name in &callees {
-                if let Some(&callee_idx) = func_names.get(callee_name)
-                    && callee_idx != i
-                    && !unboxed[callee_idx]
-                {
+            for &callee_idx in callees {
+                if callee_idx != i && !unboxed[callee_idx] {
                     // Self-recursion is fine, but calling a boxed function isn't
                     unboxed[i] = false;
                     changed = true;
