@@ -147,29 +147,46 @@ Modules are gated by prelude level (`@prelude(none|minimal|pure|core|script|serv
 
 | Module | Prelude | Functions |
 |--------|---------|-----------|
-| `Option` | minimal+ | `map`, `unwrap`, `unwrap_or`, `is_some`, `is_none` |
-| `Result` | minimal+ | `map`, `map_err`, `unwrap`, `unwrap_or`, `is_ok`, `is_err` |
-| `String` | pure+ | `length`, `slice`, `contains`, `split`, `trim`, `upper`, `lower`, ... |
-| `List` | pure+ | `map`, `filter`, `fold`, `find`, `head`, `tail`, `length`, `sort`, ... |
-| `Math` | pure+ | `abs`, `min`, `max`, `clamp`, `pow` |
-| `Json` | pure+ | `parse`, `stringify` |
-| `Weak` | pure+ | `downgrade`, `upgrade` |
+| `Option` | minimal+ | `map`, `flat_map`, `unwrap`, `unwrap_or`, `ok_or`, `is_some`, `is_none` |
+| `Result` | minimal+ | `map`, `map_err`, `and_then`, `unwrap`, `unwrap_or`, `is_ok`, `is_err`, `ensure`, `context` |
+| `String` | pure+ | `length`, `slice`, `contains`, `split`, `join`, `trim`, `to_upper`, `to_lower`, `starts_with`, `ends_with`, `chars`, `char_at`, `index_of`, `to_int`, `from_char_code`, `char_code`, `replace`, `matches`, `find_matches`, `replace_regex` |
+| `List` | pure+ | `map`, `filter`, `fold`, `find`, `head`, `tail`, `length`, `sort`, `reverse`, `concat`, `contains`, `get` |
+| `Math` | pure+ | `abs`, `min`, `max`, `clamp`, `pow`, `sqrt`, `sin`, `cos`, `atan2`, `floor`, `ceil` |
+| `Float` | pure+ | `from_int`, `format` |
+| `Json` | pure+ | `parse`, `to_string`, `to_string_pretty`, `to_camel_case`, `to_snake_case` |
+| `Crypto` | pure+ | `sha256`, `hmac_sha256`, `constant_time_eq` |
+| `Weak` | core+ | `downgrade`, `upgrade` |
+| `Int` | core+ | `to_string`, `parse`, `from_float` |
+| `Map` | core+ | `empty`, `insert`, `get`, `remove`, `contains`, `keys`, `values`, `len`, `from_list` |
+| `Set` | core+ | `empty`, `insert`, `remove`, `contains`, `union`, `intersection`, `len`, `from_list` |
 | `Console` | script+ | `println!`, `print!`, `error!`, `read_line!` |
 | `Log` | script+ | `info!`, `warn!`, `error!`, `debug!` |
 | `Time` | script+ | `now!`, `sleep!` |
-| `Random` | script+ | `int!`, `bool!` |
+| `DateTime` | script+ | `now!`, `parse`, `to_string`, `add`, `diff` |
+| `Random` | script+ | `int!`, `bool!`, `uuid!`, `bytes!` |
 | `Env` | script+ | `get!`, `set!`, `args!` |
-| `Fs` | script+ | `read!`, `write!`, `exists!`, `delete!`, `with_file!` |
-| `Http` | script+ | `get!`, `post!`, `put!`, `delete!` |
-| `Router` | server | `get`, `post`, `put`, `delete`, `group` |
+| `Fs` | script+ | `read!`, `write!`, `exists!`, `delete!`, `list_dir!`, `with_file!` |
+| `Http` | script+ | `get!`, `post!`, `put!`, `delete!`, `request!` |
+| `Response` | script+ | `ok`, `json`, `created`, `no_content`, `bad_request`, `not_found`, `error`, `status`, `redirect`, `with_header`, ... |
+| `Request` | script+ | `header`, `method`, `body_json`, `param`, `param_int`, `query`, `query_int`, `decode`, `multipart` |
+| `HttpError` | script+ | `bad_request`, `not_found`, `unauthorized`, `forbidden`, `conflict`, `unprocessable`, `internal`, ... |
+| `Middleware` | script+ | `extract_bearer`, `extract_basic`, `cors_config`, `rate_limit_config` |
+| `Validate` | server | `required`, `string`, `int`, `boolean`, `min_length`, `max_length`, `min`, `max`, `one_of` |
+| `Jwt` | server | `sign`, `sign_with`, `verify`, `decode` |
+| `Session` | server | `create!`, `get!`, `set!`, `delete!` |
+| `Router` | server | `new`, `get`, `post`, `put`, `delete`, `patch`, `options`, `head`, `any`, `use`, `group`, `resources`, `state`, `ws` |
+| `Sqlite` | server | `connect!`, `execute!`, `query!`, `query_one!`, `query_map!`, `query_as!`, `query_one_as!` |
+| `Row` | server | `string`, `int`, `float`, `bool`, `optional_string`, `optional_int`, `decode` |
+| `Server` | server | `listen!` |
+| `Ws` | server | `send!`, `receive!`, `close!` |
 
 ## Testing
 
 ```bash
-# Full test suite (~450 tests)
+# Full test suite (~600 tests)
 cargo test -p blc
 
-# With JIT and AOT tests (~550 tests)
+# With JIT and AOT tests (~650 tests)
 cargo test -p blc --features jit,aot
 
 # Fast subset
@@ -222,6 +239,10 @@ Baseline is in **v0.1 (Bootstrap Phase)**. The core language, type system, effec
 - Module system with qualified, selective, and wildcard imports
 - Self-hosted compiler (lexer, parser, C codegen) for bootstrap verification
 - HTTP server with TLS, compression, static files, CORS, cookies
+- WebSocket support, JWT authentication, server-side sessions
+- Request validation, SQLite/Postgres/MySQL database drivers
+- Structured concurrency with scoped tasks and channels
+- Regex string matching, DateTime handling, cryptographic hashing
 - Editor support (Zed)
 - CI pipeline, fuzzing, conformance and property test suites
 
