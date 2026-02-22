@@ -123,6 +123,9 @@ fn optimize_inner(module: &mut IrModule, lift: bool) {
         func.body = simplify_blocks(func.body.clone());
     }
     if lift {
+        // Evidence passing: transform tail-resumptive effect handlers into
+        // MakeRecord/GetField/CallIndirect so the JIT can compile them.
+        evidence_transform(module);
         // Lambda lifting: transform Lambda nodes into MakeClosure + lifted functions
         lift_lambdas(module);
     }
@@ -355,8 +358,476 @@ fn lift_lambdas_in_expr(
 }
 
 // ---------------------------------------------------------------------------
-// Tag Registry Builder
+// Evidence Passing Transform (effects → records + indirect calls)
 // ---------------------------------------------------------------------------
+
+/// Context carried through the evidence transform.
+struct EvidenceCtx {
+    /// The evidence variable currently in scope (e.g. "__ev_0").
+    current_ev: Option<String>,
+    /// Module-global counter for unique evidence variable names.
+    ev_counter: usize,
+    /// Set of function names that need an __ev parameter prepended.
+    needs_evidence: HashSet<String>,
+}
+
+impl EvidenceCtx {
+    fn fresh_ev(&mut self) -> String {
+        let name = format!("__ev_{}", self.ev_counter);
+        self.ev_counter += 1;
+        name
+    }
+}
+
+/// Determine which functions need an `__ev` evidence parameter.
+///
+/// 1. Functions whose body contains `PerformEffect` are directly effectful.
+/// 2. Functions that call (via CallDirect/TailCall) a directly effectful
+///    function are transitively effectful.
+/// 3. Fixed-point iteration propagates until stable.
+///
+/// Functions containing `HandleEffect` where ALL clauses are tail-resumptive
+/// provide their own evidence — their body may need evidence internally, but
+/// the handler itself creates it. These are handled during the transform.
+fn compute_needs_evidence(module: &IrModule) -> HashSet<String> {
+    let func_names: HashMap<String, usize> = module
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| (f.name.clone(), i))
+        .collect();
+
+    // Step 1: Mark functions that directly contain PerformEffect.
+    let mut needs: Vec<bool> = module
+        .functions
+        .iter()
+        .map(|f| expr_has_perform(&f.body))
+        .collect();
+
+    // Step 2: Build call graph (indices of callees for each function).
+    let call_graph: Vec<Vec<usize>> = module
+        .functions
+        .iter()
+        .map(|f| {
+            let mut callees = Vec::new();
+            collect_call_targets(&f.body, &mut callees);
+            callees
+                .iter()
+                .filter_map(|n| func_names.get(n).copied())
+                .collect()
+        })
+        .collect();
+
+    // Step 3: Fixed-point — propagate evidence needs through call graph.
+    loop {
+        let mut changed = false;
+        for (i, callees) in call_graph.iter().enumerate() {
+            if needs[i] {
+                continue;
+            }
+            for &callee_idx in callees {
+                if needs[callee_idx] {
+                    needs[i] = true;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    needs
+        .into_iter()
+        .enumerate()
+        .filter(|(_, b)| *b)
+        .map(|(i, _)| module.functions[i].name.clone())
+        .collect()
+}
+
+/// Check if an expression contains any *unhandled* PerformEffect node.
+///
+/// PerformEffect nodes inside a tail-resumptive HandleEffect that handles
+/// them are considered handled and don't count. Only PerformEffect nodes
+/// that escape their handler (or have no handler) make the function effectful.
+fn expr_has_perform(expr: &Expr) -> bool {
+    let mut handled: HashSet<String> = HashSet::new();
+    expr_has_unhandled_perform(expr, &mut handled)
+}
+
+fn expr_has_unhandled_perform(expr: &Expr, handled: &mut HashSet<String>) -> bool {
+    match expr {
+        Expr::PerformEffect { effect, method, args, .. } => {
+            let key = format!("{}.{}", effect, method);
+            if handled.contains(&key) {
+                // This effect is handled by an enclosing HandleEffect.
+                // Still check args for unhandled performs.
+                args.iter().any(|a| expr_has_unhandled_perform(a, handled))
+            } else {
+                true
+            }
+        }
+        Expr::HandleEffect { body, clauses } => {
+            let all_tail_resumptive = clauses.iter().all(|c| c.is_tail_resumptive);
+            if all_tail_resumptive {
+                // These clauses handle their effects — add them to scope.
+                let mut added = Vec::new();
+                for c in clauses {
+                    let key = format!("{}.{}", c.effect, c.method);
+                    if handled.insert(key.clone()) {
+                        added.push(key);
+                    }
+                }
+                let result = expr_has_unhandled_perform(body, handled);
+                // Restore handled set (clause bodies are lambdas, not effectful).
+                for key in added {
+                    handled.remove(&key);
+                }
+                result
+            } else {
+                // Non-tail-resumptive handler — check body and clause bodies.
+                expr_has_unhandled_perform(body, handled)
+                    || clauses.iter().any(|c| expr_has_unhandled_perform(&c.body, handled))
+            }
+        }
+        Expr::WithHandlers { handlers, body } => {
+            // WithHandlers provides evidence for its effects.
+            // For now, just check the body — WithHandlers doesn't suppress
+            // PerformEffect detection because it's a different mechanism.
+            let _ = handlers;
+            expr_has_unhandled_perform(body, handled)
+        }
+        _ => {
+            let mut found = false;
+            visit_expr_children(expr, &mut |child| {
+                if !found && expr_has_unhandled_perform(child, handled) {
+                    found = true;
+                }
+            });
+            found
+        }
+    }
+}
+
+/// Collect function names targeted by CallDirect and TailCall.
+fn collect_call_targets(expr: &Expr, out: &mut Vec<String>) {
+    visit_expr(expr, &mut |e| match e {
+        Expr::CallDirect { name, .. } | Expr::TailCall { name, .. } => {
+            out.push(name.clone());
+        }
+        _ => {}
+    });
+}
+
+/// Run the evidence-passing transform on the module.
+///
+/// Converts tail-resumptive HandleEffect, WithHandlers, and PerformEffect
+/// nodes into ordinary IR constructs (MakeRecord, GetField, CallIndirect,
+/// Lambda). After this pass, all effect nodes in JIT-eligible functions are
+/// eliminated. Non-tail-resumptive handlers are left untouched (can_jit
+/// rejects them → VM fallback).
+fn evidence_transform(module: &mut IrModule) {
+    // Check if there are any effect nodes at all.
+    let has_any_effects = module.functions.iter().any(|f| expr_has_effect_node(&f.body));
+    if !has_any_effects {
+        return;
+    }
+
+    let needs = compute_needs_evidence(module);
+
+    let mut ctx = EvidenceCtx {
+        current_ev: None,
+        ev_counter: 0,
+        needs_evidence: needs,
+    };
+
+    // Prepend __ev parameter to effectful function signatures.
+    for func in &mut module.functions {
+        if ctx.needs_evidence.contains(&func.name) {
+            func.params.insert(0, "__ev".to_string());
+        }
+    }
+
+    // Transform each function body.
+    for i in 0..module.functions.len() {
+        let has_ev = ctx.needs_evidence.contains(&module.functions[i].name);
+        ctx.current_ev = if has_ev {
+            Some("__ev".to_string())
+        } else {
+            None
+        };
+        let body = module.functions[i].body.clone();
+        module.functions[i].body = transform_evidence_expr(body, &mut ctx);
+    }
+}
+
+/// Check if an expression contains any effect-related node.
+fn expr_has_effect_node(expr: &Expr) -> bool {
+    let mut found = false;
+    visit_expr(expr, &mut |e| {
+        if found {
+            return;
+        }
+        if matches!(
+            e,
+            Expr::HandleEffect { .. } | Expr::PerformEffect { .. } | Expr::WithHandlers { .. }
+        ) {
+            found = true;
+        }
+    });
+    found
+}
+
+/// Recursively transform an expression, eliminating effect nodes.
+fn transform_evidence_expr(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
+    match expr {
+        // -----------------------------------------------------------------
+        // HandleEffect: all-tail-resumptive → build evidence record
+        // -----------------------------------------------------------------
+        Expr::HandleEffect { body, clauses } => {
+            let all_tail_resumptive = clauses.iter().all(|c| c.is_tail_resumptive);
+            if !all_tail_resumptive {
+                // Leave non-tail-resumptive handlers untouched for VM fallback.
+                // Still recurse into children in case there are nested transforms.
+                let body = transform_evidence_expr(*body, ctx);
+                let clauses = clauses
+                    .into_iter()
+                    .map(|c| HandlerClause {
+                        body: transform_evidence_expr(c.body, ctx),
+                        ..c
+                    })
+                    .collect();
+                return Expr::HandleEffect {
+                    body: Box::new(body),
+                    clauses,
+                };
+            }
+
+            let ev_name = ctx.fresh_ev();
+            let mut block = Vec::new();
+
+            // Build handler lambdas and evidence record fields.
+            let mut fields: Vec<(String, Expr)> = Vec::new();
+            for clause in &clauses {
+                let field_key = format!("{}.{}", clause.effect, clause.method);
+                // Strip the resume(expr) wrapper to get just the inner expr.
+                let stripped_body = strip_tail_resume_owned(&clause.body);
+                let lambda = Expr::Lambda {
+                    params: clause.params.clone(),
+                    body: Box::new(stripped_body),
+                    ty: None,
+                };
+                fields.push((field_key, lambda));
+            }
+
+            // Build evidence record, merging with parent evidence if present.
+            let record_expr = if let Some(ref parent_ev) = ctx.current_ev {
+                // Nested handler: merge with parent evidence.
+                Expr::UpdateRecord {
+                    base: Box::new(Expr::Var(parent_ev.clone(), None)),
+                    updates: fields,
+                    ty: None,
+                }
+            } else {
+                Expr::MakeRecord(fields, None)
+            };
+
+            block.push(Expr::Let {
+                pattern: Box::new(Pattern::Var(ev_name.clone())),
+                value: Box::new(record_expr),
+                ty: None,
+            });
+
+            // Transform body with this new evidence in scope.
+            let prev_ev = ctx.current_ev.replace(ev_name.clone());
+            let transformed_body = transform_evidence_expr(*body, ctx);
+            ctx.current_ev = prev_ev;
+
+            block.push(transformed_body);
+            Expr::Block(block, None)
+        }
+
+        // -----------------------------------------------------------------
+        // WithHandlers: build evidence record from handler expressions
+        // -----------------------------------------------------------------
+        Expr::WithHandlers { handlers, body } => {
+            let ev_name = ctx.fresh_ev();
+            let mut block = Vec::new();
+
+            // Build evidence fields from handler expressions.
+            let mut all_fields: Vec<(String, Expr)> = Vec::new();
+            for (effect_name, methods) in handlers {
+                if methods.len() == 1 && methods[0].0 == "__record__" {
+                    // `with { Effect: handler_expr }` — handler_expr is a record.
+                    // We need to wrap each method access. For now store the whole
+                    // record keyed by effect name, and GetField will use
+                    // "Effect.method" keys after we flatten.
+                    // Since WithHandlers stores an entire handler record, store it
+                    // and let PerformEffect do a two-level lookup or store flat.
+                    // Simpler: store as flat fields using a temp.
+                    let handler_tmp = format!("__ev_wh_{}", effect_name);
+                    let handler_expr = transform_evidence_expr(methods.into_iter().next().unwrap().1, ctx);
+                    block.push(Expr::Let {
+                        pattern: Box::new(Pattern::Var(handler_tmp.clone())),
+                        value: Box::new(handler_expr),
+                        ty: None,
+                    });
+                    // The handler is a record with method keys. Store it under
+                    // effect name for lookup in PerformEffect.
+                    all_fields.push((effect_name, Expr::Var(handler_tmp, None)));
+                } else {
+                    // Individual method entries
+                    for (method_key, handler_fn) in methods {
+                        let field_key = format!("{}.{}", effect_name, method_key);
+                        let handler = transform_evidence_expr(handler_fn, ctx);
+                        all_fields.push((field_key, handler));
+                    }
+                }
+            }
+
+            let record_expr = if let Some(ref parent_ev) = ctx.current_ev {
+                Expr::UpdateRecord {
+                    base: Box::new(Expr::Var(parent_ev.clone(), None)),
+                    updates: all_fields,
+                    ty: None,
+                }
+            } else {
+                Expr::MakeRecord(all_fields, None)
+            };
+
+            block.push(Expr::Let {
+                pattern: Box::new(Pattern::Var(ev_name.clone())),
+                value: Box::new(record_expr),
+                ty: None,
+            });
+
+            let prev_ev = ctx.current_ev.replace(ev_name.clone());
+            let transformed_body = transform_evidence_expr(*body, ctx);
+            ctx.current_ev = prev_ev;
+
+            block.push(transformed_body);
+            Expr::Block(block, None)
+        }
+
+        // -----------------------------------------------------------------
+        // PerformEffect: look up handler in evidence record and call it
+        // -----------------------------------------------------------------
+        Expr::PerformEffect {
+            effect,
+            method,
+            args,
+            ty,
+        } => {
+            let field_key = format!("{}.{}", effect, method);
+            let ev_var = ctx
+                .current_ev
+                .as_ref()
+                .expect("PerformEffect without evidence in scope")
+                .clone();
+
+            let args = args
+                .into_iter()
+                .map(|a| transform_evidence_expr(a, ctx))
+                .collect();
+
+            let tmp = format!("__ev_fn_{}_{}", effect, method);
+            Expr::Block(
+                vec![
+                    Expr::Let {
+                        pattern: Box::new(Pattern::Var(tmp.clone())),
+                        value: Box::new(Expr::GetField {
+                            object: Box::new(Expr::Var(ev_var, None)),
+                            field: field_key,
+                            field_idx: None,
+                            ty: None,
+                        }),
+                        ty: None,
+                    },
+                    Expr::CallIndirect {
+                        callee: Box::new(Expr::Var(tmp, None)),
+                        args,
+                        ty,
+                    },
+                ],
+                None,
+            )
+        }
+
+        // -----------------------------------------------------------------
+        // CallDirect / TailCall to effectful function: prepend evidence arg
+        // -----------------------------------------------------------------
+        Expr::CallDirect { name, args, ty } => {
+            let args: Vec<Expr> = args
+                .into_iter()
+                .map(|a| transform_evidence_expr(a, ctx))
+                .collect();
+            if ctx.needs_evidence.contains(&name) {
+                let ev_var = ctx
+                    .current_ev
+                    .as_ref()
+                    .expect("CallDirect to effectful function without evidence")
+                    .clone();
+                let mut new_args = vec![Expr::Var(ev_var, None)];
+                new_args.extend(args);
+                Expr::CallDirect {
+                    name,
+                    args: new_args,
+                    ty,
+                }
+            } else {
+                Expr::CallDirect { name, args, ty }
+            }
+        }
+
+        Expr::TailCall { name, args, ty } => {
+            let args: Vec<Expr> = args
+                .into_iter()
+                .map(|a| transform_evidence_expr(a, ctx))
+                .collect();
+            if ctx.needs_evidence.contains(&name) {
+                let ev_var = ctx
+                    .current_ev
+                    .as_ref()
+                    .expect("TailCall to effectful function without evidence")
+                    .clone();
+                let mut new_args = vec![Expr::Var(ev_var, None)];
+                new_args.extend(args);
+                Expr::TailCall {
+                    name,
+                    args: new_args,
+                    ty,
+                }
+            } else {
+                Expr::TailCall { name, args, ty }
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // All other nodes: recurse into children
+        // -----------------------------------------------------------------
+        other => {
+            walk_expr_children(other, |child| transform_evidence_expr(child, ctx))
+        }
+    }
+}
+
+/// Strip `resume(expr)` wrapper from a tail-resumptive handler body,
+/// returning an owned clone of the inner expression.
+fn strip_tail_resume_owned(expr: &Expr) -> Expr {
+    match expr {
+        Expr::CallIndirect { callee, args, .. }
+            if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume")
+                && args.len() == 1 =>
+        {
+            args[0].clone()
+        }
+        Expr::Block(stmts, _) if stmts.len() == 1 => strip_tail_resume_owned(&stmts[0]),
+        _ => expr.clone(),
+    }
+}
+
+
 
 /// Walk all functions in the module, collecting enum tags from `MakeEnum` and
 /// `Pattern::Constructor` nodes, and register them in the module's TagRegistry.
@@ -2016,5 +2487,490 @@ mod tests {
             found_closure_var,
             "Expected GetClosureVar(0) in lifted body"
         );
+    }
+
+    // -- Evidence passing transform tests --
+
+    #[test]
+    fn compute_needs_evidence_direct() {
+        // A function that directly performs an effect needs evidence.
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "effectful".into(),
+                params: vec![],
+                body: Expr::PerformEffect {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    args: vec![],
+                    ty: None,
+                },
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        let needs = super::compute_needs_evidence(&module);
+        assert!(needs.contains("effectful"));
+    }
+
+    #[test]
+    fn compute_needs_evidence_transitive() {
+        // main calls effectful, so main also needs evidence.
+        let module = IrModule {
+            functions: vec![
+                IrFunction {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Expr::CallDirect {
+                        name: "effectful".into(),
+                        args: vec![],
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+                IrFunction {
+                    name: "effectful".into(),
+                    params: vec![],
+                    body: Expr::PerformEffect {
+                        effect: "E".into(),
+                        method: "get".into(),
+                        args: vec![],
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+            ],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        let needs = super::compute_needs_evidence(&module);
+        assert!(needs.contains("main"));
+        assert!(needs.contains("effectful"));
+    }
+
+    #[test]
+    fn compute_needs_evidence_pure_function() {
+        // A pure function should not need evidence.
+        let module = IrModule {
+            functions: vec![IrFunction {
+                name: "pure".into(),
+                params: vec!["x".into()],
+                body: Expr::BinOp {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::Var("x".into(), None)),
+                    rhs: Box::new(Expr::Int(1)),
+                    ty: None,
+                },
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+        let needs = super::compute_needs_evidence(&module);
+        assert!(needs.is_empty());
+    }
+
+    #[test]
+    fn evidence_transform_tail_resumptive_handler() {
+        // handle { perform E.get!() } with { E.get!() -> resume(42) }
+        // After transform, no effect nodes should remain.
+        use crate::vm::ir::HandlerClause;
+        let handler_body = Expr::HandleEffect {
+            body: Box::new(Expr::PerformEffect {
+                effect: "E".into(),
+                method: "get".into(),
+                args: vec![],
+                ty: None,
+            }),
+            clauses: vec![HandlerClause {
+                effect: "E".into(),
+                method: "get".into(),
+                params: vec![],
+                body: Expr::CallIndirect {
+                    callee: Box::new(Expr::Var("resume".into(), None)),
+                    args: vec![Expr::Int(42)],
+                    ty: None,
+                },
+                is_tail_resumptive: true,
+            }],
+        };
+
+        let mut module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: handler_body,
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+
+        super::evidence_transform(&mut module);
+
+        // After transform, should have no HandleEffect or PerformEffect nodes.
+        let mut has_effect_nodes = false;
+        super::visit_expr(&module.functions[0].body, &mut |e| {
+            if matches!(
+                e,
+                Expr::HandleEffect { .. } | Expr::PerformEffect { .. }
+            ) {
+                has_effect_nodes = true;
+            }
+        });
+        assert!(
+            !has_effect_nodes,
+            "Expected no effect nodes after transform, got: {:?}",
+            module.functions[0].body
+        );
+
+        // Should contain MakeRecord (evidence) and CallIndirect (dispatch)
+        let mut has_record = false;
+        let mut has_indirect = false;
+        super::visit_expr(&module.functions[0].body, &mut |e| {
+            if matches!(e, Expr::MakeRecord(..)) {
+                has_record = true;
+            }
+            if matches!(e, Expr::CallIndirect { .. }) {
+                has_indirect = true;
+            }
+        });
+        assert!(has_record, "Expected MakeRecord in transformed body");
+        assert!(has_indirect, "Expected CallIndirect in transformed body");
+    }
+
+    #[test]
+    fn evidence_transform_non_tail_resumptive_untouched() {
+        // Non-tail-resumptive handler should be left untouched.
+        use crate::vm::ir::HandlerClause;
+        let handler_body = Expr::HandleEffect {
+            body: Box::new(Expr::PerformEffect {
+                effect: "E".into(),
+                method: "get".into(),
+                args: vec![],
+                ty: None,
+            }),
+            clauses: vec![HandlerClause {
+                effect: "E".into(),
+                method: "get".into(),
+                params: vec!["k".into()],
+                body: Expr::BinOp {
+                    op: BinOp::Add,
+                    lhs: Box::new(Expr::CallIndirect {
+                        callee: Box::new(Expr::Var("resume".into(), None)),
+                        args: vec![Expr::Int(1)],
+                        ty: None,
+                    }),
+                    rhs: Box::new(Expr::Int(2)),
+                    ty: None,
+                },
+                is_tail_resumptive: false,
+            }],
+        };
+
+        let mut module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: handler_body,
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+
+        super::evidence_transform(&mut module);
+
+        // HandleEffect should still be present.
+        let mut has_handle = false;
+        super::visit_expr(&module.functions[0].body, &mut |e| {
+            if matches!(e, Expr::HandleEffect { .. }) {
+                has_handle = true;
+            }
+        });
+        assert!(
+            has_handle,
+            "Non-tail-resumptive handler should remain as HandleEffect"
+        );
+    }
+
+    #[test]
+    fn evidence_transform_threads_through_call_direct() {
+        // main calls effectful_fn, both should get __ev param.
+        use crate::vm::ir::HandlerClause;
+        let mut module = IrModule {
+            functions: vec![
+                IrFunction {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Expr::HandleEffect {
+                        body: Box::new(Expr::CallDirect {
+                            name: "effectful_fn".into(),
+                            args: vec![Expr::Int(10)],
+                            ty: None,
+                        }),
+                        clauses: vec![HandlerClause {
+                            effect: "E".into(),
+                            method: "inc".into(),
+                            params: vec!["x".into()],
+                            body: Expr::CallIndirect {
+                                callee: Box::new(Expr::Var("resume".into(), None)),
+                                args: vec![Expr::BinOp {
+                                    op: BinOp::Add,
+                                    lhs: Box::new(Expr::Var("x".into(), None)),
+                                    rhs: Box::new(Expr::Int(1)),
+                                    ty: None,
+                                }],
+                                ty: None,
+                            },
+                            is_tail_resumptive: true,
+                        }],
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+                IrFunction {
+                    name: "effectful_fn".into(),
+                    params: vec!["n".into()],
+                    body: Expr::PerformEffect {
+                        effect: "E".into(),
+                        method: "inc".into(),
+                        args: vec![Expr::Var("n".into(), None)],
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+            ],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+
+        super::evidence_transform(&mut module);
+
+        // effectful_fn should now have __ev as first param
+        assert_eq!(
+            module.functions[1].params[0], "__ev",
+            "effectful_fn should have __ev as first param"
+        );
+        assert_eq!(
+            module.functions[1].params[1], "n",
+            "effectful_fn should still have n as second param"
+        );
+
+        // No PerformEffect should remain in effectful_fn
+        let mut has_perform = false;
+        super::visit_expr(&module.functions[1].body, &mut |e| {
+            if matches!(e, Expr::PerformEffect { .. }) {
+                has_perform = true;
+            }
+        });
+        assert!(
+            !has_perform,
+            "PerformEffect should be eliminated in effectful_fn"
+        );
+    }
+
+    #[test]
+    fn evidence_transform_nested_handlers() {
+        // Nested handlers should merge evidence via UpdateRecord.
+        use crate::vm::ir::HandlerClause;
+        let body = Expr::HandleEffect {
+            body: Box::new(Expr::HandleEffect {
+                body: Box::new(Expr::PerformEffect {
+                    effect: "B".into(),
+                    method: "get".into(),
+                    args: vec![],
+                    ty: None,
+                }),
+                clauses: vec![HandlerClause {
+                    effect: "B".into(),
+                    method: "get".into(),
+                    params: vec![],
+                    body: Expr::CallIndirect {
+                        callee: Box::new(Expr::Var("resume".into(), None)),
+                        args: vec![Expr::Int(2)],
+                        ty: None,
+                    },
+                    is_tail_resumptive: true,
+                }],
+            }),
+            clauses: vec![HandlerClause {
+                effect: "A".into(),
+                method: "get".into(),
+                params: vec![],
+                body: Expr::CallIndirect {
+                    callee: Box::new(Expr::Var("resume".into(), None)),
+                    args: vec![Expr::Int(1)],
+                    ty: None,
+                },
+                is_tail_resumptive: true,
+            }],
+        };
+
+        let mut module = IrModule {
+            functions: vec![IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body,
+                ty: None,
+                span: dummy_span(),
+            }],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+
+        super::evidence_transform(&mut module);
+
+        // Should have no effect nodes remaining.
+        let mut has_effect = false;
+        super::visit_expr(&module.functions[0].body, &mut |e| {
+            if matches!(
+                e,
+                Expr::HandleEffect { .. } | Expr::PerformEffect { .. }
+            ) {
+                has_effect = true;
+            }
+        });
+        assert!(!has_effect, "Nested handler should eliminate all effect nodes");
+
+        // Should have an UpdateRecord (inner handler merges with outer).
+        let mut has_update = false;
+        super::visit_expr(&module.functions[0].body, &mut |e| {
+            if matches!(e, Expr::UpdateRecord { .. }) {
+                has_update = true;
+            }
+        });
+        assert!(
+            has_update,
+            "Nested handler should use UpdateRecord to merge evidence"
+        );
+    }
+
+    #[test]
+    fn evidence_transform_tail_call_threading() {
+        // TailCall to effectful function should also get evidence prepended.
+        use crate::vm::ir::HandlerClause;
+        let mut module = IrModule {
+            functions: vec![
+                IrFunction {
+                    name: "main".into(),
+                    params: vec![],
+                    body: Expr::HandleEffect {
+                        body: Box::new(Expr::CallDirect {
+                            name: "loop_fn".into(),
+                            args: vec![Expr::Int(5)],
+                            ty: None,
+                        }),
+                        clauses: vec![HandlerClause {
+                            effect: "E".into(),
+                            method: "tick".into(),
+                            params: vec![],
+                            body: Expr::CallIndirect {
+                                callee: Box::new(Expr::Var("resume".into(), None)),
+                                args: vec![Expr::Unit],
+                                ty: None,
+                            },
+                            is_tail_resumptive: true,
+                        }],
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+                IrFunction {
+                    name: "loop_fn".into(),
+                    params: vec!["n".into()],
+                    body: Expr::If {
+                        condition: Box::new(Expr::BinOp {
+                            op: BinOp::Le,
+                            lhs: Box::new(Expr::Var("n".into(), None)),
+                            rhs: Box::new(Expr::Int(0)),
+                            ty: None,
+                        }),
+                        then_branch: Box::new(Expr::Int(0)),
+                        else_branch: Some(Box::new(Expr::Block(
+                            vec![
+                                Expr::PerformEffect {
+                                    effect: "E".into(),
+                                    method: "tick".into(),
+                                    args: vec![],
+                                    ty: None,
+                                },
+                                Expr::TailCall {
+                                    name: "loop_fn".into(),
+                                    args: vec![Expr::BinOp {
+                                        op: BinOp::Sub,
+                                        lhs: Box::new(Expr::Var("n".into(), None)),
+                                        rhs: Box::new(Expr::Int(1)),
+                                        ty: None,
+                                    }],
+                                    ty: None,
+                                },
+                            ],
+                            None,
+                        ))),
+                        ty: None,
+                    },
+                    ty: None,
+                    span: dummy_span(),
+                },
+            ],
+            entry: 0,
+            tags: TagRegistry::new(),
+        };
+
+        super::evidence_transform(&mut module);
+
+        // loop_fn should have __ev as first param
+        assert_eq!(module.functions[1].params[0], "__ev");
+
+        // TailCall in loop_fn body should have evidence prepended
+        let mut has_tail_call_with_ev = false;
+        super::visit_expr(&module.functions[1].body, &mut |e| {
+            if let Expr::TailCall { name, args, .. } = e {
+                if name == "loop_fn" && args.len() == 2 {
+                    // First arg should be __ev variable
+                    if matches!(&args[0], Expr::Var(n, _) if n == "__ev") {
+                        has_tail_call_with_ev = true;
+                    }
+                }
+            }
+        });
+        assert!(
+            has_tail_call_with_ev,
+            "TailCall to effectful loop_fn should have __ev prepended"
+        );
+    }
+
+    #[test]
+    fn strip_tail_resume_owned_works() {
+        // resume(42) → 42
+        let expr = Expr::CallIndirect {
+            callee: Box::new(Expr::Var("resume".into(), None)),
+            args: vec![Expr::Int(42)],
+            ty: None,
+        };
+        let stripped = super::strip_tail_resume_owned(&expr);
+        assert_eq!(stripped, Expr::Int(42));
+
+        // Block([resume(42)]) → 42
+        let block = Expr::Block(vec![expr], None);
+        let stripped = super::strip_tail_resume_owned(&block);
+        assert_eq!(stripped, Expr::Int(42));
+
+        // Non resume call → returned as-is
+        let not_resume = Expr::CallIndirect {
+            callee: Box::new(Expr::Var("foo".into(), None)),
+            args: vec![Expr::Int(42)],
+            ty: None,
+        };
+        let stripped = super::strip_tail_resume_owned(&not_resume);
+        assert_eq!(stripped, not_resume);
     }
 }

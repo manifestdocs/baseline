@@ -2012,3 +2012,140 @@ fn jit_rc_no_leak_try_unwrap() {
         new_allocs, new_frees
     );
 }
+
+// -- Evidence passing JIT integration tests --
+// These test the full pipeline: IR with effect nodes → optimize (evidence transform) → JIT
+
+#[test]
+fn jit_evidence_simple_handler() {
+    use crate::vm::ir::HandlerClause;
+    use crate::vm::optimize_ir::optimize;
+
+    // handle { perform E.get!() } with { E.get!() -> resume(42) }
+    let mut module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::HandleEffect {
+                body: Box::new(Expr::PerformEffect {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    args: vec![],
+                    ty: Some(Type::Int),
+                }),
+                clauses: vec![HandlerClause {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    params: vec![],
+                    body: Expr::CallIndirect {
+                        callee: Box::new(Expr::Var("resume".into(), None)),
+                        args: vec![make_int(42)],
+                        ty: Some(Type::Int),
+                    },
+                    is_tail_resumptive: true,
+                }],
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+
+    optimize(&mut module);
+    assert_eq!(compile_and_run(&module), 42);
+}
+
+#[test]
+fn jit_evidence_handler_with_params() {
+    use crate::vm::ir::HandlerClause;
+    use crate::vm::optimize_ir::optimize;
+
+    // handle { perform E.inc!(10) } with { E.inc!(x) -> resume(x + 1) }
+    let mut module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::HandleEffect {
+                body: Box::new(Expr::PerformEffect {
+                    effect: "E".into(),
+                    method: "inc".into(),
+                    args: vec![make_int(10)],
+                    ty: Some(Type::Int),
+                }),
+                clauses: vec![HandlerClause {
+                    effect: "E".into(),
+                    method: "inc".into(),
+                    params: vec!["x".into()],
+                    body: Expr::CallIndirect {
+                        callee: Box::new(Expr::Var("resume".into(), None)),
+                        args: vec![make_binop(BinOp::Add, make_var("x"), make_int(1))],
+                        ty: Some(Type::Int),
+                    },
+                    is_tail_resumptive: true,
+                }],
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+
+    optimize(&mut module);
+    assert_eq!(compile_and_run(&module), 11);
+}
+
+#[test]
+fn jit_evidence_cross_function() {
+    use crate::vm::ir::HandlerClause;
+    use crate::vm::optimize_ir::optimize;
+
+    // fn effectful() = perform E.get!()
+    // fn main() = handle { effectful() } with { E.get!() -> resume(99) }
+    let mut module = IrModule {
+        functions: vec![
+            IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::HandleEffect {
+                    body: Box::new(Expr::CallDirect {
+                        name: "effectful".into(),
+                        args: vec![],
+                        ty: Some(Type::Int),
+                    }),
+                    clauses: vec![HandlerClause {
+                        effect: "E".into(),
+                        method: "get".into(),
+                        params: vec![],
+                        body: Expr::CallIndirect {
+                            callee: Box::new(Expr::Var("resume".into(), None)),
+                            args: vec![make_int(99)],
+                            ty: Some(Type::Int),
+                        },
+                        is_tail_resumptive: true,
+                    }],
+                },
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            },
+            IrFunction {
+                name: "effectful".into(),
+                params: vec![],
+                body: Expr::PerformEffect {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    args: vec![],
+                    ty: Some(Type::Int),
+                },
+                ty: Some(Type::Int),
+                span: dummy_span(),
+            },
+        ],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+
+    optimize(&mut module);
+    assert_eq!(compile_and_run(&module), 99);
+}
