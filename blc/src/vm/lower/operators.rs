@@ -41,10 +41,18 @@ impl<'a> super::Lowerer<'a> {
             _ => return Err(self.error(format!("Unknown unary operator: {}", op_text), node)),
         };
 
+        let ty = if self.type_map.as_ref().is_some_and(|tm| {
+            matches!(tm.get(&operand.start_byte()), Some(Type::Float))
+        }) || self.is_float_expr(&operand) {
+            Some(Type::Float)
+        } else {
+            None
+        };
+
         Ok(Expr::UnaryOp {
             op,
             operand: Box::new(inner),
-            ty: None,
+            ty,
         })
     }
 
@@ -99,7 +107,18 @@ impl<'a> super::Lowerer<'a> {
             )
         }) || (self.is_int_expr(&lhs_node) && self.is_int_expr(&rhs_node));
 
-        let ty = if both_int { Some(Type::Int) } else { None };
+        let either_float = self.type_map.as_ref().is_some_and(|tm| {
+            matches!(tm.get(&lhs_node.start_byte()), Some(Type::Float))
+                || matches!(tm.get(&rhs_node.start_byte()), Some(Type::Float))
+        }) || (self.is_float_expr(&lhs_node) && self.is_float_expr(&rhs_node));
+
+        let ty = if both_int {
+            Some(Type::Int)
+        } else if either_float {
+            Some(Type::Float)
+        } else {
+            None
+        };
 
         let op = match op_text.as_str() {
             "+" => BinOp::Add,
@@ -137,6 +156,26 @@ impl<'a> super::Lowerer<'a> {
                     matches!(op_text.as_str(), "+" | "-" | "*" | "/" | "%")
                         && node.named_child(0).is_some_and(|c| self.is_int_expr(&c))
                         && node.named_child(1).is_some_and(|c| self.is_int_expr(&c))
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn is_float_expr(&self, node: &Node) -> bool {
+        match node.kind() {
+            "float_literal" => true,
+            "unary_expression" => node
+                .named_child(0)
+                .is_some_and(|c| c.kind() == "float_literal"),
+            "binary_expression" => {
+                if let Some(op) = node.child(1) {
+                    let op_text = self.node_text(&op);
+                    matches!(op_text.as_str(), "+" | "-" | "*" | "/" | "%")
+                        && node.named_child(0).is_some_and(|c| self.is_float_expr(&c))
+                        && node.named_child(1).is_some_and(|c| self.is_float_expr(&c))
                 } else {
                     false
                 }

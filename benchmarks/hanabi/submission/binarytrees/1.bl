@@ -1,0 +1,59 @@
+@prelude(script)
+
+// Binary Trees benchmark — hanabi1224/Programming-Language-Benchmarks
+// Allocate many binary trees, count their nodes.
+
+type Tree =
+  | Leaf
+  | Node(Int, Tree, Tree)
+
+fn make(depth: Int) -> Tree =
+  if depth <= 0 then Leaf
+  else {
+    let d = depth - 1
+    let left = make(d)
+    let right = make(d)
+    Node(0, left, right)
+  }
+
+fn check(tree: Tree) -> Int =
+  match tree
+    Leaf -> 1
+    Node(_, l, r) -> 1 + check(l) + check(r)
+
+fn sum_checks(i: Int, depth: Int, acc: Int) -> Int =
+  if i <= 0 then acc
+  else {
+    let t = make(depth)
+    sum_checks(i - 1, depth, acc + check(t))
+  }
+
+fn run_depth!(min_depth: Int, max_depth: Int, depth: Int) -> () =
+  if depth <= max_depth then {
+    let iterations = Math.pow(2, max_depth - depth + min_depth)
+    let c = sum_checks(iterations, depth, 0)
+    Console.println!("${iterations}\t trees of depth ${depth}\t check: ${c}")
+    run_depth!(min_depth, max_depth, depth + 2)
+  }
+  else ()
+
+fn main!() -> () = {
+  let args = Env.args!()
+  let n_str = Option.unwrap_or(List.get(args, 0), "21")
+  let n = match Int.parse(n_str)
+    Ok(v) -> v
+    Err(_) -> 21
+
+  let min_depth = 4
+  let max_depth = if min_depth + 2 > n then min_depth + 2 else n
+
+  let stretch_depth = max_depth + 1
+  let stretch_tree = make(stretch_depth)
+  Console.println!("stretch tree of depth ${stretch_depth}\t check: ${check(stretch_tree)}")
+
+  let long_lived_tree = make(max_depth)
+
+  let _ = run_depth!(min_depth, max_depth, min_depth)
+
+  Console.println!("long lived tree of depth ${max_depth}\t check: ${check(long_lived_tree)}")
+}

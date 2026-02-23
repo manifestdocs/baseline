@@ -13,6 +13,7 @@ use std::process::Command;
 
 struct BlcOutput {
     exit_code: i32,
+    signal_killed: bool,
     stdout: String,
     stderr: String,
 }
@@ -25,8 +26,10 @@ fn blc_cmd(args: &[&str], file: &Path) -> BlcOutput {
     }
     cmd.arg(file);
     let output = cmd.output().expect("failed to execute blc");
+    let signal_killed = output.status.code().is_none();
     BlcOutput {
         exit_code: output.status.code().unwrap_or(-1),
+        signal_killed,
         stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
     }
@@ -134,16 +137,29 @@ fn conformance_positive_tests() {
                 passed += 1;
             }
         } else {
+            // VM backend is required to pass
             let out = blc_cmd(&["test"], file);
             if out.exit_code != 0 {
                 failed.push(format!(
-                    "{relative}: test failed\n  stdout: {}\n  stderr: {}",
+                    "{relative} (VM): test failed\n  stdout: {}\n  stderr: {}",
                     out.stdout.trim(),
                     out.stderr.trim()
                 ));
             } else {
                 passed += 1;
             }
+
+            // JIT backend: best-effort — files with unsupported constructs
+            // (effect handlers, typed holes, etc.) will fail JIT compilation.
+            // Crashes (segfault/abort) are logged but not fatal while JIT is
+            // still gaining coverage.
+            let jit_out = blc_cmd(&["test", "--jit"], file);
+            if jit_out.exit_code == 0 {
+                passed += 1;
+            } else if jit_out.signal_killed {
+                eprintln!("  WARN: {relative} (JIT) crashed (signal-killed)");
+            }
+            // else: JIT compilation failure (exit 1) — expected for unsupported constructs
         }
     }
 

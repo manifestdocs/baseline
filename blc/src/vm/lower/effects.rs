@@ -19,50 +19,125 @@ impl<'a> super::Lowerer<'a> {
             .map(|c| self.node_text(&c))
             .unwrap_or_default();
 
-        let matcher = match matcher_kind.as_str() {
+        let make_enum_match = |subject: Expr, tag: &str| -> Expr {
+            Expr::Match {
+                subject: Box::new(subject),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::Constructor(tag.into(), vec![Pattern::Wildcard]),
+                        guard: None,
+                        body: Expr::Bool(true),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: Expr::Bool(false),
+                    }
+                ],
+                ty: Some(crate::analysis::types::Type::Bool),
+            }
+        };
+
+        match matcher_kind.as_str() {
             "to_equal" => {
                 let expected = self.lower_matcher_arg(&matcher_node)?;
-                Matcher::Equal(Box::new(expected))
+                Ok(Expr::BinOp {
+                    op: BinOp::Eq,
+                    lhs: Box::new(actual),
+                    rhs: Box::new(expected),
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
             }
-            "to_be_ok" => Matcher::BeOk,
-            "to_be_some" => Matcher::BeSome,
-            "to_be_none" => Matcher::BeNone,
-            "to_be_empty" => Matcher::BeEmpty,
+            "to_be_ok" => Ok(make_enum_match(actual, "Ok")),
+            "to_be_some" => Ok(make_enum_match(actual, "Some")),
+            "to_be_none" => Ok(make_enum_match(actual, "None")),
+            "to_be_empty" => {
+                Ok(Expr::BinOp {
+                    op: BinOp::Eq,
+                    lhs: Box::new(Expr::CallNative {
+                        module: "List".into(),
+                        method: "length".into(),
+                        args: vec![actual],
+                        ty: Some(crate::analysis::types::Type::Int),
+                    }),
+                    rhs: Box::new(Expr::Int(0)),
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
+            }
             "to_have_length" => {
                 let expected = self.lower_matcher_arg(&matcher_node)?;
-                Matcher::HaveLength(Box::new(expected))
+                Ok(Expr::BinOp {
+                    op: BinOp::Eq,
+                    lhs: Box::new(Expr::CallNative {
+                        module: "List".into(),
+                        method: "length".into(),
+                        args: vec![actual],
+                        ty: Some(crate::analysis::types::Type::Int),
+                    }),
+                    rhs: Box::new(expected),
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
             }
             "to_contain" => {
                 let expected = self.lower_matcher_arg(&matcher_node)?;
-                Matcher::Contain(Box::new(expected))
+                Ok(Expr::CallNative {
+                    module: "".into(),
+                    method: "__test_contains".into(),
+                    args: vec![actual, expected],
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
             }
             "to_start_with" => {
                 let expected = self.lower_matcher_arg(&matcher_node)?;
-                Matcher::StartWith(Box::new(expected))
+                Ok(Expr::CallNative {
+                    module: "String".into(),
+                    method: "starts_with".into(),
+                    args: vec![actual, expected],
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
             }
             "to_satisfy" => {
                 let pred = self.lower_matcher_arg(&matcher_node)?;
-                Matcher::Satisfy(Box::new(pred))
+                Ok(Expr::CallIndirect {
+                    callee: Box::new(pred),
+                    args: vec![actual],
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
             }
             "to_be" => {
-                if let Some(pat_node) = matcher_node.named_child(0) {
-                    let pattern = self.lower_pattern(&pat_node)?;
-                    Matcher::Be(pattern)
+                let pattern = if let Some(pat_node) = matcher_node.named_child(0) {
+                    self.lower_pattern(&pat_node)?
                 } else {
-                    Matcher::Be(Pattern::Wildcard)
-                }
+                    Pattern::Wildcard
+                };
+                Ok(Expr::Match {
+                    subject: Box::new(actual),
+                    arms: vec![
+                        MatchArm {
+                            pattern,
+                            guard: None,
+                            body: Expr::Bool(true),
+                        },
+                        MatchArm {
+                            pattern: Pattern::Wildcard,
+                            guard: None,
+                            body: Expr::Bool(false),
+                        }
+                    ],
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
             }
             _ => {
                 // Fallback: treat as equality
                 let expected = self.lower_matcher_arg(&matcher_node)?;
-                Matcher::Equal(Box::new(expected))
+                Ok(Expr::BinOp {
+                    op: BinOp::Eq,
+                    lhs: Box::new(actual),
+                    rhs: Box::new(expected),
+                    ty: Some(crate::analysis::types::Type::Bool),
+                })
             }
-        };
-
-        Ok(Expr::Expect {
-            actual: Box::new(actual),
-            matcher: Box::new(matcher),
-        })
+        }
     }
 
     pub(super) fn lower_matcher_arg(&mut self, matcher_node: &Node) -> Result<Expr, CompileError> {

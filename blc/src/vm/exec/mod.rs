@@ -5,7 +5,7 @@ mod dispatch_data;
 mod dispatch_effects;
 pub(crate) mod frame;
 mod hof;
-mod http_helpers;
+pub(crate) mod http_helpers;
 mod server;
 #[cfg(test)]
 mod tests;
@@ -329,6 +329,10 @@ impl Vm {
             }
 
             let op = unsafe { *chunk.code.get_unchecked(ip) };
+            // -- DEBUG TRACE --
+            if std::env::var("TRACE_VM").is_ok() {
+                println!("EXEC: {:?} STACK: {:?}", op, self.stack);
+            }
             ip += 1;
 
             match op {

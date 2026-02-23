@@ -16,6 +16,7 @@ use super::value::RcStr;
 struct Local {
     name: String,
     depth: usize,
+    slot: u16,
 }
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,7 @@ struct CodegenFrame {
     locals: Vec<Local>,
     scope_depth: usize,
     upvalues: Vec<Upvalue>,
+    temp_depth: usize,
 }
 
 // ---------------------------------------------------------------------------
@@ -41,6 +43,7 @@ pub struct Codegen<'a> {
     chunk: Chunk,
     locals: Vec<Local>,
     scope_depth: usize,
+    temp_depth: usize,
     compiled_chunks: Vec<Chunk>,
     enclosing: Vec<CodegenFrame>,
     upvalues: Vec<Upvalue>,
@@ -57,6 +60,7 @@ impl<'a> Codegen<'a> {
             chunk: Chunk::new(),
             locals: Vec::new(),
             scope_depth: 0,
+            temp_depth: 0,
             compiled_chunks: Vec::new(),
             enclosing: Vec::new(),
             upvalues: Vec::new(),
@@ -96,6 +100,7 @@ impl<'a> Codegen<'a> {
             self.chunk = Chunk::new();
             self.locals.clear();
             self.scope_depth = 0;
+            self.temp_depth = 0;
 
             // Declare parameters as locals
             for param in &func.params {
@@ -137,6 +142,7 @@ impl<'a> Codegen<'a> {
             self.chunk = Chunk::new();
             self.locals.clear();
             self.scope_depth = 0;
+            self.temp_depth = 0;
 
             for param in &func.params {
                 self.declare_local(param);
@@ -199,16 +205,23 @@ impl<'a> Codegen<'a> {
             Expr::CallIndirect { callee, args, .. }
             | Expr::TailCallIndirect { callee, args, .. } => {
                 self.gen_expr(callee, span)?;
+                self.temp_depth += 1;
                 for arg in args {
                     self.gen_expr(arg, span)?;
+                    self.temp_depth += 1;
                 }
+                self.temp_depth -= 1 + args.len();
                 let argc = Self::checked_u8(args.len(), "arguments", span)?;
                 self.emit(Op::Call(argc), span);
             }
             Expr::TailCall { args, .. } => {
+                let mut temps = 0;
                 for arg in args {
                     self.gen_expr(arg, span)?;
+                    self.temp_depth += 1;
+                    temps += 1;
                 }
+                self.temp_depth -= temps;
                 let argc = Self::checked_u8(args.len(), "arguments", span)?;
                 self.emit(Op::TailCall(argc), span);
             }
@@ -227,9 +240,13 @@ impl<'a> Codegen<'a> {
                 } else if let Expr::MakeTuple(elems, _) = payload.as_ref() {
                     // Multi-arg constructor: emit args directly + MakeEnumN
                     // to avoid intermediate Tuple allocation.
+                    let mut temps = 0;
                     for elem in elems {
                         self.gen_expr(elem, span)?;
+                        self.temp_depth += 1;
+                        temps += 1;
                     }
+                    self.temp_depth -= temps;
                     let const_idx =
                         self.chunk.add_constant(NValue::string(tag_str));
                     self.emit(Op::MakeEnumN(const_idx, id16, elems.len() as u8), span);
@@ -267,9 +284,13 @@ impl<'a> Codegen<'a> {
             }
 
             Expr::MakeList(elems, _) => {
+                let mut temps = 0;
                 for elem in elems {
                     self.gen_expr(elem, span)?;
+                    self.temp_depth += 1;
+                    temps += 1;
                 }
+                self.temp_depth -= temps;
                 let count = Self::checked_u16(elems.len(), "list elements", span)?;
                 self.emit(Op::MakeList(count), span);
             }
@@ -295,15 +316,21 @@ impl<'a> Codegen<'a> {
                 self.end_scope(span);
             }
             Expr::MakeTuple(elems, _) => {
+                let mut temps = 0;
                 for elem in elems {
                     self.gen_expr(elem, span)?;
+                    self.temp_depth += 1;
+                    temps += 1;
                 }
+                self.temp_depth -= temps;
                 let count = Self::checked_u16(elems.len(), "tuple elements", span)?;
                 self.emit(Op::MakeTuple(count), span);
             }
             Expr::MakeRange(start, end) => {
                 self.gen_expr(start, span)?;
+                self.temp_depth += 1;
                 self.gen_expr(end, span)?;
+                self.temp_depth -= 1;
                 self.emit(Op::MakeRange, span);
             }
             Expr::UpdateRecord { base, updates, .. } => {
@@ -346,7 +373,9 @@ impl<'a> Codegen<'a> {
 
             Expr::BinOp { op, lhs, rhs, ty } => {
                 self.gen_expr(lhs, span)?;
+                self.temp_depth += 1;
                 self.gen_expr(rhs, span)?;
+                self.temp_depth -= 1;
                 let both_int = matches!(ty, Some(Type::Int));
                 let opcode = match op {
                     BinOp::Add if both_int => Op::AddInt,
@@ -507,9 +536,9 @@ impl<'a> Codegen<'a> {
 
     fn gen_var(&mut self, name: &str, span: &Span) -> Result<(), CompileError> {
         // Search locals
-        for (i, local) in self.locals.iter().enumerate().rev() {
+        for local in self.locals.iter().rev() {
             if local.name == name {
-                let slot = Self::checked_u16(i, "local variables", span)?;
+                let slot = local.slot;
                 self.emit(Op::GetLocal(slot), span);
                 return Ok(());
             }
@@ -547,9 +576,9 @@ impl<'a> Codegen<'a> {
         let mut found_at: Option<(usize, u16, bool)> = None;
 
         for d in (0..depth).rev() {
-            for (slot, local) in self.enclosing[d].locals.iter().enumerate().rev() {
+            for local in self.enclosing[d].locals.iter().rev() {
                 if local.name == name {
-                    found_at = Some((d, slot as u16, true));
+                    found_at = Some((d, local.slot, true));
                     break;
                 }
             }
@@ -601,9 +630,13 @@ impl<'a> Codegen<'a> {
     ) -> Result<(), CompileError> {
         if let Some(&chunk_idx) = self.functions.get(name) {
             // Emit args first, then CallDirect — no function value pushed
+            let mut temps = 0;
             for arg in args {
                 self.gen_expr(arg, span)?;
+                self.temp_depth += 1;
+                temps += 1;
             }
+            self.temp_depth -= temps;
             let ci = Self::checked_u16(chunk_idx, "function chunks", span)?;
             let argc = Self::checked_u8(args.len(), "arguments", span)?;
             self.emit(Op::CallDirect(ci, argc), span);
@@ -611,9 +644,15 @@ impl<'a> Codegen<'a> {
         } else {
             // Fall back to variable lookup (might be a local/upvalue holding a function)
             self.gen_var(name, span)?;
+            self.temp_depth += 1;
+            let mut temps = 0;
             for arg in args {
                 self.gen_expr(arg, span)?;
+                self.temp_depth += 1;
+                temps += 1;
             }
+            self.temp_depth -= temps;
+            self.temp_depth -= 1;
             let argc = Self::checked_u8(args.len(), "arguments", span)?;
             self.emit(Op::Call(argc), span);
             Ok(())
@@ -633,9 +672,13 @@ impl<'a> Codegen<'a> {
             format!("{}.{}", module, method)
         };
         if let Some(fn_id) = self.natives.lookup(&qualified) {
+            let mut temps = 0;
             for arg in args {
                 self.gen_expr(arg, span)?;
+                self.temp_depth += 1;
+                temps += 1;
             }
+            self.temp_depth -= temps;
             let argc = Self::checked_u8(args.len(), "native arguments", span)?;
             self.emit(Op::CallNative(fn_id, argc), span);
             Ok(())
@@ -1636,9 +1679,11 @@ impl<'a> Codegen<'a> {
     // -----------------------------------------------------------------------
 
     fn declare_local(&mut self, name: &str) {
+        let slot = (self.locals.len() + self.temp_depth) as u16;
         self.locals.push(Local {
             name: name.to_string(),
             depth: self.scope_depth,
+            slot,
         });
     }
 
@@ -1842,8 +1887,10 @@ impl<'a> Codegen<'a> {
             locals: std::mem::take(&mut self.locals),
             scope_depth: self.scope_depth,
             upvalues: std::mem::take(&mut self.upvalues),
+            temp_depth: self.temp_depth,
         });
         self.scope_depth = 0;
+        self.temp_depth = 0;
     }
 
     fn leave_function(&mut self) -> (Chunk, Vec<Upvalue>) {
@@ -1854,6 +1901,7 @@ impl<'a> Codegen<'a> {
         self.locals = frame.locals;
         self.scope_depth = frame.scope_depth;
         self.upvalues = frame.upvalues;
+        self.temp_depth = frame.temp_depth;
         (func_chunk, func_upvalues)
     }
 

@@ -64,6 +64,14 @@ enum Commands {
         /// Output results as JSON
         #[arg(long)]
         json: bool,
+
+        /// Run tests using the JIT compiler
+        #[arg(long)]
+        jit: bool,
+
+        /// Run tests using the AOT compiler
+        #[arg(long)]
+        aot: bool,
     },
 
     /// Format a Baseline source file
@@ -222,8 +230,27 @@ fn main() {
                 eprintln!("[mem] {}", stats);
             }
         }
-        Commands::Test { file, json, .. } => {
-            let result = vm::test_runner::run_test_file(&file);
+        Commands::Test { file, json, jit, aot } => {
+            let result = if aot {
+                #[cfg(feature = "aot")]
+                { vm::test_runner::run_test_file_aot(&file) }
+                #[cfg(not(feature = "aot"))]
+                {
+                    eprintln!("Error: AOT testing requires building with --features aot");
+                    std::process::exit(1);
+                }
+            } else if jit {
+                #[cfg(feature = "jit")]
+                { vm::test_runner::run_test_file_jit(&file) }
+                #[cfg(not(feature = "jit"))]
+                {
+                    eprintln!("Error: JIT testing requires building with --features jit");
+                    std::process::exit(1);
+                }
+            } else {
+                vm::test_runner::run_test_file(&file)
+            };
+            
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap());
             } else {

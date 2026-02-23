@@ -397,6 +397,60 @@ pub struct IrTestModule {
     pub tags: TagRegistry,
 }
 
+impl IrTestModule {
+    /// Convert this test module into a standard executable module
+    /// where the entry function runs all tests sequentially.
+    /// Returns 0 if all tests pass, 1 if any test fails.
+    pub fn into_executable_module(self) -> IrModule {
+        let mut functions = self.functions;
+        let mut test_calls = Vec::new();
+        
+        for (i, test) in self.tests.into_iter().enumerate() {
+            if test.skip { continue; }
+            let name = format!("__test_{}", i);
+            functions.push(IrFunction {
+                name: name.clone(),
+                params: vec![],
+                body: test.body,
+                ty: Some(Type::Bool),
+                span: Span { line: test.line, col: test.col, start_byte: 0, end_byte: 0 },
+            });
+            test_calls.push(name);
+        }
+        
+        let mut body = Expr::Int(0);
+        for name in test_calls.into_iter().rev() {
+            let call = Expr::CallDirect {
+                name,
+                args: vec![],
+                ty: Some(Type::Bool),
+            };
+            body = Expr::If {
+                condition: Box::new(call),
+                then_branch: Box::new(body),
+                else_branch: Some(Box::new(Expr::Int(1))),
+                ty: Some(Type::Int),
+            };
+        }
+        
+        functions.push(IrFunction {
+            name: "__main_test_runner".to_string(),
+            params: vec![],
+            body,
+            ty: Some(Type::Int),
+            span: Span { line: 0, col: 0, start_byte: 0, end_byte: 0 },
+        });
+        
+        let entry = functions.len() - 1;
+        
+        IrModule {
+            functions,
+            entry,
+            tags: self.tags,
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------

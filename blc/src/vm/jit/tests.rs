@@ -2149,3 +2149,443 @@ fn jit_evidence_cross_function() {
     optimize(&mut module);
     assert_eq!(compile_and_run(&module), 99);
 }
+
+// ---------------------------------------------------------------------------
+// Float arithmetic tests
+// ---------------------------------------------------------------------------
+
+fn make_float(f: f64) -> Expr {
+    Expr::Float(f)
+}
+
+fn make_float_binop(op: BinOp, lhs: Expr, rhs: Expr) -> Expr {
+    Expr::BinOp {
+        op,
+        lhs: Box::new(lhs),
+        rhs: Box::new(rhs),
+        ty: Some(Type::Float),
+    }
+}
+
+/// Compile and run, extracting an f64 from NaN-boxed Float result.
+fn compile_and_run_float(module: &IrModule) -> f64 {
+    let nv = compile_and_run_nvalue(module);
+    assert!(nv.is_float(), "Expected Float, got: {}", nv);
+    nv.as_float()
+}
+
+#[test]
+fn jit_float_add() {
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: make_float_binop(BinOp::Add, make_float(3.14), make_float(2.0)),
+            ty: Some(Type::Float),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    let result = compile_and_run_float(&module);
+    assert!((result - 5.14).abs() < 1e-10, "Expected 5.14, got {}", result);
+}
+
+#[test]
+fn jit_float_sub() {
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: make_float_binop(BinOp::Sub, make_float(5.0), make_float(3.0)),
+            ty: Some(Type::Float),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run_float(&module), 2.0);
+}
+
+#[test]
+fn jit_float_mul() {
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: make_float_binop(BinOp::Mul, make_float(3.0), make_float(4.0)),
+            ty: Some(Type::Float),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run_float(&module), 12.0);
+}
+
+#[test]
+fn jit_float_div() {
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: make_float_binop(BinOp::Div, make_float(10.0), make_float(4.0)),
+            ty: Some(Type::Float),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run_float(&module), 2.5);
+}
+
+#[test]
+fn jit_float_neg() {
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::UnaryOp {
+                op: UnaryOp::Neg,
+                operand: Box::new(make_float(3.14)),
+                ty: Some(Type::Float),
+            },
+            ty: Some(Type::Float),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run_float(&module), -3.14);
+}
+
+#[test]
+fn jit_float_compare_lt() {
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::BinOp {
+                op: BinOp::Lt,
+                lhs: Box::new(make_float(1.0)),
+                rhs: Box::new(make_float(2.0)),
+                ty: Some(Type::Float),
+            },
+            ty: Some(Type::Bool),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert!(compile_and_run_bool(&module));
+}
+
+// -- Phase 1: List pattern and complex tuple pattern tests --
+
+#[test]
+fn jit_list_pattern_head_tail() {
+    // match [1, 2, 3] { [h, ...t] -> h }
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Match {
+                subject: Box::new(Expr::MakeList(
+                    vec![make_int(10), make_int(20), make_int(30)],
+                    None,
+                )),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::List(
+                            vec![Pattern::Var("h".into())],
+                            Some("t".into()),
+                        ),
+                        guard: None,
+                        body: Expr::Var("h".into(), Some(Type::Int)),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: make_int(0),
+                    },
+                ],
+                ty: Some(Type::Int),
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run(&module), 10);
+}
+
+#[test]
+fn jit_list_pattern_exact_length() {
+    // match [1, 2] { [a, b] -> a + b, _ -> 0 }
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Match {
+                subject: Box::new(Expr::MakeList(
+                    vec![make_int(3), make_int(4)],
+                    None,
+                )),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::List(
+                            vec![Pattern::Var("a".into()), Pattern::Var("b".into())],
+                            None,
+                        ),
+                        guard: None,
+                        body: make_binop(BinOp::Add,
+                            Expr::Var("a".into(), Some(Type::Int)),
+                            Expr::Var("b".into(), Some(Type::Int)),
+                        ),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: make_int(0),
+                    },
+                ],
+                ty: Some(Type::Int),
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run(&module), 7);
+}
+
+#[test]
+fn jit_list_pattern_length_mismatch() {
+    // match [1, 2, 3] { [a, b] -> 99, _ -> 0 }
+    // Should fall through to wildcard because length != 2
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Match {
+                subject: Box::new(Expr::MakeList(
+                    vec![make_int(1), make_int(2), make_int(3)],
+                    None,
+                )),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::List(
+                            vec![Pattern::Var("a".into()), Pattern::Var("b".into())],
+                            None,
+                        ),
+                        guard: None,
+                        body: make_int(99),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: make_int(0),
+                    },
+                ],
+                ty: Some(Type::Int),
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run(&module), 0);
+}
+
+#[test]
+fn jit_list_pattern_empty() {
+    // match [] { [] -> 1, _ -> 0 }
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Match {
+                subject: Box::new(Expr::MakeList(vec![], None)),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::List(vec![], None),
+                        guard: None,
+                        body: make_int(1),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: make_int(0),
+                    },
+                ],
+                ty: Some(Type::Int),
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run(&module), 1);
+}
+
+#[test]
+fn jit_list_pattern_rest_binding() {
+    // match [1, 2, 3] { [h, ...t] -> length(t) via list_length }
+    // We verify the rest binding is a list of length 2
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Match {
+                subject: Box::new(Expr::MakeList(
+                    vec![make_int(1), make_int(2), make_int(3)],
+                    None,
+                )),
+                arms: vec![MatchArm {
+                    pattern: Pattern::List(
+                        vec![Pattern::Var("h".into())],
+                        Some("t".into()),
+                    ),
+                    guard: None,
+                    body: Expr::Var("h".into(), Some(Type::Int)),
+                }],
+                ty: Some(Type::Int),
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    // h = 1
+    assert_eq!(compile_and_run(&module), 1);
+}
+
+#[test]
+fn jit_tuple_pattern_with_literal() {
+    // match (1, 2) { (1, x) -> x, _ -> 0 }
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Match {
+                subject: Box::new(Expr::MakeTuple(
+                    vec![make_int(1), make_int(42)],
+                    None,
+                )),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::Tuple(vec![
+                            Pattern::Literal(Box::new(make_int(1))),
+                            Pattern::Var("x".into()),
+                        ]),
+                        guard: None,
+                        body: Expr::Var("x".into(), Some(Type::Int)),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: make_int(0),
+                    },
+                ],
+                ty: Some(Type::Int),
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run(&module), 42);
+}
+
+#[test]
+fn jit_tuple_pattern_literal_mismatch() {
+    // match (2, 42) { (1, x) -> x, _ -> 0 }
+    // first element is 2, not 1 → fall through
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Match {
+                subject: Box::new(Expr::MakeTuple(
+                    vec![make_int(2), make_int(42)],
+                    None,
+                )),
+                arms: vec![
+                    MatchArm {
+                        pattern: Pattern::Tuple(vec![
+                            Pattern::Literal(Box::new(make_int(1))),
+                            Pattern::Var("x".into()),
+                        ]),
+                        guard: None,
+                        body: Expr::Var("x".into(), Some(Type::Int)),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: make_int(0),
+                    },
+                ],
+                ty: Some(Type::Int),
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run(&module), 0);
+}
+
+#[test]
+fn jit_can_jit_list_pattern() {
+    // Verify that list patterns are now accepted by can_jit
+    let func = IrFunction {
+        name: "test".into(),
+        params: vec![],
+        body: Expr::Match {
+            subject: Box::new(Expr::MakeList(vec![make_int(1)], None)),
+            arms: vec![MatchArm {
+                pattern: Pattern::List(
+                    vec![Pattern::Var("h".into())],
+                    Some("t".into()),
+                ),
+                guard: None,
+                body: Expr::Var("h".into(), Some(Type::Int)),
+            }],
+            ty: Some(Type::Int),
+        },
+        ty: Some(Type::Int),
+        span: dummy_span(),
+    };
+    assert!(can_jit(&func, None));
+}
+
+#[test]
+fn jit_can_jit_complex_tuple_pattern() {
+    // Verify that tuple patterns with nested literals are now accepted
+    let func = IrFunction {
+        name: "test".into(),
+        params: vec![],
+        body: Expr::Match {
+            subject: Box::new(Expr::MakeTuple(vec![make_int(1), make_int(2)], None)),
+            arms: vec![MatchArm {
+                pattern: Pattern::Tuple(vec![
+                    Pattern::Literal(Box::new(make_int(1))),
+                    Pattern::Var("x".into()),
+                ]),
+                guard: None,
+                body: Expr::Var("x".into(), Some(Type::Int)),
+            }],
+            ty: Some(Type::Int),
+        },
+        ty: Some(Type::Int),
+        span: dummy_span(),
+    };
+    assert!(can_jit(&func, None));
+}

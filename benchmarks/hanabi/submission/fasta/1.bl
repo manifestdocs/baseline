@@ -1,0 +1,120 @@
+@prelude(script)
+
+// Fasta benchmark — hanabi1224/Programming-Language-Benchmarks
+// DNA sequence generation with PRNG-based weighted random selection.
+
+// Constants
+fn line_length() -> Int = 60
+fn im() -> Int = 139968
+fn ia() -> Int = 3877
+fn ic() -> Int = 29573
+
+// ALU repeat sequence
+fn alu() -> String =
+  "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGACCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAATACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCAGCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGGAGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCCAGCCTGGGCGACAGAGCGAGACTCCGTCTCAAAAA"
+
+// IUB amino acid table: chars and cumulative probabilities
+fn iub_chars() -> List<String> =
+  ["a", "c", "g", "t", "B", "D", "H", "K", "M", "N", "R", "S", "V", "W", "Y"]
+
+fn iub_cum() -> List<Float> = {
+  // Cumulative probabilities (matching C: sum probabilities sequentially)
+  [0.27, 0.39, 0.51, 0.78, 0.80, 0.82, 0.84, 0.86, 0.88, 0.90, 0.92, 0.94, 0.96, 0.98, 1.00]
+}
+
+// Homo sapiens frequency table
+fn hs_chars() -> List<String> = ["a", "c", "g", "t"]
+
+fn hs_cum() -> List<Float> = {
+  [0.3029549426680, 0.5009432431601, 0.6984905497992, 1.0]
+}
+
+// PRNG: linear congruential generator
+fn next_random(last: Int) -> Int =
+  (last * ia() + ic()) % im()
+
+// Select character from cumulative probability table (float comparison like C)
+fn select(rf: Float, cum: List<Float>, chars: List<String>, idx: Int) -> String =
+  match List.get(cum, idx)
+    Some(threshold) ->
+      if rf < threshold then Option.unwrap(List.get(chars, idx))
+      else select(rf, cum, chars, idx + 1)
+    None -> Option.unwrap(List.get(chars, List.length(chars) - 1))
+
+// --- Repeat fasta (ALU cycling) ---
+
+fn repeat_line(src: String, src_len: Int, pos: Int, remaining: Int, acc: String) -> (String, Int) =
+  if remaining <= 0 then (acc, pos)
+  else {
+    let ch = String.slice(src, pos % src_len, 1)
+    repeat_line(src, src_len, pos + 1, remaining - 1, "${acc}${ch}")
+  }
+
+fn make_repeat_fasta!(header: String, src: String, n: Int) -> () = {
+  Console.println!(header)
+  let src_len = String.length(src)
+  repeat_fasta_loop!(src, src_len, 0, n)
+}
+
+fn repeat_fasta_loop!(src: String, src_len: Int, pos: Int, n: Int) -> () =
+  if n <= 0 then ()
+  else {
+    let nb = if n < line_length() then n else line_length()
+    let result = repeat_line(src, src_len, pos, nb, "")
+    let line = match result
+      (s, _) -> s
+    let new_pos = match result
+      (_, p) -> p
+    let _ = Console.println!(line)
+    repeat_fasta_loop!(src, src_len, new_pos, n - nb)
+  }
+
+// --- Random fasta ---
+
+fn random_line(cum: List<Float>, chars: List<String>, seed: Int, remaining: Int, acc: String) -> (String, Int) =
+  if remaining <= 0 then (acc, seed)
+  else {
+    let new_seed = next_random(seed)
+    let rf = Float.from_int(new_seed) / Float.from_int(im())
+    let ch = select(rf, cum, chars, 0)
+    random_line(cum, chars, new_seed, remaining - 1, "${acc}${ch}")
+  }
+
+fn make_random_fasta!(header: String, cum: List<Float>, chars: List<String>, n: Int, seed: Int) -> Int = {
+  Console.println!(header)
+  random_fasta_loop!(cum, chars, n, seed)
+}
+
+fn random_fasta_loop!(cum: List<Float>, chars: List<String>, n: Int, seed: Int) -> Int =
+  if n <= 0 then seed
+  else {
+    let nb = if n < line_length() then n else line_length()
+    let result = random_line(cum, chars, seed, nb, "")
+    let line = match result
+      (s, _) -> s
+    let new_seed = match result
+      (_, s) -> s
+    let _ = Console.println!(line)
+    random_fasta_loop!(cum, chars, n - nb, new_seed)
+  }
+
+// --- Main ---
+
+fn main!() -> () = {
+  let args = Env.args!()
+  let n_str = Option.unwrap_or(List.get(args, 0), "1000")
+  let n = match Int.parse(n_str)
+    Ok(v) -> v
+    Err(_) -> 1000
+
+  make_repeat_fasta!(">ONE Homo sapiens alu", alu(), n * 2)
+
+  let iub_c = iub_cum()
+  let iub_ch = iub_chars()
+  let seed = make_random_fasta!(">TWO IUB ambiguity codes", iub_c, iub_ch, n * 3, 42)
+
+  let hs_c = hs_cum()
+  let hs_ch = hs_chars()
+  let _ = make_random_fasta!(">THREE Homo sapiens frequency", hs_c, hs_ch, n * 5, seed)
+  ()
+}

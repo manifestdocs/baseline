@@ -81,7 +81,11 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
             method,
             ..
         } => {
-            let qualified = format!("{}.{}", module, method);
+            let qualified = if module.is_empty() {
+                method.to_string()
+            } else {
+                format!("{}.{}", module, method)
+            };
 
             // AOT path: check if we have a known symbol or inline HOF for this native
             if natives.is_none() {
@@ -177,16 +181,9 @@ fn pattern_can_jit(pattern: &Pattern) -> bool {
     match pattern {
         Pattern::Wildcard | Pattern::Var(_) | Pattern::Literal(_) => true,
         Pattern::Constructor(_, sub_patterns) => sub_patterns.iter().all(pattern_can_jit),
-        Pattern::Tuple(sub_patterns) => {
-            // Only allow simple bindings (Var/Wildcard) in tuple patterns.
-            // Nested literals or constructors inside tuples are not yet implemented.
-            sub_patterns
-                .iter()
-                .all(|p| matches!(p, Pattern::Var(_) | Pattern::Wildcard))
-        }
+        Pattern::Tuple(sub_patterns) => sub_patterns.iter().all(pattern_can_jit),
         Pattern::Record(fields) => fields.iter().all(|(_, sub)| pattern_can_jit(sub)),
-        // List patterns not yet supported in JIT — fall back to VM
-        Pattern::List(_, _) => false,
+        Pattern::List(elems, _rest) => elems.iter().all(pattern_can_jit),
     }
 }
 

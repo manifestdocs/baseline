@@ -5,8 +5,10 @@
 
 use std::collections::HashMap;
 
-use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{AbiParam, BlockArg, InstBuilder, StackSlotData, StackSlotKind, types};
+use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
+use cranelift_codegen::ir::{
+    AbiParam, BlockArg, InstBuilder, MemFlags, StackSlotData, StackSlotKind, types,
+};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, Switch, Variable};
 use cranelift_module::{DataId, FuncId, Module};
@@ -166,6 +168,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         } else {
             // JIT path: deduplicate string allocations via pool
             if let Some(&cached) = self.string_pool.get(s) {
+                // RC: each reuse of a cached string needs its own reference.
+                // The first use got one incref from emit_heap_nvalue; subsequent
+                // uses need an additional incref since each call site may consume
+                // the reference (via jit_take_arg or explicit decref).
+                if self.rc_enabled {
+                    return Ok(self.emit_incref(cached));
+                }
                 return Ok(cached);
             }
             let nv = NValue::string(s.into());
@@ -180,6 +189,17 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     fn untag_int(&mut self, val: CValue) -> CValue {
         let shifted_left = self.builder.ins().ishl_imm(val, 16);
         self.builder.ins().sshr_imm(shifted_left, 16)
+    }
+
+    /// Bitcast a NaN-boxed float (I64 raw bits) to F64 for Cranelift float ops.
+    /// This is a no-op at the machine level — NaN-boxed floats ARE raw IEEE 754 bits.
+    fn bitcast_to_f64(&mut self, val: CValue) -> CValue {
+        self.builder.ins().bitcast(types::F64, MemFlags::new(), val)
+    }
+
+    /// Bitcast an F64 back to I64 (NaN-boxed float representation).
+    fn bitcast_to_i64(&mut self, val: CValue) -> CValue {
+        self.builder.ins().bitcast(types::I64, MemFlags::new(), val)
     }
 
     /// Tag a raw i64 as a NaN-boxed Int: band with PAYLOAD_MASK, bor with TAG_INT.
@@ -864,6 +884,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::BinOp { op, lhs, rhs, ty } => {
                 let is_int = matches!(ty, Some(Type::Int));
+                let is_float = matches!(ty, Some(Type::Float));
                 let lhs_val = self.compile_expr(lhs)?;
                 let rhs_val = self.compile_expr(rhs)?;
 
@@ -891,6 +912,61 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         BinOp::ListConcat => {
                             Ok(self.call_helper("jit_list_concat", &[lhs_val, rhs_val]))
                         }
+                    }
+                } else if is_float {
+                    // Native Cranelift F64 instructions via bitcast I64↔F64.
+                    // NaN-boxed floats ARE raw IEEE 754 bits, so bitcast is zero-overhead.
+                    let lf = self.bitcast_to_f64(lhs_val);
+                    let rf = self.bitcast_to_f64(rhs_val);
+                    match op {
+                        BinOp::Add => {
+                            let r = self.builder.ins().fadd(lf, rf);
+                            Ok(self.bitcast_to_i64(r))
+                        }
+                        BinOp::Sub => {
+                            let r = self.builder.ins().fsub(lf, rf);
+                            Ok(self.bitcast_to_i64(r))
+                        }
+                        BinOp::Mul => {
+                            let r = self.builder.ins().fmul(lf, rf);
+                            Ok(self.bitcast_to_i64(r))
+                        }
+                        BinOp::Div => {
+                            let r = self.builder.ins().fdiv(lf, rf);
+                            Ok(self.bitcast_to_i64(r))
+                        }
+                        BinOp::Mod => {
+                            // No Cranelift fmod instruction; use runtime helper.
+                            Ok(self.call_helper("jit_float_mod", &[lhs_val, rhs_val]))
+                        }
+                        BinOp::Eq => {
+                            let c = self.builder.ins().fcmp(FloatCC::Equal, lf, rf);
+                            Ok(self.tag_bool(c))
+                        }
+                        BinOp::Ne => {
+                            let c = self.builder.ins().fcmp(FloatCC::NotEqual, lf, rf);
+                            Ok(self.tag_bool(c))
+                        }
+                        BinOp::Lt => {
+                            let c = self.builder.ins().fcmp(FloatCC::LessThan, lf, rf);
+                            Ok(self.tag_bool(c))
+                        }
+                        BinOp::Gt => {
+                            let c = self.builder.ins().fcmp(FloatCC::GreaterThan, lf, rf);
+                            Ok(self.tag_bool(c))
+                        }
+                        BinOp::Le => {
+                            let c = self.builder.ins().fcmp(FloatCC::LessThanOrEqual, lf, rf);
+                            Ok(self.tag_bool(c))
+                        }
+                        BinOp::Ge => {
+                            let c = self
+                                .builder
+                                .ins()
+                                .fcmp(FloatCC::GreaterThanOrEqual, lf, rf);
+                            Ok(self.tag_bool(c))
+                        }
+                        BinOp::ListConcat => Err("ListConcat on Float is invalid".into()),
                     }
                 } else {
                     // Non-int: compare raw NaN-boxed bits for equality/ordering,
@@ -950,10 +1026,18 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
             }
 
-            Expr::UnaryOp { op, operand, .. } => {
+            Expr::UnaryOp { op, operand, ty } => {
                 let val = self.compile_expr(operand)?;
                 match op {
-                    UnaryOp::Neg => Ok(self.call_helper("jit_int_neg", &[val])),
+                    UnaryOp::Neg => {
+                        if matches!(ty, Some(Type::Float)) {
+                            let f = self.bitcast_to_f64(val);
+                            let neg = self.builder.ins().fneg(f);
+                            Ok(self.bitcast_to_i64(neg))
+                        } else {
+                            Ok(self.call_helper("jit_int_neg", &[val]))
+                        }
+                    }
                     UnaryOp::Not => {
                         // Check bit 0 (truthy check), invert
                         let one = self.builder.ins().iconst(types::I64, 1);
@@ -1225,7 +1309,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 args,
                 ..
             } => {
-                let qualified = format!("{}.{}", mod_name, method);
+                let qualified = if mod_name.is_empty() {
+                    method.to_string()
+                } else {
+                    format!("{}.{}", mod_name, method)
+                };
 
                 // HOF path: compile inline (works for both JIT and AOT)
                 if Self::is_inline_hof(&qualified) {
@@ -1500,11 +1588,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     .iter()
                     .map(|a| self.compile_expr(a))
                     .collect::<Result<Vec<_>, _>>()?;
+                // RC: compile_call_value handles callee_val cleanup internally:
+                // - Closure path: callee passed as param[0], callee function decrefs via pop_rc_scope
+                // - Function path: callee NOT passed, decref emitted inside compile_call_value
                 let result = self.compile_call_value(callee_val, &compiled_args)?;
-                // RC: decref the callee value after the call completes
-                if self.rc_enabled {
-                    self.emit_decref(callee_val);
-                }
                 Ok(result)
             }
 
@@ -1735,6 +1822,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         self.builder.switch_to_block(null_closure_block);
         self.builder.seal_block(null_closure_block);
+        // RC: null closure path — callee won't run, so decref the closure here
+        if self.rc_enabled {
+            self.emit_decref(callee_val);
+        }
         let unit_c = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
         self.builder
             .ins()
@@ -1769,6 +1860,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         self.builder.switch_to_block(null_func_block);
         self.builder.seal_block(null_func_block);
+        // RC: null function path — decref callee since nobody else will
+        if self.rc_enabled {
+            self.emit_decref(callee_val);
+        }
         let unit_f = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
         self.builder
             .ins()
@@ -1780,6 +1875,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let sig_ref_f = self.builder.import_signature(func_sig);
         let result_f = self.builder.ins().call_indirect(sig_ref_f, fn_ptr_f, args);
         let ret_f = self.builder.inst_results(result_f)[0];
+        // RC: function path — callee_val was NOT passed as a param, so decref here
+        if self.rc_enabled {
+            self.emit_decref(callee_val);
+        }
         self.builder
             .ins()
             .jump(merge_block, &[BlockArg::Value(ret_f)]);
@@ -2631,14 +2730,82 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
             }
             Pattern::Tuple(sub_patterns) => {
-                // Tuples always match structurally, but sub-patterns might need checking.
-                // For simplicity, tuples always match (sub-patterns are just bindings).
-                // More complex tuple patterns with nested literals would need recursive checking.
+                // Tuples always match structurally.
+                // For sub-patterns that need checking (literals, constructors),
+                // we extract each element and test recursively.
                 let has_complex = sub_patterns
                     .iter()
                     .any(|p| !matches!(p, Pattern::Var(_) | Pattern::Wildcard));
                 if has_complex {
-                    // TODO: complex tuple pattern matching
+                    // Check each complex sub-pattern; mismatch falls through
+                    let check_block = self.builder.create_block();
+                    self.builder.ins().jump(check_block, &[]);
+                    self.builder.switch_to_block(check_block);
+                    self.builder.seal_block(check_block);
+
+                    for (i, sub) in sub_patterns.iter().enumerate() {
+                        if matches!(sub, Pattern::Var(_) | Pattern::Wildcard) {
+                            continue;
+                        }
+                        let idx = self.builder.ins().iconst(types::I64, i as i64);
+                        let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
+                        // For literal sub-patterns, test equality
+                        if let Pattern::Literal(lit_expr) = sub {
+                            let lit_val = self.compile_expr(lit_expr)?;
+                            let eq = self.call_helper("jit_values_equal", &[elem, lit_val]);
+                            let cmp = self.is_truthy(eq);
+                            let next_check = self.builder.create_block();
+                            let fallthrough = next_test.unwrap_or(merge_block);
+                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
+                                vec![BlockArg::Value(
+                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+                                )]
+                            } else {
+                                vec![]
+                            };
+                            self.builder.ins().brif(
+                                cmp,
+                                next_check,
+                                &[],
+                                fallthrough,
+                                &fallthrough_args,
+                            );
+                            self.builder.switch_to_block(next_check);
+                            self.builder.seal_block(next_check);
+                        }
+                        // Constructor sub-patterns inside tuples: check tag
+                        if let Pattern::Constructor(tag, _) = sub {
+                            let cmp = if let Some(id) = self.tags.get_id(tag) {
+                                let tag_id_val = self.call_helper("jit_enum_tag_id", &[elem]);
+                                let expected = self.builder.ins().iconst(types::I64, id as i64);
+                                self.builder.ins().icmp(IntCC::Equal, tag_id_val, expected)
+                            } else {
+                                let tag_nv = NValue::string(tag.as_str().into());
+                                let tag_val = self.emit_heap_nvalue(tag_nv);
+                                let eq_result =
+                                    self.call_helper("jit_enum_tag_eq", &[elem, tag_val]);
+                                self.is_truthy(eq_result)
+                            };
+                            let next_check = self.builder.create_block();
+                            let fallthrough = next_test.unwrap_or(merge_block);
+                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
+                                vec![BlockArg::Value(
+                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+                                )]
+                            } else {
+                                vec![]
+                            };
+                            self.builder.ins().brif(
+                                cmp,
+                                next_check,
+                                &[],
+                                fallthrough,
+                                &fallthrough_args,
+                            );
+                            self.builder.switch_to_block(next_check);
+                            self.builder.seal_block(next_check);
+                        }
+                    }
                     self.builder.ins().jump(body_block, &[]);
                 } else {
                     self.builder.ins().jump(body_block, &[]);
@@ -2648,8 +2815,68 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 // Record patterns always match structurally
                 self.builder.ins().jump(body_block, &[]);
             }
-            Pattern::List(_, _) => {
-                return Err("List patterns not supported in JIT".into());
+            Pattern::List(elems, rest) => {
+                // List pattern: check length >= required elements
+                let len_nv = self.call_helper("jit_list_length", &[subject]);
+                let len_raw = self.untag_int(len_nv);
+                let required = self.builder.ins().iconst(types::I64, elems.len() as i64);
+
+                // If rest binding: len >= required. If no rest: len == required.
+                let cmp = if rest.is_some() {
+                    self.builder
+                        .ins()
+                        .icmp(IntCC::SignedGreaterThanOrEqual, len_raw, required)
+                } else {
+                    self.builder.ins().icmp(IntCC::Equal, len_raw, required)
+                };
+
+                let check_elems = self.builder.create_block();
+                let fallthrough = next_test.unwrap_or(merge_block);
+                let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
+                    vec![BlockArg::Value(
+                        self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+                    )]
+                } else {
+                    vec![]
+                };
+                self.builder.ins().brif(
+                    cmp,
+                    check_elems,
+                    &[],
+                    fallthrough,
+                    &fallthrough_args,
+                );
+
+                self.builder.switch_to_block(check_elems);
+                self.builder.seal_block(check_elems);
+
+                // Check each element sub-pattern that needs testing (literals, constructors)
+                for (i, sub) in elems.iter().enumerate() {
+                    if matches!(sub, Pattern::Var(_) | Pattern::Wildcard) {
+                        continue;
+                    }
+                    let idx = self.builder.ins().iconst(types::I64, i as i64);
+                    let idx_tagged = self.tag_int(idx);
+                    let elem = self.call_helper("jit_list_get", &[subject, idx_tagged]);
+                    if let Pattern::Literal(lit_expr) = sub {
+                        let lit_val = self.compile_expr(lit_expr)?;
+                        let eq = self.call_helper("jit_values_equal", &[elem, lit_val]);
+                        let c = self.is_truthy(eq);
+                        let next_check = self.builder.create_block();
+                        let ft = next_test.unwrap_or(merge_block);
+                        let ft_args: Vec<BlockArg> = if next_test.is_none() {
+                            vec![BlockArg::Value(
+                                self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+                            )]
+                        } else {
+                            vec![]
+                        };
+                        self.builder.ins().brif(c, next_check, &[], ft, &ft_args);
+                        self.builder.switch_to_block(next_check);
+                        self.builder.seal_block(next_check);
+                    }
+                }
+                self.builder.ins().jump(body_block, &[]);
             }
         }
         Ok(())
@@ -2696,8 +2923,25 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     self.bind_pattern_vars(sub_pat, elem)?;
                 }
             }
-            Pattern::List(_, _) => {
-                return Err("List patterns not supported in JIT".into());
+            Pattern::List(elems, rest) => {
+                // Bind each element pattern to list[i]
+                for (i, sub) in elems.iter().enumerate() {
+                    if matches!(sub, Pattern::Wildcard) {
+                        continue;
+                    }
+                    let idx = self.builder.ins().iconst(types::I64, i as i64);
+                    let idx_tagged = self.tag_int(idx);
+                    let elem = self.call_helper("jit_list_get", &[subject, idx_tagged]);
+                    self.bind_pattern_vars(sub, elem)?;
+                }
+                // Bind rest variable to tail
+                if let Some(rest_name) = rest {
+                    let start = self.builder.ins().iconst(types::I64, elems.len() as i64);
+                    let tail = self.call_helper("jit_list_tail", &[subject, start]);
+                    let var = self.new_var();
+                    self.builder.def_var(var, tail);
+                    self.vars.insert(rest_name.clone(), var);
+                }
             }
         }
         Ok(())
@@ -2750,8 +2994,26 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     self.bind_pattern_vars_rc(sub_pat, elem)?;
                 }
             }
-            Pattern::List(_, _) => {
-                return Err("List patterns not supported in JIT".into());
+            Pattern::List(elems, rest) => {
+                // Bind each element pattern to list[i] with RC tracking
+                for (i, sub) in elems.iter().enumerate() {
+                    if matches!(sub, Pattern::Wildcard) {
+                        continue;
+                    }
+                    let idx = self.builder.ins().iconst(types::I64, i as i64);
+                    let idx_tagged = self.tag_int(idx);
+                    let elem = self.call_helper("jit_list_get", &[subject, idx_tagged]);
+                    self.bind_pattern_vars_rc(sub, elem)?;
+                }
+                // Bind rest variable to tail with RC tracking
+                if let Some(rest_name) = rest {
+                    let start = self.builder.ins().iconst(types::I64, elems.len() as i64);
+                    let tail = self.call_helper("jit_list_tail", &[subject, start]);
+                    let var = self.new_var();
+                    self.builder.def_var(var, tail);
+                    self.vars.insert(rest_name.clone(), var);
+                    self.rc_track_var(var);
+                }
             }
         }
         Ok(())

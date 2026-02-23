@@ -1,0 +1,4 @@
+@prelude(script)
+
+fn main!() -> () =
+  Console.println!("Hello, World!")

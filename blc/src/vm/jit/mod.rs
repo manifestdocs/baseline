@@ -39,7 +39,8 @@ pub use helpers::jit_take_error;
 /// A JIT-compiled program. Holds the compiled module and a dispatch table
 /// mapping function index → native function pointer.
 pub struct JitProgram {
-    /// Owns the compiled code pages (freed on drop).
+    /// Owns the compiled code pages (leaked on drop by Cranelift's design —
+    /// see cranelift-jit Memory::drop which calls mem::forget on allocations).
     _module: JITModule,
     /// function index → native fn pointer (None = fell back to interpreter).
     dispatch: Vec<Option<*const u8>>,
@@ -203,6 +204,7 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     // HOF support helpers
     "jit_list_length_raw",
     "jit_list_get_raw",
+    "jit_list_tail",
     "jit_alloc_buf",
     "jit_build_list_from_buf",
     "jit_make_some",
@@ -222,6 +224,8 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_int_le",
     "jit_int_gt",
     "jit_int_ge",
+    // Float arithmetic helpers
+    "jit_float_mod",
     // Reference counting helpers
     "jit_rc_incref",
     "jit_rc_decref",
@@ -313,6 +317,7 @@ fn compile_inner(
     builder.symbol("jit_init_fn_table", jit_init_fn_table as *const u8);
     builder.symbol("jit_list_length_raw", jit_list_length_raw as *const u8);
     builder.symbol("jit_list_get_raw", jit_list_get_raw as *const u8);
+    builder.symbol("jit_list_tail", jit_list_tail as *const u8);
     builder.symbol("jit_alloc_buf", jit_alloc_buf as *const u8);
     builder.symbol(
         "jit_build_list_from_buf",
@@ -335,6 +340,7 @@ fn compile_inner(
     builder.symbol("jit_int_le", jit_int_le as *const u8);
     builder.symbol("jit_int_gt", jit_int_gt as *const u8);
     builder.symbol("jit_int_ge", jit_int_ge as *const u8);
+    builder.symbol("jit_float_mod", jit_float_mod as *const u8);
     builder.symbol("jit_rc_incref", jit_rc_incref as *const u8);
     builder.symbol("jit_rc_decref", jit_rc_decref as *const u8);
     builder.symbol("jit_set_rc_mode_raw", jit_set_rc_mode_raw as *const u8);
@@ -530,6 +536,9 @@ fn compile_inner(
                     eprintln!("JIT: fallback for '{}': {}", func.name, e);
                 }
                 compilable[i] = false;
+                // Reset the FunctionBuilderContext to clear any unsealed blocks
+                // left behind by the failed compilation.
+                fb_ctx = FunctionBuilderContext::new();
                 continue;
             }
         }
@@ -741,7 +750,8 @@ pub(super) fn make_helper_sig<M: Module>(
         | "jit_int_lt"
         | "jit_int_le"
         | "jit_int_gt"
-        | "jit_int_ge" => {
+        | "jit_int_ge"
+        | "jit_float_mod" => {
             // (a, b) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -786,8 +796,8 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "jit_list_get_raw" => {
-            // (list_bits, index: i64) -> u64
+        "jit_list_get_raw" | "jit_list_tail" => {
+            // (list_bits, index/start: i64) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

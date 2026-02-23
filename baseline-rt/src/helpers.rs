@@ -371,36 +371,59 @@ pub extern "C" fn jit_get_field(object_bits: u64, field_bits: u64) -> u64 {
     jit_own(result)
 }
 
-/// Update a record by merging in new fields.
+/// Update a record or named struct by merging in new fields.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_update_record(base_bits: u64, updates: *const u64, count: u64) -> u64 {
     let base = unsafe { jit_take_arg(base_bits) };
     let n = count as usize;
     let slice = unsafe { std::slice::from_raw_parts(updates, n * 2) };
 
-    let Some(base_fields) = base.as_record() else {
+    if !base.is_heap() {
         jit_set_error("update_record on non-record".to_string());
         return NV_UNIT;
-    };
-    let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
-
-    for i in 0..n {
-        let key_nv = unsafe { jit_take_arg(slice[i * 2]) };
-        let val_nv = unsafe { jit_take_arg(slice[i * 2 + 1]) };
-        let Some(key) = key_nv.as_string().cloned() else {
-            jit_set_error("record update key must be a string".to_string());
-            return NV_UNIT;
-        };
-
-        if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == key) {
-            existing.1 = val_nv;
-        } else {
-            fields.push((key, val_nv));
-        }
     }
 
-    let result = NValue::record(fields);
-    jit_own(result)
+    match base.as_heap_ref() {
+        HeapObject::Record(base_fields) => {
+            let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
+            for i in 0..n {
+                let key_nv = unsafe { jit_take_arg(slice[i * 2]) };
+                let val_nv = unsafe { jit_take_arg(slice[i * 2 + 1]) };
+                let Some(key) = key_nv.as_string().cloned() else {
+                    jit_set_error("record update key must be a string".to_string());
+                    return NV_UNIT;
+                };
+                if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == key) {
+                    existing.1 = val_nv;
+                } else {
+                    fields.push((key, val_nv));
+                }
+            }
+            jit_own(NValue::record(fields))
+        }
+        HeapObject::Struct { name, fields: base_fields } => {
+            let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
+            for i in 0..n {
+                let key_nv = unsafe { jit_take_arg(slice[i * 2]) };
+                let val_nv = unsafe { jit_take_arg(slice[i * 2 + 1]) };
+                let Some(key) = key_nv.as_string().cloned() else {
+                    jit_set_error("record update key must be a string".to_string());
+                    return NV_UNIT;
+                };
+                if let Some(existing) = fields.iter_mut().find(|(k, _)| *k == key) {
+                    existing.1 = val_nv;
+                } else {
+                    jit_set_error(format!("Record has no field '{}'", key));
+                    return NV_UNIT;
+                }
+            }
+            jit_own(NValue::struct_val(name.clone(), fields))
+        }
+        _ => {
+            jit_set_error("update_record on non-record".to_string());
+            NV_UNIT
+        }
+    }
 }
 
 /// Build a range (as a list of ints from start..end).
@@ -708,6 +731,26 @@ pub extern "C" fn jit_list_get_raw(list_bits: u64, index: i64) -> u64 {
     }
 }
 
+/// Get a sub-list starting from index `start` (tail/slice operation).
+/// Returns a new list containing elements[start..].
+/// Used by list pattern matching: `[h, ...t]` binds `t` to the tail.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_list_tail(list_bits: u64, start: u64) -> u64 {
+    let list = unsafe { NValue::borrow_from_raw(list_bits) };
+    let result = match list.as_list() {
+        Some(items) => {
+            let s = start as usize;
+            if s >= items.len() {
+                NValue::list(Vec::new())
+            } else {
+                NValue::list(items[s..].to_vec())
+            }
+        }
+        None => NValue::list(Vec::new()),
+    };
+    jit_own(result)
+}
+
 /// Allocate a temporary u64 buffer of `count` elements on the heap.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_alloc_buf(count: i64) -> *mut u64 {
@@ -897,6 +940,18 @@ pub extern "C" fn jit_int_ge(a: u64, b: u64) -> u64 {
     } else {
         NV_FALSE
     }
+}
+
+// ---------------------------------------------------------------------------
+// Float arithmetic helpers
+// ---------------------------------------------------------------------------
+
+/// Float modulo (no Cranelift fmod instruction; uses Rust's f64 % operator).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_float_mod(a: u64, b: u64) -> u64 {
+    let fa = f64::from_bits(a);
+    let fb = f64::from_bits(b);
+    (fa % fb).to_bits()
 }
 
 // ---------------------------------------------------------------------------

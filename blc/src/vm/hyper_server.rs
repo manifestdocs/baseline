@@ -606,40 +606,29 @@ impl AsyncResponse {
     /// Create from NValue response record.
     pub fn from_nvalue(val: &NValue) -> Self {
         // Unwrap Result enum (Ok/Err) — VM handlers return Ok(response)
-        if val.is_heap() {
-            if let super::nvalue::HeapObject::Enum { tag, payload, .. } = val.as_heap_ref() {
-                if &**tag == "Ok" {
-                    return Self::from_nvalue(payload);
-                } else if &**tag == "Err" {
-                    // If the Err payload is a Response record (has status field),
-                    // extract it as a proper HTTP response instead of returning 500.
-                    if let Some(fields) = payload.as_record() {
-                        if fields.iter().any(|(k, _)| &**k == "status") {
-                            return Self::from_nvalue(payload);
-                        }
+        if let Some((tag, payload)) = val.as_enum() {
+            if &**tag == "Ok" {
+                return Self::from_nvalue(payload);
+            } else if &**tag == "Err" {
+                // If the Err payload is a Response record (has status field),
+                // extract it as a proper HTTP response instead of returning 500.
+                if let Some(fields) = payload.as_record() {
+                    if fields.iter().any(|(k, _)| &**k == "status") {
+                        return Self::from_nvalue(payload);
                     }
-                    // If the Err payload is an HttpError enum variant (e.g. NotFound("..."))
-                    if payload.is_heap() {
-                        if let super::nvalue::HeapObject::Enum {
-                            tag: err_tag,
-                            payload: err_payload,
-                            ..
-                        } = payload.as_heap_ref()
-                        {
-                            if super::natives::http_error::http_error_status_code(err_tag).is_some()
-                            {
-                                let resp =
-                                    super::natives::http_error::http_error_to_response_record(
-                                        err_tag,
-                                        err_payload,
-                                    );
-                                return Self::from_nvalue(&resp);
-                            }
-                        }
-                    }
-                    let msg = payload.as_str().unwrap_or("Internal Server Error");
-                    return Self::text(500, msg.to_string());
                 }
+                // If the Err payload is an HttpError enum variant (e.g. NotFound("..."))
+                if let Some((err_tag, err_payload)) = payload.as_enum() {
+                    if super::natives::http_error::http_error_status_code(err_tag).is_some() {
+                        let resp = super::natives::http_error::http_error_to_response_record(
+                            err_tag,
+                            err_payload,
+                        );
+                        return Self::from_nvalue(&resp);
+                    }
+                }
+                let msg = payload.as_str().unwrap_or("Internal Server Error");
+                return Self::text(500, msg.to_string());
             }
         }
 
@@ -1338,6 +1327,7 @@ impl Default for AsyncRouteTree {
 use crate::vm::async_executor::{AsyncExecutorConfig, AsyncVmExecutor};
 use crate::vm::chunk::Chunk;
 use crate::vm::sendable::SendableHandler;
+use crate::vm::sendable::SendableValue;
 
 /// Context for the async server, holding shared state.
 pub struct AsyncServerContext {
@@ -1870,7 +1860,7 @@ async fn handle_request_with_context(
         let openapi_path = format!("{}/openapi.json", docs_path.trim_end_matches('/'));
         if req.method() == Method::GET && req_path == openapi_path {
             let json = generate_openapi_json(&ctx.route_meta);
-            let mut resp = AsyncResponse::json(&json).into_hyper();
+            let mut resp = AsyncResponse::json(json).into_hyper();
             insert_request_id(&mut resp, &meta);
             log_access(config, "GET", &openapi_path, &resp, &meta, remote_addr);
             return Ok(resp);
@@ -2094,6 +2084,9 @@ async fn handle_request_with_context(
                         AsyncResponse::text(501, "VM execution not configured").into_hyper()
                     }
                 }
+                AsyncHandler::VmWs(_) => {
+                    AsyncResponse::text(400, "Bad Request: WebSocket upgrade required").into_hyper()
+                }
                 AsyncHandler::NativeSse(f) => {
                     let (tx, rx) = tokio::sync::mpsc::channel::<SseEvent>(32);
                     let handler = Arc::clone(&f);
@@ -2125,7 +2118,7 @@ async fn handle_request_with_context(
 
     // Apply request ID, CORS, and compression
     let resp = finalize_response(resp, &meta, config);
-    log_access(config, &method, &path, &resp, &meta, remote_addr);
+    log_access(config, method.as_str(), &path, &resp, &meta, remote_addr);
 
     Ok(resp)
 }
@@ -2642,13 +2635,21 @@ async fn serve_static_file(
             }
         };
 
-        let stream = tokio_util::io::ReaderStream::new(file);
+        let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(32);
+        tokio::spawn(async move {
+            use tokio_stream::StreamExt;
+            let mut stream = tokio_util::io::ReaderStream::new(file);
+            while let Some(Ok(chunk)) = stream.next().await {
+                if tx.send(chunk).await.is_err() {
+                    break;
+                }
+            }
+        });
+
         use tokio_stream::StreamExt;
-        let body = http_body_util::StreamBody::new(stream.map(|result| {
-            result
-                .map(hyper::body::Frame::data)
-                .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
-        }));
+        let rx_stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        let body_stream = rx_stream.map(|chunk| Ok::<_, std::convert::Infallible>(hyper::body::Frame::data(chunk)));
+        let body = http_body_util::StreamBody::new(body_stream);
 
         let mut builder = Response::builder()
             .status(StatusCode::OK)
