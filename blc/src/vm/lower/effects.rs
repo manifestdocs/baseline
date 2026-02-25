@@ -1,6 +1,6 @@
 use tree_sitter::Node;
 
-use crate::vm::chunk::CompileError;
+use crate::vm::ir::CompileError;
 use crate::vm::ir::*;
 
 impl<'a> super::Lowerer<'a> {
@@ -223,7 +223,9 @@ impl<'a> super::Lowerer<'a> {
 
                 // Detect tail-resumptive: handler body is exactly `resume(expr)`.
                 // If so, no continuation capture is needed.
-                let is_tail_resumptive = Self::is_tail_resumptive_body(&handler_body);
+                let is_tr = Self::is_tail_resumptive_body(&handler_body);
+                eprintln!("JIT debug: handler body for {} is {:?} (is_tr={})", effect_name, handler_body, is_tr);
+                let is_tail_resumptive = is_tr;
 
                 clauses.push(HandlerClause {
                     effect: effect_name,
@@ -274,7 +276,7 @@ impl<'a> super::Lowerer<'a> {
     /// Check if a handler body is tail-resumptive (body is exactly `resume(expr)`).
     fn is_tail_resumptive_body(expr: &Expr) -> bool {
         match expr {
-            Expr::CallIndirect { callee, args, .. } => {
+            Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
                 matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") && args.len() == 1
             }
             Expr::Block(stmts, _) if stmts.len() == 1 => Self::is_tail_resumptive_body(&stmts[0]),

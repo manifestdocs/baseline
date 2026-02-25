@@ -500,7 +500,7 @@ fn expr_has_unhandled_perform(expr: &Expr, handled: &mut HashSet<String>) -> boo
         }
         _ => {
             let mut found = false;
-            visit_expr_children(expr, &mut |child| {
+            visit_immediate_children(expr, &mut |child| {
                 if !found && expr_has_unhandled_perform(child, handled) {
                     found = true;
                 }
@@ -816,7 +816,7 @@ fn transform_evidence_expr(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
 /// returning an owned clone of the inner expression.
 fn strip_tail_resume_owned(expr: &Expr) -> Expr {
     match expr {
-        Expr::CallIndirect { callee, args, .. }
+        Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. }
             if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume")
                 && args.len() == 1 =>
         {
@@ -1102,6 +1102,82 @@ fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
 }
 
 /// Visit all immediate children of an expression (read-only).
+
+/// Visit all immediate children of an expression (read-only).
+fn visit_immediate_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
+    match expr {
+        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole | Expr::Var(_, _) => {}
+        Expr::BinOp { lhs, rhs, .. } => { f(lhs); f(rhs); }
+        Expr::UnaryOp { operand, .. } => f(operand),
+        Expr::And(l, r) | Expr::Or(l, r) => { f(l); f(r); }
+        Expr::If { condition, then_branch, else_branch, .. } => {
+            f(condition); f(then_branch);
+            if let Some(e) = else_branch { f(e); }
+        }
+        Expr::Match { subject, arms, .. } => {
+            f(subject);
+            for arm in arms {
+                if let Some(guard) = &arm.guard { f(guard); }
+                f(&arm.body);
+            }
+        }
+        Expr::For { iterable, body, .. } => { f(iterable); f(body); }
+        Expr::Let { value, .. } => f(value),
+        Expr::Block(exprs, _) => {
+            for e in exprs { f(e); }
+        }
+        Expr::CallDirect { args, .. } | Expr::CallNative { args, .. } | Expr::TailCall { args, .. } => {
+            for a in args { f(a); }
+        }
+        Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
+            f(callee);
+            for a in args { f(a); }
+        }
+        Expr::MakeEnum { payload, .. } => f(payload),
+        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
+            for (_, v) in fields { f(v); }
+        }
+        Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
+            for item in items { f(item); }
+        }
+        Expr::MakeRange(s, e) => { f(s); f(e); }
+        Expr::UpdateRecord { base, updates, .. } => {
+            f(base);
+            for (_, v) in updates { f(v); }
+        }
+        Expr::GetField { object, .. } => f(object),
+        Expr::Lambda { body, .. } => f(body),
+        Expr::MakeClosure { captures, .. } => {
+            for c in captures { f(c); }
+        }
+        Expr::GetClosureVar(_) => {}
+        Expr::Try { expr, .. } => f(expr),
+        Expr::Concat(parts) => {
+            for p in parts { f(p); }
+        }
+        Expr::WithHandlers { handlers, body, .. } => {
+            for (_, methods) in handlers {
+                for (_, h) in methods { f(h); }
+            }
+            f(body);
+        }
+        Expr::HandleEffect { body, clauses, .. } => {
+            f(body);
+            for c in clauses { f(&c.body); }
+        }
+        Expr::PerformEffect { args, .. } => {
+            for a in args { f(a); }
+        }
+        Expr::Expect { actual, matcher } => {
+            f(actual);
+            match matcher.as_ref() {
+                crate::vm::ir::Matcher::Equal(e) | crate::vm::ir::Matcher::HaveLength(e) | crate::vm::ir::Matcher::Contain(e) | crate::vm::ir::Matcher::StartWith(e) | crate::vm::ir::Matcher::Satisfy(e) => f(e),
+                _ => {}
+            }
+        }
+    }
+}
+
 fn visit_expr_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
     match expr {
         // Literals — no children
@@ -1545,6 +1621,24 @@ fn rename_pattern(pattern: Pattern, rename_map: &HashMap<String, String>) -> Pat
     }
 }
 
+/// Check if an expression contains constructs that return early from the current function.
+/// Functions containing these cannot be safely inlined without transforming the early returns.
+fn has_early_return(expr: &Expr) -> bool {
+    let mut found = false;
+    visit_expr(expr, &mut |e| {
+        if found {
+            return;
+        }
+        match e {
+            Expr::Try { .. } | Expr::TailCall { .. } | Expr::TailCallIndirect { .. } => {
+                found = true;
+            }
+            _ => {}
+        }
+    });
+    found
+}
+
 /// Inline eligible function calls within the module.
 /// Runs multiple rounds to handle chains (f→g→h).
 fn inline_functions(module: &mut IrModule) {
@@ -1552,12 +1646,13 @@ fn inline_functions(module: &mut IrModule) {
     // A function is inlineable if:
     //   1. Body size <= INLINE_THRESHOLD
     //   2. Not self-recursive (no CallDirect/TailCall to self)
+    //   3. Doesn't have early returns (like Expr::Try) which break inline semantics.
     let inlineable: HashMap<String, (Vec<String>, Expr)> = module
         .functions
         .iter()
         .filter(|f| {
             let size = expr_node_count(&f.body);
-            size <= INLINE_THRESHOLD && !references_function(&f.body, &f.name)
+            size <= INLINE_THRESHOLD && !references_function(&f.body, &f.name) && !has_early_return(&f.body)
         })
         .map(|f| (f.name.clone(), (f.params.clone(), f.body.clone())))
         .collect();
