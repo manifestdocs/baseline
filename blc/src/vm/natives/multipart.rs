@@ -128,7 +128,8 @@ fn extract_header_value(fields: &[(RcStr, NValue)], header_name: &str) -> Option
     let headers_val = fields.iter().find(|(k, _)| &**k == "headers")?.1.clone();
     let headers = headers_val.as_list()?;
     for h in headers {
-        if let Some(tuple) = h.as_tuple()
+        let opt_tuple: Option<&Vec<NValue>> = h.as_tuple();
+        if let Some(tuple) = opt_tuple
             && tuple.len() >= 2
             && let Some(name) = tuple[0].as_string()
             && name.eq_ignore_ascii_case(header_name)

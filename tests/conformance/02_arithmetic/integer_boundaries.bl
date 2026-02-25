@@ -1,0 +1,37 @@
+@prelude(core)
+
+// Conformance: integer boundary cases
+// Inspired by: C99 INT_MAX tests, Rust i64 overflow tests, Python bigint tests
+
+// --- Large value arithmetic ---
+test "large multiplication" = 999999 * 999999 == 999998000001
+test "large addition" = 1000000000 + 1000000000 == 2000000000
+test "large subtraction" = 2000000000 - 1000000000 == 1000000000
+
+// --- Powers of two (common compiler boundary) ---
+test "2^10" = 1024 == 1024
+test "2^20 arithmetic" = 1048576 - 1 == 1048575
+
+// --- Gauss sum (verifiable formula: n*(n+1)/2) ---
+fn gauss_sum(n: Int) -> Int = if n <= 0 then 0 else n + gauss_sum(n - 1)
+
+test "gauss sum 100" = gauss_sum(100) == 5050
+test "gauss sum 1000" = gauss_sum(1000) == 500500
+
+// --- Fibonacci (well-known sequence) ---
+fn fib(n: Int) -> Int = if n <= 1 then n else fib(n - 1) + fib(n - 2)
+
+test "fibonacci 20" = fib(20) == 6765
+test "fibonacci 25" = fib(25) == 75025
+
+// --- Negative arithmetic ---
+test "negative times negative" = -3 * -4 == 12
+test "negative times positive" = -3 * 4 == -12
+test "negative division" = -15 / 3 == -5
+test "modulo with negative" = -7 % 3 == -1
+
+// --- Zero edge cases ---
+test "zero times large" = 0 * 999999999 == 0
+test "divide by one" = 42 / 1 == 42
+test "modulo one" = 42 % 1 == 0
+test "modulo self" = 42 % 42 == 0

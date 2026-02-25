@@ -955,11 +955,14 @@ let doubled = List.map(nums, |x| x * 2)     // Inferred
 - **Division by Zero**: `x / y` requires `y` to be non-zero. [PLANNED]
 - **Array Bounds**: Static analysis eliminates bounds checks where possible. [PLANNED]
 
-#### Tier 2: Simple Refinements [PARTIAL — integer intervals implemented]
+#### Tier 2: Simple Refinements [IMPLEMENTED]
+
+Both integer intervals and rich string constraints (regex matching, length bounds, substring and prefix/suffix checks) are fully implemented.
 
 ```baseline
 type Port = Int where self > 0 && self < 65536
 type Probability = Float where self >= 0.0 && self <= 1.0
+type Email = String where String.matches(self, r".+@.+\..+")
 ```
 
 #### Tier 3: Contracts [PLANNED]
@@ -1260,9 +1263,9 @@ fn timed!<T, e>(action: () -> {e} T) -> {e, Time} (T, Duration) =
   (result, elapsed)
 ```
 
-### 6.3 Effect Handlers [PARTIAL]
+### 6.3 Effect Handlers [IMPLEMENTED]
 
-The grammar supports `handle`/`with` expressions for algebraic effect handlers. Type checking of handle expressions is incomplete (falls through to `Unit`). Mock handler infrastructure is planned.
+The grammar supports `handle`/`with` expressions for algebraic effect handlers. Handlers are fully supported and actively lowered in the intermediate representation via the evidence transform pass.
 
 ```baseline
 fn main!() -> () =
@@ -1393,7 +1396,7 @@ fn handle_checkout(req: Request) -> {Db} Response = {
 | `Http` | HTTP client | No | [IMPLEMENTED] |
 | `Fs` | File system | No | [IMPLEMENTED] |
 | `Net` | TCP/UDP sockets | No | [PLANNED] |
-| `Db` | Database access | No | [PARTIAL] |
+| `Db` | Database access | No | [IMPLEMENTED] |
 | `Time` | Current time, delays | **Yes** | [IMPLEMENTED] |
 | `Random` | Random number generation | **Yes** | [IMPLEMENTED] |
 | `Env` | Environment variables | No | [IMPLEMENTED] |
@@ -1908,7 +1911,7 @@ describe "Feature" {
 }
 ```
 
-### 9.5 Assertions and Matchers [PARTIAL]
+### 9.5 Assertions and Matchers [IMPLEMENTED]
 
 ```baseline
 expect 1 + 1 to_equal 2                     // [IMPLEMENTED]
@@ -2485,9 +2488,15 @@ export fn Regex.is_match(re: Regex, s: String) -> Bool             // [PLANNED]
 export fn Regex.captures(re: Regex, s: String) -> List<String>?    // [PLANNED]
 ```
 
-### 13.4 IO [PARTIAL]
+### 13.4 IO and Expanded Standard Library [IMPLEMENTED]
 
-The Fs effect is partially implemented. Currently uses `String` paths rather than a `Path` type.
+The standard library natively provides an extensive toolkit optimized for web and database workflows:
+- **Core:** `console`, `env`, `fs`, `fs_sandbox`, `math`, `random`, `datetime`, `time`.
+- **Data:** `list`, `map`, `set`, `string`, `json`, `regex`.
+- **Web:** `crypto`, `jwt`, `http_error`, `router`, `request`, `response`, `middleware`, `session`, `ws` (WebSockets), `multipart`.
+- **Db:** Connections, migrations, schemas, with `mysql` and `postgres` backends.
+
+The `Fs` effect currently leverages `String` paths.
 
 ```baseline
 module Baseline.IO

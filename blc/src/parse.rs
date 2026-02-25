@@ -132,6 +132,7 @@ pub fn parse_source(source: &str, file_name: &str) -> CheckResult {
 /// or decimal notation, with optional underscore separators.
 pub fn parse_int_literal(text: &str) -> Option<i64> {
     let s = text.replace('_', "");
+    let s = s.trim();
     if s.starts_with("0x") || s.starts_with("0X") {
         i64::from_str_radix(&s[2..], 16).ok()
     } else if s.starts_with("0b") || s.starts_with("0B") {
@@ -139,7 +140,11 @@ pub fn parse_int_literal(text: &str) -> Option<i64> {
     } else if s.starts_with("0o") || s.starts_with("0O") {
         i64::from_str_radix(&s[2..], 8).ok()
     } else {
-        s.parse::<i64>().ok()
+        let res = s.parse::<i64>();
+        if res.is_err() {
+            eprintln!("parse_int_literal err: {:?} from {:?}", res, text);
+        }
+        res.ok()
     }
 }
 

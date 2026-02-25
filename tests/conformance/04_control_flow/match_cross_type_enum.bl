@@ -1,0 +1,53 @@
+@prelude(core)
+
+// Test: match arms returning enums of a different type than the subject.
+// Regression test for a JIT string pool SSA dominance bug where string
+// constants (enum tag names) defined in one match arm block were not
+// visible in sibling arm blocks, causing MakeEnum to produce Unit
+// instead of the correct enum value.
+
+fn classify(x: Option<Int>) -> Result<Int, String> =
+  match x
+    Some(n) -> if n > 0 then Ok(n) else Err("not positive")
+    None -> Err("missing")
+
+test "Some positive → Ok" = {
+  let result = classify(Some(5))
+  match result
+    Ok(v) -> v == 5
+    Err(_) -> false
+}
+
+test "Some negative → Err" = {
+  let result = classify(Some(-1))
+  match result
+    Ok(_) -> false
+    Err(msg) -> msg == "not positive"
+}
+
+test "None → Err" = {
+  let result = classify(None)
+  match result
+    Ok(_) -> false
+    Err(msg) -> msg == "missing"
+}
+
+// Same pattern with String.to_int (native function returning Option)
+fn parse_positive(s: String) -> Result<Int, String> =
+  match String.to_int(s)
+    Some(n) -> if n > 0 then Ok(n) else Err("not positive")
+    None -> Err("not a number")
+
+test "parse_positive valid" = {
+  match parse_positive("5")
+    Ok(v) -> v == 5
+    Err(_) -> false
+}
+
+test "parse_positive invalid" = Result.is_err(parse_positive("hello"))
+
+test "parse_positive negative" = {
+  match parse_positive("-1")
+    Ok(_) -> false
+    Err(msg) -> msg == "not positive"
+}

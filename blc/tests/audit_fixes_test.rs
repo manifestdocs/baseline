@@ -49,19 +49,8 @@ fn test_check_result_has_verification_level() {
     assert!(result.unchecked.contains(&"smt".to_string()));
 }
 
-#[test]
-fn test_vm_instruction_limit() {
-    use blc::vm::exec::Vm;
 
-    // Create VM with limit
-    let vm = Vm::with_instruction_limit(1000);
-    // Just verify it constructs - actual limit testing would require executing code
-    drop(vm);
 
-    // Default VM has no limit (0)
-    let vm = Vm::new();
-    drop(vm);
-}
 
 #[test]
 fn test_suggestion_has_confidence_field() {

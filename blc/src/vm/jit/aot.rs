@@ -461,7 +461,7 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
                 } else {
                     Some(&aot_native_ids)
                 },
-                string_pool: HashMap::new(),
+                
                 scratch_slot: None,
                 rc_enabled: true,
                 rc_scope_stack: Vec::new(),

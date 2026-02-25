@@ -1,0 +1,56 @@
+@prelude(core)
+
+// Conformance: advanced closure semantics
+// Inspired by: Scheme R7RS closure tests, OCaml closure capture tests
+
+// --- Capture semantics ---
+test "closure captures value at creation" = {
+  let x = 10
+  let f = |y| x + y
+  f(0) == 10
+}
+
+test "closure captures independent copy" = {
+  // Each closure should capture its own 'n' — not share a mutable ref
+  // This is the classic "closure in a loop" bug from JavaScript
+  let adders = List.map([1, 2, 3], |n| |x| x + n)
+  let results = List.map(adders, |f| f(0))
+  List.fold(results, 0, |a, b| a + b) == 6
+}
+
+test "nested closure capture" = {
+  let a = 10
+  let f = |x| {
+    let g = |y| x + y + a
+    g(3)
+  }
+  f(5) == 18
+}
+
+test "closure captures outer binding" = {
+  let multiplier = 3
+  let triple = |x| x * multiplier
+  triple(4) == 12
+}
+
+// --- Higher-order closures ---
+test "closure composition" = {
+  let double = |x| x * 2
+  let inc = |x| x + 1
+  let result = inc(double(5))
+  result == 11
+}
+
+test "closure as predicate" = {
+  let threshold = 3
+  let evens = List.filter([1, 2, 3, 4, 5], |x| x > threshold)
+  List.length(evens) == 2
+}
+
+test "curried adder" = {
+  // Manual currying via nested lambdas
+  let make_adder = |n| |x| x + n
+  let add5 = make_adder(5)
+  let add10 = make_adder(10)
+  add5(3) + add10(3) == 21
+}

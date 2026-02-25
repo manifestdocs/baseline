@@ -44,7 +44,7 @@ pub(crate) mod ws;
 use std::collections::HashMap;
 
 use super::nvalue::{HeapObject, NValue};
-use super::value::RcStr;
+use baseline_rt::value::RcStr;
 
 // ---------------------------------------------------------------------------
 // Native Function Registry
@@ -217,16 +217,7 @@ impl NativeRegistry {
         let mut flags = 0u8;
         if matches!(
             name,
-            "List.map"
-                | "List.filter"
-                | "List.fold"
-                | "List.find"
-                | "Option.map"
-                | "Option.flat_map"
-                | "Result.map"
-                | "Result.map_err"
-                | "Result.and_then"
-                | "Fs.with_file!"
+            "Fs.with_file!"
                 | "Fs.with_file"
                 | "Sqlite.query_map!"
                 | "Sqlite.query_map"
@@ -382,29 +373,18 @@ impl NativeRegistry {
         self.register("List.contains", native_list_contains);
         self.register("List.get", native_list_get);
 
-        // -- List (HOF) — these are placeholders; actual execution handled by VM --
-        self.register("List.map", native_hof_placeholder);
-        self.register("List.filter", native_hof_placeholder);
-        self.register("List.fold", native_hof_placeholder);
-        self.register("List.find", native_hof_placeholder);
-
         // -- Option --
         self.register("Option.unwrap", native_option_unwrap);
         self.register("Option.unwrap_or", native_option_unwrap_or);
         self.register("Option.is_some", native_option_is_some);
         self.register("Option.is_none", native_option_is_none);
         self.register("Option.ok_or", native_option_ok_or);
-        self.register("Option.map", native_hof_placeholder);
-        self.register("Option.flat_map", native_hof_placeholder);
 
         // -- Result --
         self.register("Result.unwrap", native_result_unwrap);
         self.register("Result.unwrap_or", native_result_unwrap_or);
         self.register("Result.is_ok", native_result_is_ok);
         self.register("Result.is_err", native_result_is_err);
-        self.register("Result.map", native_hof_placeholder);
-        self.register("Result.map_err", native_hof_placeholder);
-        self.register("Result.and_then", native_hof_placeholder);
         self.register("Result.ensure", native_result_ensure);
         self.register("Result.context", native_result_context);
 
@@ -805,16 +785,6 @@ impl NativeRegistry {
         self.register("Async.timeout!", native_async_placeholder);
         self.register("Async.timeout", native_async_placeholder);
     }
-}
-
-// ---------------------------------------------------------------------------
-// HOF placeholder — actual execution is in the VM
-// ---------------------------------------------------------------------------
-
-fn native_hof_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
-    Err(NativeError(
-        "HOF must be executed by VM, not called directly".into(),
-    ))
 }
 
 fn native_server_listen_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {

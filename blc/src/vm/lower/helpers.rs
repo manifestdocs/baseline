@@ -1,6 +1,6 @@
 use tree_sitter::Node;
 
-use crate::vm::chunk::CompileError;
+use crate::vm::ir::CompileError;
 use crate::vm::ir::*;
 
 impl<'a> super::Lowerer<'a> {

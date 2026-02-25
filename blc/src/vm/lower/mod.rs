@@ -3,7 +3,7 @@ use tree_sitter::Node;
 
 use crate::analysis::types::{DictEntry, TypeMap};
 
-use super::chunk::CompileError;
+use super::ir::CompileError;
 use super::ir::*;
 use super::natives::NativeRegistry;
 

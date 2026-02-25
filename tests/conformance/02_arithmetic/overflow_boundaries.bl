@@ -1,0 +1,51 @@
+@prelude(core)
+
+// Conformance: integer overflow at NaN-boxing boundaries
+// The JIT uses 48-bit payload for ints (range: -2^47 to 2^47-1 = ±140_737_488_355_328).
+// Values beyond this range must be handled by BigInt helpers (jit_int_add etc.)
+// and not silently truncated.
+
+// --- Values near the 48-bit boundary ---
+
+// 2^47 - 1 = 140_737_488_355_327 (max inline int)
+fn max_inline() -> Int = 140_737_488_355_327
+
+test "max inline int identity" = max_inline() == 140_737_488_355_327
+test "max inline int + 0" = max_inline() + 0 == 140_737_488_355_327
+
+// Arithmetic that crosses the 48-bit boundary should still be correct
+test "overflow add" = max_inline() + 1 == 140_737_488_355_328
+test "overflow add larger" = max_inline() + 1000 == 140_737_488_356_327
+
+// Negative boundary: -2^47 = -140_737_488_355_328
+fn min_inline() -> Int = -140_737_488_355_328
+
+test "min inline int identity" = min_inline() == -140_737_488_355_328
+test "underflow sub" = min_inline() - 1 == -140_737_488_355_329
+test "underflow sub larger" = min_inline() - 1000 == -140_737_488_356_328
+
+// Multiplication overflow
+test "mul overflow" = 100_000_000 * 100_000_000 == 10_000_000_000_000_000
+
+// Verify large values survive round-trip through function calls
+fn identity(n: Int) -> Int = n
+
+test "large value survives function call" = identity(140_737_488_355_328) == 140_737_488_355_328
+test "large negative survives function call" = identity(-140_737_488_355_329) == -140_737_488_355_329
+
+// Verify large values in data structures
+test "large value in list" = {
+  let xs = [140_737_488_355_328]
+  List.head(xs) == Some(140_737_488_355_328)
+}
+
+test "large value in match" = {
+  let x = 140_737_488_355_328
+  match x
+    140_737_488_355_328 -> true
+    _ -> false
+}
+
+// Negation at boundary
+test "negate max inline" = -(140_737_488_355_327) == -140_737_488_355_327
+test "negate overflow boundary" = -(140_737_488_355_328) == -140_737_488_355_328

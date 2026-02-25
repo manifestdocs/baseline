@@ -33,7 +33,7 @@ pub(super) fn native_middleware_extract_bearer(args: &[NValue]) -> Result<NValue
     };
     let auth_str: &str = &auth;
     if let Some(token) = auth_str.strip_prefix("Bearer ") {
-        let trimmed = token.trim();
+        let trimmed: &str = token.trim();
         if trimmed.is_empty() {
             return Ok(unauthorized_err("Empty Bearer token"));
         }
@@ -54,7 +54,7 @@ pub(super) fn native_middleware_extract_basic(args: &[NValue]) -> Result<NValue,
         None => return Ok(unauthorized_err("Missing Authorization header")),
     };
     let auth_str: &str = &auth;
-    let encoded = match auth_str.strip_prefix("Basic ") {
+    let encoded: &str = match auth_str.strip_prefix("Basic ") {
         Some(e) => e.trim(),
         None => return Ok(unauthorized_err("Expected Basic authentication scheme")),
     };

@@ -1,6 +1,6 @@
 use tree_sitter::Node;
 
-use crate::vm::chunk::CompileError;
+use crate::vm::ir::CompileError;
 use crate::vm::ir::*;
 
 impl<'a> super::Lowerer<'a> {
@@ -43,19 +43,9 @@ impl<'a> super::Lowerer<'a> {
 
         let value = self.lower_expression(&value_node)?;
 
-        let pattern = if pattern_node.kind() == "tuple_pattern" {
-            let mut pat_cursor = pattern_node.walk();
-            let bindings: Vec<Node> = pattern_node.named_children(&mut pat_cursor).collect();
-            let mut pats = Vec::new();
-            for binding in &bindings {
-                if binding.kind() == "identifier" {
-                    pats.push(Pattern::Var(self.node_text(binding)));
-                } else if binding.kind() == "wildcard_pattern" {
-                    pats.push(Pattern::Wildcard);
-                }
-            }
-            Pattern::Tuple(pats)
-        } else if pattern_node.kind() == "record_pattern" {
+        let pattern = if pattern_node.kind() == "tuple_pattern"
+            || pattern_node.kind() == "record_pattern"
+        {
             self.lower_pattern(&pattern_node)?
         } else {
             let name = self.node_text(&pattern_node);
@@ -197,7 +187,7 @@ impl<'a> super::Lowerer<'a> {
                     match node.kind() {
                         "integer_literal" => {
                             let text = self.node_text(node);
-                            Expr::Int(text.parse().map_err(|_| {
+                            Expr::Int(crate::parse::parse_int_literal(&text).ok_or_else(|| {
                                 self.error(format!("Invalid integer: {}", text), node)
                             })?)
                         }

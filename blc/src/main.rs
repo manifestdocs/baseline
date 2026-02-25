@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use blc::diagnostics::{self, CheckResult};
 use blc::parse;
+use blc::resolver;
 use blc::test_runner;
 use blc::vm;
 
@@ -39,10 +40,6 @@ enum Commands {
         /// The file to run
         file: PathBuf,
 
-        /// Use the Cranelift JIT compiler (requires --features jit)
-        #[arg(long)]
-        jit: bool,
-
         /// Print heap allocation statistics after execution
         #[arg(long)]
         mem_stats: bool,
@@ -64,10 +61,6 @@ enum Commands {
         /// Output results as JSON
         #[arg(long)]
         json: bool,
-
-        /// Run tests using the JIT compiler
-        #[arg(long)]
-        jit: bool,
 
         /// Run tests using the AOT compiler
         #[arg(long)]
@@ -111,9 +104,6 @@ enum Commands {
         /// Project name (defaults to directory name)
         name: Option<String>,
     },
-
-    /// Start an interactive REPL session
-    Repl,
 
     /// Start the MCP (Model Context Protocol) server over stdio
     #[cfg(feature = "mcp")]
@@ -213,44 +203,33 @@ fn main() {
         }
         Commands::Run {
             file,
-            jit,
             mem_stats,
             fs_sandbox,
             program_args,
         } => {
             vm::natives::set_program_args(program_args);
             vm::natives::set_fs_sandbox(fs_sandbox);
-            if jit {
-                run_file_jit(&file);
-            } else {
-                run_file_vm(&file);
-            }
+            run_file_jit(&file);
             if mem_stats {
                 let stats = vm::nvalue::alloc_stats();
                 eprintln!("[mem] {}", stats);
             }
         }
-        Commands::Test { file, json, jit, aot } => {
+        Commands::Test { file, json, aot } => {
             let result = if aot {
                 #[cfg(feature = "aot")]
-                { vm::test_runner::run_test_file_aot(&file) }
+                {
+                    vm::test_runner::run_test_file_aot(&file)
+                }
                 #[cfg(not(feature = "aot"))]
                 {
                     eprintln!("Error: AOT testing requires building with --features aot");
                     std::process::exit(1);
                 }
-            } else if jit {
-                #[cfg(feature = "jit")]
-                { vm::test_runner::run_test_file_jit(&file) }
-                #[cfg(not(feature = "jit"))]
-                {
-                    eprintln!("Error: JIT testing requires building with --features jit");
-                    std::process::exit(1);
-                }
             } else {
-                vm::test_runner::run_test_file(&file)
+                vm::test_runner::run_test_file_jit(&file)
             };
-            
+
             if json {
                 println!("{}", serde_json::to_string_pretty(&result).unwrap());
             } else {
@@ -300,9 +279,7 @@ fn main() {
         Commands::Init { name } => {
             init_project(name);
         }
-        Commands::Repl => {
-            blc::repl::run();
-        }
+
         #[cfg(feature = "mcp")]
         Commands::Mcp => {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
@@ -386,12 +363,29 @@ fn init_project(name: Option<String>) {
     println!("Run with: blc run src/main.bl");
 }
 
-fn run_file_vm(file: &PathBuf) {
-    use blc::resolver;
+// ---------------------------------------------------------------------------
+// Shared compilation pipeline
+// ---------------------------------------------------------------------------
+
+/// Result of the shared front-end pipeline: optimized IR ready for JIT or AOT.
+struct CompileResult {
+    module: vm::ir::IrModule,
+    natives: vm::natives::NativeRegistry,
+}
+
+/// Shared front-end: parse → type-check → analysis → import resolution →
+/// lower → stdlib prepend → optimize.
+///
+/// Used by both `run_file_jit` and `build_file_aot` so that every code path
+/// gets the same validation and import handling.
+fn compile_to_ir(file: &PathBuf) -> CompileResult {
     use tree_sitter::Parser;
     use tree_sitter_baseline::LANGUAGE;
 
-    let source = std::fs::read_to_string(file).expect("Failed to read file");
+    let source = std::fs::read_to_string(file).unwrap_or_else(|e| {
+        eprintln!("Failed to read {}: {}", file.display(), e);
+        std::process::exit(1);
+    });
     let file_str = file.display().to_string();
     let mut parser = Parser::new();
     parser
@@ -400,113 +394,267 @@ fn run_file_vm(file: &PathBuf) {
     let tree = parser.parse(&source, None).expect("Failed to parse");
     let root = tree.root_node();
 
+    // Parse imports from the main file
     let imports = resolver::ModuleLoader::parse_imports(&root, &source);
 
-    // Run the type checker to build a TypeMap for opcode specialization.
-    // Also collect type definitions for schema-driven request decoding.
-    // For files with imports, use the loader-aware variant for transitive import support.
-    let (type_diags, type_map, type_defs, dict_map) = if imports.is_empty() {
-        blc::analysis::check_types_with_map_and_defs(&root, &source, &file_str)
-    } else {
-        let base_dir = file.parent().expect("Cannot determine base directory");
-        let mut loader = resolver::ModuleLoader::with_base_dir(base_dir.to_path_buf());
-        blc::analysis::check_types_with_loader_map_and_defs(
+    // Create a single ModuleLoader to reuse across type checking and lowering
+    let base_dir = file.parent().map(|p| p.to_path_buf());
+    let mut loader = match &base_dir {
+        Some(dir) => resolver::ModuleLoader::with_base_dir(dir.clone()),
+        None => resolver::ModuleLoader::new(),
+    };
+
+    // Type checking: always use loader-aware variant (handles the no-imports case fine)
+    let (type_diags, type_map, dict_map) = {
+        let (diags, tm, _defs, dm) = blc::analysis::check_types_with_loader_map_and_defs(
             &root,
             &source,
             &file_str,
             Some(&mut loader),
-        )
+        );
+        (diags, tm, dm)
     };
-
-    // Populate schema registry for Request.decode
-    let refined_types = blc::analysis::collect_refined_types(&tree, &source);
-    vm::natives::schema::populate_schemas(&type_defs, &refined_types);
-
     let has_type_errors = type_diags
         .iter()
         .any(|d| d.severity == diagnostics::Severity::Error);
-    let type_map = if has_type_errors {
-        None
-    } else {
-        Some(type_map)
-    };
-
-    let mut vm_instance = vm::exec::Vm::new();
-
-    let program = if imports.is_empty() {
-        // Use the new IR pipeline: CST → lower → codegen → Program
-        let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
-        lowerer.set_dict_map(dict_map);
-        let ir_module = lowerer.lower_module(&root);
-        ir_module.and_then(|mut module| {
-            vm::optimize_ir::optimize_for_bytecode(&mut module);
-            let codegen = vm::codegen::Codegen::new(vm_instance.natives());
-            codegen.generate_program(&module)
-        })
-    } else {
-        vm::module_compiler::compile_with_imports(
-            &source,
-            &root,
-            file.as_path(),
-            vm_instance.natives(),
-        )
-    };
-
-    let mut program = match program {
-        Ok(p) => p,
-        Err(e) => {
-            eprintln!("Compile Error: {}", e);
-            std::process::exit(1);
-        }
-    };
-    program.optimize();
-    match vm_instance.execute_program(&program) {
-        Ok(val) => {
-            if !matches!(val, vm::value::Value::Unit) {
-                println!("{}", val);
+    if has_type_errors {
+        for d in &type_diags {
+            if d.severity == diagnostics::Severity::Error {
+                eprintln!(
+                    "{}:{}:{}: error: {} [{}]",
+                    d.location.file, d.location.line, d.location.col, d.message, d.code
+                );
             }
         }
-        Err(e) => {
-            eprintln!(
-                "Runtime Error: {}:{}:{}: {}",
-                file.display(),
-                e.line,
-                e.col,
-                e.message
-            );
-            std::process::exit(1);
+        std::process::exit(1);
+    }
+
+    // Run effect and refinement checking
+    let effect_diags = blc::analysis::check_effects(&tree, &source, &file_str);
+    let refinement_diags = blc::analysis::check_refinements(&tree, &source, &file_str);
+    for d in effect_diags.iter().chain(refinement_diags.iter()) {
+        eprintln!(
+            "{}:{}:{}: {}: {} [{}]",
+            d.location.file,
+            d.location.line,
+            d.location.col,
+            match d.severity {
+                diagnostics::Severity::Error => "error",
+                diagnostics::Severity::Warning => "warning",
+                diagnostics::Severity::Info => "info",
+            },
+            d.message,
+            d.code
+        );
+    }
+    let has_analysis_errors = effect_diags
+        .iter()
+        .chain(refinement_diags.iter())
+        .any(|d| d.severity == diagnostics::Severity::Error);
+    if has_analysis_errors {
+        std::process::exit(1);
+    }
+
+    let natives = vm::natives::NativeRegistry::new();
+    let (stdlib_fns, stdlib_names) = vm::stdlib::compile_stdlib(&natives);
+    let stdlib_fn_count = stdlib_fns.len();
+
+    // Resolve and lower imported modules into IR functions
+    let mut imported_fns: Vec<vm::ir::IrFunction> = Vec::new();
+    let mut imported_names: Vec<String> = Vec::new();
+
+    if !imports.is_empty() {
+        // Reuse the same loader that type checking already populated — modules
+        // are cached so they won't be re-parsed (fixes issue #6).
+
+        enum StackStep {
+            Process(resolver::ResolvedImport, String),
+            Pop(std::path::PathBuf),
+        }
+
+        let mut to_process: Vec<StackStep> = imports
+            .into_iter()
+            .map(|(import, _)| StackStep::Process(import, file_str.clone()))
+            .collect();
+
+        let mut loaded_modules_meta = Vec::new();
+        let mut visited = std::collections::HashSet::new();
+
+        while let Some(step) = to_process.pop() {
+            match step {
+                StackStep::Pop(path) => {
+                    loader.pop_resolution(&path);
+                }
+                StackStep::Process(import, from_file) => {
+                    let mod_path = match loader.resolve_path(&import.module_name, &root, &from_file)
+                    {
+                        Ok(p) => p,
+                        Err(d) => {
+                            eprintln!("Compile Error: {}", d.message);
+                            std::process::exit(1);
+                        }
+                    };
+
+                    // If we already fully processed this module's transitive closure,
+                    // just get its idx and continue.
+                    if !visited.insert(mod_path.clone()) {
+                        let idx = match loader.load_module(&mod_path, &root, &from_file) {
+                            Ok(i) => i,
+                            Err(d) => {
+                                eprintln!("Compile Error: {}", d.message);
+                                std::process::exit(1);
+                            }
+                        };
+                        loaded_modules_meta.push((import, idx));
+                        continue;
+                    }
+
+                    let idx = match loader.load_module(&mod_path, &root, &from_file) {
+                        Ok(i) => i,
+                        Err(d) => {
+                            eprintln!("Compile Error: {}", d.message);
+                            std::process::exit(1);
+                        }
+                    };
+
+                    loaded_modules_meta.push((import, idx));
+
+                    // Push the pop action to be executed AFTER nested imports are processed
+                    to_process.push(StackStep::Pop(mod_path.clone()));
+
+                    let nested_imports = {
+                        let (mod_root, mod_source, _) = loader.get_module(idx).unwrap();
+                        resolver::ModuleLoader::parse_imports(&mod_root, mod_source)
+                    };
+
+                    for (nested_import, _) in nested_imports {
+                        to_process.push(StackStep::Process(
+                            nested_import,
+                            mod_path.display().to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+
+        // Deduplicate the modules to lower so we don't compile them twice,
+        // while preserving order.
+        let mut lowered_modules = std::collections::HashSet::new();
+
+        // Pre-collect ALL function names from all loaded modules to inject into the lowerer
+        // so that functions can call each other directly.
+        let mut global_functions = std::collections::HashSet::new();
+        // and collect module exports
+        let mut mod_exports: std::collections::HashMap<usize, std::collections::HashSet<String>> =
+            std::collections::HashMap::new();
+
+        for i in 0..loaded_modules_meta.len() {
+            let (_, idx) = loaded_modules_meta[i];
+            if !mod_exports.contains_key(&idx) {
+                let (mod_root, mod_source, _) = loader.get_module(idx).unwrap();
+                let uses_exports = resolver::module_uses_exports(&mod_root, mod_source);
+
+                // Hack: We need all functions to collect their names
+                let mut dummy_lowerer = vm::lower::Lowerer::new(mod_source, &natives, None);
+                let mod_fns = dummy_lowerer
+                    .lower_module_functions(&mod_root)
+                    .unwrap_or_default();
+
+                let exported = if uses_exports {
+                    resolver::exported_function_names(&mod_root, mod_source)
+                } else {
+                    mod_fns
+                        .iter()
+                        .map(|f| f.name.as_str().to_string())
+                        .collect()
+                };
+                mod_exports.insert(idx, exported);
+
+                let short_name = loaded_modules_meta[i]
+                    .0
+                    .module_name
+                    .split('.')
+                    .next_back()
+                    .unwrap_or("?");
+                for f in mod_fns {
+                    global_functions.insert(f.name.clone());
+                    global_functions.insert(format!("{}.{}", short_name, f.name));
+                }
+            }
+        }
+
+        // Now lower each module once, injecting all known functions
+        let mut lowered_fns: std::collections::HashMap<usize, Vec<vm::ir::IrFunction>> =
+            std::collections::HashMap::new();
+
+        for i in (0..loaded_modules_meta.len()).rev() {
+            let (import, idx) = &loaded_modules_meta[i];
+
+            if !lowered_fns.contains_key(idx) {
+                let (mod_root, mod_source, _) = loader.get_module(*idx).unwrap();
+                let mut mod_lowerer = vm::lower::Lowerer::new(mod_source, &natives, None);
+                mod_lowerer.add_functions(global_functions.iter().cloned());
+                let mod_fns = match mod_lowerer.lower_module_functions(&mod_root) {
+                    Ok(fns) => fns,
+                    Err(e) => {
+                        eprintln!("Import Compile Error: {}", e.message);
+                        std::process::exit(1);
+                    }
+                };
+                lowered_fns.insert(*idx, mod_fns);
+            }
+
+            let mod_fns = lowered_fns.get(idx).unwrap();
+            let exported = mod_exports.get(idx).unwrap();
+
+            let short_name = import
+                .module_name
+                .split('.')
+                .next_back()
+                .unwrap_or(&import.module_name);
+
+            // Register names and functions for THIS specific import statement
+            let mut qualified_clones: Vec<vm::ir::IrFunction> = Vec::new();
+            for f in mod_fns {
+                if !exported.contains(f.name.as_str()) {
+                    continue;
+                }
+                let qualified = format!("{}.{}", short_name, f.name);
+
+                if !imported_names.contains(&qualified) {
+                    // Avoid dups
+                    imported_names.push(qualified.clone());
+                    let mut alias = f.clone();
+                    alias.name = qualified;
+                    qualified_clones.push(alias);
+                }
+
+                match &import.kind {
+                    resolver::ImportKind::Selective(names) => {
+                        if names.contains(&f.name) && !imported_names.contains(&f.name) {
+                            imported_names.push(f.name.clone());
+                        }
+                    }
+                    resolver::ImportKind::Wildcard => {
+                        if !imported_names.contains(&f.name) {
+                            imported_names.push(f.name.clone());
+                        }
+                    }
+                    resolver::ImportKind::Qualified => {}
+                }
+            }
+
+            if lowered_modules.insert(*idx) {
+                imported_fns.extend(mod_fns.clone());
+            }
+            imported_fns.extend(qualified_clones);
         }
     }
-}
 
-#[cfg(feature = "jit")]
-fn run_file_jit(file: &PathBuf) {
-    use tree_sitter::Parser;
-    use tree_sitter_baseline::LANGUAGE;
-
-    let source = std::fs::read_to_string(file).expect("Failed to read file");
-    let file_str = file.display().to_string();
-    let mut parser = Parser::new();
-    parser
-        .set_language(&LANGUAGE.into())
-        .expect("Failed to load language");
-    let tree = parser.parse(&source, None).expect("Failed to parse");
-    let root = tree.root_node();
-
-    let (type_diags, type_map, dict_map) =
-        blc::analysis::check_types_with_map(&root, &source, &file_str);
-    let has_type_errors = type_diags
-        .iter()
-        .any(|d| d.severity == diagnostics::Severity::Error);
-    let type_map = if has_type_errors {
-        None
-    } else {
-        Some(type_map)
-    };
-
-    let vm_instance = vm::exec::Vm::new();
-    let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), type_map);
+    let mut lowerer = vm::lower::Lowerer::new(&source, &natives, Some(type_map));
     lowerer.set_dict_map(dict_map);
+    lowerer.add_functions(stdlib_names.iter().cloned());
+    lowerer.add_functions(imported_names.iter().cloned());
     let ir_module = match lowerer.lower_module(&root) {
         Ok(m) => m,
         Err(e) => {
@@ -516,10 +664,31 @@ fn run_file_jit(file: &PathBuf) {
     };
 
     let mut optimized = ir_module;
+    // Prepend stdlib functions, then imported functions; adjust entry index
+    let import_fn_count = imported_fns.len();
+    optimized.functions.splice(0..0, stdlib_fns);
+    optimized
+        .functions
+        .splice(stdlib_fn_count..stdlib_fn_count, imported_fns);
+    optimized.entry += stdlib_fn_count + import_fn_count;
     vm::optimize_ir::optimize(&mut optimized);
 
+    CompileResult {
+        module: optimized,
+        natives,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JIT execution
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "jit")]
+fn run_file_jit(file: &PathBuf) {
+    let result = compile_to_ir(file);
+
     let jit_program =
-        match vm::jit::compile_with_natives(&optimized, false, Some(vm_instance.natives())) {
+        match vm::jit::compile_with_natives(&result.module, false, Some(&result.natives)) {
             Ok(p) => p,
             Err(e) => {
                 eprintln!("JIT Error: {}", e);
@@ -551,6 +720,10 @@ fn run_file_jit(_file: &PathBuf) {
     eprintln!("  cargo build --features jit --release");
     std::process::exit(1);
 }
+
+// ---------------------------------------------------------------------------
+// AOT compilation
+// ---------------------------------------------------------------------------
 
 /// Find the directory containing libbaseline_rt.a for AOT linking.
 ///
@@ -603,56 +776,10 @@ fn find_baseline_rt_lib() -> Option<PathBuf> {
 
 #[cfg(feature = "aot")]
 fn build_file_aot(file: &PathBuf, output: Option<&Path>, trace: bool) {
-    use tree_sitter::Parser;
-    use tree_sitter_baseline::LANGUAGE;
-
-    let source = std::fs::read_to_string(file).unwrap_or_else(|e| {
-        eprintln!("Failed to read {}: {}", file.display(), e);
-        std::process::exit(1);
-    });
-    let file_str = file.display().to_string();
-    let mut parser = Parser::new();
-    parser
-        .set_language(&LANGUAGE.into())
-        .expect("Failed to load language");
-    let tree = parser.parse(&source, None).expect("Failed to parse");
-    let root = tree.root_node();
-
-    // Type-check (exit on errors)
-    let (type_diags, type_map, dict_map) =
-        blc::analysis::check_types_with_map(&root, &source, &file_str);
-    let has_type_errors = type_diags
-        .iter()
-        .any(|d| d.severity == diagnostics::Severity::Error);
-    if has_type_errors {
-        for d in &type_diags {
-            if d.severity == diagnostics::Severity::Error {
-                eprintln!(
-                    "{}:{}:{}: error: {} [{}]",
-                    d.location.file, d.location.line, d.location.col, d.message, d.code
-                );
-            }
-        }
-        std::process::exit(1);
-    }
-
-    // Lower to IR + optimize
-    let vm_instance = vm::exec::Vm::new();
-    let mut lowerer = vm::lower::Lowerer::new(&source, vm_instance.natives(), Some(type_map));
-    lowerer.set_dict_map(dict_map);
-    let ir_module = match lowerer.lower_module(&root) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Compile Error: {}", e.message);
-            std::process::exit(1);
-        }
-    };
-
-    let mut optimized = ir_module;
-    vm::optimize_ir::optimize(&mut optimized);
+    let result = compile_to_ir(file);
 
     // AOT compile
-    let obj_bytes = match vm::jit::aot::compile_to_object(&optimized, trace) {
+    let obj_bytes = match vm::jit::aot::compile_to_object(&result.module, trace) {
         Ok(bytes) => bytes,
         Err(e) => {
             eprintln!("AOT Error: {}", e);

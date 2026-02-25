@@ -10,13 +10,13 @@ use cranelift_codegen::ir::{
     AbiParam, BlockArg, InstBuilder, MemFlags, StackSlotData, StackSlotKind, types,
 };
 use cranelift_codegen::isa::CallConv;
-use cranelift_frontend::{FunctionBuilder, Switch, Variable};
+use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{DataId, FuncId, Module};
 
-use super::super::ir::{BinOp, Expr, IrFunction, MatchArm, Pattern, TagRegistry, UnaryOp};
+use super::super::ir::{BinOp, Expr, IrFunction, Matcher, Pattern, TagRegistry, UnaryOp};
 use super::super::natives::NativeRegistry;
 use super::super::nvalue::{NValue, PAYLOAD_MASK, TAG_BOOL, TAG_INT};
-use super::super::value::RcStr;
+use baseline_rt::value::RcStr;
 use super::analysis::expr_only_refs_params;
 use super::helpers::{NV_FALSE, NV_TRUE, NV_UNIT};
 use crate::analysis::types::Type;
@@ -53,8 +53,7 @@ pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     /// AOT native function IDs: maps qualified name → FuncId for direct calls.
     /// When Some, CallNative emits direct calls instead of going through NativeRegistry.
     pub(super) aot_native_ids: Option<&'a HashMap<String, FuncId>>,
-    /// JIT string constant pool: deduplicates heap allocations for repeated string literals.
-    pub(super) string_pool: HashMap<String, CValue>,
+
     /// Reusable scratch stack slot for spill_to_stack (slot, size in bytes).
     pub(super) scratch_slot: Option<(cranelift_codegen::ir::StackSlot, u32)>,
     /// Whether RC codegen is enabled (scope-based incref/decref).
@@ -73,6 +72,31 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let var = self.builder.declare_var(types::I64);
         self.next_var += 1;
         var
+    }
+
+    /// Stash an SSA value into a Cranelift Variable so it remains valid
+    /// across block boundaries created by subsequent compile_expr calls.
+    pub(super) fn stash_in_var(&mut self, val: CValue) -> CValue {
+        let var = self.new_var();
+        self.builder.def_var(var, val);
+        self.builder.use_var(var)
+    }
+
+    /// Compile a slice of expressions, stashing each intermediate result
+    /// in a Variable to prevent SSA dominance violations when later
+    /// compile_expr calls create new blocks (if/else, match, etc.).
+    fn compile_exprs_stashed(&mut self, exprs: &[Expr]) -> Result<Vec<CValue>, String> {
+        let mut vals = Vec::with_capacity(exprs.len());
+        for (i, e) in exprs.iter().enumerate() {
+            let val = self.compile_expr(e)?;
+            // Stash all but the last value (the last is always in the current block)
+            if i < exprs.len() - 1 {
+                vals.push(self.stash_in_var(val));
+            } else {
+                vals.push(val);
+            }
+        }
+        Ok(vals)
     }
 
     // -- RC scope helpers --
@@ -117,12 +141,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Emit a decref call.
-    fn emit_decref(&mut self, val: CValue) {
+    pub(super) fn emit_decref(&mut self, val: CValue) {
         self.call_helper_void("jit_rc_decref", &[val]);
     }
 
     /// Call a runtime helper that returns no useful value.
-    fn call_helper_void(&mut self, name: &str, args: &[CValue]) {
+    pub(super) fn call_helper_void(&mut self, name: &str, args: &[CValue]) {
         let func_id = self.helper_ids[name];
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         self.builder.ins().call(func_ref, args);
@@ -141,7 +165,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Emit a NaN-boxed NValue for a heap object, keeping it rooted.
-    fn emit_heap_nvalue(&mut self, nv: NValue) -> CValue {
+    pub(super) fn emit_heap_nvalue(&mut self, nv: NValue) -> CValue {
         let bits = nv.raw() as i64;
         self.heap_roots.push(nv);
         let val = self.builder.ins().iconst(types::I64, bits);
@@ -166,27 +190,25 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             let len = self.builder.ins().iconst(types::I64, s.len() as i64);
             Ok(self.call_helper("jit_make_string", &[addr, len]))
         } else {
-            // JIT path: deduplicate string allocations via pool
-            if let Some(&cached) = self.string_pool.get(s) {
-                // RC: each reuse of a cached string needs its own reference.
-                // The first use got one incref from emit_heap_nvalue; subsequent
-                // uses need an additional incref since each call site may consume
-                // the reference (via jit_take_arg or explicit decref).
-                if self.rc_enabled {
-                    return Ok(self.emit_incref(cached));
-                }
-                return Ok(cached);
-            }
+            // JIT path: allocate a fresh string NValue for each occurrence.
+            //
+            // NOTE: A previous string pool optimization cached Variables to
+            // deduplicate allocations. However, this was unsound: def_var in
+            // one match arm block doesn't dominate sibling arms, so use_var
+            // returns 0x0 (the Cranelift default for undefined Variables).
+            // This caused MakeEnum to receive a null tag string, silently
+            // producing Unit instead of the correct enum value.
+            //
+            // TODO: Restore pool by initializing Variables in the entry block
+            // before any splits, or by tracking block membership.
             let nv = NValue::string(s.into());
-            let val = self.emit_heap_nvalue(nv);
-            self.string_pool.insert(s.to_string(), val);
-            Ok(val)
+            Ok(self.emit_heap_nvalue(nv))
         }
     }
 
     /// Untag an Int: extract the 48-bit signed payload from NaN-boxed int.
     /// ishl 16, sshr 16
-    fn untag_int(&mut self, val: CValue) -> CValue {
+    pub(super) fn untag_int(&mut self, val: CValue) -> CValue {
         let shifted_left = self.builder.ins().ishl_imm(val, 16);
         self.builder.ins().sshr_imm(shifted_left, 16)
     }
@@ -204,7 +226,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
     /// Tag a raw i64 as a NaN-boxed Int: band with PAYLOAD_MASK, bor with TAG_INT.
     /// Only correct when the value is guaranteed to fit in 48-bit signed range.
-    fn tag_int(&mut self, val: CValue) -> CValue {
+    pub(super) fn tag_int(&mut self, val: CValue) -> CValue {
         let mask = self.builder.ins().iconst(types::I64, PAYLOAD_MASK as i64);
         let masked = self.builder.ins().band(val, mask);
         let tag = self.builder.ins().iconst(types::I64, TAG_INT as i64);
@@ -256,7 +278,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Check if a NaN-boxed value is truthy (bit 0 set, works for NaN-boxed bools).
-    fn is_truthy(&mut self, val: CValue) -> CValue {
+    pub(super) fn is_truthy(&mut self, val: CValue) -> CValue {
         let one = self.builder.ins().iconst(types::I64, 1);
         let bit = self.builder.ins().band(val, one);
         let zero = self.builder.ins().iconst(types::I64, 0);
@@ -287,7 +309,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     }
 
     /// Call a runtime helper function by name.
-    fn call_helper(&mut self, name: &str, args: &[CValue]) -> CValue {
+    pub(super) fn call_helper(&mut self, name: &str, args: &[CValue]) -> CValue {
         let func_id = self.helper_ids[name];
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let call = self.builder.ins().call(func_ref, args);
@@ -886,6 +908,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let is_int = matches!(ty, Some(Type::Int));
                 let is_float = matches!(ty, Some(Type::Float));
                 let lhs_val = self.compile_expr(lhs)?;
+                let lhs_val = self.stash_in_var(lhs_val);
                 let rhs_val = self.compile_expr(rhs)?;
 
                 if is_int {
@@ -1020,7 +1043,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             Ok(self.tag_bool(cmp))
                         }
                         BinOp::ListConcat => {
-                            Ok(self.call_helper("jit_list_concat", &[lhs_val, rhs_val]))
+                            if matches!(ty, Some(Type::String)) {
+                                Ok(self.call_helper("jit_string_concat", &[lhs_val, rhs_val]))
+                            } else {
+                                Ok(self.call_helper("jit_list_concat", &[lhs_val, rhs_val]))
+                            }
                         }
                     }
                 }
@@ -1146,21 +1173,15 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
                         if callee_unboxed {
                             // Boxed → unboxed: untag args, tag result
-                            let arg_vals: Vec<CValue> = args
-                                .iter()
-                                .map(|a| {
-                                    let boxed = self.compile_expr(a)?;
-                                    Ok(self.untag_int(boxed))
-                                })
-                                .collect::<Result<Vec<_>, String>>()?;
+                            let arg_vals = self.compile_exprs_stashed(args)?;
+                            let arg_vals: Vec<CValue> = arg_vals.into_iter()
+                                .map(|boxed| self.untag_int(boxed))
+                                .collect();
                             let call = self.builder.ins().call(func_ref, &arg_vals);
                             let raw_result = self.builder.inst_results(call)[0];
                             Ok(self.tag_int_checked(raw_result))
                         } else {
-                            let arg_vals: Vec<CValue> = args
-                                .iter()
-                                .map(|a| self.compile_expr(a))
-                                .collect::<Result<Vec<_>, _>>()?;
+                            let arg_vals = self.compile_exprs_stashed(args)?;
                             let call = self.builder.ins().call(func_ref, &arg_vals);
                             Ok(self.builder.inst_results(call)[0])
                         }
@@ -1179,10 +1200,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 if name == &self.current_func_name
                     && let Some(loop_header) = self.loop_header
                 {
-                    let arg_vals: Vec<CValue> = args
-                        .iter()
-                        .map(|a| self.compile_expr(a))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let arg_vals = self.compile_exprs_stashed(args)?;
 
                     // RC: decref old parameter values before overwriting
                     if self.rc_enabled {
@@ -1214,22 +1232,16 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
 
                         if callee_unboxed {
-                            let arg_vals: Vec<CValue> = args
-                                .iter()
-                                .map(|a| {
-                                    let boxed = self.compile_expr(a)?;
-                                    Ok(self.untag_int(boxed))
-                                })
-                                .collect::<Result<Vec<_>, String>>()?;
+                            let arg_vals = self.compile_exprs_stashed(args)?;
+                            let arg_vals: Vec<CValue> = arg_vals.into_iter()
+                                .map(|boxed| self.untag_int(boxed))
+                                .collect();
                             let call = self.builder.ins().call(func_ref, &arg_vals);
                             let raw_result = self.builder.inst_results(call)[0];
                             Ok(self.tag_int_checked(raw_result))
                         } else {
                             // Both boxed — use return_call for guaranteed TCE
-                            let arg_vals: Vec<CValue> = args
-                                .iter()
-                                .map(|a| self.compile_expr(a))
-                                .collect::<Result<Vec<_>, _>>()?;
+                            let arg_vals = self.compile_exprs_stashed(args)?;
                             self.builder.ins().return_call(func_ref, &arg_vals);
 
                             let dead_block = self.builder.create_block();
@@ -1315,11 +1327,6 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     format!("{}.{}", mod_name, method)
                 };
 
-                // HOF path: compile inline (works for both JIT and AOT)
-                if Self::is_inline_hof(&qualified) {
-                    return self.compile_hof(&qualified, args);
-                }
-
                 // AOT path: direct call to extern "C" symbol in libbaseline_rt
                 if let Some(native_ids) = self.aot_native_ids {
                     let func_id = native_ids
@@ -1348,33 +1355,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     .ok_or_else(|| format!("Unknown native: {}", qualified))?;
                 let is_owning = self.rc_enabled && registry.is_owning(native_id);
 
-                let arg_vals: Vec<CValue> = if is_owning {
-                    // Owning (CoW) dispatch: "move" the first arg (container)
-                    // instead of copying it. This avoids the incref that would
-                    // prevent in-place mutation in the native.
-                    let mut vals = Vec::with_capacity(args.len());
-                    for (i, a) in args.iter().enumerate() {
-                        if i == 0 {
-                            if let Expr::Var(name, _) = a {
-                                // Move: read without incref, then null out the var
-                                if let Some(&var) = self.vars.get(name.as_str()) {
-                                    let val = self.builder.use_var(var);
-                                    let unit =
-                                        self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                                    self.builder.def_var(var, unit);
-                                    vals.push(val);
-                                    continue;
-                                }
-                            }
-                        }
-                        vals.push(self.compile_expr(a)?);
-                    }
-                    vals
-                } else {
-                    args.iter()
-                        .map(|a| self.compile_expr(a))
-                        .collect::<Result<Vec<_>, _>>()?
-                };
+                let arg_vals: Vec<CValue> = args
+                    .iter()
+                    .map(|a| self.compile_expr(a))
+                    .collect::<Result<Vec<_>, _>>()?;
 
                 let args_addr = self.spill_to_stack(&arg_vals);
                 let registry_ptr = self
@@ -1396,10 +1380,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
 
             Expr::Concat(parts) => {
-                let part_vals: Vec<CValue> = parts
-                    .iter()
-                    .map(|e| self.compile_expr(e))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let part_vals = self.compile_exprs_stashed(parts)?;
 
                 let addr = self.spill_to_stack(&part_vals);
                 let count = self
@@ -1414,10 +1395,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 if let Some(id) = self.tags.get_id(tag) {
                     // Multi-arg: MakeEnum { payload: MakeTuple([...]) } → flat enum
                     if let Expr::MakeTuple(items, _) = payload.as_ref() {
-                        let item_vals: Vec<CValue> = items
-                            .iter()
-                            .map(|e| self.compile_expr(e))
-                            .collect::<Result<Vec<_>, _>>()?;
+                        let item_vals = self.compile_exprs_stashed(items)?;
                         let tag_val = self.emit_string_value(tag)?;
                         let id_val = self.builder.ins().iconst(types::I64, id as i64);
                         let addr = self.spill_to_stack(&item_vals);
@@ -1436,11 +1414,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     }
                     // Single-arg: existing path
                     let tag_val = self.emit_string_value(tag)?;
+                    let tag_val = self.stash_in_var(tag_val);
                     let payload_val = self.compile_expr(payload)?;
                     let id_val = self.builder.ins().iconst(types::I64, id as i64);
                     Ok(self.call_helper("jit_make_enum_with_id", &[tag_val, id_val, payload_val]))
                 } else {
                     let tag_val = self.emit_string_value(tag)?;
+                    let tag_val = self.stash_in_var(tag_val);
                     let payload_val = self.compile_expr(payload)?;
                     Ok(self.call_helper("jit_make_enum", &[tag_val, payload_val]))
                 }
@@ -1448,10 +1428,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::MakeStruct { name, fields, .. } => {
                 let name_val = self.emit_string_value(name)?;
+                let name_val = self.stash_in_var(name_val);
 
                 let mut pair_vals = Vec::with_capacity(fields.len() * 2);
                 for (fname, fexpr) in fields {
                     let key_val = self.emit_string_value(fname)?;
+                    let key_val = self.stash_in_var(key_val);
                     let val = self.compile_expr(fexpr)?;
                     pair_vals.push(key_val);
                     pair_vals.push(val);
@@ -1463,10 +1445,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
 
             Expr::MakeList(items, _) => {
-                let item_vals: Vec<CValue> = items
-                    .iter()
-                    .map(|e| self.compile_expr(e))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let item_vals = if items.is_empty() {
+                    vec![]
+                } else {
+                    self.compile_exprs_stashed(items)?
+                };
 
                 let addr = self.spill_to_stack(&item_vals);
                 let count = self
@@ -1480,6 +1463,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let mut pair_vals = Vec::with_capacity(fields.len() * 2);
                 for (fname, fexpr) in fields {
                     let key_val = self.emit_string_value(fname)?;
+                    let key_val = self.stash_in_var(key_val);
                     let val = self.compile_expr(fexpr)?;
                     pair_vals.push(key_val);
                     pair_vals.push(val);
@@ -1491,10 +1475,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
 
             Expr::MakeTuple(items, _) => {
-                let item_vals: Vec<CValue> = items
-                    .iter()
-                    .map(|e| self.compile_expr(e))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let item_vals = if items.is_empty() {
+                    vec![]
+                } else {
+                    self.compile_exprs_stashed(items)?
+                };
 
                 let addr = self.spill_to_stack(&item_vals);
                 let count = self
@@ -1506,16 +1491,19 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::MakeRange(start, end) => {
                 let start_val = self.compile_expr(start)?;
+                let start_val = self.stash_in_var(start_val);
                 let end_val = self.compile_expr(end)?;
                 Ok(self.call_helper("jit_make_range", &[start_val, end_val]))
             }
 
             Expr::UpdateRecord { base, updates, .. } => {
                 let base_val = self.compile_expr(base)?;
+                let base_val = self.stash_in_var(base_val);
 
                 let mut pair_vals = Vec::with_capacity(updates.len() * 2);
                 for (fname, fexpr) in updates {
                     let key_val = self.emit_string_value(fname)?;
+                    let key_val = self.stash_in_var(key_val);
                     let val = self.compile_expr(fexpr)?;
                     pair_vals.push(key_val);
                     pair_vals.push(val);
@@ -1564,10 +1552,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     Ok(self.emit_heap_nvalue(NValue::function(*func_idx)))
                 } else {
                     // Compile each capture expression
-                    let cap_vals: Vec<CValue> = captures
-                        .iter()
-                        .map(|c| self.compile_expr(c))
-                        .collect::<Result<Vec<_>, _>>()?;
+                    let cap_vals = self.compile_exprs_stashed(captures)?;
                     let addr = self.spill_to_stack(&cap_vals);
                     let idx_val = self.builder.ins().iconst(types::I64, *func_idx as i64);
                     let count_val = self.builder.ins().iconst(types::I64, captures.len() as i64);
@@ -1584,10 +1569,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::CallIndirect { callee, args, .. } => {
                 let callee_val = self.compile_expr(callee)?;
-                let compiled_args: Vec<CValue> = args
-                    .iter()
-                    .map(|a| self.compile_expr(a))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let callee_val = self.stash_in_var(callee_val);
+                let compiled_args = if args.is_empty() {
+                    vec![]
+                } else {
+                    self.compile_exprs_stashed(args)?
+                };
                 // RC: compile_call_value handles callee_val cleanup internally:
                 // - Closure path: callee passed as param[0], callee function decrefs via pop_rc_scope
                 // - Function path: callee NOT passed, decref emitted inside compile_call_value
@@ -1597,10 +1584,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::TailCallIndirect { callee, args, .. } => {
                 let callee_val = self.compile_expr(callee)?;
-                let compiled_args: Vec<CValue> = args
-                    .iter()
-                    .map(|a| self.compile_expr(a))
-                    .collect::<Result<Vec<_>, _>>()?;
+                let callee_val = self.stash_in_var(callee_val);
+                let compiled_args = if args.is_empty() {
+                    vec![]
+                } else {
+                    self.compile_exprs_stashed(args)?
+                };
 
                 let use_tail = self.func_call_conv == CallConv::Tail;
 
@@ -1771,6 +1760,21 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
             }
 
+            Expr::Expect { actual, matcher } => {
+                self.compile_expect(actual, matcher)
+            }
+
+            // Typed hole: unreachable at runtime if control flow is correct.
+            // Emit a trap so the function body still compiles.
+            Expr::Hole => {
+                self.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+                // Unreachable, but Cranelift needs a value for the block.
+                let dead_block = self.builder.create_block();
+                self.builder.switch_to_block(dead_block);
+                self.builder.seal_block(dead_block);
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+
             // Remaining unsupported constructs
             _ => Err(format!("Unsupported expression in JIT: {:?}", expr)),
         }
@@ -1889,441 +1893,124 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         Ok(self.builder.block_params(merge_block)[0])
     }
 
-    // -- HOF inline compilation --
+    // -- Expect (inline test matchers) --
 
-    /// Check if a qualified native name is a HOF we compile inline.
-    fn is_inline_hof(qualified: &str) -> bool {
-        matches!(
-            qualified,
-            "List.map"
-                | "List.filter"
-                | "List.fold"
-                | "List.find"
-                | "Option.map"
-                | "Result.map"
-                | "Result.map_err"
-        )
-    }
-
-    /// Compile a HOF call inline (no ABI bridging needed).
-    fn compile_hof(&mut self, qualified: &str, args: &[Expr]) -> Result<CValue, String> {
-        match qualified {
-            "List.map" => self.compile_hof_list_map(args),
-            "List.filter" => self.compile_hof_list_filter(args),
-            "List.fold" => self.compile_hof_list_fold(args),
-            "List.find" => self.compile_hof_list_find(args),
-            "Option.map" => self.compile_hof_option_map(args),
-            "Result.map" => self.compile_hof_result_map(args),
-            "Result.map_err" => self.compile_hof_result_map_err(args),
-            _ => Err(format!("Unknown inline HOF: {}", qualified)),
+    /// Compile `expect actual matcher` → Bool NValue.
+    fn compile_expect(&mut self, actual: &Expr, matcher: &Matcher) -> Result<CValue, String> {
+        match matcher {
+            Matcher::Equal(expected) => {
+                let actual_val = self.compile_expr(actual)?;
+                let actual_val = self.stash_in_var(actual_val);
+                let expected_val = self.compile_expr(expected)?;
+                Ok(self.call_helper("jit_values_equal", &[actual_val, expected_val]))
+            }
+            Matcher::BeOk => {
+                let actual_val = self.compile_expr(actual)?;
+                let tag_id = self.call_helper("jit_enum_tag_id", &[actual_val]);
+                let ok_id = self.tags.get_id("Ok").unwrap_or(2) as i64;
+                let expected = self.builder.ins().iconst(types::I64, ok_id);
+                self.emit_tag_cmp_to_bool(tag_id, expected)
+            }
+            Matcher::BeSome => {
+                let actual_val = self.compile_expr(actual)?;
+                let tag_id = self.call_helper("jit_enum_tag_id", &[actual_val]);
+                let some_id = self.tags.get_id("Some").unwrap_or(1) as i64;
+                let expected = self.builder.ins().iconst(types::I64, some_id);
+                self.emit_tag_cmp_to_bool(tag_id, expected)
+            }
+            Matcher::BeNone => {
+                let actual_val = self.compile_expr(actual)?;
+                let tag_id = self.call_helper("jit_enum_tag_id", &[actual_val]);
+                let none_id = self.tags.get_id("None").unwrap_or(0) as i64;
+                let expected = self.builder.ins().iconst(types::I64, none_id);
+                self.emit_tag_cmp_to_bool(tag_id, expected)
+            }
+            Matcher::BeEmpty => {
+                let actual_val = self.compile_expr(actual)?;
+                let len_nv = self.call_helper("jit_list_length", &[actual_val]);
+                let len_raw = self.untag_int(len_nv);
+                let zero = self.builder.ins().iconst(types::I64, 0);
+                self.emit_tag_cmp_to_bool(len_raw, zero)
+            }
+            Matcher::HaveLength(expected) => {
+                let actual_val = self.compile_expr(actual)?;
+                let actual_val = self.stash_in_var(actual_val);
+                let len = self.call_helper("jit_list_length", &[actual_val]);
+                let expected_val = self.compile_expr(expected)?;
+                Ok(self.call_helper("jit_values_equal", &[len, expected_val]))
+            }
+            Matcher::Contain(expected) => {
+                // Use __test_contains native
+                let registry = self.natives.ok_or("No native registry for JIT")?;
+                if let Some(native_id) = registry.lookup("__test_contains") {
+                    let actual_val = self.compile_expr(actual)?;
+                    let actual_val = self.stash_in_var(actual_val);
+                    let expected_val = self.compile_expr(expected)?;
+                    let args_addr = self.spill_to_stack(&[actual_val, expected_val]);
+                    let registry_ptr = self.builder.ins().iconst(
+                        self.ptr_type,
+                        registry as *const NativeRegistry as i64,
+                    );
+                    let id_val = self.builder.ins().iconst(types::I64, native_id as i64);
+                    let count_val = self.builder.ins().iconst(types::I64, 2);
+                    Ok(self.call_helper(
+                        "jit_call_native",
+                        &[registry_ptr, id_val, args_addr, count_val],
+                    ))
+                } else {
+                    // Fallback: simple equality
+                    let actual_val = self.compile_expr(actual)?;
+                    let actual_val = self.stash_in_var(actual_val);
+                    let expected_val = self.compile_expr(expected)?;
+                    Ok(self.call_helper("jit_values_equal", &[actual_val, expected_val]))
+                }
+            }
+            Matcher::StartWith(expected) => {
+                // Use String.starts_with native
+                let registry = self.natives.ok_or("No native registry for JIT")?;
+                if let Some(native_id) = registry.lookup("String.starts_with") {
+                    let actual_val = self.compile_expr(actual)?;
+                    let actual_val = self.stash_in_var(actual_val);
+                    let expected_val = self.compile_expr(expected)?;
+                    let args_addr = self.spill_to_stack(&[actual_val, expected_val]);
+                    let registry_ptr = self.builder.ins().iconst(
+                        self.ptr_type,
+                        registry as *const NativeRegistry as i64,
+                    );
+                    let id_val = self.builder.ins().iconst(types::I64, native_id as i64);
+                    let count_val = self.builder.ins().iconst(types::I64, 2);
+                    Ok(self.call_helper(
+                        "jit_call_native",
+                        &[registry_ptr, id_val, args_addr, count_val],
+                    ))
+                } else {
+                    // Fallback: simple equality
+                    let actual_val = self.compile_expr(actual)?;
+                    let actual_val = self.stash_in_var(actual_val);
+                    let expected_val = self.compile_expr(expected)?;
+                    Ok(self.call_helper("jit_values_equal", &[actual_val, expected_val]))
+                }
+            }
+            Matcher::Satisfy(pred) => {
+                // Apply the predicate to the actual value via indirect call
+                let pred_val = self.compile_expr(pred)?;
+                let pred_val = self.stash_in_var(pred_val);
+                let actual_val = self.compile_expr(actual)?;
+                self.compile_call_value(pred_val, &[actual_val])
+            }
+            Matcher::Be(_pattern) => {
+                // TODO: proper pattern matching; for now always true (same as VM)
+                Ok(self.builder.ins().iconst(types::I64, NV_TRUE as i64))
+            }
         }
     }
 
-    /// List.map(list, fn) — loop: get item → call fn → store result → build list
-    fn compile_hof_list_map(&mut self, args: &[Expr]) -> Result<CValue, String> {
-        if args.len() != 2 {
-            return Err("List.map requires 2 arguments".into());
-        }
-        let list_val = self.compile_expr(&args[0])?;
-        let fn_val = self.compile_expr(&args[1])?;
-
-        let len = self.call_helper("jit_list_length_raw", &[list_val]);
-        let buf = self.call_helper("jit_alloc_buf", &[len]);
-
-        // Loop: i = 0; while i < len
-        let i_var = self.new_var();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.def_var(i_var, zero);
-
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let done = self.builder.create_block();
-
-        self.builder.ins().jump(header, &[]);
-        self.builder.switch_to_block(header);
-
-        let i = self.builder.use_var(i_var);
-        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
-        self.builder.ins().brif(cmp, body, &[], done, &[]);
-
-        self.builder.switch_to_block(body);
-        self.builder.seal_block(body);
-
-        let i = self.builder.use_var(i_var);
-        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
-        let result = self.compile_call_value(fn_val, &[item])?;
-
-        // Store result at buf[i*8]
-        let i = self.builder.use_var(i_var);
-        let offset = self.builder.ins().imul_imm(i, 8);
-        let addr = self.builder.ins().iadd(buf, offset);
-        self.builder
-            .ins()
-            .store(cranelift_codegen::ir::MemFlags::new(), result, addr, 0);
-
-        // i++
-        let i = self.builder.use_var(i_var);
-        let one = self.builder.ins().iconst(types::I64, 1);
-        let next_i = self.builder.ins().iadd(i, one);
-        self.builder.def_var(i_var, next_i);
-        self.builder.ins().jump(header, &[]);
-
-        self.builder.switch_to_block(done);
-        self.builder.seal_block(done);
-        self.builder.seal_block(header);
-
-        let result = self.call_helper("jit_build_list_from_buf", &[buf, len]);
-        // RC: decref input list and function after building result
-        if self.rc_enabled {
-            self.emit_decref(list_val);
-            self.emit_decref(fn_val);
-        }
-        Ok(result)
-    }
-
-    /// List.filter(list, fn) — loop: get item → call fn → if truthy, store → build list
-    fn compile_hof_list_filter(&mut self, args: &[Expr]) -> Result<CValue, String> {
-        if args.len() != 2 {
-            return Err("List.filter requires 2 arguments".into());
-        }
-        let list_val = self.compile_expr(&args[0])?;
-        let fn_val = self.compile_expr(&args[1])?;
-
-        let len = self.call_helper("jit_list_length_raw", &[list_val]);
-        let buf = self.call_helper("jit_alloc_buf", &[len]);
-
-        let i_var = self.new_var();
-        let out_var = self.new_var();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.def_var(i_var, zero);
-        self.builder.def_var(out_var, zero);
-
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let store_block = self.builder.create_block();
-        let skip_block = self.builder.create_block();
-        let done = self.builder.create_block();
-
-        self.builder.ins().jump(header, &[]);
-        self.builder.switch_to_block(header);
-
-        let i = self.builder.use_var(i_var);
-        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
-        self.builder.ins().brif(cmp, body, &[], done, &[]);
-
-        self.builder.switch_to_block(body);
-        self.builder.seal_block(body);
-
-        let i = self.builder.use_var(i_var);
-        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
-        let pred_result = self.compile_call_value(fn_val, &[item])?;
-        let is_true = self.call_helper("jit_is_truthy", &[pred_result]);
-        let zero_cmp = self.builder.ins().iconst(types::I64, 0);
-        let truthy = self.builder.ins().icmp(IntCC::NotEqual, is_true, zero_cmp);
-        self.builder
-            .ins()
-            .brif(truthy, store_block, &[], skip_block, &[]);
-
-        // Store path
-        self.builder.switch_to_block(store_block);
-        self.builder.seal_block(store_block);
-        let out_idx = self.builder.use_var(out_var);
-        let offset = self.builder.ins().imul_imm(out_idx, 8);
-        let addr = self.builder.ins().iadd(buf, offset);
-        self.builder
-            .ins()
-            .store(cranelift_codegen::ir::MemFlags::new(), item, addr, 0);
-        let one = self.builder.ins().iconst(types::I64, 1);
-        let next_out = self.builder.ins().iadd(out_idx, one);
-        self.builder.def_var(out_var, next_out);
-        self.builder.ins().jump(skip_block, &[]);
-
-        // Skip / continue
-        self.builder.switch_to_block(skip_block);
-        self.builder.seal_block(skip_block);
-        let i = self.builder.use_var(i_var);
-        let one = self.builder.ins().iconst(types::I64, 1);
-        let next_i = self.builder.ins().iadd(i, one);
-        self.builder.def_var(i_var, next_i);
-        self.builder.ins().jump(header, &[]);
-
-        self.builder.switch_to_block(done);
-        self.builder.seal_block(done);
-        self.builder.seal_block(header);
-
-        let out_count = self.builder.use_var(out_var);
-        let result = self.call_helper("jit_build_list_from_buf", &[buf, out_count]);
-        // RC: decref input list and function after building result
-        if self.rc_enabled {
-            self.emit_decref(list_val);
-            self.emit_decref(fn_val);
-        }
-        Ok(result)
-    }
-
-    /// List.fold(list, init, fn) — loop: get item → call fn(acc, item) → update acc
-    fn compile_hof_list_fold(&mut self, args: &[Expr]) -> Result<CValue, String> {
-        if args.len() != 3 {
-            return Err("List.fold requires 3 arguments".into());
-        }
-        let list_val = self.compile_expr(&args[0])?;
-        let init_val = self.compile_expr(&args[1])?;
-        let fn_val = self.compile_expr(&args[2])?;
-
-        let len = self.call_helper("jit_list_length_raw", &[list_val]);
-
-        let i_var = self.new_var();
-        let acc_var = self.new_var();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.def_var(i_var, zero);
-        self.builder.def_var(acc_var, init_val);
-
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let done = self.builder.create_block();
-
-        self.builder.ins().jump(header, &[]);
-        self.builder.switch_to_block(header);
-
-        let i = self.builder.use_var(i_var);
-        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
-        self.builder.ins().brif(cmp, body, &[], done, &[]);
-
-        self.builder.switch_to_block(body);
-        self.builder.seal_block(body);
-
-        let i = self.builder.use_var(i_var);
-        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
-        let acc = self.builder.use_var(acc_var);
-        let new_acc = self.compile_call_value(fn_val, &[acc, item])?;
-        self.builder.def_var(acc_var, new_acc);
-
-        let i = self.builder.use_var(i_var);
-        let one = self.builder.ins().iconst(types::I64, 1);
-        let next_i = self.builder.ins().iadd(i, one);
-        self.builder.def_var(i_var, next_i);
-        self.builder.ins().jump(header, &[]);
-
-        self.builder.switch_to_block(done);
-        self.builder.seal_block(done);
-        self.builder.seal_block(header);
-
-        // RC: decref input list and function after fold completes
-        if self.rc_enabled {
-            self.emit_decref(list_val);
-            self.emit_decref(fn_val);
-        }
-        Ok(self.builder.use_var(acc_var))
-    }
-
-    /// List.find(list, fn) — loop: get item → call fn → if truthy, return Some(item)
-    fn compile_hof_list_find(&mut self, args: &[Expr]) -> Result<CValue, String> {
-        if args.len() != 2 {
-            return Err("List.find requires 2 arguments".into());
-        }
-        let list_val = self.compile_expr(&args[0])?;
-        let fn_val = self.compile_expr(&args[1])?;
-
-        let len = self.call_helper("jit_list_length_raw", &[list_val]);
-
-        let i_var = self.new_var();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.def_var(i_var, zero);
-
-        let header = self.builder.create_block();
-        let body = self.builder.create_block();
-        let found_block = self.builder.create_block();
-        let done = self.builder.create_block();
-        self.builder.append_block_param(done, types::I64);
-
-        self.builder.ins().jump(header, &[]);
-        self.builder.switch_to_block(header);
-
-        let i = self.builder.use_var(i_var);
-        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, i, len);
-        // If not found, jump to done with None
-        let none_val = self.call_helper("jit_make_none", &[]);
-        self.builder
-            .ins()
-            .brif(cmp, body, &[], done, &[BlockArg::Value(none_val)]);
-
-        self.builder.switch_to_block(body);
-        self.builder.seal_block(body);
-
-        let i = self.builder.use_var(i_var);
-        let item = self.call_helper("jit_list_get_raw", &[list_val, i]);
-        let pred_result = self.compile_call_value(fn_val, &[item])?;
-        let is_true = self.call_helper("jit_is_truthy", &[pred_result]);
-        let zero_cmp = self.builder.ins().iconst(types::I64, 0);
-        let truthy = self.builder.ins().icmp(IntCC::NotEqual, is_true, zero_cmp);
-
-        let cont_block = self.builder.create_block();
-        self.builder
-            .ins()
-            .brif(truthy, found_block, &[], cont_block, &[]);
-
-        // Found: return Some(item)
-        self.builder.switch_to_block(found_block);
-        self.builder.seal_block(found_block);
-        let some_val = self.call_helper("jit_make_some", &[item]);
-        self.builder.ins().jump(done, &[BlockArg::Value(some_val)]);
-
-        // Continue loop
-        self.builder.switch_to_block(cont_block);
-        self.builder.seal_block(cont_block);
-        let i = self.builder.use_var(i_var);
-        let one = self.builder.ins().iconst(types::I64, 1);
-        let next_i = self.builder.ins().iadd(i, one);
-        self.builder.def_var(i_var, next_i);
-        self.builder.ins().jump(header, &[]);
-
-        self.builder.switch_to_block(done);
-        self.builder.seal_block(done);
-        self.builder.seal_block(header);
-
-        // RC: decref input list and function after find completes
-        if self.rc_enabled {
-            self.emit_decref(list_val);
-            self.emit_decref(fn_val);
-        }
-        Ok(self.builder.block_params(done)[0])
-    }
-
-    /// Option.map(opt, fn) — if Some: call fn(payload) → Some(result); else None
-    fn compile_hof_option_map(&mut self, args: &[Expr]) -> Result<CValue, String> {
-        if args.len() != 2 {
-            return Err("Option.map requires 2 arguments".into());
-        }
-        let opt_val = self.compile_expr(&args[0])?;
-        let fn_val = self.compile_expr(&args[1])?;
-
-        let is_none = self.call_helper("jit_is_none", &[opt_val]);
-        let cmp = self.is_truthy(is_none);
-
-        let none_block = self.builder.create_block();
-        let some_block = self.builder.create_block();
-        let merge_block = self.builder.create_block();
-        self.builder.append_block_param(merge_block, types::I64);
-
-        self.builder
-            .ins()
-            .brif(cmp, none_block, &[], some_block, &[]);
-
-        // None path: pass through
-        self.builder.switch_to_block(none_block);
-        self.builder.seal_block(none_block);
-        let none_result = self.call_helper("jit_make_none", &[]);
-        self.builder
-            .ins()
-            .jump(merge_block, &[BlockArg::Value(none_result)]);
-
-        // Some path: extract payload, call fn, wrap in Some
-        self.builder.switch_to_block(some_block);
-        self.builder.seal_block(some_block);
-        let payload = self.call_helper("jit_enum_payload", &[opt_val]);
-        let mapped = self.compile_call_value(fn_val, &[payload])?;
-        let some_result = self.call_helper("jit_make_some", &[mapped]);
-        self.builder
-            .ins()
-            .jump(merge_block, &[BlockArg::Value(some_result)]);
-
-        self.builder.switch_to_block(merge_block);
-        self.builder.seal_block(merge_block);
-        // RC: decref input option and function after map completes
-        if self.rc_enabled {
-            self.emit_decref(opt_val);
-            self.emit_decref(fn_val);
-        }
-        Ok(self.builder.block_params(merge_block)[0])
-    }
-
-    /// Result.map(res, fn) — if Ok: call fn(payload) → Ok(result); else pass-through
-    fn compile_hof_result_map(&mut self, args: &[Expr]) -> Result<CValue, String> {
-        if args.len() != 2 {
-            return Err("Result.map requires 2 arguments".into());
-        }
-        let res_val = self.compile_expr(&args[0])?;
-        let fn_val = self.compile_expr(&args[1])?;
-
-        let is_err = self.call_helper("jit_is_err", &[res_val]);
-        let cmp = self.is_truthy(is_err);
-
-        let err_block = self.builder.create_block();
-        let ok_block = self.builder.create_block();
-        let merge_block = self.builder.create_block();
-        self.builder.append_block_param(merge_block, types::I64);
-
-        self.builder.ins().brif(cmp, err_block, &[], ok_block, &[]);
-
-        // Err path: pass through as-is
-        self.builder.switch_to_block(err_block);
-        self.builder.seal_block(err_block);
-        self.builder
-            .ins()
-            .jump(merge_block, &[BlockArg::Value(res_val)]);
-
-        // Ok path: extract payload, call fn, wrap in Ok
-        self.builder.switch_to_block(ok_block);
-        self.builder.seal_block(ok_block);
-        let payload = self.call_helper("jit_enum_payload", &[res_val]);
-        let mapped = self.compile_call_value(fn_val, &[payload])?;
-        let ok_result = self.call_helper("jit_make_ok", &[mapped]);
-        self.builder
-            .ins()
-            .jump(merge_block, &[BlockArg::Value(ok_result)]);
-
-        self.builder.switch_to_block(merge_block);
-        self.builder.seal_block(merge_block);
-        // RC: decref input result and function after map completes
-        if self.rc_enabled {
-            self.emit_decref(res_val);
-            self.emit_decref(fn_val);
-        }
-        Ok(self.builder.block_params(merge_block)[0])
-    }
-
-    /// Result.map_err(res, fn) — if Err: call fn(payload) → Err(result); else pass-through
-    fn compile_hof_result_map_err(&mut self, args: &[Expr]) -> Result<CValue, String> {
-        if args.len() != 2 {
-            return Err("Result.map_err requires 2 arguments".into());
-        }
-        let res_val = self.compile_expr(&args[0])?;
-        let fn_val = self.compile_expr(&args[1])?;
-
-        let is_err = self.call_helper("jit_is_err", &[res_val]);
-        let cmp = self.is_truthy(is_err);
-
-        let err_block = self.builder.create_block();
-        let ok_block = self.builder.create_block();
-        let merge_block = self.builder.create_block();
-        self.builder.append_block_param(merge_block, types::I64);
-
-        self.builder.ins().brif(cmp, err_block, &[], ok_block, &[]);
-
-        // Ok path: pass through as-is
-        self.builder.switch_to_block(ok_block);
-        self.builder.seal_block(ok_block);
-        self.builder
-            .ins()
-            .jump(merge_block, &[BlockArg::Value(res_val)]);
-
-        // Err path: extract payload, call fn, wrap in Err
-        self.builder.switch_to_block(err_block);
-        self.builder.seal_block(err_block);
-        let payload = self.call_helper("jit_enum_payload", &[res_val]);
-        let mapped = self.compile_call_value(fn_val, &[payload])?;
-        let err_result = self.call_helper("jit_make_err", &[mapped]);
-        self.builder
-            .ins()
-            .jump(merge_block, &[BlockArg::Value(err_result)]);
-
-        self.builder.switch_to_block(merge_block);
-        self.builder.seal_block(merge_block);
-        if self.rc_enabled {
-            self.emit_decref(res_val);
-            self.emit_decref(fn_val);
-        }
-        Ok(self.builder.block_params(merge_block)[0])
+    /// Compare two i64 values for equality and return NV_TRUE or NV_FALSE.
+    fn emit_tag_cmp_to_bool(&mut self, a: CValue, b: CValue) -> Result<CValue, String> {
+        let true_val = self.builder.ins().iconst(types::I64, NV_TRUE as i64);
+        let false_val = self.builder.ins().iconst(types::I64, NV_FALSE as i64);
+        let cmp = self.builder.ins().icmp(IntCC::Equal, a, b);
+        Ok(self.builder.ins().select(cmp, true_val, false_val))
     }
 
     /// Create MemFlags with `readonly` set.
@@ -2340,1261 +2027,5 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         flags.set_readonly();
         flags.set_aligned();
         flags
-    }
-
-    // -- Match compilation --
-
-    fn compile_match(&mut self, subject: &Expr, arms: &[MatchArm]) -> Result<CValue, String> {
-        let subject_val = self.compile_expr(subject)?;
-
-        if arms.is_empty() {
-            return Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64));
-        }
-
-        // Check if this match is eligible for Switch dispatch
-        if self.is_switch_eligible(arms) {
-            return self.compile_match_switch(subject_val, arms);
-        }
-
-        self.compile_match_linear(subject_val, arms)
-    }
-
-    /// Check if a match can use Cranelift Switch dispatch.
-    /// Eligible when all arms are Constructor patterns (with optional trailing Wildcard/Var),
-    /// and all constructor tags have known integer IDs.
-    fn is_switch_eligible(&self, arms: &[MatchArm]) -> bool {
-        if arms.is_empty() {
-            return false;
-        }
-        // Guards require fallthrough to next arm on failure, incompatible with switch
-        if arms.iter().any(|arm| arm.guard.is_some()) {
-            return false;
-        }
-        let mut has_constructor = false;
-        for (i, arm) in arms.iter().enumerate() {
-            let is_last = i == arms.len() - 1;
-            match &arm.pattern {
-                Pattern::Constructor(tag, _) => {
-                    if self.tags.get_id(tag).is_none() {
-                        return false;
-                    }
-                    has_constructor = true;
-                }
-                Pattern::Wildcard | Pattern::Var(_) => {
-                    // Only allowed as the last arm (default case)
-                    if !is_last {
-                        return false;
-                    }
-                }
-                _ => return false, // Literal or Tuple — not switch-eligible
-            }
-        }
-        has_constructor
-    }
-
-    /// Compile a match using Cranelift Switch (jump table / binary search).
-    fn compile_match_switch(
-        &mut self,
-        subject_val: CValue,
-        arms: &[MatchArm],
-    ) -> Result<CValue, String> {
-        let merge_block = self.builder.create_block();
-        self.builder.append_block_param(merge_block, types::I64);
-
-        // Store subject in a variable for use across blocks
-        let subj_var = self.new_var();
-        self.builder.def_var(subj_var, subject_val);
-
-        // Extract tag_id once via helper call
-        let subj = self.builder.use_var(subj_var);
-        let tag_id_val = self.call_helper("jit_enum_tag_id", &[subj]);
-
-        // Build Switch + per-arm blocks
-        let mut switch = Switch::new();
-        let mut arm_blocks = Vec::new();
-        let mut default_arm: Option<usize> = None;
-
-        for (i, arm) in arms.iter().enumerate() {
-            match &arm.pattern {
-                Pattern::Constructor(tag, _) => {
-                    let id = self.tags.get_id(tag).unwrap(); // checked in is_switch_eligible
-                    let block = self.builder.create_block();
-                    switch.set_entry(id as u128, block);
-                    arm_blocks.push((i, block));
-                }
-                Pattern::Wildcard | Pattern::Var(_) => {
-                    default_arm = Some(i);
-                }
-                _ => unreachable!("non-eligible pattern in switch"),
-            }
-        }
-
-        // Default block: handles wildcard/var or returns unit
-        let default_block = self.builder.create_block();
-        switch.emit(self.builder, tag_id_val, default_block);
-
-        // Compile each constructor arm body
-        for (arm_idx, block) in &arm_blocks {
-            self.builder.switch_to_block(*block);
-            self.builder.seal_block(*block);
-            let subj_again = self.builder.use_var(subj_var);
-            if self.rc_enabled {
-                self.push_rc_scope();
-                self.bind_pattern_vars_rc(&arms[*arm_idx].pattern, subj_again)?;
-
-                // Try CoW optimization for constructor patterns
-                let mut body_val =
-                    if let Pattern::Constructor(tag, sub_pats) = &arms[*arm_idx].pattern {
-                        let bindings: Vec<String> = sub_pats
-                            .iter()
-                            .map(|p| match p {
-                                Pattern::Var(name) => name.clone(),
-                                _ => String::new(),
-                            })
-                            .collect();
-                        if let Some(val) = self.try_gen_enum_update(
-                            &arms[*arm_idx].body,
-                            tag,
-                            &bindings,
-                            subj_var,
-                        )? {
-                            // CoW consumed subject ownership — null out subj_var
-                            // so the merge-block decref is a no-op.
-                            let unit_val =
-                                self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                            self.builder.def_var(subj_var, unit_val);
-                            val
-                        } else {
-                            self.compile_expr(&arms[*arm_idx].body)?
-                        }
-                    } else {
-                        self.compile_expr(&arms[*arm_idx].body)?
-                    };
-
-                let ret_var = self.new_var();
-                self.builder.def_var(ret_var, body_val);
-                self.pop_rc_scope(Some(ret_var));
-                body_val = self.builder.use_var(ret_var);
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(body_val)]);
-            } else {
-                self.bind_pattern_vars(&arms[*arm_idx].pattern, subj_again)?;
-                let body_val = self.compile_expr(&arms[*arm_idx].body)?;
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(body_val)]);
-            }
-        }
-
-        // Compile default arm
-        self.builder.switch_to_block(default_block);
-        self.builder.seal_block(default_block);
-        if let Some(idx) = default_arm {
-            let subj_again = self.builder.use_var(subj_var);
-            if self.rc_enabled {
-                self.push_rc_scope();
-                self.bind_pattern_vars_rc(&arms[idx].pattern, subj_again)?;
-                let mut body_val = self.compile_expr(&arms[idx].body)?;
-                let ret_var = self.new_var();
-                self.builder.def_var(ret_var, body_val);
-                self.pop_rc_scope(Some(ret_var));
-                body_val = self.builder.use_var(ret_var);
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(body_val)]);
-            } else {
-                self.bind_pattern_vars(&arms[idx].pattern, subj_again)?;
-                let body_val = self.compile_expr(&arms[idx].body)?;
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(body_val)]);
-            }
-        } else {
-            let unit_val = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-            self.builder
-                .ins()
-                .jump(merge_block, &[BlockArg::Value(unit_val)]);
-        }
-
-        self.builder.switch_to_block(merge_block);
-        self.builder.seal_block(merge_block);
-        // RC: decref the subject after all arms have merged
-        if self.rc_enabled {
-            let subj = self.builder.use_var(subj_var);
-            self.emit_decref(subj);
-        }
-        Ok(self.builder.block_params(merge_block)[0])
-    }
-
-    /// Linear cascade match (original implementation, used as fallback).
-    fn compile_match_linear(
-        &mut self,
-        subject_val: CValue,
-        arms: &[MatchArm],
-    ) -> Result<CValue, String> {
-        let merge_block = self.builder.create_block();
-        self.builder.append_block_param(merge_block, types::I64);
-
-        // Store subject in a variable so we can use it across blocks
-        let subj_var = self.new_var();
-        self.builder.def_var(subj_var, subject_val);
-
-        for (i, arm) in arms.iter().enumerate() {
-            let is_last = i == arms.len() - 1;
-            let body_block = self.builder.create_block();
-            let next_test = if is_last {
-                None
-            } else {
-                Some(self.builder.create_block())
-            };
-
-            let subj = self.builder.use_var(subj_var);
-            self.compile_pattern_test(&arm.pattern, subj, body_block, next_test, merge_block)?;
-
-            // Body block
-            self.builder.switch_to_block(body_block);
-            self.builder.seal_block(body_block);
-            let subj_again = self.builder.use_var(subj_var);
-            if self.rc_enabled {
-                self.push_rc_scope();
-                self.bind_pattern_vars_rc(&arm.pattern, subj_again)?;
-                // Guard check: if guard fails, jump to next arm
-                if let Some(ref guard) = arm.guard {
-                    let guard_val = self.compile_expr(guard)?;
-                    let true_val = self.builder.ins().iconst(types::I64, NV_TRUE as i64);
-                    let cmp = self.builder.ins().icmp(IntCC::Equal, guard_val, true_val);
-                    let guard_fail = self.builder.create_block();
-                    let guard_pass = self.builder.create_block();
-                    self.builder
-                        .ins()
-                        .brif(cmp, guard_pass, &[], guard_fail, &[]);
-                    // Guard fail: clean up scope and fall through to next
-                    self.builder.switch_to_block(guard_fail);
-                    self.builder.seal_block(guard_fail);
-                    self.pop_rc_scope(None);
-                    if let Some(next) = next_test {
-                        self.builder.ins().jump(next, &[]);
-                    } else {
-                        let unit = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                        self.builder
-                            .ins()
-                            .jump(merge_block, &[BlockArg::Value(unit)]);
-                    }
-                    self.builder.switch_to_block(guard_pass);
-                    self.builder.seal_block(guard_pass);
-                }
-                let mut body_val = self.compile_expr(&arm.body)?;
-                let ret_var = self.new_var();
-                self.builder.def_var(ret_var, body_val);
-                self.pop_rc_scope(Some(ret_var));
-                body_val = self.builder.use_var(ret_var);
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(body_val)]);
-            } else {
-                self.bind_pattern_vars(&arm.pattern, subj_again)?;
-                // Guard check: if guard fails, jump to next arm
-                if let Some(ref guard) = arm.guard {
-                    let guard_val = self.compile_expr(guard)?;
-                    let true_val = self.builder.ins().iconst(types::I64, NV_TRUE as i64);
-                    let cmp = self.builder.ins().icmp(IntCC::Equal, guard_val, true_val);
-                    let guard_fail = self.builder.create_block();
-                    let guard_pass = self.builder.create_block();
-                    self.builder
-                        .ins()
-                        .brif(cmp, guard_pass, &[], guard_fail, &[]);
-                    // Guard fail: fall through to next arm
-                    self.builder.switch_to_block(guard_fail);
-                    self.builder.seal_block(guard_fail);
-                    if let Some(next) = next_test {
-                        self.builder.ins().jump(next, &[]);
-                    } else {
-                        let unit = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                        self.builder
-                            .ins()
-                            .jump(merge_block, &[BlockArg::Value(unit)]);
-                    }
-                    self.builder.switch_to_block(guard_pass);
-                    self.builder.seal_block(guard_pass);
-                }
-                let body_val = self.compile_expr(&arm.body)?;
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(body_val)]);
-            }
-
-            if let Some(next) = next_test {
-                self.builder.switch_to_block(next);
-                self.builder.seal_block(next);
-            }
-        }
-
-        self.builder.switch_to_block(merge_block);
-        self.builder.seal_block(merge_block);
-        // RC: decref the subject after all arms have merged
-        if self.rc_enabled {
-            let subj = self.builder.use_var(subj_var);
-            self.emit_decref(subj);
-        }
-        Ok(self.builder.block_params(merge_block)[0])
-    }
-
-    /// Emit a pattern test. On match, jump to body_block. On mismatch, jump to
-    /// next_test (or merge with unit if last arm).
-    fn compile_pattern_test(
-        &mut self,
-        pattern: &Pattern,
-        subject: CValue,
-        body_block: cranelift_codegen::ir::Block,
-        next_test: Option<cranelift_codegen::ir::Block>,
-        merge_block: cranelift_codegen::ir::Block,
-    ) -> Result<(), String> {
-        match pattern {
-            Pattern::Wildcard | Pattern::Var(_) => {
-                // Always matches
-                self.builder.ins().jump(body_block, &[]);
-            }
-            Pattern::Literal(lit_expr) => {
-                let lit_val = self.compile_expr(lit_expr)?;
-                let eq_result = self.call_helper("jit_values_equal", &[subject, lit_val]);
-                let cmp = self.is_truthy(eq_result);
-                let fallthrough = next_test.unwrap_or(merge_block);
-                let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                    vec![BlockArg::Value(
-                        self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                    )]
-                } else {
-                    vec![]
-                };
-                self.builder
-                    .ins()
-                    .brif(cmp, body_block, &[], fallthrough, &fallthrough_args);
-            }
-            Pattern::Constructor(tag, sub_patterns) => {
-                // Use integer tag_id comparison when available (faster than string compare)
-                let cmp = if let Some(id) = self.tags.get_id(tag) {
-                    let tag_id_val = self.call_helper("jit_enum_tag_id", &[subject]);
-                    let expected = self.builder.ins().iconst(types::I64, id as i64);
-                    self.builder.ins().icmp(IntCC::Equal, tag_id_val, expected)
-                } else {
-                    let tag_nv = NValue::string(tag.as_str().into());
-                    let tag_val = self.emit_heap_nvalue(tag_nv);
-                    let eq_result = self.call_helper("jit_enum_tag_eq", &[subject, tag_val]);
-                    self.is_truthy(eq_result)
-                };
-
-                if sub_patterns.is_empty() {
-                    let fallthrough = next_test.unwrap_or(merge_block);
-                    let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                        vec![BlockArg::Value(
-                            self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                        )]
-                    } else {
-                        vec![]
-                    };
-                    self.builder
-                        .ins()
-                        .brif(cmp, body_block, &[], fallthrough, &fallthrough_args);
-                } else {
-                    // Need to check sub-patterns on the payload
-                    let check_payload = self.builder.create_block();
-                    let fallthrough = next_test.unwrap_or(merge_block);
-                    let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                        vec![BlockArg::Value(
-                            self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                        )]
-                    } else {
-                        vec![]
-                    };
-                    self.builder.ins().brif(
-                        cmp,
-                        check_payload,
-                        &[],
-                        fallthrough,
-                        &fallthrough_args,
-                    );
-
-                    self.builder.switch_to_block(check_payload);
-                    self.builder.seal_block(check_payload);
-
-                    // For single sub-pattern, extract payload directly
-                    if sub_patterns.len() == 1 {
-                        // Sub-pattern is applied to the enum payload
-                        // Just jump to body — binding happens in bind_pattern_vars
-                        self.builder.ins().jump(body_block, &[]);
-                    } else {
-                        // Multiple sub-patterns → payload must be a tuple
-                        self.builder.ins().jump(body_block, &[]);
-                    }
-                }
-            }
-            Pattern::Tuple(sub_patterns) => {
-                // Tuples always match structurally.
-                // For sub-patterns that need checking (literals, constructors),
-                // we extract each element and test recursively.
-                let has_complex = sub_patterns
-                    .iter()
-                    .any(|p| !matches!(p, Pattern::Var(_) | Pattern::Wildcard));
-                if has_complex {
-                    // Check each complex sub-pattern; mismatch falls through
-                    let check_block = self.builder.create_block();
-                    self.builder.ins().jump(check_block, &[]);
-                    self.builder.switch_to_block(check_block);
-                    self.builder.seal_block(check_block);
-
-                    for (i, sub) in sub_patterns.iter().enumerate() {
-                        if matches!(sub, Pattern::Var(_) | Pattern::Wildcard) {
-                            continue;
-                        }
-                        let idx = self.builder.ins().iconst(types::I64, i as i64);
-                        let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
-                        // For literal sub-patterns, test equality
-                        if let Pattern::Literal(lit_expr) = sub {
-                            let lit_val = self.compile_expr(lit_expr)?;
-                            let eq = self.call_helper("jit_values_equal", &[elem, lit_val]);
-                            let cmp = self.is_truthy(eq);
-                            let next_check = self.builder.create_block();
-                            let fallthrough = next_test.unwrap_or(merge_block);
-                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                                vec![BlockArg::Value(
-                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                                )]
-                            } else {
-                                vec![]
-                            };
-                            self.builder.ins().brif(
-                                cmp,
-                                next_check,
-                                &[],
-                                fallthrough,
-                                &fallthrough_args,
-                            );
-                            self.builder.switch_to_block(next_check);
-                            self.builder.seal_block(next_check);
-                        }
-                        // Constructor sub-patterns inside tuples: check tag
-                        if let Pattern::Constructor(tag, _) = sub {
-                            let cmp = if let Some(id) = self.tags.get_id(tag) {
-                                let tag_id_val = self.call_helper("jit_enum_tag_id", &[elem]);
-                                let expected = self.builder.ins().iconst(types::I64, id as i64);
-                                self.builder.ins().icmp(IntCC::Equal, tag_id_val, expected)
-                            } else {
-                                let tag_nv = NValue::string(tag.as_str().into());
-                                let tag_val = self.emit_heap_nvalue(tag_nv);
-                                let eq_result =
-                                    self.call_helper("jit_enum_tag_eq", &[elem, tag_val]);
-                                self.is_truthy(eq_result)
-                            };
-                            let next_check = self.builder.create_block();
-                            let fallthrough = next_test.unwrap_or(merge_block);
-                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                                vec![BlockArg::Value(
-                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                                )]
-                            } else {
-                                vec![]
-                            };
-                            self.builder.ins().brif(
-                                cmp,
-                                next_check,
-                                &[],
-                                fallthrough,
-                                &fallthrough_args,
-                            );
-                            self.builder.switch_to_block(next_check);
-                            self.builder.seal_block(next_check);
-                        }
-                    }
-                    self.builder.ins().jump(body_block, &[]);
-                } else {
-                    self.builder.ins().jump(body_block, &[]);
-                }
-            }
-            Pattern::Record(_) => {
-                // Record patterns always match structurally
-                self.builder.ins().jump(body_block, &[]);
-            }
-            Pattern::List(elems, rest) => {
-                // List pattern: check length >= required elements
-                let len_nv = self.call_helper("jit_list_length", &[subject]);
-                let len_raw = self.untag_int(len_nv);
-                let required = self.builder.ins().iconst(types::I64, elems.len() as i64);
-
-                // If rest binding: len >= required. If no rest: len == required.
-                let cmp = if rest.is_some() {
-                    self.builder
-                        .ins()
-                        .icmp(IntCC::SignedGreaterThanOrEqual, len_raw, required)
-                } else {
-                    self.builder.ins().icmp(IntCC::Equal, len_raw, required)
-                };
-
-                let check_elems = self.builder.create_block();
-                let fallthrough = next_test.unwrap_or(merge_block);
-                let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                    vec![BlockArg::Value(
-                        self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                    )]
-                } else {
-                    vec![]
-                };
-                self.builder.ins().brif(
-                    cmp,
-                    check_elems,
-                    &[],
-                    fallthrough,
-                    &fallthrough_args,
-                );
-
-                self.builder.switch_to_block(check_elems);
-                self.builder.seal_block(check_elems);
-
-                // Check each element sub-pattern that needs testing (literals, constructors)
-                for (i, sub) in elems.iter().enumerate() {
-                    if matches!(sub, Pattern::Var(_) | Pattern::Wildcard) {
-                        continue;
-                    }
-                    let idx = self.builder.ins().iconst(types::I64, i as i64);
-                    let idx_tagged = self.tag_int(idx);
-                    let elem = self.call_helper("jit_list_get", &[subject, idx_tagged]);
-                    if let Pattern::Literal(lit_expr) = sub {
-                        let lit_val = self.compile_expr(lit_expr)?;
-                        let eq = self.call_helper("jit_values_equal", &[elem, lit_val]);
-                        let c = self.is_truthy(eq);
-                        let next_check = self.builder.create_block();
-                        let ft = next_test.unwrap_or(merge_block);
-                        let ft_args: Vec<BlockArg> = if next_test.is_none() {
-                            vec![BlockArg::Value(
-                                self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                            )]
-                        } else {
-                            vec![]
-                        };
-                        self.builder.ins().brif(c, next_check, &[], ft, &ft_args);
-                        self.builder.switch_to_block(next_check);
-                        self.builder.seal_block(next_check);
-                    }
-                }
-                self.builder.ins().jump(body_block, &[]);
-            }
-        }
-        Ok(())
-    }
-
-    /// Bind variables from a match pattern to the subject value.
-    fn bind_pattern_vars(&mut self, pattern: &Pattern, subject: CValue) -> Result<(), String> {
-        match pattern {
-            Pattern::Wildcard => {}
-            Pattern::Var(name) => {
-                let var = self.new_var();
-                self.builder.def_var(var, subject);
-                self.vars.insert(name.clone(), var);
-            }
-            Pattern::Literal(_) => {}
-            Pattern::Constructor(_, sub_patterns) => {
-                if !sub_patterns.is_empty() {
-                    // Extract fields directly from flat enum payload
-                    for (i, sub) in sub_patterns.iter().enumerate() {
-                        if matches!(sub, Pattern::Wildcard) {
-                            continue; // skip extraction for wildcards — no binding needed
-                        }
-                        let idx = self.builder.ins().iconst(types::I64, i as i64);
-                        let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
-                        self.bind_pattern_vars(sub, elem)?;
-                    }
-                }
-            }
-            Pattern::Tuple(sub_patterns) => {
-                for (i, sub) in sub_patterns.iter().enumerate() {
-                    if matches!(sub, Pattern::Wildcard) {
-                        continue; // skip extraction for wildcards — no binding needed
-                    }
-                    let idx = self.builder.ins().iconst(types::I64, i as i64);
-                    let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
-                    self.bind_pattern_vars(sub, elem)?;
-                }
-            }
-            Pattern::Record(fields) => {
-                for (field_name, sub_pat) in fields {
-                    let field_nv = NValue::string(field_name.as_str().into());
-                    let field_val = self.emit_heap_nvalue(field_nv);
-                    let elem = self.call_helper("jit_get_field", &[subject, field_val]);
-                    self.bind_pattern_vars(sub_pat, elem)?;
-                }
-            }
-            Pattern::List(elems, rest) => {
-                // Bind each element pattern to list[i]
-                for (i, sub) in elems.iter().enumerate() {
-                    if matches!(sub, Pattern::Wildcard) {
-                        continue;
-                    }
-                    let idx = self.builder.ins().iconst(types::I64, i as i64);
-                    let idx_tagged = self.tag_int(idx);
-                    let elem = self.call_helper("jit_list_get", &[subject, idx_tagged]);
-                    self.bind_pattern_vars(sub, elem)?;
-                }
-                // Bind rest variable to tail
-                if let Some(rest_name) = rest {
-                    let start = self.builder.ins().iconst(types::I64, elems.len() as i64);
-                    let tail = self.call_helper("jit_list_tail", &[subject, start]);
-                    let var = self.new_var();
-                    self.builder.def_var(var, tail);
-                    self.vars.insert(rest_name.clone(), var);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Bind match-pattern variables with RC tracking.
-    /// Like bind_pattern_vars but tracks bound variables in the current RC scope.
-    /// Does NOT decref the subject — that's handled separately in the merge block.
-    fn bind_pattern_vars_rc(&mut self, pattern: &Pattern, subject: CValue) -> Result<(), String> {
-        if !self.rc_enabled {
-            return self.bind_pattern_vars(pattern, subject);
-        }
-        match pattern {
-            Pattern::Wildcard => {}
-            Pattern::Var(name) => {
-                let var = self.new_var();
-                self.builder.def_var(var, subject);
-                self.vars.insert(name.clone(), var);
-                self.rc_track_var(var);
-            }
-            Pattern::Literal(_) => {}
-            Pattern::Constructor(_, sub_patterns) => {
-                if !sub_patterns.is_empty() {
-                    // Extract fields directly from flat enum payload
-                    for (i, sub) in sub_patterns.iter().enumerate() {
-                        if matches!(sub, Pattern::Wildcard) {
-                            continue; // skip extraction for wildcards — avoids leaked owned clone
-                        }
-                        let idx = self.builder.ins().iconst(types::I64, i as i64);
-                        let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
-                        self.bind_pattern_vars_rc(sub, elem)?;
-                    }
-                }
-            }
-            Pattern::Tuple(sub_patterns) => {
-                for (i, sub) in sub_patterns.iter().enumerate() {
-                    if matches!(sub, Pattern::Wildcard) {
-                        continue; // skip extraction for wildcards — avoids leaked owned clone
-                    }
-                    let idx = self.builder.ins().iconst(types::I64, i as i64);
-                    let elem = self.call_helper("jit_tuple_get", &[subject, idx]);
-                    self.bind_pattern_vars_rc(sub, elem)?;
-                }
-            }
-            Pattern::Record(fields) => {
-                for (field_name, sub_pat) in fields {
-                    let field_nv = NValue::string(field_name.as_str().into());
-                    let field_val = self.emit_heap_nvalue(field_nv);
-                    let elem = self.call_helper("jit_get_field", &[subject, field_val]);
-                    self.bind_pattern_vars_rc(sub_pat, elem)?;
-                }
-            }
-            Pattern::List(elems, rest) => {
-                // Bind each element pattern to list[i] with RC tracking
-                for (i, sub) in elems.iter().enumerate() {
-                    if matches!(sub, Pattern::Wildcard) {
-                        continue;
-                    }
-                    let idx = self.builder.ins().iconst(types::I64, i as i64);
-                    let idx_tagged = self.tag_int(idx);
-                    let elem = self.call_helper("jit_list_get", &[subject, idx_tagged]);
-                    self.bind_pattern_vars_rc(sub, elem)?;
-                }
-                // Bind rest variable to tail with RC tracking
-                if let Some(rest_name) = rest {
-                    let start = self.builder.ins().iconst(types::I64, elems.len() as i64);
-                    let tail = self.call_helper("jit_list_tail", &[subject, start]);
-                    let var = self.new_var();
-                    self.builder.def_var(var, tail);
-                    self.vars.insert(rest_name.clone(), var);
-                    self.rc_track_var(var);
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Bind a let-pattern (Var, Wildcard, Tuple, Constructor).
-    fn bind_pattern(&mut self, pattern: &Pattern, val: CValue) -> Result<(), String> {
-        match pattern {
-            Pattern::Var(name) => {
-                let var = self.new_var();
-                self.builder.def_var(var, val);
-                self.vars.insert(name.clone(), var);
-            }
-            Pattern::Wildcard => {}
-            Pattern::Tuple(sub_patterns) => {
-                for (i, sub) in sub_patterns.iter().enumerate() {
-                    let idx = self.builder.ins().iconst(types::I64, i as i64);
-                    let elem = self.call_helper("jit_tuple_get", &[val, idx]);
-                    self.bind_pattern(sub, elem)?;
-                }
-            }
-            Pattern::Constructor(_, sub_patterns) => {
-                if !sub_patterns.is_empty() {
-                    // Extract fields directly from flat enum payload
-                    for (i, sub) in sub_patterns.iter().enumerate() {
-                        let idx = self.builder.ins().iconst(types::I64, i as i64);
-                        let elem = self.call_helper("jit_enum_field_get", &[val, idx]);
-                        self.bind_pattern(sub, elem)?;
-                    }
-                }
-            }
-            _ => return Err("Unsupported pattern in let binding".into()),
-        }
-        Ok(())
-    }
-
-    /// Bind a let-pattern with RC tracking: tracks bound variables in the
-    /// current RC scope and decrefs wildcard/unused values.
-    fn bind_pattern_rc(&mut self, pattern: &Pattern, val: CValue) -> Result<(), String> {
-        if !self.rc_enabled {
-            return self.bind_pattern(pattern, val);
-        }
-        match pattern {
-            Pattern::Var(name) => {
-                let var = self.new_var();
-                self.builder.def_var(var, val);
-                self.vars.insert(name.clone(), var);
-                self.rc_track_var(var);
-            }
-            Pattern::Wildcard => {
-                // Value is unused — decref it
-                self.emit_decref(val);
-            }
-            Pattern::Tuple(sub_patterns) => {
-                for (i, sub) in sub_patterns.iter().enumerate() {
-                    let idx = self.builder.ins().iconst(types::I64, i as i64);
-                    let elem = self.call_helper("jit_tuple_get", &[val, idx]);
-                    // jit_tuple_get increfs the element, so we own it
-                    self.bind_pattern_rc(sub, elem)?;
-                }
-                // Decref the tuple container after extracting elements
-                self.emit_decref(val);
-            }
-            Pattern::Constructor(_, sub_patterns) => {
-                if sub_patterns.is_empty() {
-                    // Enum with no payload — decref it
-                    self.emit_decref(val);
-                } else {
-                    // Extract fields directly from flat enum payload
-                    for (i, sub) in sub_patterns.iter().enumerate() {
-                        let idx = self.builder.ins().iconst(types::I64, i as i64);
-                        let elem = self.call_helper("jit_enum_field_get", &[val, idx]);
-                        self.bind_pattern_rc(sub, elem)?;
-                    }
-                    // Decref the enum container
-                    self.emit_decref(val);
-                }
-            }
-            _ => return Err("Unsupported pattern in let binding".into()),
-        }
-        Ok(())
-    }
-
-    // -- For loop compilation --
-
-    fn compile_for(
-        &mut self,
-        binding: &str,
-        iterable: &Expr,
-        body: &Expr,
-    ) -> Result<CValue, String> {
-        let list_val = self.compile_expr(iterable)?;
-
-        // Get list length
-        let len_nv = self.call_helper("jit_list_length", &[list_val]);
-        let len = self.untag_int(len_nv);
-
-        // Store list in a variable
-        let list_var = self.new_var();
-        self.builder.def_var(list_var, list_val);
-
-        // Index variable starts at 0
-        let idx_var = self.new_var();
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        self.builder.def_var(idx_var, zero);
-
-        // RC: initialize binding var to NV_UNIT in preheader (for decref on first iteration)
-        let bind_var = self.new_var();
-        let unit_val = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-        self.builder.def_var(bind_var, unit_val);
-        self.vars.insert(binding.to_string(), bind_var);
-
-        // Loop header
-        let loop_head = self.builder.create_block();
-        let loop_body = self.builder.create_block();
-        let loop_exit = self.builder.create_block();
-
-        self.builder.ins().jump(loop_head, &[]);
-        self.builder.switch_to_block(loop_head);
-        // Don't seal yet — back edge from loop body
-
-        let idx = self.builder.use_var(idx_var);
-        let cmp = self.builder.ins().icmp(IntCC::SignedLessThan, idx, len);
-        self.builder.ins().brif(cmp, loop_body, &[], loop_exit, &[]);
-
-        // Loop body
-        self.builder.switch_to_block(loop_body);
-        self.builder.seal_block(loop_body);
-
-        // RC: decref previous iteration's binding value
-        if self.rc_enabled {
-            let old_bind = self.builder.use_var(bind_var);
-            self.emit_decref(old_bind);
-        }
-
-        let list = self.builder.use_var(list_var);
-        let idx_tagged = self.tag_int(idx);
-        let elem = self.call_helper("jit_list_get", &[list, idx_tagged]);
-
-        // Update binding variable with new element
-        self.builder.def_var(bind_var, elem);
-
-        // Compile body (result is discarded)
-        let body_val = self.compile_expr(body)?;
-
-        // RC: decref discarded body result
-        if self.rc_enabled {
-            self.emit_decref(body_val);
-        }
-
-        // Increment index
-        let cur_idx = self.builder.use_var(idx_var);
-        let one = self.builder.ins().iconst(types::I64, 1);
-        let next_idx = self.builder.ins().iadd(cur_idx, one);
-        self.builder.def_var(idx_var, next_idx);
-
-        self.builder.ins().jump(loop_head, &[]);
-
-        // Seal loop header now
-        self.builder.seal_block(loop_head);
-
-        // Exit
-        self.builder.switch_to_block(loop_exit);
-        self.builder.seal_block(loop_exit);
-
-        // RC: decref the last iteration's binding and the list itself
-        if self.rc_enabled {
-            let last_bind = self.builder.use_var(bind_var);
-            self.emit_decref(last_bind);
-            let list_final = self.builder.use_var(list_var);
-            self.emit_decref(list_final);
-        }
-
-        Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
-    }
-
-    // -- Try expression compilation --
-
-    fn compile_try(&mut self, inner: &Expr) -> Result<CValue, String> {
-        let val = self.compile_expr(inner)?;
-
-        // Check if the value is Err or None → early return
-        let is_err_val = self.call_helper("jit_is_err", &[val]);
-        let is_none_val = self.call_helper("jit_is_none", &[val]);
-
-        // Combine: should_return = is_err || is_none
-        let one = self.builder.ins().iconst(types::I64, 1);
-        let err_bit = self.builder.ins().band(is_err_val, one);
-        let none_bit = self.builder.ins().band(is_none_val, one);
-        let should_return = self.builder.ins().bor(err_bit, none_bit);
-        let zero = self.builder.ins().iconst(types::I64, 0);
-        let cmp = self
-            .builder
-            .ins()
-            .icmp(IntCC::NotEqual, should_return, zero);
-
-        let unwrap_block = self.builder.create_block();
-        let return_block = self.builder.create_block();
-
-        self.builder
-            .ins()
-            .brif(cmp, return_block, &[], unwrap_block, &[]);
-
-        // Return block: propagate the Err/None value
-        self.builder.switch_to_block(return_block);
-        self.builder.seal_block(return_block);
-        self.builder.ins().return_(&[val]);
-
-        // Unwrap block: extract Ok/Some payload
-        self.builder.switch_to_block(unwrap_block);
-        self.builder.seal_block(unwrap_block);
-        let payload = self.call_helper("jit_enum_payload", &[val]);
-        // RC: jit_enum_payload borrows val and returns owned payload;
-        // decref the container now that we've extracted the payload
-        if self.rc_enabled {
-            self.emit_decref(val);
-        }
-        Ok(payload)
-    }
-
-    // -- SRA (Scalar Replacement of Aggregates) --
-
-    /// Try to compile an expression as an SRA Let binding.
-    /// Returns `true` if the expression was intercepted and compiled as scalar
-    /// field variables (skipping the MakeRecord allocation), `false` otherwise.
-    fn try_compile_sra_let(
-        &mut self,
-        expr: &Expr,
-        sra_names: &std::collections::HashSet<&str>,
-    ) -> Result<bool, String> {
-        let Expr::Let { pattern, value, .. } = expr else {
-            return Ok(false);
-        };
-        let Pattern::Var(name) = pattern.as_ref() else {
-            return Ok(false);
-        };
-        if !sra_names.contains(name.as_str()) {
-            return Ok(false);
-        }
-        let Expr::MakeRecord(fields, _) = value.as_ref() else {
-            return Ok(false);
-        };
-        let mut field_vars = HashMap::new();
-        for (fname, fexpr) in fields {
-            let val = self.compile_expr(fexpr)?;
-            let var = self.new_var();
-            self.builder.def_var(var, val);
-            field_vars.insert(fname.clone(), var);
-        }
-        self.sra_records.insert(name.clone(), field_vars);
-        Ok(true)
-    }
-
-    // -- Clone-on-Write enum optimization --
-
-    /// Detect if fields represent a single-field-update pattern.
-    /// Returns (field_index, new_value_expr) if exactly one field differs
-    /// from the corresponding pattern binding.
-    fn detect_single_field_update<'e>(
-        fields: &'e [Expr],
-        bindings: &[String],
-    ) -> Option<(usize, &'e Expr)> {
-        if fields.len() != bindings.len() {
-            return None;
-        }
-        let mut update_idx = None;
-        for (i, (field, binding)) in fields.iter().zip(bindings.iter()).enumerate() {
-            if let Expr::Var(name, _) = field {
-                if name == binding {
-                    continue; // pass-through field
-                }
-            }
-            // This field is different
-            if update_idx.is_some() {
-                return None; // more than one changed field
-            }
-            update_idx = Some(i);
-        }
-        update_idx.map(|i| (i, &fields[i]))
-    }
-
-    /// Check if an expression can be optimized as an enum field update
-    /// (without generating code). Used to decide whether to enter the
-    /// optimization path for if/else trees.
-    fn can_enum_update(expr: &Expr, tag: &str, bindings: &[String]) -> bool {
-        match expr {
-            Expr::MakeEnum {
-                tag: t, payload, ..
-            } if t == tag => {
-                if let Expr::MakeTuple(fields, _) = payload.as_ref() {
-                    Self::detect_single_field_update(fields, bindings).is_some()
-                } else {
-                    false
-                }
-            }
-            Expr::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                Self::can_enum_update(then_branch, tag, bindings)
-                    || else_branch
-                        .as_ref()
-                        .is_some_and(|e| Self::can_enum_update(e, tag, bindings))
-            }
-            _ => false,
-        }
-    }
-
-    /// Try to compile an enum update body using CoW (clone-on-write).
-    /// Returns Some(result_val) if optimized, None if not applicable.
-    ///
-    /// Pattern detected:
-    ///   match subject { Tag(a, b, c) -> Tag(a, f(b), c) }
-    /// Emits jit_enum_field_drop + jit_enum_field_set instead of full MakeEnum.
-    fn try_gen_enum_update(
-        &mut self,
-        body: &Expr,
-        tag: &str,
-        bindings: &[String],
-        subj_var: Variable,
-    ) -> Result<Option<CValue>, String> {
-        match body {
-            Expr::MakeEnum {
-                tag: body_tag,
-                payload,
-                ..
-            } if body_tag == tag => {
-                if let Expr::MakeTuple(fields, _) = payload.as_ref() {
-                    if let Some((field_idx, new_value)) =
-                        Self::detect_single_field_update(fields, bindings)
-                    {
-                        let idx_val = self
-                            .builder
-                            .ins()
-                            .iconst(types::I64, field_idx as i64);
-
-                        // Null out the updated field to reduce its refcount
-                        let subj = self.builder.use_var(subj_var);
-                        self.call_helper_void("jit_enum_field_drop", &[subj, idx_val]);
-
-                        // Compile the new value (pattern bindings now have refcount 1)
-                        let new_val = self.compile_expr(new_value)?;
-
-                        // In-place field update (or clone if shared)
-                        let subj = self.builder.use_var(subj_var);
-                        let result =
-                            self.call_helper("jit_enum_field_set", &[subj, idx_val, new_val]);
-                        return Ok(Some(result));
-                    }
-                }
-                Ok(None)
-            }
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                // Check if at least one branch is optimizable
-                let then_opt = Self::can_enum_update(then_branch, tag, bindings);
-                let else_opt = else_branch
-                    .as_ref()
-                    .is_some_and(|e| Self::can_enum_update(e, tag, bindings));
-                if !then_opt && !else_opt {
-                    return Ok(None);
-                }
-
-                let cond_val = self.compile_expr(condition)?;
-
-                let then_block = self.builder.create_block();
-                let else_block = self.builder.create_block();
-                let merge_block = self.builder.create_block();
-                self.builder.append_block_param(merge_block, types::I64);
-
-                let cmp = self.is_truthy(cond_val);
-                if self.rc_enabled {
-                    self.emit_decref(cond_val);
-                }
-                self.builder
-                    .ins()
-                    .brif(cmp, then_block, &[], else_block, &[]);
-
-                // Then branch
-                self.builder.switch_to_block(then_block);
-                self.builder.seal_block(then_block);
-                let then_val = if then_opt {
-                    if let Some(v) =
-                        self.try_gen_enum_update(then_branch, tag, bindings, subj_var)?
-                    {
-                        v
-                    } else {
-                        self.compile_expr(then_branch)?
-                    }
-                } else {
-                    self.compile_expr(then_branch)?
-                };
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(then_val)]);
-
-                // Else branch
-                self.builder.switch_to_block(else_block);
-                self.builder.seal_block(else_block);
-                let else_val = if let Some(else_expr) = else_branch {
-                    if else_opt {
-                        if let Some(v) =
-                            self.try_gen_enum_update(else_expr, tag, bindings, subj_var)?
-                        {
-                            v
-                        } else {
-                            self.compile_expr(else_expr)?
-                        }
-                    } else {
-                        self.compile_expr(else_expr)?
-                    }
-                } else {
-                    self.builder.ins().iconst(types::I64, NV_UNIT as i64)
-                };
-                self.builder
-                    .ins()
-                    .jump(merge_block, &[BlockArg::Value(else_val)]);
-
-                self.builder.switch_to_block(merge_block);
-                self.builder.seal_block(merge_block);
-                Ok(Some(self.builder.block_params(merge_block)[0]))
-            }
-            _ => Ok(None),
-        }
-    }
-
-    /// Find SRA candidates in a block: Let bindings to MakeRecord where the
-    /// variable never escapes (only used in GetField positions).
-    ///
-    /// Uses a single pass to collect all escaping variable names, then filters
-    /// candidates by checking set membership. O(N) instead of O(N²).
-    pub(super) fn find_sra_candidates(exprs: &[Expr]) -> Vec<(String, Vec<String>)> {
-        // Single pass: collect all variable names that appear in escaping positions
-        let mut escaping = std::collections::HashSet::new();
-        for expr in exprs {
-            Self::collect_escaping_vars(expr, &mut escaping);
-        }
-
-        let mut candidates = Vec::new();
-        for expr in exprs {
-            if let Expr::Let { pattern, value, .. } = expr {
-                if let Pattern::Var(name) = pattern.as_ref() {
-                    if let Expr::MakeRecord(fields, _) = value.as_ref() {
-                        if !escaping.contains(name.as_str()) {
-                            let field_names: Vec<String> =
-                                fields.iter().map(|(k, _)| k.clone()).collect();
-                            candidates.push((name.clone(), field_names));
-                        }
-                    }
-                }
-            }
-        }
-        candidates
-    }
-
-    /// Collect variable names that appear in escaping positions (anything other
-    /// than GetField base). A single walk of the expression tree.
-    fn collect_escaping_vars<'c>(expr: &'c Expr, escaping: &mut std::collections::HashSet<&'c str>) {
-        match expr {
-            Expr::Var(name, _) => {
-                // Bare variable reference = escapes
-                escaping.insert(name.as_str());
-            }
-            Expr::GetField { object, .. } => {
-                // GetField on a bare var is a safe (non-escaping) use — skip it.
-                // But recurse into nested expressions.
-                if let Expr::Var(_, _) = object.as_ref() {
-                    // Safe use: record.field — do NOT mark as escaping
-                } else {
-                    Self::collect_escaping_vars(object, escaping);
-                }
-            }
-            Expr::UpdateRecord { base, updates, .. } => {
-                // UpdateRecord base always escapes (immutability — see 1A fix)
-                Self::collect_escaping_vars(base, escaping);
-                for (_, v) in updates {
-                    Self::collect_escaping_vars(v, escaping);
-                }
-            }
-            // Recurse into all children
-            Expr::Int(_)
-            | Expr::Float(_)
-            | Expr::String(_)
-            | Expr::Bool(_)
-            | Expr::Unit
-            | Expr::Hole
-            | Expr::GetClosureVar(_) => {}
-            Expr::BinOp { lhs, rhs, .. } | Expr::And(lhs, rhs) | Expr::Or(lhs, rhs) => {
-                Self::collect_escaping_vars(lhs, escaping);
-                Self::collect_escaping_vars(rhs, escaping);
-            }
-            Expr::UnaryOp { operand, .. } => Self::collect_escaping_vars(operand, escaping),
-            Expr::If {
-                condition,
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                Self::collect_escaping_vars(condition, escaping);
-                Self::collect_escaping_vars(then_branch, escaping);
-                if let Some(e) = else_branch {
-                    Self::collect_escaping_vars(e, escaping);
-                }
-            }
-            Expr::Block(exprs, _) | Expr::MakeList(exprs, _) | Expr::MakeTuple(exprs, _) => {
-                for e in exprs {
-                    Self::collect_escaping_vars(e, escaping);
-                }
-            }
-            Expr::Concat(parts) => {
-                for p in parts {
-                    Self::collect_escaping_vars(p, escaping);
-                }
-            }
-            Expr::Let { value, .. } => Self::collect_escaping_vars(value, escaping),
-            Expr::CallDirect { args, .. }
-            | Expr::CallNative { args, .. }
-            | Expr::TailCall { args, .. } => {
-                for a in args {
-                    Self::collect_escaping_vars(a, escaping);
-                }
-            }
-            Expr::CallIndirect { callee, args, .. }
-            | Expr::TailCallIndirect { callee, args, .. } => {
-                Self::collect_escaping_vars(callee, escaping);
-                for a in args {
-                    Self::collect_escaping_vars(a, escaping);
-                }
-            }
-            Expr::Match { subject, arms, .. } => {
-                Self::collect_escaping_vars(subject, escaping);
-                for arm in arms {
-                    Self::collect_escaping_vars(&arm.body, escaping);
-                }
-            }
-            Expr::MakeEnum { payload, .. } => Self::collect_escaping_vars(payload, escaping),
-            Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
-                for (_, v) in fields {
-                    Self::collect_escaping_vars(v, escaping);
-                }
-            }
-            Expr::MakeRange(a, b) => {
-                Self::collect_escaping_vars(a, escaping);
-                Self::collect_escaping_vars(b, escaping);
-            }
-            Expr::For { iterable, body, .. } => {
-                Self::collect_escaping_vars(iterable, escaping);
-                Self::collect_escaping_vars(body, escaping);
-            }
-            Expr::Try { expr, .. } => Self::collect_escaping_vars(expr, escaping),
-            Expr::MakeClosure { captures, .. } => {
-                for c in captures {
-                    Self::collect_escaping_vars(c, escaping);
-                }
-            }
-            Expr::Lambda { body, .. } => Self::collect_escaping_vars(body, escaping),
-            Expr::WithHandlers { handlers, body, .. } => {
-                for (_, methods) in handlers {
-                    for (_, h) in methods {
-                        Self::collect_escaping_vars(h, escaping);
-                    }
-                }
-                Self::collect_escaping_vars(body, escaping);
-            }
-            Expr::HandleEffect { body, clauses, .. } => {
-                Self::collect_escaping_vars(body, escaping);
-                for clause in clauses {
-                    Self::collect_escaping_vars(&clause.body, escaping);
-                }
-            }
-            Expr::PerformEffect { args, .. } => {
-                for a in args {
-                    Self::collect_escaping_vars(a, escaping);
-                }
-            }
-            Expr::Expect { actual, .. } => Self::collect_escaping_vars(actual, escaping),
-        }
     }
 }

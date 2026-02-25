@@ -192,17 +192,15 @@ else
     echo -e "  ${YELLOW}⊘${NC} F# (dotnet not available)"
 fi
 
-# Baseline (always present — we're in its repo)
+# Baseline JIT (always present — we're in its repo)
 BLC="$(cd "$SCRIPT_DIR/../.." && pwd)/target/release/blc"
 if [ ! -f "$BLC" ]; then
     echo -e "  ${YELLOW}Building blc...${NC}"
-    (cd "$SCRIPT_DIR/../.." && cargo build --release --bin blc 2>/dev/null)
+    (cd "$SCRIPT_DIR/../.." && cargo build --features jit --release --bin blc 2>/dev/null)
 fi
-echo -e "  ${GREEN}✓${NC} Baseline (VM)"
-LANGS_AVAILABLE+=(baseline_vm)
 
-# Check for JIT (must actually produce correct output, not just exit 0)
-JIT_TEST_OUTPUT=$("$BLC" run --jit "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null || true)
+# Verify JIT produces correct output
+JIT_TEST_OUTPUT=$("$BLC" run "$SCRIPT_DIR/fib/fib.bl" 2>/dev/null || true)
 if [ "$JIT_TEST_OUTPUT" = "9227465" ]; then
     echo -e "  ${GREEN}✓${NC} Baseline (JIT)"
     LANGS_AVAILABLE+=(baseline_jit)
@@ -275,12 +273,9 @@ for bench in "${BENCHES[@]}"; do
     [[ " ${LANGS_AVAILABLE[*]} " == *" ruby "* ]] && \
         run_bench "ruby" "$bench" "ruby $SCRIPT_DIR/$bench/$bench.rb"
 
-    # Baseline VM
-    run_bench "baseline_vm" "$bench" "$BLC run $SCRIPT_DIR/$bench/$bench.bl"
-
     # Baseline JIT (Cranelift)
     [[ " ${LANGS_AVAILABLE[*]} " == *" baseline_jit "* ]] && \
-        run_bench "baseline_jit" "$bench" "$BLC run --jit $SCRIPT_DIR/$bench/$bench.bl"
+        run_bench "baseline_jit" "$bench" "$BLC run $SCRIPT_DIR/$bench/$bench.bl"
 
     # Baseline LLVM JIT
     [[ " ${LANGS_AVAILABLE[*]} " == *" baseline_llvm "* ]] && \

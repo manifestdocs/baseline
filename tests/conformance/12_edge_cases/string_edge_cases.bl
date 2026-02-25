@@ -1,18 +1,65 @@
 @prelude(core)
 
 // Conformance: string edge cases
+// Inspired by: Rust string tests, Go string tests, Python str tests
 
+// --- Basic operations ---
 test "empty string length" = String.length("") == 0
-test "single char" = String.length("x") == 1
-test "string comparison" = "abc" == "abc"
-test "string inequality" = "abc" != "def"
-test "trim empty" = String.trim("") == ""
+test "single char length" = String.length("x") == 1
+test "whitespace string" = String.length(" ") == 1
+test "string interpolation concat" = {
+  let a = "hello"
+  let b = "world"
+  "${a} ${b}" == "hello world"
+}
+
+// --- Trim ---
+test "trim leading" = String.trim("  hello") == "hello"
+test "trim trailing" = String.trim("hello  ") == "hello"
+test "trim both" = String.trim("  hello  ") == "hello"
 test "trim no whitespace" = String.trim("hello") == "hello"
+test "trim only whitespace" = String.trim("   ") == ""
+test "trim empty" = String.trim("") == ""
+
+// --- Contains / starts_with ---
+test "contains substring" = String.contains("hello world", "world") == true
+test "contains missing" = String.contains("hello", "xyz") == false
+test "contains self" = String.contains("abc", "abc") == true
 test "contains empty" = String.contains("hello", "") == true
+test "starts_with match" = String.starts_with("hello", "hel") == true
+test "starts_with no match" = String.starts_with("hello", "xyz") == false
 test "starts_with empty" = String.starts_with("hello", "") == true
+test "starts_with full" = String.starts_with("hello", "hello") == true
+
+// --- Split / Join ---
+test "split basic" = {
+  let parts = String.split("a,b,c", ",")
+  parts == ["a", "b", "c"]
+}
+
 test "split no delimiter" = {
   let parts = String.split("hello", ",")
   List.length(parts) == 1
 }
+
+test "join basic" = String.join(["a", "b", "c"], ",") == "a,b,c"
 test "join empty list" = String.join([], ",") == ""
 test "join single" = String.join(["one"], ",") == "one"
+
+// --- Roundtrip: split then join ---
+test "split-join roundtrip" = {
+  let original = "one,two,three"
+  let parts = String.split(original, ",")
+  String.join(parts, ",") == original
+}
+
+// --- Interpolation ---
+test "interpolation basic" = {
+  let name = "world"
+  "hello ${name}" == "hello world"
+}
+
+test "interpolation expression" = {
+  let n = 42
+  "answer: ${Int.to_string(n)}" == "answer: 42"
+}

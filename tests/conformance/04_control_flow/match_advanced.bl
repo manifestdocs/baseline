@@ -1,0 +1,75 @@
+@prelude(core)
+
+// Conformance: advanced pattern matching
+// Inspired by: OCaml pattern match tests, Haskell case expression tests
+
+type Color3 = | Red3 | Green3 | Blue3
+
+fn color_to_int(c: Color3) -> Int = {
+  match c
+    Red3 -> 0
+    Green3 -> 1
+    Blue3 -> 2
+}
+
+type Shape2 = | Circle2(Int) | Rect2(Int, Int)
+
+fn area2(s: Shape2) -> Int = {
+  match s
+    Circle2(r) -> r * r * 3
+    Rect2(w, h) -> w * h
+}
+
+type Point2 = | Point2(Int, Int)
+
+fn classify(n: Int) -> String = {
+  match n
+    0 -> "zero"
+    1 -> "one"
+    _ -> "other"
+}
+
+fn double_or_zero(opt: Option<Int>) -> Int = {
+  match opt
+    Some(x) -> x * 2
+    None -> 0
+}
+
+// --- Option pattern matching ---
+test "match option some" = double_or_zero(Some(5)) == 10
+test "match option none" = double_or_zero(None) == 0
+
+// --- Constructor with payload ---
+test "circle area" = area2(Circle2(5)) == 75
+test "rect area" = area2(Rect2(3, 4)) == 12
+
+// --- Enum match all arms ---
+test "match all color arms" = {
+  color_to_int(Red3) == 0 && color_to_int(Green3) == 1 && color_to_int(Blue3) == 2
+}
+
+// --- Wildcard and literal patterns ---
+test "wildcard matches anything" = {
+  classify(0) == "zero" && classify(1) == "one" && classify(99) == "other"
+}
+
+// --- Tuple patterns ---
+test "tuple destructure" = {
+  let pair = (3, 7)
+  let (a, b) = pair
+  a + b == 10
+}
+
+// --- Constructor with multiple fields ---
+test "constructor two fields" = {
+  let p = Point2(3, 4)
+  match p
+    Point2(x, y) -> x * x + y * y == 25
+}
+
+// --- First match wins ---
+test "first arm wins" = {
+  match 1
+    1 -> true
+    _ -> false
+}

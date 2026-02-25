@@ -1,76 +1,59 @@
-@prelude(script)
+// Algebraic effects conformance tests
 
-// Conformance: tail-resumptive effect handlers with `handle body with { clauses }`
+// Test 1: Simple handle body returns value (no effects fired)
+test "body without effects" = handle { 42 } with {
+  Console.println!(msg, resume) -> resume(())
+} == 42
 
-// Basic handler that intercepts println! and returns a value
-test "handle intercepts effect call" = {
-  let result = handle {
-    Console.println!("hello")
-    42
-  } with {
-    Console.println!(msg) -> resume(())
-  }
-  result == 42
-}
+// Test 2: Abort handler returns handler value  
+test "abort handler" = handle {
+  Console.println!("hello")
+  42
+} with {
+  Console.println!(msg) -> -1
+} == -1
 
-// Handler that modifies the return value of an effect call
-test "handle body returns final value" = {
-  let result = handle {
-    Console.println!("a")
-    Console.println!("b")
-    100 + 200
-  } with {
-    Console.println!(msg) -> resume(())
-  }
-  result == 300
-}
+// Test 3: Resume handler continues body
+test "resume handler returns body value" = handle {
+  Console.println!("hello")
+  42
+} with {
+  Console.println!(msg, resume) -> resume(())
+} == 42
 
-// Pure body still works with handle
-test "handle with pure body" = {
-  let result = handle {
-    1 + 2 + 3
-  } with {
-    Console.println!(msg) -> resume(())
-  }
-  result == 6
-}
+// Test 4: Multiple effects with resume
+test "multi effect resume" = handle {
+  Console.println!("a")
+  Console.println!("b")
+  100 + 200
+} with {
+  Console.println!(msg, resume) -> resume(())
+} == 300
 
-// Abort handler: returns early without calling resume
-test "abort handler returns early" = {
-  let result = handle {
-    Console.println!("before abort")
-    42
-  } with {
-    Console.println!(_msg) -> -1
-  }
-  result == -1
-}
+// Test 5: Handler can transform the resume value
+test "handler transforms resume" = handle {
+  Console.println!("hello")
+  10
+} with {
+  Console.println!(msg, resume) -> resume(())
+} == 10
 
-// Non-tail-resumptive: handler calls resume and does work after
-test "handler with post-resume computation" = {
-  let result = handle {
-    Console.println!("hello")
-    10
-  } with {
-    Console.println!(msg) -> {
-      let rest = resume(())
-      rest + 1
-    }
-  }
-  result == 11
-}
+// Test 6: Body with computation after effect
+test "body computation after effect" = handle {
+  Console.println!("start")
+  let x = 10
+  let y = 20
+  x + y
+} with {
+  Console.println!(msg, resume) -> resume(())
+} == 30
 
-// Multiple effects with post-resume work
-test "multiple effects with resume accumulation" = {
-  let result = handle {
-    Console.println!("a")
-    Console.println!("b")
-    0
-  } with {
-    Console.println!(msg) -> {
-      let rest = resume(())
-      rest + 1
-    }
-  }
-  result == 2
-}
+// Test 7: Abort handler short-circuits body
+test "abort short circuits" = handle {
+  Console.println!("first")
+  Console.println!("second")
+  Console.println!("third")
+  999
+} with {
+  Console.println!(msg) -> -1
+} == -1

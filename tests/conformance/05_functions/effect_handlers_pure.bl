@@ -1,0 +1,77 @@
+@prelude(script)
+
+// Conformance: algebraic effect handler execution through the JIT
+// These tests exercise the evidence-passing transform + JIT codegen.
+// They live in 05_functions/ so they run through `blc test` (not check-only
+// like the 08_effects/ directory).
+
+// --- handle/with basic ---
+
+test "handle pure body no effects" = {
+  let result = handle { 1 + 2 + 3 } with {
+    Console.println!(msg, resume) -> resume(())
+  }
+  result == 6
+}
+
+
+
+test "handle resume continues body" = {
+  let result = handle {
+    Console.println!("go")
+    42
+  } with {
+    Console.println!(msg, resume) -> resume(())
+  }
+  result == 42
+}
+
+test "handle resume multiple effects" = {
+  let result = handle {
+    Console.println!("a")
+    Console.println!("b")
+    100
+  } with {
+    Console.println!(msg, resume) -> resume(())
+  }
+  result == 100
+}
+
+test "handle body computation after effect" = {
+  let result = handle {
+    Console.println!("start")
+    let x = 10
+    let y = 32
+    x + y
+  } with {
+    Console.println!(msg, resume) -> resume(())
+  }
+  result == 42
+}
+
+// --- with { Effect: mock } syntax ---
+
+test "with mock handler replaces effect" = {
+  let mock = {
+    println: |_msg| ()
+  }
+  let result = with { Console: mock } {
+    Console.println!("should not print")
+    42
+  }
+  result == 42
+}
+
+test "with mock handler arithmetic" = {
+  let mock = {
+    println: |_msg| ()
+  }
+  let result = with { Console: mock } {
+    Console.println!("a")
+    Console.println!("b")
+    let x = 100
+    let y = 200
+    x + y
+  }
+  result == 300
+}

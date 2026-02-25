@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use super::super::ir::{Expr, IrFunction, IrModule, MatchArm, Pattern};
+use super::super::ir::{Expr, IrFunction, IrModule, MatchArm, Matcher, Pattern};
 use super::super::natives::NativeRegistry;
 use crate::analysis::types::Type;
 
@@ -53,7 +53,7 @@ pub(super) fn has_self_tail_call(expr: &Expr, name: &str) -> bool {
 pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> bool {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::Bool(_) | Expr::Unit | Expr::String(_) => true,
-        Expr::Hole => false, // Typed holes should not be JIT-compiled
+        Expr::Hole => true, // Compiles to a trap — panics at runtime if reached
         Expr::Var(_, _) => true,
         Expr::BinOp { lhs, rhs, .. } => expr_can_jit(lhs, natives) && expr_can_jit(rhs, natives),
         Expr::UnaryOp { operand, .. } => expr_can_jit(operand, natives),
@@ -112,8 +112,8 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
 
             // JIT path: resolve through registry
             let reg = natives.unwrap();
-            // Inline HOFs are always allowed
-            let is_hof = matches!(
+            // Inline HOFs are always allowed (compiled as pure IR in stdlib)
+            let is_inline_hof = matches!(
                 qualified.as_str(),
                 "List.map"
                     | "List.filter"
@@ -123,13 +123,13 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
                     | "Result.map"
                     | "Result.map_err"
             );
-            if is_hof {
+            if is_inline_hof {
                 return args.iter().all(|a| expr_can_jit(a, natives));
             }
             if reg.lookup(&qualified).is_none() {
                 return false;
             }
-            // Non-inline HOFs still need VM — can't JIT them
+            // Non-inline HOFs that need VM re-entrancy can't be JIT-compiled
             if let Some(id) = reg.lookup(&qualified)
                 && reg.is_hof(id)
             {
@@ -162,11 +162,15 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
         Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
             expr_can_jit(callee, natives) && args.iter().all(|a| expr_can_jit(a, natives))
         }
-        // WithHandlers, effects, and Expect not yet JIT-supported
+        // Expect: recurse into the actual expression (matcher is compiled inline)
+        Expr::Expect { actual, matcher } => {
+            expr_can_jit(actual, natives) && matcher_can_jit(matcher, natives)
+        }
+        // WithHandlers, effects not yet JIT-supported
+        // (tail-resumptive handlers are eliminated by evidence transform before can_jit)
         Expr::WithHandlers { .. }
         | Expr::HandleEffect { .. }
-        | Expr::PerformEffect { .. }
-        | Expr::Expect { .. } => false,
+        | Expr::PerformEffect { .. } => false,
     }
 }
 
@@ -187,6 +191,19 @@ fn pattern_can_jit(pattern: &Pattern) -> bool {
     }
 }
 
+/// Check if a Matcher variant can be compiled by the JIT.
+fn matcher_can_jit(matcher: &Matcher, natives: Option<&NativeRegistry>) -> bool {
+    match matcher {
+        Matcher::Equal(expected) => expr_can_jit(expected, natives),
+        Matcher::BeOk | Matcher::BeSome | Matcher::BeNone | Matcher::BeEmpty => true,
+        Matcher::HaveLength(expected) => expr_can_jit(expected, natives),
+        Matcher::Contain(expected) => expr_can_jit(expected, natives),
+        Matcher::StartWith(expected) => expr_can_jit(expected, natives),
+        Matcher::Satisfy(pred) => expr_can_jit(pred, natives),
+        Matcher::Be(_pattern) => true, // emits constant true (same as VM)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Scalar-only analysis for unboxed fast path
 // ---------------------------------------------------------------------------
@@ -201,9 +218,6 @@ fn type_is_scalar(ty: Option<&Type>) -> bool {
     match ty {
         None => false, // No type info — pessimistic to avoid misclassifying heap pointers as scalars
         Some(Type::Int | Type::Bool | Type::Unit) => true,
-        // Float excluded: unboxed BinOp uses integer instructions (iadd, sdiv)
-        // which produce wrong results on float bit patterns. Proper float unboxed
-        // support (bitcast + fadd/fsub/fmul/fdiv) can be added later.
         Some(_) => false, // String, List, Record, Enum, Float, etc. → not scalar
     }
 }

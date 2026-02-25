@@ -9,6 +9,8 @@
 
 mod analysis;
 mod compile;
+mod compile_pattern;
+mod compile_opt;
 mod helpers;
 
 #[cfg(feature = "aot")]
@@ -16,6 +18,12 @@ pub mod aot;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_pattern;
+#[cfg(test)]
+mod tests_closure;
+#[cfg(test)]
+mod tests_rc;
 
 use std::collections::HashMap;
 
@@ -196,6 +204,7 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_closure_fn_ptr",
     "jit_function_fn_ptr",
     "jit_list_concat",
+    "jit_string_concat",
     // AOT-specific helpers
     "jit_make_string",
     "jit_print_result",
@@ -311,6 +320,7 @@ fn compile_inner(
     builder.symbol("jit_closure_fn_ptr", jit_closure_fn_ptr as *const u8);
     builder.symbol("jit_function_fn_ptr", jit_function_fn_ptr as *const u8);
     builder.symbol("jit_list_concat", jit_list_concat as *const u8);
+    builder.symbol("jit_string_concat", jit_string_concat as *const u8);
     builder.symbol("jit_make_string", jit_make_string as *const u8);
     builder.symbol("jit_print_result", jit_print_result as *const u8);
     builder.symbol("jit_drain_arena", jit_drain_arena as *const u8);
@@ -471,7 +481,7 @@ fn compile_inner(
                 sra_records: HashMap::new(),
                 aot_strings: None,
                 aot_native_ids: None,
-                string_pool: HashMap::new(),
+                
                 scratch_slot: None,
                 rc_enabled,
                 rc_scope_stack: Vec::new(),
@@ -592,10 +602,12 @@ fn compile_inner(
             fn_builder.finalize();
         }
 
-        let mut ctx = cranelift_codegen::Context::for_function(cl_func);
-        jit_module
-            .define_function(wrapper_id, &mut ctx)
-            .map_err(|e| format!("JIT: entry wrapper error: {}", e))?;
+        let mut ctx = cranelift_codegen::Context::for_function(cl_func.clone());
+        let res = jit_module.define_function(wrapper_id, &mut ctx);
+        if let Err(e) = &res {
+            println!("cl_func that failed:\n{}", cl_func.display());
+        }
+        res.map_err(|e| format!("JIT: entry wrapper error: {}", e))?;
 
         if trace {
             eprintln!("JIT: created entry wrapper (platform CC → Tail CC)");
@@ -742,6 +754,7 @@ pub(super) fn make_helper_sig<M: Module>(
         "jit_tuple_get"
         | "jit_closure_upvalue"
         | "jit_list_concat"
+        | "jit_string_concat"
         | "jit_int_add"
         | "jit_int_sub"
         | "jit_int_mul"

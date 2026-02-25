@@ -1,8 +1,15 @@
 @prelude(core)
 
-// Conformance: integer literals and basic operations
+// Conformance: integer literals
+// Inspired by: Haskell Report §2.5, OCaml integer literal tests, Rust primitive tests
 
-test "integer literal" = 42 == 42
-test "zero" = 0 == 0
-test "negative" = -1 == -1
-test "large integer" = 1000000 == 1000000
+test "positive literal used in arithmetic" = 42 + 0 == 42
+test "zero is additive identity" = 0 + 100 == 100
+test "negative literal" = -1 + 1 == 0
+test "large literal" = 1000000 - 1 == 999999
+test "negative literal subtract" = -5 + 10 == 5
+test "literal in comparison" = 42 > 41
+test "literal in let binding" = {
+  let x = 99
+  x - 99 == 0
+}

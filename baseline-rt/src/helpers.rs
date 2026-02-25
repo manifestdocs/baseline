@@ -680,6 +680,19 @@ pub extern "C" fn jit_list_concat(a_bits: u64, b_bits: u64) -> u64 {
     jit_own(result)
 }
 
+/// Concatenate two strings.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_string_concat(a_bits: u64, b_bits: u64) -> u64 {
+    let a = unsafe { jit_take_arg(a_bits) };
+    let b = unsafe { jit_take_arg(b_bits) };
+
+    let mut result = a.to_string();
+    result.push_str(&b.to_string());
+    
+    let result = NValue::string(result.into());
+    jit_own(result)
+}
+
 // ---------------------------------------------------------------------------
 // AOT-specific helpers
 // ---------------------------------------------------------------------------

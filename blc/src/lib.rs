@@ -10,7 +10,6 @@ pub mod manifest;
 pub mod mcp;
 pub mod parse;
 pub mod prelude;
-pub mod repl;
 pub mod resolver;
 pub mod test_runner;
 pub mod vm;

@@ -1,0 +1,42 @@
+@prelude(core)
+
+// Conformance: advanced error handling with Result type
+// Inspired by: Rust Result tests, Haskell Either tests
+
+fn safe_divide(a: Int, b: Int) -> Result<Int, String> = {
+  if b == 0 then Err("division by zero")
+  else Ok(a / b)
+}
+
+fn chain_divide(a: Int, b: Int, c: Int) -> Result<Int, String> = {
+  let x = safe_divide(a, b)?
+  let y = safe_divide(x, c)?
+  Ok(y)
+}
+
+// --- Basic Result operations ---
+test "ok is ok" = Result.is_ok(Ok(42))
+test "err is not ok" = not Result.is_ok(Err("fail"))
+test "unwrap ok" = Result.unwrap(Ok(42)) == 42
+test "unwrap_or with ok" = Result.unwrap_or(Ok(42), 0) == 42
+test "unwrap_or with err" = Result.unwrap_or(Err("fail"), 0) == 0
+
+// --- Result.map ---
+test "map ok" = Result.unwrap(Result.map(Ok(5), |x| x * 2)) == 10
+test "map err passes through" = Result.is_err(Result.map(Err("fail"), |x| x * 2))
+
+// --- Try (?) operator ---
+test "try success chain" = Result.unwrap(chain_divide(100, 10, 2)) == 5
+test "try propagates first error" = Result.is_err(chain_divide(100, 0, 2))
+// --- Result with match ---
+test "result match ok" = {
+  match Ok(42)
+    Ok(n) -> n == 42
+    Err(_) -> false
+}
+
+test "result match err" = {
+  match Err("bad")
+    Ok(_) -> false
+    Err(msg) -> msg == "bad"
+}

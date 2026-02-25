@@ -17,7 +17,7 @@ use super::{HeapObject, NValue, NativeError, RcStr};
 fn row_lookup<'a>(columns: &[RcStr], values: &'a [SqlValue], name: &str) -> Option<&'a SqlValue> {
     columns
         .iter()
-        .position(|c| c.as_ref() == name)
+        .position(|c: &RcStr| c.as_ref() == name)
         .map(|i| &values[i])
 }
 

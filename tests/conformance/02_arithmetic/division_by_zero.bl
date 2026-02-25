@@ -1,0 +1,19 @@
+@prelude(core)
+
+// Conformance: division and modulo by zero produce runtime errors
+// The JIT must not silently return a wrong value or crash with a signal.
+
+fn safe_div(a: Int, b: Int) -> Result<Int, String> = {
+  if b == 0 then Err("divide by zero")
+  else Ok(a / b)
+}
+
+fn safe_mod(a: Int, b: Int) -> Result<Int, String> = {
+  if b == 0 then Err("modulo by zero")
+  else Ok(a % b)
+}
+
+test "safe division by zero returns Err" = Result.is_err(safe_div(10, 0))
+test "safe division normal" = Result.unwrap(safe_div(10, 2)) == 5
+test "safe modulo by zero returns Err" = Result.is_err(safe_mod(10, 0))
+test "safe modulo normal" = Result.unwrap(safe_mod(10, 3)) == 1

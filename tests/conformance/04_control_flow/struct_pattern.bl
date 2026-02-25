@@ -1,0 +1,70 @@
+@prelude(core)
+
+// Conformance: struct/record patterns in match and nested enum+struct patterns
+// Tests that the JIT correctly handles destructuring structs within enums.
+
+type Point = { x: Int, y: Int }
+
+type Shape =
+  | Circle(Int)
+  | Rect(Point, Point)
+
+fn area(s: Shape) -> Int = {
+  match s
+    Circle(r) -> r * r * 3
+    Rect(tl, br) -> {
+      let w = br.x - tl.x
+      let h = br.y - tl.y
+      w * h
+    }
+}
+
+test "match struct in enum Circle" = area(Circle(5)) == 75
+test "match struct in enum Rect" = {
+  let s = Rect(Point { x: 0, y: 0 }, Point { x: 10, y: 5 })
+  area(s) == 50
+}
+
+// Record destructuring in let
+test "let destructure struct" = {
+  let p = Point { x: 3, y: 7 }
+  let { x, y } = p
+  x + y == 10
+}
+
+// Record pattern with partial match
+fn on_axis(p: Point) -> String = {
+  match p
+    { x: 0, .. } -> "y-axis"
+    { y: 0, .. } -> "x-axis"
+    _ -> "other"
+}
+
+test "record pattern y-axis" = on_axis(Point { x: 0, y: 5 }) == "y-axis"
+test "record pattern x-axis" = on_axis(Point { x: 3, y: 0 }) == "x-axis"
+test "record pattern other" = on_axis(Point { x: 1, y: 1 }) == "other"
+
+// Nested recursive enum
+type Tree =
+  | Leaf(Int)
+  | Node(Tree, Tree)
+
+fn tree_sum(t: Tree) -> Int = {
+  match t
+    Leaf(v) -> v
+    Node(l, r) -> tree_sum(l) + tree_sum(r)
+}
+
+test "tree sum single leaf" = tree_sum(Leaf(42)) == 42
+test "tree sum two leaves" = tree_sum(Node(Leaf(10), Leaf(20))) == 30
+test "tree sum nested" = tree_sum(Node(Node(Leaf(1), Leaf(2)), Leaf(3))) == 6
+
+// Struct field access after pattern match
+fn translate(p: Point, dx: Int, dy: Int) -> Point = {
+  Point { x: p.x + dx, y: p.y + dy }
+}
+
+test "struct returned from function" = {
+  let p = translate(Point { x: 1, y: 2 }, 10, 20)
+  p.x == 11 && p.y == 22
+}

@@ -1,0 +1,46 @@
+@prelude(core)
+
+// Conformance: string concatenation and interpolation through the JIT
+// Verifies the Concat IR node and jit_concat helper produce correct results.
+
+test "string concat operator" = "hello" ++ " " ++ "world" == "hello world"
+test "string concat empty left" = "" ++ "abc" == "abc"
+test "string concat empty right" = "abc" ++ "" == "abc"
+test "string concat empty both" = "" ++ "" == ""
+
+test "string interpolation simple" = {
+  let name = "Alice"
+  "Hello, ${name}!" == "Hello, Alice!"
+}
+
+test "string interpolation with arithmetic" = {
+  let x = 21
+  "The answer is ${x * 2}" == "The answer is 42"
+}
+
+test "string interpolation multiple" = {
+  let a = "one"
+  let b = "two"
+  let c = "three"
+  "${a}, ${b}, ${c}" == "one, two, three"
+}
+
+test "string interpolation nested expression" = {
+  let xs = [1, 2, 3]
+  "length is ${List.length(xs)}" == "length is 3"
+}
+
+test "string interpolation preserves unicode" = {
+  let emoji = "🎉"
+  "party ${emoji}" == "party 🎉"
+}
+
+// Verify string concat with function calls (heap-allocated intermediate values)
+fn greet(name: String) -> String = "Hello, ${name}!"
+
+test "string interpolation in function" = greet("Bob") == "Hello, Bob!"
+
+test "string concat chained" = {
+  let parts = List.map(["a", "b", "c"], |s| s ++ "!")
+  parts == ["a!", "b!", "c!"]
+}

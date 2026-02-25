@@ -1,7 +1,7 @@
 use tree_sitter::Node;
 
 use crate::analysis::types::Type;
-use crate::vm::chunk::CompileError;
+use crate::vm::ir::CompileError;
 use crate::vm::ir::*;
 
 use super::helpers::eval_const_binary;
@@ -112,13 +112,29 @@ impl<'a> super::Lowerer<'a> {
                 || matches!(tm.get(&rhs_node.start_byte()), Some(Type::Float))
         }) || (self.is_float_expr(&lhs_node) && self.is_float_expr(&rhs_node));
 
-        let ty = if both_int {
-            Some(Type::Int)
-        } else if either_float {
-            Some(Type::Float)
-        } else {
-            None
-        };
+        let both_string = self.type_map.as_ref().is_some_and(|tm| {
+            matches!(
+                (
+                    tm.get(&lhs_node.start_byte()),
+                    tm.get(&rhs_node.start_byte())
+                ),
+                (Some(Type::String), Some(Type::String))
+            )
+        }) || (self.is_string_expr(&lhs_node) && self.is_string_expr(&rhs_node));
+
+        let explicit_ty = self.type_map.as_ref().and_then(|tm| tm.get(&node.start_byte()).cloned());
+
+        let mut ty = explicit_ty.or_else(|| {
+            if both_int {
+                Some(Type::Int)
+            } else if either_float {
+                Some(Type::Float)
+            } else if both_string {
+                Some(Type::String)
+            } else {
+                None
+            }
+        });
 
         let op = match op_text.as_str() {
             "+" => BinOp::Add,
@@ -132,7 +148,12 @@ impl<'a> super::Lowerer<'a> {
             ">" => BinOp::Gt,
             "<=" => BinOp::Le,
             ">=" => BinOp::Ge,
-            "++" => BinOp::ListConcat,
+            "++" => {
+                if both_string {
+                    ty = Some(Type::String);
+                }
+                BinOp::ListConcat
+            },
             _ => return Err(self.error(format!("Unknown binary operator: {}", op_text), node)),
         };
 
@@ -176,6 +197,26 @@ impl<'a> super::Lowerer<'a> {
                     matches!(op_text.as_str(), "+" | "-" | "*" | "/" | "%")
                         && node.named_child(0).is_some_and(|c| self.is_float_expr(&c))
                         && node.named_child(1).is_some_and(|c| self.is_float_expr(&c))
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    pub(super) fn is_string_expr(&self, node: &Node) -> bool {
+        match node.kind() {
+            "string_literal" | "raw_string_literal" | "raw_hash_string_literal" | "multiline_string_literal" => true,
+            "literal" | "parenthesized_expression" => {
+                node.named_child(0).is_some_and(|c| self.is_string_expr(&c))
+            }
+            "binary_expression" => {
+                if let Some(op) = node.child(1) {
+                    let op_text = self.node_text(&op);
+                    op_text.as_str() == "++"
+                        && node.named_child(0).is_some_and(|c| self.is_string_expr(&c))
+                        && node.named_child(1).is_some_and(|c| self.is_string_expr(&c))
                 } else {
                     false
                 }

@@ -1,22 +1,47 @@
 @prelude(core)
 
 // Conformance: comparison operators
+// Inspired by: Haskell Ord class tests, OCaml compare tests, C comparison tests
 
+// --- Integer comparisons ---
 test "equal" = 1 == 1
 test "not equal" = 1 != 2
-test "less than" = 1 < 2
-test "less than false" = {
-  let r = 2 < 1
-  not r
+test "less than true" = 1 < 2
+test "less than false" = not (2 < 1)
+test "greater than true" = 3 > 2
+test "greater than false" = not (1 > 2)
+test "less or equal same" = 2 <= 2
+test "less or equal less" = 1 <= 2
+test "less or equal not" = not (3 <= 2)
+test "greater or equal same" = 3 >= 3
+test "greater or equal greater" = 4 >= 3
+test "greater or equal not" = not (2 >= 3)
+
+// --- Transitivity (from Ord laws) ---
+test "transitivity" = {
+  let a = 1
+  let b = 2
+  let c = 3
+  a < b && b < c && a < c
 }
-test "greater than" = 3 > 2
-test "greater than false" = {
-  let r = 1 > 2
-  not r
-}
-test "less or equal" = 2 <= 2
-test "less or equal lt" = 1 <= 2
-test "greater or equal" = 3 >= 3
-test "greater or equal gt" = 4 >= 3
-test "string equality" = "hello" == "hello"
-test "string inequality" = "a" != "b"
+
+// --- Negative numbers ---
+test "negative less positive" = -1 < 1
+test "negative comparison" = -5 < -2
+test "negative equal" = -3 == -3
+
+// --- Zero boundary ---
+test "zero less positive" = 0 < 1
+test "zero greater negative" = 0 > -1
+
+// --- String comparisons ---
+test "string equal" = "hello" == "hello"
+test "string not equal" = "a" != "b"
+test "string lexicographic" = "abc" < "abd"
+test "string prefix shorter" = "ab" < "abc"
+test "empty string less" = "" < "a"
+
+// --- Bool comparisons ---
+test "bool equal true" = true == true
+test "bool equal false" = false == false
+test "bool not equal" = true != false

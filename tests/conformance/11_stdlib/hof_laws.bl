@@ -1,0 +1,80 @@
+@prelude(core)
+
+// Conformance: higher-order function laws
+// Inspired by: Haskell Functor/Monad laws, QuickCheck property-based tests,
+//              OCaml List module documentation examples
+
+// --- Map laws ---
+
+test "map identity" = {
+  // Functor law: map id xs == xs
+  List.map([1, 2, 3, 4, 5], |x| x) == [1, 2, 3, 4, 5]
+}
+
+test "map composition" = {
+  // Functor law: map (f . g) xs == map f (map g xs)
+  let composed = List.map([1, 2, 3], |x| (x * 2) + 1)
+  let chained = List.map(List.map([1, 2, 3], |x| x * 2), |x| x + 1)
+  composed == chained
+}
+
+test "map preserves length" = {
+  List.length(List.map([1, 2, 3, 4, 5], |x| x * 100)) == 5
+}
+
+test "map distributes over concat" = {
+  let mapped_concat = List.map(List.concat([1, 2], [3, 4]), |x| x * 2)
+  let concat_mapped = List.concat(List.map([1, 2], |x| x * 2), List.map([3, 4], |x| x * 2))
+  mapped_concat == concat_mapped
+}
+
+// --- Fold properties ---
+
+test "fold sum equals manual" = {
+  List.fold([1, 2, 3, 4], 0, |a, b| a + b) == 10
+}
+
+test "fold length" = {
+  // length as fold (from Haskell standard definition)
+  List.fold([10, 20, 30], 0, |acc, _| acc + 1) == 3
+}
+
+test "fold reverse" = {
+  // reverse as fold (from Haskell standard definition)
+  List.fold([1, 2, 3], [], |acc, x| List.concat([x], acc)) == [3, 2, 1]
+}
+
+test "fold empty list" = {
+  List.fold([], 42, |acc, x| acc + x) == 42
+}
+
+// --- Filter properties ---
+
+test "filter idempotent" = {
+  // filter p (filter p xs) == filter p xs
+  let once = List.filter([1, 2, 3, 4, 5, 6], |x| x % 2 == 0)
+  let twice = List.filter(once, |x| x % 2 == 0)
+  twice == once
+}
+
+test "filter true keeps all" = {
+  List.filter([1, 2, 3], |_| true) == [1, 2, 3]
+}
+
+test "filter false removes all" = {
+  List.filter([1, 2, 3], |_| false) == []
+}
+
+// --- Combined operations ---
+
+test "filter then map" = {
+  let evens = List.filter([1, 2, 3, 4, 5, 6], |x| x % 2 == 0)
+  let result = List.map(evens, |x| x * 10)
+  result == [20, 40, 60]
+}
+
+test "map then fold" = {
+  let squares = List.map([1, 2, 3], |x| x * x)
+  let sum = List.fold(squares, 0, |a, b| a + b)
+  sum == 14
+}

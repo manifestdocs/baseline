@@ -107,7 +107,7 @@ proptest! {
         if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json)
             && let Some(diagnostics) = parsed["diagnostics"].as_array()
         {
-            let valid_prefixes = ["TYP_", "CAP_", "REF_", "SYN_", "IO_", "IMP_", "PRE_", "STY_"];
+            let valid_prefixes = ["TYP_", "CAP_", "REF_", "SYN_", "IO_", "IMP_", "PRE_", "STY_", "W_", "SPEC_"];
             for diag in diagnostics {
                 if let Some(code) = diag["code"].as_str() {
                     prop_assert!(

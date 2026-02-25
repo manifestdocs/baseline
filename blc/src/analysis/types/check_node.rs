@@ -240,6 +240,9 @@ fn check_node_inner(
 
             if def_node_candidate.kind() == "variant_list" {
                 // Sum type / enum
+                // First pass: register the enum name to allow recursive references
+                symbols.insert_type(name.clone(), Type::Enum(name.clone(), vec![]));
+
                 let mut variants = Vec::new();
                 let mut cursor = def_node_candidate.walk();
                 for child in def_node_candidate.children(&mut cursor) {
@@ -1732,8 +1735,9 @@ fn check_node_inner(
                     }
                 }
                 "++" => {
-                    // List concatenation: List<T> ++ List<T> -> List<T>
+                    // List and String concatenation
                     match (&left_type, &right_type) {
+                        (Type::String, Type::String) => Type::String,
                         (Type::List(inner_l), Type::List(inner_r)) => {
                             if types_compatible(inner_l, inner_r) {
                                 left_type.clone()
@@ -1759,11 +1763,11 @@ fn check_node_inner(
                                     severity: Severity::Error,
                                     location: Location::from_node(file, node),
                                     message: format!(
-                                        "Operator `++` requires List operands, found {} and {}",
+                                        "Operator `++` requires List or String operands, found {} and {}",
                                         left_type, right_type
                                     ),
                                     context:
-                                        "The ++ operator concatenates two lists of the same type."
+                                        "The ++ operator concatenates two lists of the same type or two strings."
                                             .to_string(),
                                     suggestions: vec![],
                                 });

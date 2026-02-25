@@ -99,10 +99,9 @@ for bench in "${BENCHES[@]}"; do
 
     echo -e "${BOLD}$bench${NC}"
 
-    for mode in vm jit llvm; do
+    for mode in jit llvm; do
         case "$mode" in
-            vm)   flag=""; label="baseline_vm" ;;
-            jit)  $HAS_JIT || continue; flag="--jit"; label="baseline_jit" ;;
+            jit)  $HAS_JIT || continue; flag=""; label="baseline_jit" ;;
             llvm) $HAS_LLVM || continue; flag="--llvm"; label="baseline_llvm" ;;
         esac
 

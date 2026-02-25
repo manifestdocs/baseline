@@ -1,15 +1,31 @@
 @prelude(core)
 
 // Conformance: float literals and arithmetic
+// Inspired by: IEEE 754 specification, Python float tests, Rust f64 tests
 
-test "positive float" = 3.14 == 3.14
-test "negative float" = -1.5 == -1.5
-test "zero float" = 0.0 == 0.0
+// Basic arithmetic (non-tautological: verify through operations)
 test "float addition" = 1.0 + 2.0 == 3.0
 test "float subtraction" = 5.0 - 2.0 == 3.0
 test "float multiplication" = 2.0 * 3.0 == 6.0
 test "float division" = 10.0 / 4.0 == 2.5
+test "negative float arithmetic" = -1.5 + 3.0 == 1.5
+test "zero float arithmetic" = 0.0 + 1.0 == 1.0
+
+// Comparisons
 test "float comparison lt" = 1.0 < 2.0
 test "float comparison gt" = 3.0 > 2.0
 test "float comparison le" = 2.0 <= 2.0
 test "float comparison ge" = 2.0 >= 2.0
+test "float comparison le strict" = 1.9 <= 2.0
+test "float comparison ge strict" = 2.1 >= 2.0
+
+// Precision: IEEE 754 double precision
+test "float associative add" = (0.1 + 0.2) + 0.3 != 0.1 + (0.2 + 0.3)  // IEEE 754: addition is NOT associative
+test "large float" = 1.0e10 + 1.0 > 1.0e10
+test "small float" = 0.0001 * 10000.0 == 1.0
+
+// Mixed with int conversion
+test "float in let binding" = {
+  let x = 3.14
+  x > 3.0
+}

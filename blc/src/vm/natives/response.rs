@@ -131,7 +131,7 @@ pub(super) fn native_response_with_header(args: &[NValue]) -> Result<NValue, Nat
     let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
     for (k, v) in &mut new_fields {
         if &**k == "headers" {
-            let mut headers = match v.as_list() {
+            let mut headers: Vec<NValue> = match v.as_list() {
                 Some(list) => list.clone(),
                 None => Vec::new(),
             };
@@ -179,7 +179,7 @@ pub(super) fn native_response_with_headers(args: &[NValue]) -> Result<NValue, Na
     let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
     for (k, v) in &mut new_fields {
         if &**k == "headers" {
-            let mut headers = match v.as_list() {
+            let mut headers: Vec<NValue> = match v.as_list() {
                 Some(list) => list.clone(),
                 None => Vec::new(),
             };
@@ -333,7 +333,7 @@ pub(super) fn native_response_set_cookie(args: &[NValue]) -> Result<NValue, Nati
     let mut new_fields: Vec<(RcStr, NValue)> = fields.clone();
     for (k, v) in &mut new_fields {
         if &**k == "headers" {
-            let mut headers = match v.as_list() {
+            let mut headers: Vec<NValue> = match v.as_list() {
                 Some(list) => list.clone(),
                 None => Vec::new(),
             };
