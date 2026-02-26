@@ -1,0 +1,14 @@
+@prelude(core)
+
+fn double(x: Int) -> Int = x * 2
+fn increment(x: Int) -> Int = x + 1
+
+fn main() -> () = {
+  let result = 5 |> double |> increment
+  let _ = Console.println!(Int.to_string(result))
+  let nums = [1, 2, 3, 4, 5]
+  let evens = List.filter(nums, |x| x % 2 == 0)
+  let doubled = List.map(evens, double)
+  let total = List.fold(doubled, 0, |a, b| a + b)
+  let _ = Console.println!(Int.to_string(total))
+}

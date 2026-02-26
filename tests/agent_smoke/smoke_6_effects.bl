@@ -1,0 +1,16 @@
+@prelude(core)
+
+fn greet!(name: String) -> () = {
+  let msg = "Hello, " ++ name ++ "!"
+  let _ = Console.println!(msg)
+}
+
+fn main() -> () = {
+  let _ = greet!("Baseline")
+}
+
+test "greeting format" = {
+  let name = "World"
+  let msg = "Hello, " ++ name ++ "!"
+  msg == "Hello, World!"
+}

@@ -1,0 +1,11 @@
+@prelude(core)
+
+type Port = Int where self > 0 && self <= 65535
+
+fn create_server(port: Port) -> String =
+  "Server on port " ++ Int.to_string(port)
+
+fn main() -> () = {
+  let addr: Port = 8080
+  let _ = Console.println!(create_server(addr))
+}
