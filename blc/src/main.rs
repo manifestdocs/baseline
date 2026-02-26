@@ -700,7 +700,7 @@ fn run_file_jit(file: &PathBuf) {
         Some(val) => {
             // Check for runtime errors stored in the thread-local error slot
             if let Some(err) = vm::jit::jit_take_error() {
-                eprintln!("Runtime Error: {}", err);
+                eprintln!("{}: Runtime Error: {}", file.display(), err);
                 std::process::exit(1);
             }
             if !val.is_unit() {

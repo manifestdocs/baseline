@@ -44,7 +44,14 @@ pub fn run_test_file_jit(path: &Path) -> TestSuiteResult {
         Err(e) => return empty_fail_result_msg(&e.message),
     };
 
-    let test_count = ir_test_module.tests.len();
+    // Collect test metadata before consuming the module
+    let test_meta: Vec<(String, usize)> = ir_test_module
+        .tests
+        .iter()
+        .filter(|t| !t.skip)
+        .map(|t| (t.name.clone(), t.line))
+        .collect();
+    let test_count = test_meta.len();
     if test_count == 0 {
         return empty_pass_result();
     }
@@ -60,12 +67,14 @@ pub fn run_test_file_jit(path: &Path) -> TestSuiteResult {
         Err(e) => return empty_fail_result_msg(&format!("JIT compile error: {}", e)),
     };
 
-    let passed = match program.run_entry_nvalue() {
-        Some(val) => val.is_int() && val.as_int() == 0,
-        None => false,
+    // The entry function returns the count of failed tests (0 = all pass)
+    let failed_count = match program.run_entry_nvalue() {
+        Some(val) if val.is_int() => (val.as_int().max(0) as usize).min(test_count),
+        _ => test_count,
     };
+    let passed_count = test_count - failed_count;
 
-    build_suite_result("JIT Execution", test_count, passed)
+    build_suite_result_counted(&test_meta, passed_count, failed_count)
 }
 
 #[cfg(not(feature = "jit"))]
@@ -108,7 +117,14 @@ pub fn run_test_file_aot(path: &Path) -> TestSuiteResult {
         Err(e) => return empty_fail_result_msg(&e.message),
     };
 
-    let test_count = ir_test_module.tests.len();
+    // Collect test metadata before consuming the module
+    let test_meta: Vec<(String, usize)> = ir_test_module
+        .tests
+        .iter()
+        .filter(|t| !t.skip)
+        .map(|t| (t.name.clone(), t.line))
+        .collect();
+    let test_count = test_meta.len();
     if test_count == 0 {
         return empty_pass_result();
     }
@@ -126,7 +142,7 @@ pub fn run_test_file_aot(path: &Path) -> TestSuiteResult {
 
     let tmp_dir = std::env::temp_dir();
     let exe_path = tmp_dir.join(format!("blc_test_aot_{}", std::process::id()));
-    
+
     // Find libbaseline_rt
     let mut rt_lib = None;
     if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
@@ -151,7 +167,14 @@ pub fn run_test_file_aot(path: &Path) -> TestSuiteResult {
 
     let _ = std::fs::remove_file(&exe_path);
 
-    build_suite_result("AOT Execution", test_count, passed)
+    // AOT runner: exit code 0 = all pass, non-zero = some failed.
+    // We don't know the exact failure count, so report all-or-nothing.
+    let (passed_count, failed_count) = if passed {
+        (test_count, 0)
+    } else {
+        (0, test_count)
+    };
+    build_suite_result_counted(&test_meta, passed_count, failed_count)
 }
 
 #[cfg(not(feature = "aot"))]
@@ -188,24 +211,43 @@ fn empty_pass_result() -> TestSuiteResult {
     }
 }
 
-fn build_suite_result(name: &str, count: usize, passed: bool) -> TestSuiteResult {
+fn build_suite_result_counted(
+    test_meta: &[(String, usize)],
+    passed_count: usize,
+    failed_count: usize,
+) -> TestSuiteResult {
+    let total = passed_count + failed_count;
     let mut tests = Vec::new();
-    for i in 0..count {
+
+    // We know the total passed/failed counts but not which specific tests failed.
+    // Mark the first `passed_count` as pass and the rest as fail.
+    for (i, (name, line)) in test_meta.iter().enumerate() {
+        let is_pass = i < passed_count;
         tests.push(TestResult {
-            name: format!("{} test {}", name, i),
-            status: if passed { TestStatus::Pass } else { TestStatus::Fail },
-            message: if passed { None } else { Some("Native execution failed".to_string()) },
-            location: Location { file: String::new(), line: 0, col: 0, end_line: None, end_col: None },
+            name: name.clone(),
+            status: if is_pass { TestStatus::Pass } else { TestStatus::Fail },
+            message: if is_pass { None } else { Some("Assertion failed".to_string()) },
+            location: Location {
+                file: String::new(),
+                line: *line,
+                col: 0,
+                end_line: None,
+                end_col: None,
+            },
         });
     }
-    
+
     TestSuiteResult {
-        status: if passed { "pass".to_string() } else { "fail".to_string() },
+        status: if failed_count == 0 {
+            "pass".to_string()
+        } else {
+            "fail".to_string()
+        },
         tests,
         summary: TestSummary {
-            total: count,
-            passed: if passed { count } else { 0 },
-            failed: if passed { 0 } else { count },
+            total,
+            passed: passed_count,
+            failed: failed_count,
             skipped: 0,
         },
     }

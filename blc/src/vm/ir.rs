@@ -417,11 +417,11 @@ pub struct IrTestModule {
 impl IrTestModule {
     /// Convert this test module into a standard executable module
     /// where the entry function runs all tests sequentially.
-    /// Returns 0 if all tests pass, 1 if any test fails.
+    /// Returns the count of failed tests (0 = all pass).
     pub fn into_executable_module(self) -> IrModule {
         let mut functions = self.functions;
         let mut test_calls = Vec::new();
-        
+
         for (i, test) in self.tests.into_iter().enumerate() {
             if test.skip { continue; }
             let name = format!("__test_{}", i);
@@ -434,7 +434,9 @@ impl IrTestModule {
             });
             test_calls.push(name);
         }
-        
+
+        // Build: (if test_0() then 0 else 1) + (if test_1() then 0 else 1) + ... + 0
+        // Returns the total count of failed tests.
         let mut body = Expr::Int(0);
         for name in test_calls.into_iter().rev() {
             let call = Expr::CallDirect {
@@ -442,10 +444,16 @@ impl IrTestModule {
                 args: vec![],
                 ty: Some(Type::Bool),
             };
-            body = Expr::If {
+            let test_result = Expr::If {
                 condition: Box::new(call),
-                then_branch: Box::new(body),
+                then_branch: Box::new(Expr::Int(0)),
                 else_branch: Some(Box::new(Expr::Int(1))),
+                ty: Some(Type::Int),
+            };
+            body = Expr::BinOp {
+                op: BinOp::Add,
+                lhs: Box::new(test_result),
+                rhs: Box::new(body),
                 ty: Some(Type::Int),
             };
         }

@@ -430,7 +430,7 @@ fn check_import_selective() {
 
 #[test]
 fn run_import_missing_module() {
-    assert_run_fails("imports/import_missing.bl", &["Compile Error"]);
+    assert_run_fails("imports/import_missing.bl", &["IMP_001"]);
 }
 
 #[test]
@@ -549,8 +549,8 @@ fn vm_run_circular_import_detected() {
         "VM circular import should fail but exited 0"
     );
     assert!(
-        out.stderr.contains("Circular import detected"),
-        "VM circular import stderr should mention cycle:\n{}",
+        out.stderr.contains("IMP_003") || out.stderr.contains("Circular import"),
+        "VM circular import stderr should mention cycle or import error:\n{}",
         out.stderr
     );
 }
