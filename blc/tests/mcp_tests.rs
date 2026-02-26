@@ -267,6 +267,217 @@ fn test_docs_search() {
 }
 
 #[test]
+fn test_test_tool_passing() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    // Write a temp test file
+    let dir = tempfile::tempdir().unwrap();
+    let test_file = dir.path().join("test_pass.bl");
+    std::fs::write(
+        &test_file,
+        "@prelude(core)\ntest \"one plus one\" = 1 + 1 == 2\ntest \"true\" = true\n",
+    )
+    .unwrap();
+
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "baseline/test",
+                "arguments": { "file": test_file.to_str().unwrap() }
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    let content = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: Value = serde_json::from_str(content).unwrap();
+    assert_eq!(result["status"], "pass");
+    assert_eq!(result["summary"]["passed"], 2);
+    assert_eq!(result["summary"]["failed"], 0);
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_test_tool_failing() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    let dir = tempfile::tempdir().unwrap();
+    let test_file = dir.path().join("test_fail.bl");
+    std::fs::write(
+        &test_file,
+        "@prelude(core)\ntest \"wrong\" = 1 + 1 == 3\n",
+    )
+    .unwrap();
+
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "baseline/test",
+                "arguments": { "file": test_file.to_str().unwrap() }
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    let content = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let result: Value = serde_json::from_str(content).unwrap();
+    assert_eq!(result["status"], "fail");
+    assert_eq!(result["summary"]["failed"], 1);
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_check_no_params_error() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "baseline/check",
+                "arguments": {}
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    // Should return an error, not crash
+    assert!(resp.get("error").is_some() || resp["result"]["isError"] == true);
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_check_file_not_found() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "baseline/check",
+                "arguments": { "file": "/nonexistent/path.bl" }
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    // Should return error, not crash
+    assert!(resp.get("error").is_some() || resp["result"]["isError"] == true);
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_reference_invalid_section() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "baseline/reference",
+                "arguments": { "section": "nonexistent_section" }
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    // Should return error with available sections, not crash
+    assert!(resp.get("error").is_some());
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_docs_module_filter() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "baseline/docs",
+                "arguments": { "module": "List" }
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    let content = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let docs: Value = serde_json::from_str(content).unwrap();
+    let modules = docs["modules"].as_array().unwrap();
+    assert_eq!(modules.len(), 1);
+    assert_eq!(modules[0]["name"], "List");
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
+fn test_docs_index() {
+    let (mut stdin, mut stdout, mut child) = spawn_mcp();
+    initialize(&mut stdin, &mut stdout);
+
+    // No query, no module → lightweight index
+    send_jsonrpc(
+        &mut stdin,
+        &json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "tools/call",
+            "params": {
+                "name": "baseline/docs",
+                "arguments": {}
+            }
+        }),
+    );
+
+    let resp = read_jsonrpc(&mut stdout);
+    let content = resp["result"]["content"][0]["text"].as_str().unwrap();
+    let index: Value = serde_json::from_str(content).unwrap();
+    // Index should have modules and total_functions
+    assert!(!index["modules"].as_array().unwrap().is_empty());
+    assert!(index["total_functions"].as_u64().unwrap() > 0);
+
+    drop(stdin);
+    let _ = child.wait();
+}
+
+#[test]
 fn test_resources_list_and_read() {
     let (mut stdin, mut stdout, mut child) = spawn_mcp();
     initialize(&mut stdin, &mut stdout);

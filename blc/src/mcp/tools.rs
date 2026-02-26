@@ -169,7 +169,7 @@ impl BaselineMcp {
     )]
     async fn test(&self, params: Parameters<TestRequest>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&params.0.file);
-        let result = crate::vm::test_runner::run_test_file(&path);
+        let result = crate::vm::test_runner::run_test_file_jit(&path);
         let json = serde_json::to_string_pretty(&result)
             .map_err(|e| McpError::internal_error(format!("JSON error: {}", e), None))?;
         Ok(CallToolResult::success(vec![Content::text(json)]))
