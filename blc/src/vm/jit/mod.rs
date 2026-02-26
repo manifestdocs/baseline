@@ -128,7 +128,23 @@ impl JitProgram {
         }
         let guard = CleanupGuard { rc_enabled };
 
-        let raw = func();
+        // Catch panics from JIT-compiled code to prevent process abort.
+        let raw = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(func)) {
+            Ok(val) => val,
+            Err(payload) => {
+                // Extract panic message
+                let msg = if let Some(s) = payload.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = payload.downcast_ref::<&str>() {
+                    s.to_string()
+                } else {
+                    "unknown panic in JIT-compiled code".to_string()
+                };
+                helpers::jit_set_error(format!("JIT runtime panic: {}", msg));
+                drop(guard);
+                return None;
+            }
+        };
 
         // Extract the return value BEFORE draining the arena.
         // borrow_from_raw increments the Arc refcount, so the return value
@@ -361,7 +377,7 @@ fn compile_inner(
     // Declare runtime helpers as imported functions
     let mut helper_ids: HashMap<&str, FuncId> = HashMap::new();
     for &name in HELPER_NAMES {
-        let sig = make_helper_sig(&mut jit_module, name, ptr_type);
+        let sig = make_helper_sig(&mut jit_module, name, ptr_type)?;
         let id = jit_module
             .declare_function(name, Linkage::Import, &sig)
             .map_err(|e| e.to_string())?;
@@ -425,7 +441,9 @@ fn compile_inner(
         if !compilable[i] {
             continue;
         }
-        let func_id = func_ids[i].unwrap();
+        let func_id = func_ids[i].ok_or_else(|| {
+            format!("JIT: function '{}' was not declared", func.name)
+        })?;
         let start = std::time::Instant::now();
 
         let mut cl_func = cranelift_codegen::ir::Function::new();
@@ -576,7 +594,9 @@ fn compile_inner(
     // The wrapper bridges to the host's C ABI so transmute to fn()->u64 works.
     let entry_wrapper_id: Option<FuncId> = if compilable.get(module.entry).copied().unwrap_or(false)
     {
-        let entry_func_id = func_ids[module.entry].unwrap();
+        let entry_func_id = func_ids[module.entry].ok_or_else(|| {
+            "JIT: entry function was not compiled".to_string()
+        })?;
 
         // Platform-default CC (SystemV on Linux, AppleAarch64 on macOS ARM64)
         let mut wrapper_sig = jit_module.make_signature();
@@ -618,10 +638,26 @@ fn compile_inner(
         None
     };
 
-    // Phase 3: Finalize and get function pointers
-    jit_module
-        .finalize_definitions()
-        .map_err(|e| e.to_string())?;
+    // Phase 3: Finalize and get function pointers.
+    // Wrap in catch_unwind because Cranelift may panic on unresolvable symbols
+    // (e.g., unsupported IR constructs that produce undefined function references).
+    let finalize_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        jit_module.finalize_definitions()
+    }));
+    match finalize_result {
+        Ok(Ok(())) => {}
+        Ok(Err(e)) => return Err(e.to_string()),
+        Err(payload) => {
+            let msg = if let Some(s) = payload.downcast_ref::<String>() {
+                s.clone()
+            } else if let Some(s) = payload.downcast_ref::<&str>() {
+                s.to_string()
+            } else {
+                "unknown panic".to_string()
+            };
+            return Err(format!("JIT compilation failed: {}", msg));
+        }
+    }
 
     let mut dispatch: Vec<Option<*const u8>> = Vec::with_capacity(module.functions.len());
     for (i, _) in module.functions.iter().enumerate() {
@@ -678,7 +714,7 @@ pub(super) fn make_helper_sig<M: Module>(
     module: &mut M,
     name: &str,
     ptr_type: cranelift_codegen::ir::Type,
-) -> cranelift_codegen::ir::Signature {
+) -> Result<cranelift_codegen::ir::Signature, String> {
     let mut sig = module.make_signature();
     // Platform-default CC (SystemV on Linux x86_64, AppleAarch64 on macOS ARM64).
     // Matches the `extern "C"` ABI of our Rust runtime helper functions.
@@ -848,7 +884,7 @@ pub(super) fn make_helper_sig<M: Module>(
             // (enabled: i64) -> void
             sig.params.push(AbiParam::new(types::I64));
         }
-        _ => panic!("Unknown helper: {}", name),
+        _ => return Err(format!("JIT: unknown runtime helper '{}'", name)),
     }
-    sig
+    Ok(sig)
 }

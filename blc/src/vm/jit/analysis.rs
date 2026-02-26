@@ -111,7 +111,9 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
             }
 
             // JIT path: resolve through registry
-            let reg = natives.unwrap();
+            let Some(reg) = natives else {
+                return false;
+            };
             // Inline HOFs are always allowed (compiled as pure IR in stdlib)
             let is_inline_hof = matches!(
                 qualified.as_str(),
