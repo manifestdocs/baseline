@@ -1,0 +1,5 @@
+@prelude(core)
+
+fn main() -> () = {
+  let _ = Console.println!("Hello, World!")
+}

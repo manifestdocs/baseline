@@ -1,0 +1,21 @@
+@prelude(core)
+
+type ParseError = { message: String }
+
+fn parse_int(s: String) -> Result<Int, ParseError> =
+  match String.to_int(s)
+    Some(n) -> Ok(n)
+    None -> Err(ParseError { message: "Not a number: " ++ s })
+
+fn main() -> () = {
+  let good = parse_int("42")
+  let bad = parse_int("abc")
+  let msg1 = match good
+    Ok(n) -> "Parsed: " ++ Int.to_string(n)
+    Err(e) -> "Error: " ++ e.message
+  let msg2 = match bad
+    Ok(n) -> "Parsed: " ++ Int.to_string(n)
+    Err(e) -> "Error: " ++ e.message
+  let _ = Console.println!(msg1)
+  let _ = Console.println!(msg2)
+}

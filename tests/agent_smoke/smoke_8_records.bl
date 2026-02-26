@@ -1,0 +1,13 @@
+@prelude(core)
+
+type User = { name: String, age: Int }
+
+fn describe(user: User) -> String =
+  "${user.name} is ${Int.to_string(user.age)} years old"
+
+fn main() -> () = {
+  let alice = User { name: "Alice", age: 30 }
+  let _ = Console.println!(describe(alice))
+  let older = User { ..alice, age: 31 }
+  let _ = Console.println!(describe(older))
+}

@@ -30,11 +30,11 @@ Baseline:  `items |> List.filter(|x| x > 0) |> List.map(|x| x * 2)`
 
 ### Error Handling
 Python:    `try: val = risky() / except: val = default`
-Baseline:  `match risky() { Ok(v) -> v, Err(_) -> default }`
+Baseline:  `match risky()` then indented arms: `Ok(v) -> v` / `Err(_) -> default`
 
 ### Null Handling
 Python:    `if x is not None: use(x)`
-Baseline:  `match x { Some(v) -> use(v), None -> fallback }`
+Baseline:  `match x` then indented arms: `Some(v) -> use(v)` / `None -> fallback`
 
 ### String Concatenation
 Python:    `greeting = "Hello, " + name + "!"`
@@ -211,7 +211,9 @@ WRONG: `!valid`             -> RIGHT: `not valid` — `!` is for effects, `not` 
 WRONG: `"a" + "b"`          -> RIGHT: `"${a}${b}"` — no `+` for string concatenation
 WRONG: `return x`           -> RIGHT: `x` — last expression is the return value
 WRONG: `let mut x = 0`      -> RIGHT: restructure with recursion or `List.fold`
-WRONG: `try { risky() }`    -> RIGHT: `match risky() { Ok(v) -> v, Err(e) -> handle(e) }`
+WRONG: `try { risky() }`    -> RIGHT: `match risky()` with indented arms (NO braces)
+WRONG: `match x { ... }`    -> RIGHT: `match x` then newline + indented arms — NO curly braces
+WRONG: `Int.parse("42")`    -> RIGHT: `String.to_int("42")` — returns `Option<Int>`
 WRONG: `async fn fetch()`   -> RIGHT: `fn fetch!()` — effects replace async/await
 WRONG: `x; y; z`            -> RIGHT: `{ let _ = x  let _ = y  z }` — no semicolons
 WRONG: `fn foo { ... }`     -> RIGHT: `fn foo() -> Type = expr` — signature required
@@ -220,7 +222,7 @@ WRONG: `import { foo }`     -> RIGHT: `import Foo { bar }` — module names are 
 ## Standard Library
 
 ### Core (`@prelude(core)`)
-- **Int**: `to_string(Int) -> String`, `parse(String) -> Int`
+- **Int**: `to_string(Int) -> String`
 - **Option**: `unwrap`, `unwrap_or`, `is_some`, `is_none`, `map`, `flat_map`
 - **Result**: `unwrap`, `unwrap_or`, `is_ok`, `is_err`, `map`, `and_then`, `map_err`, `context`
 - **Map**: `empty`, `insert`, `get`, `remove`, `contains`, `keys`, `values`, `len`, `from_list`
@@ -322,7 +324,7 @@ fn main!() = {
 ```
 blc check file.bl           # Type/effect check
 blc check file.bl --json    # JSON diagnostics
-blc run file.bl             # Compile and run (VM)
+blc run file.bl             # Compile and run (JIT)
 blc test file.bl            # Run inline tests
 blc test file.bl --json     # JSON test output
 blc fmt file.bl             # Format source

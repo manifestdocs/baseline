@@ -1,0 +1,10 @@
+@prelude(core)
+
+fn double(x: Int) -> Int = x * 2
+
+fn main() -> () = {
+  let nums = [1, 2, 3, 4, 5]
+  let result = List.map(nums, double)
+  let sum = List.fold(result, 0, |acc, x| acc + x)
+  let _ = Console.println!(Int.to_string(sum))
+}
