@@ -6,5 +6,11 @@ license.workspace = true
 repository.workspace = true
 description = "Runtime library for Baseline AOT-compiled programs"
 
+[features]
+default = []
+# Use non-atomic Rc instead of Arc for single-threaded execution.
+# ~2x faster refcount ops but NValue becomes !Send + !Sync.
+non-atomic-rc = []
+
 [lib]
 crate-type = ["lib", "staticlib"]

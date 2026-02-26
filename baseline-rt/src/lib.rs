@@ -5,4 +5,5 @@
 pub mod helpers;
 pub mod natives;
 pub mod nvalue;
+pub mod rc;
 pub mod value;

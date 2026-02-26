@@ -140,7 +140,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.call_helper("jit_rc_incref", &[val])
     }
 
-    /// Emit a decref call.
+    /// Emit a decref call for a NaN-boxed value.
+    /// jit_rc_decref checks the tag internally and is a no-op for non-heap values.
     pub(super) fn emit_decref(&mut self, val: CValue) {
         self.call_helper_void("jit_rc_decref", &[val]);
     }

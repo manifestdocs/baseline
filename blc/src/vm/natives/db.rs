@@ -2,7 +2,7 @@ use std::cell::RefCell;
 
 use rusqlite::{Connection, params_from_iter};
 
-use std::sync::Arc;
+use baseline_rt::rc::Rc;
 
 use super::db_backend::{self, ColumnNames, Row, SqlValue};
 use super::{NValue, NativeError, RcStr};
@@ -63,7 +63,7 @@ pub fn sqlite_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeErro
             .prepare(sql)
             .map_err(|e| NativeError(format!("SQLite query: {}", e)))?;
 
-        let columns: ColumnNames = Arc::new(
+        let columns: ColumnNames = Rc::new(
             stmt.column_names()
                 .iter()
                 .map(|s| RcStr::from(*s))

@@ -5,8 +5,8 @@
 //! records, enums, closures) and indirect call dispatch.
 
 use std::cell::{Cell, RefCell};
-use std::sync::Arc;
 
+use crate::rc::{self, Rc};
 use crate::nvalue::{
     HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT,
 };
@@ -204,7 +204,7 @@ pub extern "C" fn jit_enum_field_get(subject_bits: u64, index: u64) -> u64 {
 /// Used before a recursive call so the extracted binding becomes sole owner,
 /// enabling cascading in-place updates (clone-on-write).
 ///
-/// Uses raw pointer mutation to bypass Arc::get_mut(). This is safe because:
+/// Uses raw pointer mutation to bypass Rc::get_mut(). This is safe because:
 /// 1. The field was already extracted via jit_enum_field_get (clone) before this call
 /// 2. Extra Arc refs are "ghost" refs from the JIT's RC incref-on-read model
 /// 3. Those ghost refs only participate in decref at scope exit, never read the payload
@@ -229,7 +229,7 @@ pub extern "C" fn jit_enum_field_drop(enum_bits: u64, field_idx: u64) {
 /// Update a single field in a flat enum via in-place mutation.
 /// Takes ownership of new_value_bits. The enum is mutated in place via raw pointer.
 ///
-/// Uses raw pointer mutation to bypass Arc::get_mut(). This is safe because:
+/// Uses raw pointer mutation to bypass Rc::get_mut(). This is safe because:
 /// 1. jit_enum_field_drop already nulled the old field value
 /// 2. Extra Arc refs are "ghost" refs from the JIT's RC incref-on-read model
 /// 3. Those ghost refs only participate in decref at scope exit, never read the payload
@@ -979,7 +979,7 @@ pub extern "C" fn jit_rc_incref(bits: u64) -> u64 {
     if bits & TAG_MASK == TAG_HEAP {
         let ptr = (bits & PAYLOAD_MASK) as *const HeapObject;
         unsafe {
-            Arc::increment_strong_count(ptr);
+            rc::increment_strong_count(ptr);
         }
     }
     bits
@@ -990,23 +990,30 @@ pub extern "C" fn jit_rc_incref(bits: u64) -> u64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_rc_decref(bits: u64) {
     if bits & TAG_MASK == TAG_HEAP {
-        let ptr = (bits & PAYLOAD_MASK) as *const HeapObject;
-        // In debug builds, track deallocation in alloc_stats (matches NValue::drop logic)
-        #[cfg(debug_assertions)]
-        {
-            let is_last = unsafe {
-                let arc = Arc::from_raw(ptr);
-                let count = Arc::strong_count(&arc);
-                std::mem::forget(arc);
-                count == 1
-            };
-            if is_last {
-                crate::nvalue::record_free();
-            }
+        jit_rc_decref_heap(bits);
+    }
+}
+
+/// Decrement the reference count of a value already known to be heap-allocated.
+/// The caller must have verified `bits & TAG_MASK == TAG_HEAP`.
+/// This avoids the tag check when the JIT inlines the non-heap fast path.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_rc_decref_heap(bits: u64) {
+    let ptr = (bits & PAYLOAD_MASK) as *const HeapObject;
+    #[cfg(debug_assertions)]
+    {
+        let is_last = unsafe {
+            let arc = Rc::from_raw(ptr);
+            let count = Rc::strong_count(&arc);
+            std::mem::forget(arc);
+            count == 1
+        };
+        if is_last {
+            crate::nvalue::record_free();
         }
-        unsafe {
-            Arc::decrement_strong_count(ptr);
-        }
+    }
+    unsafe {
+        rc::decrement_strong_count(ptr);
     }
 }
 

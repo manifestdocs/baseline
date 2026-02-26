@@ -543,7 +543,7 @@ pub(crate) fn native_row_decode(args: &[NValue]) -> Result<NValue, NativeError> 
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use baseline_rt::rc::Rc;
 
     use super::*;
 
@@ -561,7 +561,7 @@ mod tests {
     }
 
     fn make_typed_row(cols: &[&str], vals: Vec<SqlValue>) -> NValue {
-        let columns = Arc::new(cols.iter().map(|s| RcStr::from(*s)).collect());
+        let columns = Rc::new(cols.iter().map(|s| RcStr::from(*s)).collect());
         NValue::row(columns, vals)
     }
 

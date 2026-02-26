@@ -12,8 +12,9 @@
 //!   Heap:     0xFFFE_PPPP_PPPP_PPPP  (P = pointer to Arc<HeapObject> inner data)
 
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::rc::{self, Rc};
 
 use crate::value::{RcStr, Value};
 
@@ -32,7 +33,7 @@ pub enum SqlValue {
 }
 
 /// Shared column names across all rows from a single query.
-pub type ColumnNames = Arc<Vec<RcStr>>;
+pub type ColumnNames = Rc<Vec<RcStr>>;
 
 // ---------------------------------------------------------------------------
 // Tag constants
@@ -173,7 +174,10 @@ pub enum HeapObject {
     /// Set: unique elements.
     Set(Vec<NValue>),
     /// Weak reference to a heap object (does not prevent deallocation).
+    #[cfg(not(feature = "non-atomic-rc"))]
     WeakRef(Box<std::sync::Weak<HeapObject>>),
+    #[cfg(feature = "non-atomic-rc")]
+    WeakRef(Box<std::rc::Weak<HeapObject>>),
     /// Integers that don't fit in 48-bit signed range.
     BigInt(i64),
     /// Opaque native object — used for Scope handles, Cell handles, and other
@@ -181,7 +185,7 @@ pub enum HeapObject {
     /// The `&'static str` tag identifies the type for runtime dispatch.
     NativeObject {
         tag: &'static str,
-        data: Arc<dyn std::any::Any + Send + Sync>,
+        data: std::sync::Arc<dyn std::any::Any + Send + Sync>,
     },
     /// One-shot delimited continuation captured at an effect perform site.
     /// Stores the stack/frame/handler segment between handler boundary and perform.
@@ -255,12 +259,15 @@ impl PartialEq for HeapObject {
             ) => c1 == c2 && u1 == u2,
             (HeapObject::Map(a), HeapObject::Map(b)) => a == b,
             (HeapObject::Set(a), HeapObject::Set(b)) => a == b,
+            #[cfg(not(feature = "non-atomic-rc"))]
             (HeapObject::WeakRef(a), HeapObject::WeakRef(b)) => std::sync::Weak::ptr_eq(a, b),
+            #[cfg(feature = "non-atomic-rc")]
+            (HeapObject::WeakRef(a), HeapObject::WeakRef(b)) => std::rc::Weak::ptr_eq(a, b),
             (HeapObject::BigInt(a), HeapObject::BigInt(b)) => a == b,
             (
                 HeapObject::NativeObject { tag: t1, data: d1 },
                 HeapObject::NativeObject { tag: t2, data: d2 },
-            ) => t1 == t2 && Arc::ptr_eq(d1, d2),
+            ) => t1 == t2 && std::sync::Arc::ptr_eq(d1, d2),
             (
                 HeapObject::Row {
                     columns: c1,
@@ -270,7 +277,7 @@ impl PartialEq for HeapObject {
                     columns: c2,
                     values: v2,
                 },
-            ) => Arc::ptr_eq(c1, c2) && v1 == v2,
+            ) => Rc::ptr_eq(c1, c2) && v1 == v2,
             _ => false,
         }
     }
@@ -446,7 +453,13 @@ impl NValue {
         Self::from_heap(HeapObject::Set(elems))
     }
 
+    #[cfg(not(feature = "non-atomic-rc"))]
     pub fn weak_ref(w: std::sync::Weak<HeapObject>) -> Self {
+        Self::from_heap(HeapObject::WeakRef(Box::new(w)))
+    }
+
+    #[cfg(feature = "non-atomic-rc")]
+    pub fn weak_ref(w: std::rc::Weak<HeapObject>) -> Self {
         Self::from_heap(HeapObject::WeakRef(Box::new(w)))
     }
 
@@ -483,7 +496,7 @@ impl NValue {
     }
 
     /// Create a native object NValue (Scope handle, Cell handle, etc.).
-    pub fn native_object(tag: &'static str, data: Arc<dyn std::any::Any + Send + Sync>) -> Self {
+    pub fn native_object(tag: &'static str, data: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
         Self::from_heap(HeapObject::NativeObject { tag, data })
     }
 
@@ -498,8 +511,8 @@ impl NValue {
     }
 
     fn from_heap(obj: HeapObject) -> Self {
-        let rc = Arc::new(obj);
-        let ptr = Arc::into_raw(rc) as u64;
+        let rc = Rc::new(obj);
+        let ptr = Rc::into_raw(rc) as u64;
         debug_assert!(ptr & TAG_MASK == 0, "heap pointer exceeds 48 bits");
         #[cfg(debug_assertions)]
         ALLOC_STATS.allocs.fetch_add(1, Ordering::Relaxed);
@@ -649,11 +662,11 @@ impl NValue {
         // SAFETY: We reconstruct the Arc from the raw pointer, attempt get_mut,
         // then convert back to raw to avoid dropping. The NValue owns one strong ref.
         unsafe {
-            let mut arc = Arc::from_raw(ptr);
-            let result = Arc::get_mut(&mut arc);
+            let mut arc = Rc::from_raw(ptr);
+            let result = Rc::get_mut(&mut arc);
             let got_mut = result.is_some();
-            // Convert back to raw pointer (don't drop the Arc)
-            let _ = Arc::into_raw(arc);
+            // Convert back to raw pointer (don't drop the Rc)
+            let _ = Rc::into_raw(arc);
             if got_mut {
                 // We confirmed strong_count == 1, so we have exclusive access.
                 Some(&mut *ptr)
@@ -754,7 +767,7 @@ impl NValue {
 
     /// Attempt to unwrap the inner HeapObject if this NValue is the sole owner.
     ///
-    /// Uses `Arc::try_unwrap` under the hood. On success (strong_count == 1),
+    /// Uses `Rc::try_unwrap` under the hood. On success (strong_count == 1),
     /// the NValue is consumed and the inner HeapObject is returned directly
     /// without cloning. On failure (aliased), returns `Err(self)` so the
     /// caller can fall back to a clone-based path.
@@ -764,33 +777,33 @@ impl NValue {
             return Err(self);
         }
         let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
-        let arc = unsafe { Arc::from_raw(ptr) };
+        let arc = unsafe { Rc::from_raw(ptr) };
         let bits = self.0;
         std::mem::forget(self);
-        match Arc::try_unwrap(arc) {
+        match Rc::try_unwrap(arc) {
             Ok(inner) => {
                 #[cfg(debug_assertions)]
                 ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
                 Ok(inner)
             }
             Err(arc) => {
-                let _ = Arc::into_raw(arc);
+                let _ = Rc::into_raw(arc);
                 Err(unsafe { NValue::from_raw(bits) })
             }
         }
     }
 
-    /// Reconstruct the Arc<HeapObject> from a heap NValue (increments strong count).
+    /// Reconstruct the Rc<HeapObject> from a heap NValue (increments strong count).
     /// Returns None for non-heap values.
     #[inline]
-    pub fn as_arc(&self) -> Option<Arc<HeapObject>> {
+    pub fn as_rc(&self) -> Option<Rc<HeapObject>> {
         if !self.is_heap() {
             return None;
         }
         let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
         unsafe {
-            Arc::increment_strong_count(ptr);
-            Some(Arc::from_raw(ptr))
+            rc::increment_strong_count(ptr);
+            Some(Rc::from_raw(ptr))
         }
     }
 
@@ -826,7 +839,7 @@ impl Clone for NValue {
         if self.is_heap() {
             let ptr = (self.0 & PAYLOAD_MASK) as *const HeapObject;
             unsafe {
-                Arc::increment_strong_count(ptr);
+                rc::increment_strong_count(ptr);
             }
         }
         NValue(self.0)
@@ -843,11 +856,11 @@ impl Drop for NValue {
             // In debug builds, track free count for leak detection.
             #[cfg(debug_assertions)]
             {
-                // SAFETY: We reconstruct the Arc only to read strong_count,
+                // SAFETY: We reconstruct the Rc only to read strong_count,
                 // then forget it so we don't double-drop.
                 let is_last = unsafe {
-                    let arc = Arc::from_raw(ptr);
-                    let count = Arc::strong_count(&arc);
+                    let arc = Rc::from_raw(ptr);
+                    let count = Rc::strong_count(&arc);
                     std::mem::forget(arc);
                     count == 1
                 };
@@ -855,11 +868,11 @@ impl Drop for NValue {
                     ALLOC_STATS.frees.fetch_add(1, Ordering::Relaxed);
                 }
             }
-            // SAFETY: is_heap() guarantees ptr is a valid Arc pointer.
+            // SAFETY: is_heap() guarantees ptr is a valid Rc pointer.
             // This NValue owns exactly one strong count, which we're releasing.
             // If this is the last reference, the HeapObject will be deallocated.
             unsafe {
-                Arc::decrement_strong_count(ptr);
+                rc::decrement_strong_count(ptr);
             }
         }
     }
@@ -1027,6 +1040,7 @@ impl fmt::Debug for NValue {
 
 impl NValue {
     pub fn to_value(&self) -> Value {
+        use std::sync::Arc; // Value type uses std::sync::Arc
         if self.is_int() {
             return Value::Int(self.as_int());
         }

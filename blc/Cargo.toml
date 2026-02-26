@@ -15,7 +15,8 @@ name = "blc"
 path = "src/main.rs"
 
 [features]
-default = ["jit"]
+default = ["jit", "non-atomic-rc"]
+non-atomic-rc = ["baseline-rt/non-atomic-rc"]
 jit = [
     "dep:cranelift-codegen",
     "dep:cranelift-frontend",

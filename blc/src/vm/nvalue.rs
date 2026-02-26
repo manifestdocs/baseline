@@ -1168,6 +1168,8 @@ mod tests {
 
     // Compile-time assertion: NValue must be Send+Sync
     // for cross-fiber sharing in the structured concurrency runtime.
+    // Skipped when non-atomic-rc is enabled (Rc is !Send + !Sync).
+    #[cfg(not(feature = "non-atomic-rc"))]
     const _: () = {
         fn assert_send_sync<T: Send + Sync>() {}
         fn check() {
