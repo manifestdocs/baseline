@@ -422,7 +422,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         // call_block: emit the actual recursive call
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);
-        let func_id = self.func_ids[func_idx].unwrap();
+        let func_id = self.func_ids[func_idx].ok_or_else(|| {
+            format!("JIT: speculated function at index {} was not declared", func_idx)
+        })?;
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let callee_unboxed = func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
         let call_result = if callee_unboxed {
@@ -857,7 +859,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.seal_block(call_block);
 
         // Call the unboxed function: pass raw args, receive raw result
-        let func_id = self.func_ids[func_idx].unwrap();
+        let func_id = self.func_ids[func_idx].ok_or_else(|| {
+            format!("JIT: unboxed speculated function at index {} was not declared", func_idx)
+        })?;
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let call = self.builder.ins().call(func_ref, &arg_vals);
         let call_result = self.builder.inst_results(call)[0];

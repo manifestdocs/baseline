@@ -309,7 +309,7 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
         if name == "jit_call_native" {
             continue;
         }
-        let sig = make_helper_sig(&mut obj_module, name, ptr_type);
+        let sig = make_helper_sig(&mut obj_module, name, ptr_type)?;
         let id = obj_module
             .declare_function(name, Linkage::Import, &sig)
             .map_err(|e| e.to_string())?;
@@ -402,7 +402,9 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
         .collect();
 
     for (i, func) in module.functions.iter().enumerate() {
-        let func_id = func_ids[i].unwrap();
+        let func_id = func_ids[i].ok_or_else(|| {
+            format!("AOT: function '{}' was not declared", func.name)
+        })?;
         let start = std::time::Instant::now();
         let is_unboxed = unboxed_flags[i];
 
