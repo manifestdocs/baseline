@@ -4,31 +4,42 @@ Baseline is a strongly typed, effect-based programming language. This guide take
 
 ## Installation
 
-Baseline requires [Rust](https://rustup.rs/) (1.75+). Install the compiler:
+### Homebrew (macOS)
 
 ```bash
-# Clone the repository
-git clone https://github.com/manifestdocs/baseline.git
-cd baseline
-
-# Install the compiler
-cargo install --path blc
+brew install manifestdocs/tap/baseline
 ```
 
-Verify the installation:
+### Direct Download
+
+Download a pre-built binary from [GitHub Releases](https://github.com/manifestdocs/baseline/releases):
+
+| Platform | Binary |
+|----------|--------|
+| macOS (Apple Silicon) | `blc-darwin-arm64-v*.tar.gz` |
+| macOS (Intel) | `blc-darwin-x86_64-v*.tar.gz` |
+| Linux (x86_64) | `blc-linux-x86_64-v*.tar.gz` |
+
+```bash
+# Example: macOS Apple Silicon
+tar xzf blc-darwin-arm64-v0.15.0.tar.gz
+sudo mv blc /usr/local/bin/
+```
+
+### From Source (Rust)
+
+Requires [Rust](https://rustup.rs/) (1.75+):
+
+```bash
+git clone https://github.com/manifestdocs/baseline.git
+cd baseline
+cargo install --path blc --features jit
+```
+
+### Verify Installation
 
 ```bash
 blc --version
-```
-
-### Optional features
-
-```bash
-# With Cranelift JIT (faster execution for numeric workloads)
-cargo install --path blc --features jit
-
-# With AOT compilation (compile to standalone native executables)
-cargo install --path blc --features aot
 ```
 
 ## Hello World
@@ -40,8 +51,8 @@ Create a file called `hello.bl`:
 
 fn greet(name: String) -> String = "Hello, ${name}!"
 
-fn main!() -> {Console} () = {
-  Console.println!(greet("World"))
+fn main() -> () = {
+  let _ = Console.println!(greet("World"))
 }
 ```
 
@@ -57,9 +68,8 @@ Let's break down the syntax:
 - `@prelude(script)` imports the standard library for scripting (Console, Math, List, etc.)
 - `fn greet(name: String) -> String` declares a pure function with typed parameters
 - `"Hello, ${name}!"` uses string interpolation
-- `fn main!()` the `!` suffix marks this function as effectful
-- `-> {Console} ()` declares the return type `()` (Unit) and the effect set `{Console}`
-- `Console.println!(msg)` calls the effectful print function
+- `Console.println!(msg)` calls the effectful print function — the `!` suffix marks it as effectful
+- `let _ = expr` binds the result to `_` (discards it), used for side-effectful calls
 
 ## Type Checking
 
@@ -90,29 +100,11 @@ blc check hello.bl --level full          # Types + refinements + SMT specs
 
 ## Running Programs
 
-The default runtime is a bytecode VM:
-
 ```bash
 blc run hello.bl
 ```
 
-With the `jit` feature installed, you can use Cranelift JIT for faster execution:
-
-```bash
-blc run hello.bl --jit
-```
-
-## Compiling to Native
-
-With the `aot` feature installed, compile to a standalone executable:
-
-```bash
-blc build hello.bl -o hello
-./hello
-# Hello, World!
-```
-
-The resulting binary has no runtime dependencies.
+The compiler uses Cranelift JIT to compile and execute natively.
 
 ## Inline Testing
 
@@ -258,26 +250,26 @@ Side effects are explicit capabilities declared in function signatures:
 // Pure function — no effects, no !
 fn double(x: Int) -> Int = x * 2
 
-// Effectful function — ! suffix, effect set in return type
-fn main!() -> {Console} () = {
-  Console.println!("Hello!")     // Console.println! requires {Console}
-  Console.println!("${double(21)}")
+// Effectful function — uses Console.println! which has the ! suffix
+fn main() -> () = {
+  let _ = Console.println!("Hello!")
+  let _ = Console.println!("${double(21)}")
 }
 ```
 
-The `!` suffix marks effectful functions. The effect set (e.g., `{Console}`) declares which capabilities the function requires.
+The `!` suffix marks effectful function calls. The compiler tracks effects automatically — you don't need to declare them.
 
 ### Lists and Higher-Order Functions
 
 ```baseline
 @prelude(script)
 
-fn main!() -> {Console} () = {
+fn main() -> () = {
   let nums = [1, 2, 3, 4, 5]
   let doubled = List.map(nums, |x| x * 2)
   let evens = List.filter(nums, |x| x % 2 == 0)
   let sum = List.fold(nums, 0, |acc, x| acc + x)
-  Console.println!("Sum: ${sum}")
+  let _ = Console.println!("Sum: " ++ Int.to_string(sum))
 }
 ```
 
@@ -366,7 +358,7 @@ apply(|n| n + 1, 41)  // A = Int, B = Int
 | `blc run <file>` | Execute a program |
 | `blc test <file>` | Run inline tests |
 | `blc fmt <file>` | Format source code |
-| `blc build <file> -o <output>` | Compile to native binary (requires `aot` feature) |
+| `blc build <file> -o <output>` | Compile to standalone native binary |
 | `blc lsp` | Start language server |
 
 ### Common flags
@@ -375,12 +367,13 @@ apply(|n| n + 1, 41)  // A = Int, B = Int
 |------|----------|-------------|
 | `--json` | check, test | Machine-readable JSON output |
 | `--level <level>` | check | Verification depth: `types`, `refinements`, `full` |
-| `--jit` | run | Use Cranelift JIT (requires `jit` feature) |
 | `-o <path>` | build | Output binary path |
 | `--check` | fmt | Verify formatting without modifying |
 
 ## Next Steps
 
+- Read the [Language Tour](tour.md) for a comprehensive walkthrough
 - Browse the `examples/` directory for more programs
+- Review [Known Gotchas](gotchas.md) to avoid common pitfalls
 - Read the [Language Specification](../design/baseline-language-specification.md) for full details
 - Try writing tests alongside your functions using `@test` sections
