@@ -12,11 +12,13 @@
 
 This specification describes the full Baseline v0.2 target language. Each feature is marked with its current implementation status in the `blc` compiler:
 
-- **[IMPLEMENTED]** — Working in grammar, type checker, and runtime
-- **[PARTIAL]** — Partially implemented (e.g., grammar exists but no type checking, or type-checks but no runtime)
+- **[IMPLEMENTED]** — Working in grammar, type checker, and JIT runtime
+- **[PARTIAL]** — Partially implemented (e.g., grammar exists but no type checking, or type-checks but no JIT runtime)
 - **[PLANNED]** — Designed but not yet implemented; target for v0.2
 
 Features marked `[PLANNED]` are normative design — they describe how the language *will* work and should be implemented to match this specification. The compiler is in bootstrap phase; see conformance tests in `tests/conformance/` for verified behavior.
+
+> **Note (v0.15):** The bytecode VM and tree-walk interpreter have been removed. The Cranelift JIT is now the sole execution backend. Features that relied on the old interpreter (algebraic effect handlers with `handle...with`, concurrency/fibers, REPL) are not yet supported in the JIT path.
 
 ---
 
@@ -57,7 +59,7 @@ Baseline is designed around three core principles:
 ### 1.2 Goals
 
 - **Fast compilation**: Development builds in <200ms [IMPLEMENTED]
-- **Fast execution**: Compiled to native with zero-cost effects and refinements [PARTIAL — bytecode VM implemented; native compilation planned]
+- **Fast execution**: Compiled to native with zero-cost effects and refinements [PARTIAL — Cranelift JIT native compilation implemented; zero-cost effects at runtime planned]
 - **Small binaries**: Typical services <5MB [PLANNED]
 - **Verified correctness**: Specifications checked at compile time [PARTIAL — type and effect checking implemented; SMT verification planned]
 - **Portable deployment**: Primary target is WebAssembly [PLANNED]
@@ -1263,9 +1265,9 @@ fn timed!<T, e>(action: () -> {e} T) -> {e, Time} (T, Duration) =
   (result, elapsed)
 ```
 
-### 6.3 Effect Handlers [IMPLEMENTED]
+### 6.3 Effect Handlers [PARTIAL]
 
-The grammar supports `handle`/`with` expressions for algebraic effect handlers. Handlers are fully supported and actively lowered in the intermediate representation via the evidence transform pass.
+The grammar supports `handle`/`with` expressions for algebraic effect handlers. Effect declarations and handler syntax are parsed and type-checked. The evidence transform pass lowers tail-resumptive effects in the IR. However, `handle...with` expressions do not execute in the Cranelift JIT runtime — programs using them fail with "No function definitions found". Full algebraic effect handler execution is planned.
 
 ```baseline
 fn main!() -> () =
@@ -2488,13 +2490,14 @@ export fn Regex.is_match(re: Regex, s: String) -> Bool             // [PLANNED]
 export fn Regex.captures(re: Regex, s: String) -> List<String>?    // [PLANNED]
 ```
 
-### 13.4 IO and Expanded Standard Library [IMPLEMENTED]
+### 13.4 IO and Expanded Standard Library [PARTIAL]
 
-The standard library natively provides an extensive toolkit optimized for web and database workflows:
-- **Core:** `console`, `env`, `fs`, `fs_sandbox`, `math`, `random`, `datetime`, `time`.
-- **Data:** `list`, `map`, `set`, `string`, `json`, `regex`.
-- **Web:** `crypto`, `jwt`, `http_error`, `router`, `request`, `response`, `middleware`, `session`, `ws` (WebSockets), `multipart`.
-- **Db:** Connections, migrations, schemas, with `mysql` and `postgres` backends.
+The standard library provides a toolkit optimized for web and database workflows:
+- **Core:** `Console`, `Env`, `Fs`, `Math`, `Random`, `DateTime`, `Time`. [IMPLEMENTED]
+- **Data:** `List`, `Map`, `Set`, `String`, `Json`. [IMPLEMENTED] `Regex` is [PLANNED].
+- **Web:** `Crypto`, `HttpError`, `Router`, `Request`, `Response`, `Middleware`, `Ws` (WebSockets). [IMPLEMENTED] `Jwt`, `Session`, `Multipart` are [PLANNED].
+- **Db:** `Sql`, `Sqlite`, `Mysql`, `Postgres` with connections, migrations, schemas. [IMPLEMENTED]
+- **Other:** `Int`, `Float`, `Option`, `Result`, `Log`, `Metrics`, `Http`, `Server`, `Scope`, `Async`. [IMPLEMENTED or PARTIAL]
 
 The `Fs` effect currently leverages `String` paths.
 
