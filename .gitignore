@@ -37,6 +37,11 @@ coverage/
 tmp/
 temp/
 *.tmp
+*.dump
+trace.txt
+opt_dump.txt
+test_parse
+patch*.py
 
 .fake
 

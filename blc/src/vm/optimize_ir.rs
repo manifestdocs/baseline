@@ -1102,8 +1102,6 @@ fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
 }
 
 /// Visit all immediate children of an expression (read-only).
-
-/// Visit all immediate children of an expression (read-only).
 fn visit_immediate_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
     match expr {
         Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole | Expr::Var(_, _) => {}

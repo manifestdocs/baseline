@@ -111,11 +111,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
     /// Track a variable as owned in the current RC scope.
     pub(super) fn rc_track_var(&mut self, var: Variable) {
-        if self.rc_enabled {
-            if let Some(frame) = self.rc_scope_stack.last_mut() {
+        if self.rc_enabled
+            && let Some(frame) = self.rc_scope_stack.last_mut() {
                 frame.push(var);
             }
-        }
     }
 
     /// Pop an RC scope frame, emitting decref for all tracked variables
@@ -1521,13 +1520,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             Expr::GetField { object, field, .. } => {
                 // SRA: if object is a scalar-replaced record, read field variable directly
-                if let Expr::Var(name, _) = object.as_ref() {
-                    if let Some(field_vars) = self.sra_records.get(name.as_str()) {
-                        if let Some(&var) = field_vars.get(field.as_str()) {
+                if let Expr::Var(name, _) = object.as_ref()
+                    && let Some(field_vars) = self.sra_records.get(name.as_str())
+                        && let Some(&var) = field_vars.get(field.as_str()) {
                             return Ok(self.builder.use_var(var));
                         }
-                    }
-                }
                 let obj_val = self.compile_expr(object)?;
                 let field_val = self.emit_string_value(field)?;
                 let result = self.call_helper("jit_get_field", &[obj_val, field_val]);
