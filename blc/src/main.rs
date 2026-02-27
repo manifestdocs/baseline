@@ -548,9 +548,9 @@ fn compile_to_ir(file: &PathBuf) -> CompileResult {
         let mut mod_exports: std::collections::HashMap<usize, std::collections::HashSet<String>> =
             std::collections::HashMap::new();
 
-        for i in 0..loaded_modules_meta.len() {
-            let (_, idx) = loaded_modules_meta[i];
-            if !mod_exports.contains_key(&idx) {
+        for (import, idx) in &loaded_modules_meta {
+            let idx = *idx;
+            if let std::collections::hash_map::Entry::Vacant(e) = mod_exports.entry(idx) {
                 let (mod_root, mod_source, _) = loader.get_module(idx).unwrap();
                 let uses_exports = resolver::module_uses_exports(&mod_root, mod_source);
 
@@ -568,10 +568,9 @@ fn compile_to_ir(file: &PathBuf) -> CompileResult {
                         .map(|f| f.name.as_str().to_string())
                         .collect()
                 };
-                mod_exports.insert(idx, exported);
+                e.insert(exported);
 
-                let short_name = loaded_modules_meta[i]
-                    .0
+                let short_name = import
                     .module_name
                     .split('.')
                     .next_back()

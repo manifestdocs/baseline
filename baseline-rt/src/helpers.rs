@@ -218,11 +218,10 @@ pub extern "C" fn jit_enum_field_drop(enum_bits: u64, field_idx: u64) {
     // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
     let ptr = (enum_bits & PAYLOAD_MASK) as *mut HeapObject;
     unsafe {
-        if let HeapObject::Enum { payload, .. } = &mut *ptr {
-            if fi < payload.len() {
+        if let HeapObject::Enum { payload, .. } = &mut *ptr
+            && fi < payload.len() {
                 payload[fi] = NValue::unit();
             }
-        }
     }
 }
 
@@ -250,11 +249,10 @@ pub extern "C" fn jit_enum_field_set(
     // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
     let ptr = (enum_bits & PAYLOAD_MASK) as *mut HeapObject;
     unsafe {
-        if let HeapObject::Enum { payload, .. } = &mut *ptr {
-            if i < payload.len() {
+        if let HeapObject::Enum { payload, .. } = &mut *ptr
+            && i < payload.len() {
                 payload[i] = new_value;
             }
-        }
     }
     enum_bits
 }

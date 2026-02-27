@@ -604,7 +604,7 @@ fn compile_inner(
 
         let mut ctx = cranelift_codegen::Context::for_function(cl_func.clone());
         let res = jit_module.define_function(wrapper_id, &mut ctx);
-        if let Err(e) = &res {
+        if let Err(_e) = &res {
             println!("cl_func that failed:\n{}", cl_func.display());
         }
         res.map_err(|e| format!("JIT: entry wrapper error: {}", e))?;

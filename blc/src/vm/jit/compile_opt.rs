@@ -63,11 +63,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         }
         let mut update_idx = None;
         for (i, (field, binding)) in fields.iter().zip(bindings.iter()).enumerate() {
-            if let Expr::Var(name, _) = field {
-                if name == binding {
+            if let Expr::Var(name, _) = field
+                && name == binding {
                     continue; // pass-through field
                 }
-            }
             // This field is different
             if update_idx.is_some() {
                 return None; // more than one changed field
@@ -124,8 +123,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 payload,
                 ..
             } if body_tag == tag => {
-                if let Expr::MakeTuple(fields, _) = payload.as_ref() {
-                    if let Some((field_idx, new_value)) =
+                if let Expr::MakeTuple(fields, _) = payload.as_ref()
+                    && let Some((field_idx, new_value)) =
                         Self::detect_single_field_update(fields, bindings)
                     {
                         let idx_val = self
@@ -146,7 +145,6 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             self.call_helper("jit_enum_field_set", &[subj, idx_val, new_val]);
                         return Ok(Some(result));
                     }
-                }
                 Ok(None)
             }
             Expr::If {
@@ -241,17 +239,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         let mut candidates = Vec::new();
         for expr in exprs {
-            if let Expr::Let { pattern, value, .. } = expr {
-                if let Pattern::Var(name) = pattern.as_ref() {
-                    if let Expr::MakeRecord(fields, _) = value.as_ref() {
-                        if !escaping.contains(name.as_str()) {
+            if let Expr::Let { pattern, value, .. } = expr
+                && let Pattern::Var(name) = pattern.as_ref()
+                    && let Expr::MakeRecord(fields, _) = value.as_ref()
+                        && !escaping.contains(name.as_str()) {
                             let field_names: Vec<String> =
                                 fields.iter().map(|(k, _)| k.clone()).collect();
                             candidates.push((name.clone(), field_names));
                         }
-                    }
-                }
-            }
         }
         candidates
     }

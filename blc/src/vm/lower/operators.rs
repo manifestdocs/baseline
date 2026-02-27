@@ -124,7 +124,7 @@ impl<'a> super::Lowerer<'a> {
 
         let explicit_ty = self.type_map.as_ref().and_then(|tm| tm.get(&node.start_byte()).cloned());
 
-        let mut ty = explicit_ty.or_else(|| {
+        let mut ty = explicit_ty.or({
             if both_int {
                 Some(Type::Int)
             } else if either_float {
