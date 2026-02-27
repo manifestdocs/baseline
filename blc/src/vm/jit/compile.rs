@@ -13,7 +13,7 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::{FunctionBuilder, Variable};
 use cranelift_module::{DataId, FuncId, Module};
 
-use super::super::ir::{BinOp, Expr, IrFunction, Matcher, Pattern, TagRegistry, UnaryOp};
+use super::super::ir::{BinOp, Expr, IrFunction, MatchArm, Matcher, Pattern, TagRegistry, UnaryOp};
 use super::super::natives::NativeRegistry;
 use super::super::nvalue::{NValue, PAYLOAD_MASK, TAG_BOOL, TAG_INT};
 use baseline_rt::value::RcStr;
@@ -2000,9 +2000,21 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let actual_val = self.compile_expr(actual)?;
                 self.compile_call_value(pred_val, &[actual_val])
             }
-            Matcher::Be(_pattern) => {
-                // TODO: proper pattern matching; for now always true (same as VM)
-                Ok(self.builder.ins().iconst(types::I64, NV_TRUE as i64))
+            Matcher::Be(pattern) => {
+                // Compile as a match: pattern → true, _ → false
+                let arms = vec![
+                    MatchArm {
+                        pattern: pattern.clone(),
+                        guard: None,
+                        body: Expr::Bool(true),
+                    },
+                    MatchArm {
+                        pattern: Pattern::Wildcard,
+                        guard: None,
+                        body: Expr::Bool(false),
+                    },
+                ];
+                self.compile_match(actual, &arms)
             }
         }
     }

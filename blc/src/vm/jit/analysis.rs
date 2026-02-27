@@ -202,7 +202,7 @@ fn matcher_can_jit(matcher: &Matcher, natives: Option<&NativeRegistry>) -> bool 
         Matcher::Contain(expected) => expr_can_jit(expected, natives),
         Matcher::StartWith(expected) => expr_can_jit(expected, natives),
         Matcher::Satisfy(pred) => expr_can_jit(pred, natives),
-        Matcher::Be(_pattern) => true, // emits constant true (same as VM)
+        Matcher::Be(_pattern) => true, // compiled as match expression
     }
 }
 
