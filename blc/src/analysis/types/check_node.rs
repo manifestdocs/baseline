@@ -1625,9 +1625,20 @@ fn check_node_inner(
             }
         }
         "effect_identifier" | "effectful_identifier" => {
-            // TODO: Lookup in a real Effect Registry for return types.
-            // For now, assume most effects return Unit or Unknown to allow flow.
-            Type::Unknown
+            let name = node.utf8_text(source.as_bytes()).unwrap();
+            if let Some(ty) = symbols.lookup(name) {
+                ty.clone()
+            } else {
+                // Strip `!` suffix and try lookup (for imported bare names)
+                let bare = name.trim_end_matches('!');
+                if let Some(ty) = symbols.lookup(bare) {
+                    ty.clone()
+                } else {
+                    // Many effectful builtins (scope!, Scope.spawn!, etc.) lack type
+                    // signatures. Fall back to Unknown to allow forward compatibility.
+                    Type::Unknown
+                }
+            }
         }
         "named_argument" => {
             // Named argument: name: expression — type-check the expression
