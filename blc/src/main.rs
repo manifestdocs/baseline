@@ -319,20 +319,36 @@ fn init_project(name: Option<String>) {
         std::process::exit(1);
     });
 
-    if cwd.join("baseline.toml").exists() {
-        eprintln!("Error: baseline.toml already exists in this directory");
+    let (project_dir, project_name) = match name {
+        Some(n) => {
+            let dir = cwd.join(&n);
+            (dir, n)
+        }
+        None => {
+            let n = cwd
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("my-app")
+                .to_string();
+            (cwd.clone(), n)
+        }
+    };
+
+    if project_dir.join("baseline.toml").exists() {
+        eprintln!("Error: baseline.toml already exists in {}", project_dir.display());
         std::process::exit(1);
     }
 
-    let project_name = name.unwrap_or_else(|| {
-        cwd.file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("my-app")
-            .to_string()
-    });
+    // Create the project directory if it doesn't exist (named project case)
+    if !project_dir.exists() {
+        std::fs::create_dir_all(&project_dir).unwrap_or_else(|e| {
+            eprintln!("Failed to create directory '{}': {}", project_dir.display(), e);
+            std::process::exit(1);
+        });
+    }
 
     std::fs::write(
-        cwd.join("baseline.toml"),
+        project_dir.join("baseline.toml"),
         blc::manifest::create_manifest(&project_name),
     )
     .unwrap_or_else(|e| {
@@ -340,7 +356,7 @@ fn init_project(name: Option<String>) {
         std::process::exit(1);
     });
 
-    let src_dir = cwd.join("src");
+    let src_dir = project_dir.join("src");
     if !src_dir.exists() {
         std::fs::create_dir_all(&src_dir).unwrap_or_else(|e| {
             eprintln!("Failed to create src/ directory: {}", e);
@@ -357,10 +373,10 @@ fn init_project(name: Option<String>) {
     }
 
     println!("Created new Baseline project '{}'", project_name);
-    println!("  baseline.toml");
-    println!("  src/main.bl");
+    println!("  {}/baseline.toml", project_name);
+    println!("  {}/src/main.bl", project_name);
     println!();
-    println!("Run with: blc run src/main.bl");
+    println!("Run with: blc run {}/src/main.bl", project_name);
 }
 
 // ---------------------------------------------------------------------------

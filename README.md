@@ -64,7 +64,6 @@ fn main!() -> {Console} Unit = {
 - **Refinement types** — Validate constraints at the type level: `type Port = Int where self > 0 && self < 65536`
 - **Option and Result** — Safe error handling with `?` propagation, pattern matching, and `map`/`unwrap_or`.
 - **Inline tests** — Tests live next to the code they verify, run with `blc test`.
-- **Effect handlers** — `with Console.println! { body }` captures effect calls for testing.
 - **Pipes** — `data |> List.filter(pred) |> List.map(f)` for readable data pipelines.
 - **Pattern matching** — Exhaustive `match` on sum types, tuples, and literals.
 - **Module system** — `import Math` (qualified), `from Math import {abs, max}` (selective), `from Math import *` (wildcard).
@@ -90,25 +89,13 @@ test "greet prints hello" = {
 | Command | Description |
 |---------|-------------|
 | `blc check <file>` | Static analysis (types, effects, refinements). `--json` for structured output. `--level` for verification depth. |
-| `blc run <file>` | Execute via bytecode VM. `--jit` for Cranelift JIT. `-- args` to pass program arguments. |
+| `blc run <file>` | Execute via Cranelift JIT. `-- args` to pass program arguments. |
 | `blc test <file>` | Run inline tests. `--json` for structured output. |
 | `blc fmt <file>` | Format source code. `--check` to validate without modifying. |
 | `blc build <file>` | Compile to standalone native executable (AOT via Cranelift). |
 | `blc init [name]` | Initialize a new Baseline project with `baseline.toml` and `src/main.bl`. |
 | `blc docs` | Generate standard library documentation. `--json` for structured output. |
 | `blc lsp` | Start the Language Server Protocol server. |
-
-**Note:** `test`, `fmt`, `build` require feature flags: `cargo build --features jit,aot`
-
-## Runtime Backends
-
-| Backend | Flag | Performance | Use case |
-|---------|------|-------------|----------|
-| **Bytecode VM** | (default) | ~CPython parity | General use, full language support |
-| **Cranelift JIT** | `--jit` | 2-3x faster for numeric code | Compute-heavy workloads |
-| **AOT native** | `blc build` | Native binary | Deployment, distribution |
-
-The VM uses NaN-boxed 8-byte values, stack-based execution, and superinstructions for hot paths. The JIT adds tail-call-to-loop optimization, base-case speculation, and unboxed scalar fast paths.
 
 ## Project Structure
 
@@ -118,7 +105,6 @@ baseline/
 │   ├── src/
 │   │   ├── analysis/           # Type, effect, and refinement checkers
 │   │   ├── vm/                 # Bytecode compiler, stack VM, JIT, AOT
-│   │   ├── interpreter.rs      # Tree-walk interpreter (legacy)
 │   │   ├── diagnostic_render.rs # Rich diagnostic output with source context
 │   │   ├── docs.rs             # Stdlib documentation generator
 │   │   ├── format.rs           # Code formatter
@@ -131,7 +117,7 @@ baseline/
 ├── selfhost/                   # Self-hosted compiler (lexer, parser, C codegen)
 ├── examples/                   # Example programs
 ├── tests/
-│   ├── conformance/            # 45 conformance tests across 12 categories
+│   ├── conformance/            # 170+ conformance tests across 15 categories
 │   └── programs/               # Real programs (fibonacci, sort, calculator, etc.)
 ├── benchmarks/cpu/             # Cross-language CPU benchmarks (C, Go, Rust, etc.)
 ├── docs/                       # User-facing documentation
@@ -198,8 +184,7 @@ scripts/diagnostic-coverage.sh
 
 The test suite includes:
 - **Unit tests** — compiler internals (types, effects, refinements, VM, formatter, LSP)
-- **Conformance tests** — 45 tests across 12 categories verifying language features
-- **Differential tests** — interpreter vs bytecode VM consistency
+- **Conformance tests** — 170+ tests across 15 categories verifying language features
 - **Property tests** — parse-never-panics, analysis-idempotent, soundness, valid-codes
 - **Bootstrap tests** — self-hosted compiler pipeline verification
 

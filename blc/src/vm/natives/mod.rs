@@ -109,6 +109,7 @@ impl NativeRegistry {
 
     /// Call a native function by ID.
     pub fn call(&self, id: u16, args: &[NValue]) -> Result<NValue, NativeError> {
+        debug_assert!((id as usize) < self.entries.len(), "native call id {id} out of bounds");
         let entry = unsafe { self.entries.get_unchecked(id as usize) };
         if let Some(arity) = entry.arity
             && args.len() != arity as usize
@@ -126,30 +127,35 @@ impl NativeRegistry {
     /// Check if a function is a HOF — O(1) flag lookup.
     #[inline(always)]
     pub fn is_hof(&self, id: u16) -> bool {
+        debug_assert!((id as usize) < self.entries.len(), "is_hof id {id} out of bounds");
         unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_HOF != 0 }
     }
 
     /// Check if a function requires VM re-entrancy — O(1) flag lookup.
     #[inline(always)]
     pub fn is_server_listen(&self, id: u16) -> bool {
+        debug_assert!((id as usize) < self.entries.len(), "is_server_listen id {id} out of bounds");
         unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_SERVER_LISTEN != 0 }
     }
 
     /// Check if a function is an async fiber primitive — O(1) flag lookup.
     #[inline(always)]
     pub fn is_async(&self, id: u16) -> bool {
+        debug_assert!((id as usize) < self.entries.len(), "is_async id {id} out of bounds");
         unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_ASYNC != 0 }
     }
 
     /// Check if a function has an owning (CoW) variant — O(1) flag lookup.
     #[inline(always)]
     pub fn is_owning(&self, id: u16) -> bool {
+        debug_assert!((id as usize) < self.entries.len(), "is_owning id {id} out of bounds");
         unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_OWNING != 0 }
     }
 
     /// Call the owning variant of a native function by ID.
     /// The caller must drain the args off the stack into a Vec before calling.
     pub fn call_owning(&self, id: u16, args: Vec<NValue>) -> Result<NValue, NativeError> {
+        debug_assert!((id as usize) < self.entries.len(), "call_owning id {id} out of bounds");
         let entry = unsafe { self.entries.get_unchecked(id as usize) };
         if let Some(arity) = entry.arity
             && args.len() != arity as usize
@@ -161,12 +167,13 @@ impl NativeRegistry {
                 args.len()
             )));
         }
-        (entry.owning_func.unwrap())(args)
+        (entry.owning_func.expect("call_owning called on non-owning native"))(args)
     }
 
     /// Get the function name by ID (for error messages).
     #[inline(always)]
     pub fn name(&self, id: u16) -> &str {
+        debug_assert!((id as usize) < self.entries.len(), "name id {id} out of bounds");
         unsafe { self.entries.get_unchecked(id as usize).name }
     }
 

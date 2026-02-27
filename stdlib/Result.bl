@@ -1,0 +1,14 @@
+fn map(res: Result<T, E>, f: (T) -> U) -> Result<U, E> =
+  match res
+    Ok(v) -> Ok(f(v))
+    Err(e) -> Err(e)
+
+fn map_err(res: Result<T, E>, f: (E) -> F) -> Result<T, F> =
+  match res
+    Ok(v) -> Ok(v)
+    Err(e) -> Err(f(e))
+
+fn and_then(res: Result<T, E>, f: (T) -> Result<U, E>) -> Result<U, E> =
+  match res
+    Ok(v) -> f(v)
+    Err(e) -> Err(e)

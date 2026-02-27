@@ -1,0 +1,19 @@
+fn map(xs: List<T>, f: (T) -> U) -> List<U> =
+  match xs
+    [] -> []
+    [h, ..t] -> [f(h)] ++ map(t, f)
+
+fn filter(xs: List<T>, f: (T) -> Bool) -> List<T> =
+  match xs
+    [] -> []
+    [h, ..t] -> if f(h) then [h] ++ filter(t, f) else filter(t, f)
+
+fn fold(xs: List<T>, init: U, f: (U, T) -> U) -> U =
+  match xs
+    [] -> init
+    [h, ..t] -> fold(t, f(init, h), f)
+
+fn find(xs: List<T>, f: (T) -> Bool) -> Option<T> =
+  match xs
+    [] -> None
+    [h, ..t] -> if f(h) then Some(h) else find(t, f)

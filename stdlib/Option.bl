@@ -1,0 +1,9 @@
+fn map(opt: Option<T>, f: (T) -> U) -> Option<U> =
+  match opt
+    Some(v) -> Some(f(v))
+    None -> None
+
+fn flat_map(opt: Option<T>, f: (T) -> Option<U>) -> Option<U> =
+  match opt
+    Some(v) -> f(v)
+    None -> None
