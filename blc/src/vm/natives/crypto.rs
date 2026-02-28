@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use baseline_rt::value::RcStr;
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 
@@ -10,7 +9,7 @@ pub(super) fn native_crypto_sha256(args: &[NValue]) -> Result<NValue, NativeErro
         Some(s) => {
             let hash = Sha256::digest(s.as_bytes());
             let hex = hex_encode(&hash);
-            Ok(NValue::string(Arc::from(hex.as_str())))
+            Ok(NValue::string(RcStr::from(hex.as_str())))
         }
         None => Err(NativeError(format!(
             "Crypto.sha256: expected String, got {}",
@@ -27,7 +26,7 @@ pub(super) fn native_crypto_hmac_sha256(args: &[NValue]) -> Result<NValue, Nativ
             mac.update(message.as_bytes());
             let result = mac.finalize().into_bytes();
             let hex = hex_encode(&result);
-            Ok(NValue::string(Arc::from(hex.as_str())))
+            Ok(NValue::string(RcStr::from(hex.as_str())))
         }
         _ => Err(NativeError(
             "Crypto.hmac_sha256: expected (String, String)".into(),
@@ -73,7 +72,7 @@ pub(super) fn native_random_bytes(args: &[NValue]) -> Result<NValue, NativeError
     let mut bytes = vec![0u8; n as usize];
     rand::thread_rng().fill(&mut bytes[..]);
     let hex = hex_encode(&bytes);
-    Ok(NValue::string(Arc::from(hex.as_str())))
+    Ok(NValue::string(RcStr::from(hex.as_str())))
 }
 
 fn hex_encode(bytes: &[u8]) -> String {

@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use baseline_rt::value::RcStr;
 use chrono::{DateTime, TimeZone, Utc};
 
 use super::{NValue, NativeError};
@@ -18,7 +17,7 @@ pub(super) fn native_datetime_parse(args: &[NValue]) -> Result<NValue, NativeErr
             )),
             Err(e) => Ok(NValue::enum_val(
                 "Err".into(),
-                NValue::string(Arc::from(e.to_string().as_str())),
+                NValue::string(RcStr::from(e.to_string().as_str())),
             )),
         },
         None => Err(NativeError("DateTime.parse: expected String".into())),
@@ -36,7 +35,7 @@ pub(super) fn native_datetime_to_string(args: &[NValue]) -> Result<NValue, Nativ
     let secs = ms / 1000;
     let nsecs = ((ms % 1000) * 1_000_000) as u32;
     match Utc.timestamp_opt(secs, nsecs) {
-        chrono::LocalResult::Single(dt) => Ok(NValue::string(Arc::from(dt.to_rfc3339().as_str()))),
+        chrono::LocalResult::Single(dt) => Ok(NValue::string(RcStr::from(dt.to_rfc3339().as_str()))),
         _ => Err(NativeError(format!(
             "DateTime.to_string: invalid epoch ms {}",
             ms

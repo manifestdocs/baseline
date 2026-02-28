@@ -1,5 +1,4 @@
-use std::sync::Arc;
-
+use baseline_rt::value::RcStr;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
@@ -95,7 +94,7 @@ pub(super) fn native_jwt_sign(args: &[NValue]) -> Result<NValue, NativeError> {
     let signature_b64 = base64url_encode(&signature);
 
     let token = format!("{}.{}", signing_input, signature_b64);
-    Ok(NValue::string(Arc::from(token.as_str())))
+    Ok(NValue::string(RcStr::from(token.as_str())))
 }
 
 // ---------------------------------------------------------------------------
@@ -143,7 +142,7 @@ pub(super) fn native_jwt_sign_with(args: &[NValue]) -> Result<NValue, NativeErro
     let signature_b64 = base64url_encode(&signature);
 
     let token = format!("{}.{}", signing_input, signature_b64);
-    Ok(NValue::string(Arc::from(token.as_str())))
+    Ok(NValue::string(RcStr::from(token.as_str())))
 }
 
 // ---------------------------------------------------------------------------

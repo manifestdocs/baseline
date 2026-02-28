@@ -1040,7 +1040,7 @@ impl fmt::Debug for NValue {
 
 impl NValue {
     pub fn to_value(&self) -> Value {
-        use std::sync::Arc; // Value type uses std::sync::Arc
+        use crate::rc::Rc;
         if self.is_int() {
             return Value::Int(self.as_int());
         }
@@ -1059,16 +1059,16 @@ impl NValue {
         match self.as_heap_ref() {
             HeapObject::String(s) => Value::String(s.clone()),
             HeapObject::List(items) => {
-                Value::List(Arc::new(items.iter().map(|v| v.to_value()).collect()))
+                Value::List(Rc::new(items.iter().map(|v| v.to_value()).collect()))
             }
-            HeapObject::Record(fields) => Value::Record(Arc::new(
+            HeapObject::Record(fields) => Value::Record(Rc::new(
                 fields
                     .iter()
                     .map(|(k, v)| (k.clone(), v.to_value()))
                     .collect(),
             )),
             HeapObject::Tuple(items) => {
-                Value::Tuple(Arc::new(items.iter().map(|v| v.to_value()).collect()))
+                Value::Tuple(Rc::new(items.iter().map(|v| v.to_value()).collect()))
             }
             HeapObject::Enum { tag, payload, .. } => {
                 // Reconstruct the old single-NValue format for Value::Enum.
@@ -1077,13 +1077,13 @@ impl NValue {
                 } else if payload.len() == 1 {
                     payload[0].to_value()
                 } else {
-                    Value::Tuple(Arc::new(payload.iter().map(|v| v.to_value()).collect()))
+                    Value::Tuple(Rc::new(payload.iter().map(|v| v.to_value()).collect()))
                 };
-                Value::Enum(tag.clone(), Arc::new(val))
+                Value::Enum(tag.clone(), Rc::new(val))
             }
             HeapObject::Struct { name, fields } => Value::Struct(
                 name.clone(),
-                Arc::new(
+                Rc::new(
                     fields
                         .iter()
                         .map(|(k, v)| (k.clone(), v.to_value()))
@@ -1095,20 +1095,20 @@ impl NValue {
                 upvalues,
             } => Value::Closure {
                 chunk_idx: *chunk_idx,
-                upvalues: Arc::new(upvalues.iter().map(|v| v.to_value()).collect()),
+                upvalues: Rc::new(upvalues.iter().map(|v| v.to_value()).collect()),
             },
             HeapObject::NativeMwNext { .. } => Value::Unit,
             HeapObject::WeakRef(_) => Value::Unit,
             HeapObject::Continuation { .. } => Value::Unit,
             HeapObject::BigInt(i) => Value::Int(*i),
-            HeapObject::Map(entries) => Value::Map(Arc::new(
+            HeapObject::Map(entries) => Value::Map(Rc::new(
                 entries
                     .iter()
                     .map(|(k, v)| (k.to_value(), v.to_value()))
                     .collect(),
             )),
             HeapObject::Set(elems) => {
-                Value::Set(Arc::new(elems.iter().map(|v| v.to_value()).collect()))
+                Value::Set(Rc::new(elems.iter().map(|v| v.to_value()).collect()))
             }
             HeapObject::NativeObject { .. } => Value::Unit,
             HeapObject::Row { columns, values } => {
@@ -1126,7 +1126,7 @@ impl NValue {
                         (Value::String(col.clone()), v)
                     })
                     .collect();
-                Value::Map(Arc::new(entries))
+                Value::Map(Rc::new(entries))
             }
         }
     }

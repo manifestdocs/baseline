@@ -9,7 +9,7 @@ use std::cell::RefCell;
 
 use tokio_postgres::{Client, NoTls};
 
-use std::sync::Arc;
+use baseline_rt::rc::Rc;
 
 use super::db_backend::{self, ColumnNames, Row, SqlValue};
 use super::{NValue, NativeError, RcStr};
@@ -92,7 +92,7 @@ pub fn postgres_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeEr
 
         // Build shared column names from first row (or empty query)
         let columns: ColumnNames = if let Some(first) = rows.first() {
-            Arc::new(
+            Rc::new(
                 first
                     .columns()
                     .iter()
@@ -100,7 +100,7 @@ pub fn postgres_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeEr
                     .collect(),
             )
         } else {
-            Arc::new(Vec::new())
+            Rc::new(Vec::new())
         };
 
         let mut result = Vec::with_capacity(rows.len());

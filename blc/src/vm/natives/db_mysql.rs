@@ -10,7 +10,7 @@ use std::cell::RefCell;
 use mysql_async::prelude::*;
 use mysql_async::{Conn, Opts, Pool};
 
-use std::sync::Arc;
+use baseline_rt::rc::Rc;
 
 use super::db_backend::{self, ColumnNames, Row, SqlValue};
 use super::{NValue, NativeError, RcStr};
@@ -96,7 +96,7 @@ pub fn mysql_query(sql: &str, params: &[String]) -> Result<Vec<Row>, NativeError
         let result = rt
             .block_on(async {
                 let stmt = conn.prep(sql).await?;
-                let columns: ColumnNames = Arc::new(
+                let columns: ColumnNames = Rc::new(
                     stmt.columns()
                         .iter()
                         .map(|c| RcStr::from(c.name_str().as_ref()))

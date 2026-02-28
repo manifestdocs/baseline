@@ -6,6 +6,22 @@
 //!
 //! When cross-fiber sharing is needed (structured concurrency), use the default
 //! Arc mode which provides Send + Sync.
+//!
+//! ## Arc Usage Audit (BASEL-336)
+//!
+//! All NValue/Value heap allocations go through this abstraction. Known exceptions:
+//!
+//! - `NativeObject` (nvalue.rs) uses `std::sync::Arc` unconditionally — native
+//!   objects may outlive the Baseline runtime (e.g., database connections).
+//! - JIT helpers (helpers.rs) use thread-local state (JIT_FN_TABLE, JIT_ARENA,
+//!   JIT_RC_MODE, JIT_ERROR) — safe for single-threaded execution only.
+//!   `JitProgram` is marked `Send` but must not be called concurrently.
+//! - The `NativeRegistry` Send+Sync assertion (mod.rs) ensures native functions
+//!   are thread-safe for future cross-fiber sharing.
+//!
+//! When adding new native functions: use `RcStr` (from `value.rs`) for strings,
+//! and `crate::rc::Rc` for other heap containers. Never import `std::sync::Arc`
+//! directly — it bypasses the feature-flag abstraction.
 
 #[cfg(not(feature = "non-atomic-rc"))]
 pub use std::sync::Arc as Rc;

@@ -1,8 +1,10 @@
 use std::fmt;
-use std::sync::Arc;
+
+use crate::rc::Rc;
 
 /// Shared string type for cheap cloning.
-pub type RcStr = Arc<str>;
+/// Uses the abstracted Rc (Arc or std::rc::Rc depending on `non-atomic-rc` feature).
+pub type RcStr = Rc<str>;
 
 // ---------------------------------------------------------------------------
 // Value
@@ -18,26 +20,26 @@ pub enum Value {
     String(RcStr),
     Bool(bool),
     Unit,
-    List(Arc<Vec<Value>>),
+    List(Rc<Vec<Value>>),
     /// Ordered key-value pairs. Keys are shared strings (field names).
-    Record(Arc<Vec<(RcStr, Value)>>),
+    Record(Rc<Vec<(RcStr, Value)>>),
     /// Positional tuple.
-    Tuple(Arc<Vec<Value>>),
+    Tuple(Rc<Vec<Value>>),
     /// Tagged enum variant: (tag_name, optional payload).
-    Enum(RcStr, Arc<Value>),
+    Enum(RcStr, Rc<Value>),
     /// Named struct: type name + ordered key-value fields (e.g., Point { x: 1, y: 2 }).
-    Struct(RcStr, Arc<Vec<(RcStr, Value)>>),
+    Struct(RcStr, Rc<Vec<(RcStr, Value)>>),
     /// A compiled function — index into Program.chunks.
     Function(usize),
     /// A closure — function + captured upvalues.
     Closure {
         chunk_idx: usize,
-        upvalues: Arc<Vec<Value>>,
+        upvalues: Rc<Vec<Value>>,
     },
     /// Map: ordered key-value pairs.
-    Map(Arc<Vec<(Value, Value)>>),
+    Map(Rc<Vec<(Value, Value)>>),
     /// Set: unique elements.
-    Set(Arc<Vec<Value>>),
+    Set(Rc<Vec<Value>>),
 }
 
 impl fmt::Display for Value {

@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use baseline_rt::value::RcStr;
 
 use super::{NValue, NativeError};
 
@@ -51,5 +51,5 @@ pub(super) fn native_random_uuid(_args: &[NValue]) -> Result<NValue, NativeError
         bytes[14],
         bytes[15],
     );
-    Ok(NValue::string(Arc::from(uuid.as_str())))
+    Ok(NValue::string(RcStr::from(uuid.as_str())))
 }
