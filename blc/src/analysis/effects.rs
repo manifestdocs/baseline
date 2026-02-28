@@ -220,6 +220,9 @@ pub fn check_effects(tree: &Tree, source: &str, file: &str) -> Vec<Diagnostic> {
         }
     }
 
+    // Phase 4: Check for resume aliasing in handle expressions (CAP_005)
+    check_resume_aliasing(root, source, file, &mut diagnostics);
+
     diagnostics
 }
 
@@ -874,6 +877,113 @@ fn infer_required_effect(call_name: &str) -> String {
         *first = first.to_ascii_uppercase();
     }
     chars.into_iter().collect()
+}
+
+/// Check for resume aliasing in handle expressions.
+///
+/// Baseline uses one-shot continuation semantics: `resume` in a handler
+/// clause can be called exactly once. Aliasing `resume` (binding it to
+/// another name, passing it as an argument, or returning it) risks calling
+/// the continuation multiple times, which would be a runtime error.
+/// Emits CAP_005 warnings for such cases.
+fn check_resume_aliasing(root: Node, source: &str, file: &str, diagnostics: &mut Vec<Diagnostic>) {
+    walk_for_handle_expressions(root, source, file, diagnostics);
+}
+
+fn walk_for_handle_expressions(
+    node: Node,
+    source: &str,
+    file: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if node.kind() == "handle_expression" {
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            if child.kind() == "handler_clause" {
+                check_handler_clause_resume(child, source, file, diagnostics);
+            }
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        walk_for_handle_expressions(child, source, file, diagnostics);
+    }
+}
+
+fn check_handler_clause_resume(
+    clause: Node,
+    source: &str,
+    file: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    // Check if `resume` is one of the parameter identifiers.
+    // In the grammar, handler_clause parameters are plain identifiers
+    // between parentheses: Effect.method!(args, resume) -> body
+    let mut has_resume = false;
+    let mut cursor = clause.walk();
+    for child in clause.children(&mut cursor) {
+        if child.kind() == "identifier"
+            && child.utf8_text(source.as_bytes()).ok() == Some("resume")
+        {
+            // Only count identifiers that appear before the "->" (parameters),
+            // not identifiers inside the handler_body field.
+            if clause
+                .child_by_field_name("handler_body")
+                .map_or(true, |body| child.start_byte() < body.start_byte())
+            {
+                has_resume = true;
+            }
+        }
+    }
+
+    if !has_resume {
+        return;
+    }
+
+    if let Some(body) = clause.child_by_field_name("handler_body") {
+        check_resume_usage_in_body(body, source, file, diagnostics);
+    }
+}
+
+fn check_resume_usage_in_body(
+    node: Node,
+    source: &str,
+    file: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if node.kind() == "identifier"
+        && node.utf8_text(source.as_bytes()).ok() == Some("resume")
+    {
+        // Check if this is a direct call: parent is call_expression and this is the callee
+        let is_direct_call = node.parent().is_some_and(|parent| {
+            parent.kind() == "call_expression"
+                && parent
+                    .named_child(0)
+                    .is_some_and(|callee| callee.id() == node.id())
+        });
+
+        if !is_direct_call {
+            diagnostics.push(Diagnostic {
+                code: "CAP_005".to_string(),
+                severity: Severity::Warning,
+                location: Location::from_node(file, &node),
+                message: "resume parameter should not be aliased; Baseline uses one-shot continuation semantics".to_string(),
+                context: "The `resume` continuation can be called exactly once. Aliasing it (binding to another name, passing as argument, or returning it) risks calling it multiple times, which would be a runtime error.".to_string(),
+                suggestions: vec![Suggestion {
+                    strategy: "direct_call".to_string(),
+                    description: "Use `resume(value)` as a direct call instead".to_string(),
+                    confidence: None,
+                    patch: None,
+                }],
+            });
+        }
+    }
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        check_resume_usage_in_body(child, source, file, diagnostics);
+    }
 }
 
 /// Build a patch to add an effect to the function signature.

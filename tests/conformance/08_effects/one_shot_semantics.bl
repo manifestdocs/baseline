@@ -1,0 +1,44 @@
+// Conformance: one-shot continuation semantics
+//
+// Baseline uses one-shot continuations: `resume` in a handler clause can be
+// called exactly once. These tests verify correct behavior for single-resume
+// and abort (no-resume) handlers.
+
+// Resume once returns correct value
+test "resume once returns body value" = handle {
+  Console.println!("hello")
+  42
+} with {
+  Console.println!(msg, resume) -> resume(())
+} == 42
+
+// Abort handler (no resume) returns handler value
+test "abort handler returns handler value" = handle {
+  Console.println!("hello")
+  42
+} with {
+  Console.println!(msg) -> -1
+} == -1
+
+// Resume with transformed value — handler supplies a value to the continuation
+test "resume with value" = handle {
+  Console.println!("hello")
+  100
+} with {
+  Console.println!(msg, resume) -> resume(())
+} == 100
+
+// Multiple effects, each resumed once
+test "multiple effects each resumed once" = handle {
+  Console.println!("a")
+  Console.println!("b")
+  let x = 10
+  let y = 20
+  x + y
+} with {
+  Console.println!(msg, resume) -> resume(())
+} == 30
+
+// TODO: Negative test (resume twice = runtime error) requires non-tail-resumptive
+// JIT support (BASEL-332). Once available, add:
+//   test "resume twice is runtime error" = ...

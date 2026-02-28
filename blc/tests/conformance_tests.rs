@@ -112,6 +112,23 @@ fn extract_expected_codes(path: &Path) -> Vec<String> {
     Vec::new()
 }
 
+/// Extract expected warning codes from comments like:
+/// // Expected warnings: CAP_005
+fn extract_expected_warnings(path: &Path) -> Vec<String> {
+    let content = std::fs::read_to_string(path).unwrap();
+    for line in content.lines() {
+        if line.contains("Expected warnings:") {
+            let after = line.split("Expected warnings:").nth(1).unwrap().trim();
+            return after
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+        }
+    }
+    Vec::new()
+}
+
 #[test]
 fn conformance_positive_tests() {
     let dir = conformance_dir();
@@ -167,7 +184,7 @@ fn conformance_positive_tests() {
 
     // Regression gate: fail if tests silently disappear.
     // Update this number when you ADD new conformance tests.
-    const MIN_POSITIVE: usize = 141;
+    const MIN_POSITIVE: usize = 142;
     assert!(
         passed >= MIN_POSITIVE,
         "Conformance regression: expected at least {MIN_POSITIVE} positive tests, but only {passed} passed. \
@@ -191,8 +208,27 @@ fn conformance_negative_tests() {
 
         let relative = file.strip_prefix(&dir).unwrap().display().to_string();
         let expected_codes = extract_expected_codes(file);
+        let expected_warnings = extract_expected_warnings(file);
 
         let out = blc_cmd(&["check"], file);
+
+        // Warning-only files: check passes (exit 0) but warnings must appear in stderr
+        if expected_codes.is_empty() && !expected_warnings.is_empty() {
+            let mut ok = true;
+            for code in &expected_warnings {
+                if !out.stderr.contains(code.as_str()) {
+                    failed.push(format!(
+                        "{relative}: expected warning code {code} not found\n  stderr: {}",
+                        out.stderr.trim()
+                    ));
+                    ok = false;
+                }
+            }
+            if ok {
+                passed += 1;
+            }
+            continue;
+        }
 
         if out.exit_code == 0 {
             failed.push(format!("{relative}: expected check to fail, but it passed"));
@@ -224,7 +260,7 @@ fn conformance_negative_tests() {
 
     // Regression gate: fail if negative tests silently disappear.
     // Update this number when you ADD new negative test files.
-    const MIN_NEGATIVE: usize = 26;
+    const MIN_NEGATIVE: usize = 27;
     assert!(
         passed >= MIN_NEGATIVE,
         "Negative test regression: expected at least {MIN_NEGATIVE} negative tests, but only {passed} passed. \

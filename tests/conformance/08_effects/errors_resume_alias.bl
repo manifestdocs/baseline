@@ -1,0 +1,12 @@
+// Negative test: aliasing `resume` in a handler clause should warn.
+// Expected warnings: CAP_005
+
+// Resume aliased by passing it as an argument
+fn identity(x: Int) -> Int = x
+
+test "alias resume" = handle {
+  Console.println!("hello")
+  42
+} with {
+  Console.println!(msg, resume) -> identity(resume)
+} == 42

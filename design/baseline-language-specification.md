@@ -1293,6 +1293,8 @@ fn timed!<T, e>(action: () -> {e} T) -> {e, Time} (T, Duration) =
 
 The grammar supports `handle`/`with` expressions for algebraic effect handlers. Effect declarations and handler syntax are parsed and type-checked. The evidence transform pass lowers tail-resumptive effects in the IR. However, `handle...with` expressions do not execute in the Cranelift JIT runtime — programs using them fail with "No function definitions found". Full algebraic effect handler execution is planned.
 
+**Continuation Semantics.** Baseline uses **one-shot continuations only**: the `resume` parameter in a handler clause can be called exactly once. Attempting to call it twice is a runtime error. This constraint simplifies the effect checker (no need to track continuation linearity), preserves LIFO stack discipline for efficient frame management, and enables reference-count reuse analysis (Perceus-style). The compiler emits a `CAP_005` warning when `resume` is aliased (bound to another name, passed as an argument, or returned from a handler). See `design/rfc-effect-compilation-architecture.md` for the full rationale.
+
 ```baseline
 fn main!() -> () =
   let http = Http.default()
