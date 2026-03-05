@@ -5,9 +5,26 @@
 
 use super::super::natives::NativeRegistry;
 use super::super::nvalue::NValue;
+use std::ptr::NonNull;
 
 // Re-export everything from baseline-rt helpers
 pub use baseline_rt::helpers::*;
+
+fn registry_ref<'a>(registry: *const NativeRegistry) -> Result<&'a NativeRegistry, &'static str> {
+    let ptr = NonNull::new(registry.cast_mut()).ok_or("null NativeRegistry pointer")?;
+    // SAFETY: pointer validity is guaranteed by the JIT caller contract.
+    Ok(unsafe { ptr.as_ref() })
+}
+
+fn args_bits<'a>(args: *const u64, count: u64) -> Result<&'a [u64], &'static str> {
+    let len = usize::try_from(count).map_err(|_| "argument count exceeds usize")?;
+    if len == 0 {
+        return Ok(&[]);
+    }
+    let ptr = NonNull::new(args.cast_mut()).ok_or("null args pointer with non-zero count")?;
+    // SAFETY: pointer validity and length are guaranteed by the JIT caller contract.
+    Ok(unsafe { std::slice::from_raw_parts(ptr.as_ptr(), len) })
+}
 
 /// Call a native function by ID (borrowing args).
 ///
@@ -23,8 +40,20 @@ pub(super) extern "C" fn jit_call_native(
     args: *const u64,
     count: u64,
 ) -> u64 {
-    let registry = unsafe { &*registry };
-    let arg_slice = unsafe { std::slice::from_raw_parts(args, count as usize) };
+    let registry = match registry_ref(registry) {
+        Ok(r) => r,
+        Err(msg) => {
+            jit_set_error(format!("Native function error: {}", msg));
+            return NV_UNIT;
+        }
+    };
+    let arg_slice = match args_bits(args, count) {
+        Ok(s) => s,
+        Err(msg) => {
+            jit_set_error(format!("Native function error: {}", msg));
+            return NV_UNIT;
+        }
+    };
     let nvalues: Vec<NValue> = arg_slice
         .iter()
         .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
@@ -53,8 +82,20 @@ pub(super) extern "C" fn jit_call_native_owning(
     args: *const u64,
     count: u64,
 ) -> u64 {
-    let registry = unsafe { &*registry };
-    let arg_slice = unsafe { std::slice::from_raw_parts(args, count as usize) };
+    let registry = match registry_ref(registry) {
+        Ok(r) => r,
+        Err(msg) => {
+            jit_set_error(format!("Native function error: {}", msg));
+            return NV_UNIT;
+        }
+    };
+    let arg_slice = match args_bits(args, count) {
+        Ok(s) => s,
+        Err(msg) => {
+            jit_set_error(format!("Native function error: {}", msg));
+            return NV_UNIT;
+        }
+    };
     let nvalues: Vec<NValue> = arg_slice
         .iter()
         .map(|&bits| unsafe { NValue::from_raw(bits) })

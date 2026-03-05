@@ -26,6 +26,8 @@ mod tests_closure;
 mod tests_rc;
 
 use std::collections::HashMap;
+use std::fmt;
+use std::ptr::NonNull;
 
 use cranelift_codegen::ir::{AbiParam, InstBuilder, types};
 use cranelift_codegen::isa::CallConv;
@@ -43,6 +45,35 @@ use compile::FnCompileCtx;
 use helpers::*;
 
 pub use helpers::jit_take_error;
+
+type EntryFn = unsafe extern "C" fn() -> u64;
+
+#[derive(Debug)]
+enum JitError {
+    Message(String),
+}
+
+impl From<String> for JitError {
+    fn from(value: String) -> Self {
+        Self::Message(value)
+    }
+}
+
+impl From<&str> for JitError {
+    fn from(value: &str) -> Self {
+        Self::Message(value.to_string())
+    }
+}
+
+impl fmt::Display for JitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Message(msg) => write!(f, "{}", msg),
+        }
+    }
+}
+
+type JitResult<T> = Result<T, JitError>;
 
 /// A JIT-compiled program. Holds the compiled module and a dispatch table
 /// mapping function index → native function pointer.
@@ -75,8 +106,16 @@ pub struct JitProgram {
 //    for the lifetime of `_module` and safe to read from any thread.
 // 3. `_heap_roots` contains Rc<HeapObject> values — these are NOT Sync, so
 //    JitProgram must NOT be Sync. However, moving the entire struct to another
-//    thread (Send) is safe because Rc ownership transfers with the move.
+//    thread (Send) is safe because Rc ownership transfers with the move —
+//    all Rc handles are fully encapsulated, no clones escape the struct.
+//
 // NOTE: JitProgram is NOT Sync. Do not add `unsafe impl Sync`.
+//
+// non-atomic-rc safety: When the `non-atomic-rc` feature is active, heap roots
+// use std::rc::Rc (!Send). Send is still safe because _heap_roots is the sole
+// owner — raw u64 bits baked into JIT code are not Rc handles, they're just
+// pointer-sized integers that happen to reference the same allocation. No Rc
+// clone escapes JitProgram, so transferring ownership across threads is sound.
 unsafe impl Send for JitProgram {}
 
 impl JitProgram {
@@ -84,6 +123,12 @@ impl JitProgram {
     /// Returns None if the function was not JIT-compiled.
     pub fn get_fn(&self, idx: usize) -> Option<*const u8> {
         self.dispatch.get(idx).copied().flatten()
+    }
+
+    fn entry_fn(&self) -> Option<EntryFn> {
+        let ptr = NonNull::new(self.entry_wrapper as *mut u8)?;
+        // SAFETY: entry_wrapper points to finalized executable code with host ABI.
+        Some(unsafe { std::mem::transmute::<*const u8, EntryFn>(ptr.as_ptr()) })
     }
 
     /// Execute the entry function, returning the result as NValue.
@@ -94,10 +139,7 @@ impl JitProgram {
     /// Heap values created during execution are tracked in a thread-local arena
     /// and freed after the return value is extracted.
     pub fn run_entry_nvalue(&self) -> Option<NValue> {
-        if self.entry_wrapper.is_null() {
-            return None;
-        }
-        let func: fn() -> u64 = unsafe { std::mem::transmute(self.entry_wrapper) };
+        let func = self.entry_fn()?;
 
         // Set up the function pointer table for indirect calls
         let fn_table: Vec<*const u8> = self
@@ -134,7 +176,7 @@ impl JitProgram {
         let guard = CleanupGuard { rc_enabled };
 
         // Catch panics from JIT-compiled code to prevent process abort.
-        let raw = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(func)) {
+        let raw = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })) {
             Ok(val) => val,
             Err(payload) => {
                 // Extract panic message
@@ -191,93 +233,93 @@ impl JitProgram {
         }
     }
 }
-/// Names of all runtime helper functions we register with Cranelift.
-pub(super) const HELPER_NAMES: &[&str] = &[
-    "jit_call_native",
-    "jit_call_native_owning",
-    "jit_concat",
-    "jit_make_enum",
-    "jit_make_enum_with_id",
-    "jit_make_enum_flat",
-    "jit_make_tuple",
-    "jit_make_list",
-    "jit_make_record",
-    "jit_make_struct",
-    "jit_get_field",
-    "jit_update_record",
-    "jit_make_range",
-    "jit_enum_tag_eq",
-    "jit_enum_tag_id",
-    "jit_enum_payload",
-    "jit_enum_field_get",
-    "jit_enum_field_drop",
-    "jit_enum_field_set",
-    "jit_tuple_get",
-    "jit_list_length",
-    "jit_list_get",
-    "jit_is_err",
-    "jit_is_none",
-    "jit_values_equal",
+/// Single source of truth: runtime helper name → function pointer.
+/// Used for both JIT symbol registration and Cranelift function declaration.
+/// AOT uses HELPER_NAMES (derived below) for declaration only (symbols come from linker).
+const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
+    ("jit_call_native", jit_call_native as *const u8),
+    ("jit_call_native_owning", jit_call_native_owning as *const u8),
+    ("jit_concat", jit_concat as *const u8),
+    ("jit_make_enum", jit_make_enum as *const u8),
+    ("jit_make_enum_with_id", jit_make_enum_with_id as *const u8),
+    ("jit_make_enum_flat", jit_make_enum_flat as *const u8),
+    ("jit_make_tuple", jit_make_tuple as *const u8),
+    ("jit_make_list", jit_make_list as *const u8),
+    ("jit_make_record", jit_make_record as *const u8),
+    ("jit_make_struct", jit_make_struct as *const u8),
+    ("jit_get_field", jit_get_field as *const u8),
+    ("jit_update_record", jit_update_record as *const u8),
+    ("jit_make_range", jit_make_range as *const u8),
+    ("jit_enum_tag_eq", jit_enum_tag_eq as *const u8),
+    ("jit_enum_tag_id", jit_enum_tag_id as *const u8),
+    ("jit_enum_payload", jit_enum_payload as *const u8),
+    ("jit_enum_field_get", jit_enum_field_get as *const u8),
+    ("jit_enum_field_drop", jit_enum_field_drop as *const u8),
+    ("jit_enum_field_set", jit_enum_field_set as *const u8),
+    ("jit_tuple_get", jit_tuple_get as *const u8),
+    ("jit_list_length", jit_list_length as *const u8),
+    ("jit_list_get", jit_list_get as *const u8),
+    ("jit_is_err", jit_is_err as *const u8),
+    ("jit_is_none", jit_is_none as *const u8),
+    ("jit_values_equal", jit_values_equal as *const u8),
     // Closure / CallIndirect / ListConcat helpers
-    "jit_make_closure",
-    "jit_closure_upvalue",
-    "jit_is_closure",
-    "jit_closure_fn_ptr",
-    "jit_function_fn_ptr",
-    "jit_list_concat",
-    "jit_string_concat",
+    ("jit_make_closure", jit_make_closure as *const u8),
+    ("jit_closure_upvalue", jit_closure_upvalue as *const u8),
+    ("jit_is_closure", jit_is_closure as *const u8),
+    ("jit_closure_fn_ptr", jit_closure_fn_ptr as *const u8),
+    ("jit_function_fn_ptr", jit_function_fn_ptr as *const u8),
+    ("jit_list_concat", jit_list_concat as *const u8),
+    ("jit_string_concat", jit_string_concat as *const u8),
     // AOT-specific helpers
-    "jit_make_string",
-    "jit_print_result",
-    "jit_drain_arena",
-    "jit_init_fn_table",
+    ("jit_make_string", jit_make_string as *const u8),
+    ("jit_print_result", jit_print_result as *const u8),
+    ("jit_drain_arena", jit_drain_arena as *const u8),
+    ("jit_init_fn_table", jit_init_fn_table as *const u8),
     // HOF support helpers
-    "jit_list_length_raw",
-    "jit_list_get_raw",
-    "jit_list_tail",
-    "jit_alloc_buf",
-    "jit_build_list_from_buf",
-    "jit_make_some",
-    "jit_make_none",
-    "jit_make_ok",
-    "jit_make_err",
-    "jit_is_truthy",
+    ("jit_list_length_raw", jit_list_length_raw as *const u8),
+    ("jit_list_get_raw", jit_list_get_raw as *const u8),
+    ("jit_list_tail", jit_list_tail as *const u8),
+    ("jit_alloc_buf", jit_alloc_buf as *const u8),
+    ("jit_build_list_from_buf", jit_build_list_from_buf as *const u8),
+    ("jit_make_some", jit_make_some as *const u8),
+    ("jit_make_none", jit_make_none as *const u8),
+    ("jit_make_ok", jit_make_ok as *const u8),
+    ("jit_make_err", jit_make_err as *const u8),
+    ("jit_is_truthy", jit_is_truthy as *const u8),
     // Integer arithmetic helpers (handle BigInt overflow)
-    "jit_int_from_i64",
-    "jit_int_add",
-    "jit_int_sub",
-    "jit_int_mul",
-    "jit_int_div",
-    "jit_int_mod",
-    "jit_int_neg",
-    "jit_int_lt",
-    "jit_int_le",
-    "jit_int_gt",
-    "jit_int_ge",
+    ("jit_int_from_i64", jit_int_from_i64 as *const u8),
+    ("jit_int_add", jit_int_add as *const u8),
+    ("jit_int_sub", jit_int_sub as *const u8),
+    ("jit_int_mul", jit_int_mul as *const u8),
+    ("jit_int_div", jit_int_div as *const u8),
+    ("jit_int_mod", jit_int_mod as *const u8),
+    ("jit_int_neg", jit_int_neg as *const u8),
+    ("jit_int_lt", jit_int_lt as *const u8),
+    ("jit_int_le", jit_int_le as *const u8),
+    ("jit_int_gt", jit_int_gt as *const u8),
+    ("jit_int_ge", jit_int_ge as *const u8),
     // Float arithmetic helpers
-    "jit_float_mod",
+    ("jit_float_mod", jit_float_mod as *const u8),
     // Reference counting helpers
-    "jit_rc_incref",
-    "jit_rc_decref",
-    "jit_set_rc_mode_raw",
+    ("jit_rc_incref", jit_rc_incref as *const u8),
+    ("jit_rc_decref", jit_rc_decref as *const u8),
+    ("jit_set_rc_mode_raw", jit_set_rc_mode_raw as *const u8),
     // Perceus reuse helpers
-    "jit_drop_reuse",
-    "jit_make_enum_reuse",
-    "jit_make_enum_flat_reuse",
-    "jit_make_record_reuse",
-    "jit_make_tuple_reuse",
+    ("jit_drop_reuse", jit_drop_reuse as *const u8),
+    ("jit_make_enum_reuse", jit_make_enum_reuse as *const u8),
+    ("jit_make_enum_flat_reuse", jit_make_enum_flat_reuse as *const u8),
+    ("jit_make_record_reuse", jit_make_record_reuse as *const u8),
+    ("jit_make_tuple_reuse", jit_make_tuple_reuse as *const u8),
 ];
+
+/// Helper names only — derived from HELPER_SYMBOLS for AOT declaration.
+pub(super) fn helper_names() -> impl Iterator<Item = &'static str> {
+    HELPER_SYMBOLS.iter().map(|(name, _)| *name)
+}
 
 /// Compiles an IrModule to native code via Cranelift (RC enabled by default).
 pub fn compile(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
-    compile_inner(module, trace, None, true)
-}
-
-/// Compiles an IrModule with RC-enabled codegen (alias for compile).
-/// Allocation helpers use mem::forget (caller owns refcount via raw bits).
-/// Codegen emits jit_rc_incref/jit_rc_decref at scope boundaries.
-pub fn compile_rc(module: &IrModule, trace: bool) -> Result<JitProgram, String> {
-    compile_inner(module, trace, None, true)
+    compile_inner(module, trace, None, true).map_err(|e| e.to_string())
 }
 
 /// Compiles an IrModule to native code, optionally with a NativeRegistry
@@ -287,7 +329,7 @@ pub fn compile_with_natives(
     trace: bool,
     natives: Option<&NativeRegistry>,
 ) -> Result<JitProgram, String> {
-    compile_inner(module, trace, natives, true)
+    compile_inner(module, trace, natives, true).map_err(|e| e.to_string())
 }
 
 fn compile_inner(
@@ -295,7 +337,7 @@ fn compile_inner(
     trace: bool,
     natives: Option<&NativeRegistry>,
     rc_enabled: bool,
-) -> Result<JitProgram, String> {
+) -> JitResult<JitProgram> {
     let mut flag_builder = settings::builder();
     flag_builder
         .set("opt_level", "speed")
@@ -315,85 +357,17 @@ fn compile_inner(
 
     let mut builder = JITBuilder::with_isa(isa, cranelift_module::default_libcall_names());
 
-    // Register runtime helper symbols
-    builder.symbol("jit_call_native", jit_call_native as *const u8);
-    builder.symbol("jit_call_native_owning", jit_call_native_owning as *const u8);
-    builder.symbol("jit_concat", jit_concat as *const u8);
-    builder.symbol("jit_make_enum", jit_make_enum as *const u8);
-    builder.symbol("jit_make_enum_with_id", jit_make_enum_with_id as *const u8);
-    builder.symbol("jit_make_enum_flat", jit_make_enum_flat as *const u8);
-    builder.symbol("jit_make_tuple", jit_make_tuple as *const u8);
-    builder.symbol("jit_make_list", jit_make_list as *const u8);
-    builder.symbol("jit_make_record", jit_make_record as *const u8);
-    builder.symbol("jit_make_struct", jit_make_struct as *const u8);
-    builder.symbol("jit_get_field", jit_get_field as *const u8);
-    builder.symbol("jit_update_record", jit_update_record as *const u8);
-    builder.symbol("jit_make_range", jit_make_range as *const u8);
-    builder.symbol("jit_enum_tag_eq", jit_enum_tag_eq as *const u8);
-    builder.symbol("jit_enum_tag_id", jit_enum_tag_id as *const u8);
-    builder.symbol("jit_enum_payload", jit_enum_payload as *const u8);
-    builder.symbol("jit_enum_field_get", jit_enum_field_get as *const u8);
-    builder.symbol("jit_enum_field_drop", jit_enum_field_drop as *const u8);
-    builder.symbol("jit_enum_field_set", jit_enum_field_set as *const u8);
-    builder.symbol("jit_tuple_get", jit_tuple_get as *const u8);
-    builder.symbol("jit_list_length", jit_list_length as *const u8);
-    builder.symbol("jit_list_get", jit_list_get as *const u8);
-    builder.symbol("jit_is_err", jit_is_err as *const u8);
-    builder.symbol("jit_is_none", jit_is_none as *const u8);
-    builder.symbol("jit_values_equal", jit_values_equal as *const u8);
-    builder.symbol("jit_make_closure", jit_make_closure as *const u8);
-    builder.symbol("jit_closure_upvalue", jit_closure_upvalue as *const u8);
-    builder.symbol("jit_is_closure", jit_is_closure as *const u8);
-    builder.symbol("jit_closure_fn_ptr", jit_closure_fn_ptr as *const u8);
-    builder.symbol("jit_function_fn_ptr", jit_function_fn_ptr as *const u8);
-    builder.symbol("jit_list_concat", jit_list_concat as *const u8);
-    builder.symbol("jit_string_concat", jit_string_concat as *const u8);
-    builder.symbol("jit_make_string", jit_make_string as *const u8);
-    builder.symbol("jit_print_result", jit_print_result as *const u8);
-    builder.symbol("jit_drain_arena", jit_drain_arena as *const u8);
-    builder.symbol("jit_init_fn_table", jit_init_fn_table as *const u8);
-    builder.symbol("jit_list_length_raw", jit_list_length_raw as *const u8);
-    builder.symbol("jit_list_get_raw", jit_list_get_raw as *const u8);
-    builder.symbol("jit_list_tail", jit_list_tail as *const u8);
-    builder.symbol("jit_alloc_buf", jit_alloc_buf as *const u8);
-    builder.symbol(
-        "jit_build_list_from_buf",
-        jit_build_list_from_buf as *const u8,
-    );
-    builder.symbol("jit_make_some", jit_make_some as *const u8);
-    builder.symbol("jit_make_none", jit_make_none as *const u8);
-    builder.symbol("jit_make_ok", jit_make_ok as *const u8);
-    builder.symbol("jit_make_err", jit_make_err as *const u8);
-    builder.symbol("jit_is_truthy", jit_is_truthy as *const u8);
-    // Integer arithmetic helpers (handle BigInt overflow)
-    builder.symbol("jit_int_from_i64", jit_int_from_i64 as *const u8);
-    builder.symbol("jit_int_add", jit_int_add as *const u8);
-    builder.symbol("jit_int_sub", jit_int_sub as *const u8);
-    builder.symbol("jit_int_mul", jit_int_mul as *const u8);
-    builder.symbol("jit_int_div", jit_int_div as *const u8);
-    builder.symbol("jit_int_mod", jit_int_mod as *const u8);
-    builder.symbol("jit_int_neg", jit_int_neg as *const u8);
-    builder.symbol("jit_int_lt", jit_int_lt as *const u8);
-    builder.symbol("jit_int_le", jit_int_le as *const u8);
-    builder.symbol("jit_int_gt", jit_int_gt as *const u8);
-    builder.symbol("jit_int_ge", jit_int_ge as *const u8);
-    builder.symbol("jit_float_mod", jit_float_mod as *const u8);
-    builder.symbol("jit_rc_incref", jit_rc_incref as *const u8);
-    builder.symbol("jit_rc_decref", jit_rc_decref as *const u8);
-    builder.symbol("jit_set_rc_mode_raw", jit_set_rc_mode_raw as *const u8);
-    // Perceus reuse helpers
-    builder.symbol("jit_drop_reuse", jit_drop_reuse as *const u8);
-    builder.symbol("jit_make_enum_reuse", jit_make_enum_reuse as *const u8);
-    builder.symbol("jit_make_enum_flat_reuse", jit_make_enum_flat_reuse as *const u8);
-    builder.symbol("jit_make_record_reuse", jit_make_record_reuse as *const u8);
-    builder.symbol("jit_make_tuple_reuse", jit_make_tuple_reuse as *const u8);
+    // Register runtime helper symbols from the single-source-of-truth table.
+    for &(name, fn_ptr) in HELPER_SYMBOLS {
+        builder.symbol(name, fn_ptr);
+    }
 
     let mut jit_module = JITModule::new(builder);
     let ptr_type = jit_module.target_config().pointer_type();
 
     // Declare runtime helpers as imported functions
     let mut helper_ids: HashMap<&str, FuncId> = HashMap::new();
-    for &name in HELPER_NAMES {
+    for name in helper_names() {
         let sig = make_helper_sig(&mut jit_module, name, ptr_type)?;
         let id = jit_module
             .declare_function(name, Linkage::Import, &sig)
@@ -414,7 +388,7 @@ fn compile_inner(
     for func in &module.functions {
         let can = can_jit(func, natives);
         if can {
-            let sig = build_signature(&mut jit_module, func.params.len(), ptr_type);
+            let sig = build_signature(&mut jit_module, func.params.len());
             let id = jit_module
                 .declare_function(&func.name, Linkage::Local, &sig)
                 .map_err(|e| e.to_string())?;
@@ -464,7 +438,7 @@ fn compile_inner(
         let start = std::time::Instant::now();
 
         let mut cl_func = cranelift_codegen::ir::Function::new();
-        cl_func.signature = build_signature(&mut jit_module, func.params.len(), ptr_type);
+        cl_func.signature = build_signature(&mut jit_module, func.params.len());
 
         let compile_result = {
             let mut fn_builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
@@ -501,7 +475,6 @@ fn compile_inner(
                 func_ids: &func_ids,
                 module: &mut jit_module,
                 vars: vars_map,
-                next_var: param_vars.len() as u32,
                 func_names: &func_names,
                 ir_functions: &module.functions,
                 current_func_name: func.name.clone(),
@@ -606,112 +579,20 @@ fn compile_inner(
         }
     }
 
-    // Phase 2.5: Create entry wrapper with platform-default calling convention.
-    // All language functions use Tail CC for guaranteed tail call elimination.
-    // The wrapper bridges to the host's C ABI so transmute to fn()->u64 works.
-    let entry_wrapper_id: Option<FuncId> = if compilable.get(module.entry).copied().unwrap_or(false)
-    {
+    let entry_wrapper_id = if compilable.get(module.entry).copied().unwrap_or(false) {
         let entry_func_id = func_ids[module.entry].ok_or_else(|| {
             "JIT: entry function was not compiled".to_string()
         })?;
-
-        // Platform-default CC (SystemV on Linux, AppleAarch64 on macOS ARM64)
-        let mut wrapper_sig = jit_module.make_signature();
-        wrapper_sig.returns.push(AbiParam::new(types::I64));
-
-        let wrapper_id = jit_module
-            .declare_function("__entry_wrapper", Linkage::Local, &wrapper_sig)
-            .map_err(|e| e.to_string())?;
-
-        let mut cl_func = cranelift_codegen::ir::Function::new();
-        cl_func.signature = wrapper_sig;
-
-        {
-            let mut fn_builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
-            let block = fn_builder.create_block();
-            fn_builder.switch_to_block(block);
-            fn_builder.seal_block(block);
-
-            let func_ref = jit_module.declare_func_in_func(entry_func_id, fn_builder.func);
-            let call = fn_builder.ins().call(func_ref, &[]);
-            let result = fn_builder.inst_results(call)[0];
-            fn_builder.ins().return_(&[result]);
-            fn_builder.finalize();
-        }
-
-        let mut ctx = cranelift_codegen::Context::for_function(cl_func.clone());
-        let res = jit_module.define_function(wrapper_id, &mut ctx);
-        if let Err(_e) = &res {
-            println!("cl_func that failed:\n{}", cl_func.display());
-        }
-        res.map_err(|e| format!("JIT: entry wrapper error: {}", e))?;
-
+        let id = create_entry_wrapper(&mut jit_module, &mut fb_ctx, entry_func_id)?;
         if trace {
             eprintln!("JIT: created entry wrapper (platform CC → Tail CC)");
         }
-
-        Some(wrapper_id)
+        Some(id)
     } else {
         None
     };
 
-    // Phase 2.6: Create per-arity trampolines (platform CC → Tail CC).
-    // These allow Rust code (call_jit_fn) to call JIT functions via extern "C"
-    // transmute without ABI mismatch. Each trampoline takes a function pointer
-    // (as first arg) plus N args, and does a Cranelift indirect call with Tail CC.
-    let mut trampoline_ids: [Option<FuncId>; 5] = [None; 5];
-    for arity in 0..5usize {
-        let tramp_name = format!("__trampoline_{}", arity);
-
-        // Platform CC signature: (fn_ptr, arg0, arg1, ..., argN) -> u64
-        let mut tramp_sig = jit_module.make_signature();
-        tramp_sig.params.push(AbiParam::new(ptr_type)); // fn_ptr
-        for _ in 0..arity {
-            tramp_sig.params.push(AbiParam::new(types::I64));
-        }
-        tramp_sig.returns.push(AbiParam::new(types::I64));
-
-        let tramp_id = jit_module
-            .declare_function(&tramp_name, Linkage::Local, &tramp_sig)
-            .map_err(|e| e.to_string())?;
-
-        let mut cl_func = cranelift_codegen::ir::Function::new();
-        cl_func.signature = tramp_sig;
-
-        {
-            let mut fn_builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
-            let block = fn_builder.create_block();
-            fn_builder.append_block_params_for_function_params(block);
-            fn_builder.switch_to_block(block);
-            fn_builder.seal_block(block);
-
-            let fn_ptr_val = fn_builder.block_params(block)[0];
-            let args: Vec<cranelift_codegen::ir::Value> = (0..arity)
-                .map(|i| fn_builder.block_params(block)[i + 1])
-                .collect();
-
-            // Tail CC signature for the indirect call target
-            let mut target_sig = jit_module.make_signature();
-            target_sig.call_conv = CallConv::Tail;
-            for _ in 0..arity {
-                target_sig.params.push(AbiParam::new(types::I64));
-            }
-            target_sig.returns.push(AbiParam::new(types::I64));
-            let sig_ref = fn_builder.import_signature(target_sig);
-
-            let call = fn_builder.ins().call_indirect(sig_ref, fn_ptr_val, &args);
-            let result = fn_builder.inst_results(call)[0];
-            fn_builder.ins().return_(&[result]);
-            fn_builder.finalize();
-        }
-
-        let mut ctx = cranelift_codegen::Context::for_function(cl_func);
-        jit_module
-            .define_function(tramp_id, &mut ctx)
-            .map_err(|e| format!("JIT: trampoline_{} error: {}", arity, e))?;
-
-        trampoline_ids[arity] = Some(tramp_id);
-    }
+    let trampoline_ids = create_trampolines(&mut jit_module, &mut fb_ctx, ptr_type)?;
 
     // Phase 3: Finalize and get function pointers.
     // Wrap in catch_unwind because Cranelift may panic on unresolvable symbols
@@ -721,7 +602,7 @@ fn compile_inner(
     }));
     match finalize_result {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => return Err(e.to_string()),
+        Ok(Err(e)) => return Err(JitError::from(e.to_string())),
         Err(payload) => {
             let msg = if let Some(s) = payload.downcast_ref::<String>() {
                 s.clone()
@@ -730,7 +611,7 @@ fn compile_inner(
             } else {
                 "unknown panic".to_string()
             };
-            return Err(format!("JIT compilation failed: {}", msg));
+            return Err(JitError::from(format!("JIT compilation failed: {}", msg)));
         }
     }
 
@@ -774,10 +655,109 @@ fn compile_inner(
 // Helpers
 // ---------------------------------------------------------------------------
 
+/// Create a platform-CC entry wrapper that calls the Tail-CC entry function.
+/// Bridges host ABI so `transmute::<_, fn() -> u64>` works correctly.
+fn create_entry_wrapper(
+    jit_module: &mut JITModule,
+    fb_ctx: &mut FunctionBuilderContext,
+    entry_func_id: FuncId,
+) -> Result<FuncId, String> {
+    let mut wrapper_sig = jit_module.make_signature();
+    wrapper_sig.returns.push(AbiParam::new(types::I64));
+
+    let wrapper_id = jit_module
+        .declare_function("__entry_wrapper", Linkage::Local, &wrapper_sig)
+        .map_err(|e| e.to_string())?;
+
+    let mut cl_func = cranelift_codegen::ir::Function::new();
+    cl_func.signature = wrapper_sig;
+
+    {
+        let mut fn_builder = FunctionBuilder::new(&mut cl_func, fb_ctx);
+        let block = fn_builder.create_block();
+        fn_builder.switch_to_block(block);
+        fn_builder.seal_block(block);
+
+        let func_ref = jit_module.declare_func_in_func(entry_func_id, fn_builder.func);
+        let call = fn_builder.ins().call(func_ref, &[]);
+        let result = fn_builder.inst_results(call)[0];
+        fn_builder.ins().return_(&[result]);
+        fn_builder.finalize();
+    }
+
+    let mut ctx = cranelift_codegen::Context::for_function(cl_func);
+    jit_module
+        .define_function(wrapper_id, &mut ctx)
+        .map_err(|e| format!("JIT: entry wrapper error: {}", e))?;
+
+    Ok(wrapper_id)
+}
+
+/// Create per-arity trampolines (platform CC → Tail CC) for indirect calls.
+/// Each trampoline takes a function pointer (first arg) plus N value args,
+/// and does a Cranelift indirect call with Tail CC.
+fn create_trampolines(
+    jit_module: &mut JITModule,
+    fb_ctx: &mut FunctionBuilderContext,
+    ptr_type: cranelift_codegen::ir::Type,
+) -> Result<[Option<FuncId>; 5], String> {
+    let mut trampoline_ids: [Option<FuncId>; 5] = [None; 5];
+    for arity in 0..5usize {
+        let tramp_name = format!("__trampoline_{}", arity);
+
+        let mut tramp_sig = jit_module.make_signature();
+        tramp_sig.params.push(AbiParam::new(ptr_type)); // fn_ptr
+        for _ in 0..arity {
+            tramp_sig.params.push(AbiParam::new(types::I64));
+        }
+        tramp_sig.returns.push(AbiParam::new(types::I64));
+
+        let tramp_id = jit_module
+            .declare_function(&tramp_name, Linkage::Local, &tramp_sig)
+            .map_err(|e| e.to_string())?;
+
+        let mut cl_func = cranelift_codegen::ir::Function::new();
+        cl_func.signature = tramp_sig;
+
+        {
+            let mut fn_builder = FunctionBuilder::new(&mut cl_func, fb_ctx);
+            let block = fn_builder.create_block();
+            fn_builder.append_block_params_for_function_params(block);
+            fn_builder.switch_to_block(block);
+            fn_builder.seal_block(block);
+
+            let fn_ptr_val = fn_builder.block_params(block)[0];
+            let args: Vec<cranelift_codegen::ir::Value> = (0..arity)
+                .map(|i| fn_builder.block_params(block)[i + 1])
+                .collect();
+
+            let mut target_sig = jit_module.make_signature();
+            target_sig.call_conv = CallConv::Tail;
+            for _ in 0..arity {
+                target_sig.params.push(AbiParam::new(types::I64));
+            }
+            target_sig.returns.push(AbiParam::new(types::I64));
+            let sig_ref = fn_builder.import_signature(target_sig);
+
+            let call = fn_builder.ins().call_indirect(sig_ref, fn_ptr_val, &args);
+            let result = fn_builder.inst_results(call)[0];
+            fn_builder.ins().return_(&[result]);
+            fn_builder.finalize();
+        }
+
+        let mut ctx = cranelift_codegen::Context::for_function(cl_func);
+        jit_module
+            .define_function(tramp_id, &mut ctx)
+            .map_err(|e| format!("JIT: trampoline_{} error: {}", arity, e))?;
+
+        trampoline_ids[arity] = Some(tramp_id);
+    }
+    Ok(trampoline_ids)
+}
+
 fn build_signature(
     module: &mut JITModule,
     param_count: usize,
-    _ptr_type: cranelift_codegen::ir::Type,
 ) -> cranelift_codegen::ir::Signature {
     let mut sig = module.make_signature();
     // Tail CC for all language-internal functions (per cranelift-guide.md §6, §10).

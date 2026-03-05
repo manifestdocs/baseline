@@ -18,7 +18,7 @@ use super::super::ir::{Expr, IrModule};
 use super::super::nvalue::{PAYLOAD_MASK, TAG_INT};
 use super::analysis::{can_jit, compute_unboxed_flags, has_self_tail_call};
 use super::compile::FnCompileCtx;
-use super::{HELPER_NAMES, make_helper_sig};
+use super::{helper_names, make_helper_sig};
 
 // ---------------------------------------------------------------------------
 // AOT native function symbol table
@@ -109,6 +109,7 @@ const AOT_NATIVE_SYMBOLS: &[(&str, &str)] = &[
     ("Map.values", "bl_map_values"),
     ("Map.len", "bl_map_len"),
     ("Map.from_list", "bl_map_from_list"),
+    ("Map.entries", "bl_map_entries"),
     // Set
     ("Set.empty", "bl_set_empty"),
     ("Set.insert", "bl_set_insert"),
@@ -304,7 +305,7 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
 
     // --- Declare runtime helpers as imports (linked from libbaseline_rt) ---
     let mut helper_ids: HashMap<&str, FuncId> = HashMap::new();
-    for &name in HELPER_NAMES {
+    for name in helper_names() {
         // Skip jit_call_native — it depends on NativeRegistry (blc-only, not in rt lib)
         if name == "jit_call_native" {
             continue;
@@ -444,7 +445,6 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
                 func_ids: &func_ids,
                 module: &mut obj_module,
                 vars: vars_map,
-                next_var: param_vars.len() as u32,
                 func_names: &func_names,
                 ir_functions: &module.functions,
                 current_func_name: func.name.clone(),
@@ -951,6 +951,12 @@ fn collect_expr_strings(expr: &Expr, strings: &mut HashSet<String>) {
             for a in args {
                 collect_expr_strings(a, strings);
             }
+        }
+        Expr::Drop { body, .. } => {
+            collect_expr_strings(body, strings);
+        }
+        Expr::Reuse { alloc, .. } => {
+            collect_expr_strings(alloc, strings);
         }
     }
 }

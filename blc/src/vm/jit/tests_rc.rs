@@ -174,7 +174,7 @@ fn jit_arena_no_leak_intermediate_values() {
 
 // -- RC (Reference Counting) verification tests --
 //
-// These tests compile with compile_rc() instead of compile(), verifying
+// These tests compile with compile() (RC is always enabled), verifying
 // that scope-based incref/decref properly manages heap lifetimes without
 // relying on the arena. They use alloc_stats to assert zero leaks.
 //
@@ -184,7 +184,7 @@ fn jit_arena_no_leak_intermediate_values() {
 
 /// Compile with RC enabled, run, return result.
 fn compile_and_run_rc_nvalue(module: &IrModule) -> NValue {
-    let program = compile_rc(module, false).expect("RC compilation failed");
+    let program = compile(module, false).expect("RC compilation failed");
     program
         .run_entry_nvalue()
         .expect("Entry function not compiled")

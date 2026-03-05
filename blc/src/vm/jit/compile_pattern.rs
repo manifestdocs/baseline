@@ -14,6 +14,22 @@ use super::super::nvalue::NValue;
 use super::helpers::{NV_TRUE, NV_UNIT};
 
 impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
+    /// Build fallthrough block args for a match branch.
+    /// When there's no next test block (last arm), we need to pass a Unit value
+    /// to the merge block. Otherwise, the fallthrough carries no args.
+    fn fallthrough_block_args(
+        &mut self,
+        next_test: Option<cranelift_codegen::ir::Block>,
+    ) -> Vec<BlockArg> {
+        if next_test.is_none() {
+            vec![BlockArg::Value(
+                self.builder.ins().iconst(types::I64, NV_UNIT as i64),
+            )]
+        } else {
+            vec![]
+        }
+    }
+
     // -- Match compilation --
 
     pub(super) fn compile_match(&mut self, subject: &Expr, arms: &[MatchArm]) -> Result<CValue, String> {
@@ -89,7 +105,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         for (i, arm) in arms.iter().enumerate() {
             match &arm.pattern {
                 Pattern::Constructor(tag, _) => {
-                    let id = self.tags.get_id(tag).unwrap(); // checked in is_switch_eligible
+                    let id = self
+                        .tags
+                        .get_id(tag)
+                        .ok_or_else(|| format!("JIT: unknown constructor tag '{}'", tag))?;
                     let block = self.builder.create_block();
                     switch.set_entry(id as u128, block);
                     arm_blocks.push((i, block));
@@ -332,13 +351,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let eq_result = self.call_helper("jit_values_equal", &[subject, lit_val]);
                 let cmp = self.is_truthy(eq_result);
                 let fallthrough = next_test.unwrap_or(merge_block);
-                let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                    vec![BlockArg::Value(
-                        self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                    )]
-                } else {
-                    vec![]
-                };
+                let fallthrough_args = self.fallthrough_block_args(next_test);
                 self.builder
                     .ins()
                     .brif(cmp, body_block, &[], fallthrough, &fallthrough_args);
@@ -358,13 +371,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
                 if sub_patterns.is_empty() {
                     let fallthrough = next_test.unwrap_or(merge_block);
-                    let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                        vec![BlockArg::Value(
-                            self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                        )]
-                    } else {
-                        vec![]
-                    };
+                    let fallthrough_args = self.fallthrough_block_args(next_test);
                     self.builder
                         .ins()
                         .brif(cmp, body_block, &[], fallthrough, &fallthrough_args);
@@ -372,13 +379,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     // Need to check sub-patterns on the payload
                     let check_payload = self.builder.create_block();
                     let fallthrough = next_test.unwrap_or(merge_block);
-                    let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                        vec![BlockArg::Value(
-                            self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                        )]
-                    } else {
-                        vec![]
-                    };
+                    let fallthrough_args = self.fallthrough_block_args(next_test);
                     self.builder.ins().brif(
                         cmp,
                         check_payload,
@@ -428,13 +429,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             let cmp = self.is_truthy(eq);
                             let next_check = self.builder.create_block();
                             let fallthrough = next_test.unwrap_or(merge_block);
-                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                                vec![BlockArg::Value(
-                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                                )]
-                            } else {
-                                vec![]
-                            };
+                            let fallthrough_args = self.fallthrough_block_args(next_test);
                             self.builder.ins().brif(
                                 cmp,
                                 next_check,
@@ -460,13 +455,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             };
                             let next_check = self.builder.create_block();
                             let fallthrough = next_test.unwrap_or(merge_block);
-                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                                vec![BlockArg::Value(
-                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                                )]
-                            } else {
-                                vec![]
-                            };
+                            let fallthrough_args = self.fallthrough_block_args(next_test);
                             self.builder.ins().brif(
                                 cmp,
                                 next_check,
@@ -511,13 +500,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             let cmp = self.is_truthy(eq);
                             let next_check = self.builder.create_block();
                             let fallthrough = next_test.unwrap_or(merge_block);
-                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                                vec![BlockArg::Value(
-                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                                )]
-                            } else {
-                                vec![]
-                            };
+                            let fallthrough_args = self.fallthrough_block_args(next_test);
                             self.builder.ins().brif(
                                 cmp,
                                 next_check,
@@ -545,13 +528,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             };
                             let next_check = self.builder.create_block();
                             let fallthrough = next_test.unwrap_or(merge_block);
-                            let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                                vec![BlockArg::Value(
-                                    self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                                )]
-                            } else {
-                                vec![]
-                            };
+                            let fallthrough_args = self.fallthrough_block_args(next_test);
                             self.builder.ins().brif(
                                 cmp,
                                 next_check,
@@ -586,13 +563,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
                 let check_elems = self.builder.create_block();
                 let fallthrough = next_test.unwrap_or(merge_block);
-                let fallthrough_args: Vec<BlockArg> = if next_test.is_none() {
-                    vec![BlockArg::Value(
-                        self.builder.ins().iconst(types::I64, NV_UNIT as i64),
-                    )]
-                } else {
-                    vec![]
-                };
+                let fallthrough_args = self.fallthrough_block_args(next_test);
                 self.builder.ins().brif(
                     cmp,
                     check_elems,

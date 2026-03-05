@@ -259,6 +259,88 @@ fn jit_recursive_fib10() {
 }
 
 #[test]
+fn jit_unboxed_bool_recursive_helper_from_main() {
+    let helper_body = Expr::If {
+        condition: Box::new(make_bool_binop(BinOp::Le, make_var("n"), make_int(0))),
+        then_branch: Box::new(Expr::Bool(true)),
+        else_branch: Some(Box::new(Expr::CallDirect {
+            name: "helper".into(),
+            args: vec![make_binop(BinOp::Sub, make_var("n"), make_int(1))],
+            ty: Some(Type::Bool),
+        })),
+        ty: Some(Type::Bool),
+    };
+
+    let module = IrModule {
+        functions: vec![
+            IrFunction {
+                name: "helper".into(),
+                params: vec!["n".into()],
+                body: helper_body,
+                ty: Some(Type::Bool),
+                span: dummy_span(),
+            },
+            IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::CallDirect {
+                    name: "helper".into(),
+                    args: vec![make_int(3)],
+                    ty: Some(Type::Bool),
+                },
+                ty: Some(Type::Bool),
+                span: dummy_span(),
+            },
+        ],
+        entry: 1,
+        tags: TagRegistry::new(),
+    };
+    assert!(compile_and_run_bool(&module));
+}
+
+#[test]
+fn jit_unboxed_float_recursive_helper_from_main() {
+    let helper_body = Expr::If {
+        condition: Box::new(make_bool_binop(BinOp::Le, make_var("n"), make_int(0))),
+        then_branch: Box::new(Expr::Float(1.25)),
+        else_branch: Some(Box::new(Expr::CallDirect {
+            name: "helper".into(),
+            args: vec![make_binop(BinOp::Sub, make_var("n"), make_int(1))],
+            ty: Some(Type::Float),
+        })),
+        ty: Some(Type::Float),
+    };
+
+    let module = IrModule {
+        functions: vec![
+            IrFunction {
+                name: "helper".into(),
+                params: vec!["n".into()],
+                body: helper_body,
+                ty: Some(Type::Float),
+                span: dummy_span(),
+            },
+            IrFunction {
+                name: "main".into(),
+                params: vec![],
+                body: Expr::CallDirect {
+                    name: "helper".into(),
+                    args: vec![make_int(4)],
+                    ty: Some(Type::Float),
+                },
+                ty: Some(Type::Float),
+                span: dummy_span(),
+            },
+        ],
+        entry: 1,
+        tags: TagRegistry::new(),
+    };
+    let nv = compile_and_run_nvalue(&module);
+    assert!(nv.is_float());
+    assert_eq!(nv.as_float(), 1.25);
+}
+
+#[test]
 fn jit_let_binding() {
     let module = IrModule {
         functions: vec![IrFunction {

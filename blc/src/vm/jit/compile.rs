@@ -30,7 +30,6 @@ pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     pub(super) func_ids: &'a [Option<FuncId>],
     pub(super) module: &'a mut M,
     pub(super) vars: HashMap<String, Variable>,
-    pub(super) next_var: u32,
     pub(super) func_names: &'a HashMap<String, usize>,
     pub(super) ir_functions: &'a [IrFunction],
     pub(super) current_func_name: String,
@@ -69,9 +68,7 @@ pub(super) type CValue = cranelift_codegen::ir::Value;
 
 impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     pub(super) fn new_var(&mut self) -> Variable {
-        let var = self.builder.declare_var(types::I64);
-        self.next_var += 1;
-        var
+        self.builder.declare_var(types::I64)
     }
 
     /// Stash an SSA value into a Cranelift Variable so it remains valid
@@ -199,8 +196,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             // This caused MakeEnum to receive a null tag string, silently
             // producing Unit instead of the correct enum value.
             //
-            // TODO: Restore pool by initializing Variables in the entry block
-            // before any splits, or by tracking block membership.
+            // If pooling is reintroduced, pooled variables must be initialized in
+            // a dominating block (e.g., function entry) before any control-flow split.
             let nv = NValue::string(s.into());
             Ok(self.emit_heap_nvalue(nv))
         }
@@ -1872,7 +1869,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             // Typed hole: unreachable at runtime if control flow is correct.
             // Emit a trap so the function body still compiles.
             Expr::Hole => {
-                self.builder.ins().trap(cranelift_codegen::ir::TrapCode::user(1).unwrap());
+                let trap = cranelift_codegen::ir::TrapCode::user(1)
+                    .ok_or_else(|| "JIT: invalid trap code".to_string())?;
+                self.builder.ins().trap(trap);
                 // Unreachable, but Cranelift needs a value for the block.
                 let dead_block = self.builder.create_block();
                 self.builder.switch_to_block(dead_block);
@@ -2130,19 +2129,4 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         Ok(self.builder.ins().select(cmp, true_val, false_val))
     }
 
-    /// Create MemFlags with `readonly` set.
-    ///
-    /// Use this for loads from immutable data (constant pools, frozen record fields).
-    /// Tells Cranelift the memory won't change, enabling load-load reordering and CSE.
-    ///
-    /// NOTE: Currently unused because all field access goes through opaque runtime
-    /// helpers. When direct memory loads are added (bypassing `jit_get_field`), every
-    /// load from immutable data MUST use these flags.
-    #[allow(dead_code)]
-    fn readonly_mem_flags() -> cranelift_codegen::ir::MemFlags {
-        let mut flags = cranelift_codegen::ir::MemFlags::new();
-        flags.set_readonly();
-        flags.set_aligned();
-        flags
-    }
 }
