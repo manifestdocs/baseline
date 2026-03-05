@@ -53,10 +53,7 @@ test "combined string constraint passes" = make_api_path("/api/users") == "/api/
 fn refined_let() -> Bool = {
   let x : Byte = 42
   let y : NonNeg = 0
-  // Note: arithmetic on refined types (x + y) causes TYP_001
-  // because the type checker doesn't unwrap refined types to Int.
-  // This is a known gap — using direct comparison instead.
-  x == 42
+  x + y == 42
 }
 
 test "let bindings with refinements" = refined_let()

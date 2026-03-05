@@ -34,6 +34,21 @@ fn is_decode_compatible(ty: &Type) -> bool {
     }
 }
 
+fn scalar_base_type(ty: &Type) -> &Type {
+    match ty {
+        Type::Refined(inner, _) | Type::Scoped(inner) => scalar_base_type(inner),
+        other => other,
+    }
+}
+
+fn is_int_like(ty: &Type) -> bool {
+    matches!(scalar_base_type(ty), Type::Int)
+}
+
+fn is_float_like(ty: &Type) -> bool {
+    matches!(scalar_base_type(ty), Type::Float)
+}
+
 /// Extract a field name from an identifier or string_literal node.
 /// For identifiers, returns the text directly.
 /// For string_literal nodes, concatenates string_content children and rejects interpolation.
@@ -1722,12 +1737,12 @@ fn check_node_inner(
 
             match op_str {
                 "+" | "-" | "*" | "/" | "%" => {
-                    if left_type == Type::Int && right_type == Type::Int {
+                    if is_int_like(&left_type) && is_int_like(&right_type) {
                         Type::Int
-                    } else if left_type == Type::Float && right_type == Type::Float {
+                    } else if is_float_like(&left_type) && is_float_like(&right_type) {
                         Type::Float
-                    } else if (left_type == Type::Int && right_type == Type::Float)
-                        || (left_type == Type::Float && right_type == Type::Int)
+                    } else if (is_int_like(&left_type) && is_float_like(&right_type))
+                        || (is_float_like(&left_type) && is_int_like(&right_type))
                     {
                         // Int/Float promotion: mixed arithmetic produces Float
                         Type::Float
@@ -2304,7 +2319,7 @@ fn check_node_inner(
             let start_type = check_node(&start_node, source, file, symbols, diagnostics);
             let end_type = check_node(&end_node, source, file, symbols, diagnostics);
 
-            if start_type != Type::Int && start_type != Type::Unknown {
+            if !is_int_like(&start_type) && start_type != Type::Unknown {
                 diagnostics.push(Diagnostic {
                     code: "TYP_024".to_string(),
                     severity: Severity::Error,
@@ -2314,7 +2329,7 @@ fn check_node_inner(
                     suggestions: vec![],
                 });
             }
-            if end_type != Type::Int && end_type != Type::Unknown {
+            if !is_int_like(&end_type) && end_type != Type::Unknown {
                 diagnostics.push(Diagnostic {
                     code: "TYP_024".to_string(),
                     severity: Severity::Error,
@@ -2349,8 +2364,8 @@ fn check_node_inner(
                     Type::Bool
                 }
                 "-" => {
-                    if operand_type != Type::Int
-                        && operand_type != Type::Float
+                    if !is_int_like(&operand_type)
+                        && !is_float_like(&operand_type)
                         && operand_type != Type::Unknown
                     {
                         diagnostics.push(Diagnostic {

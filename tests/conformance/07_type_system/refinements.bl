@@ -10,5 +10,13 @@ fn make_positive(n: Int) -> Positive = n
 
 fn make_pct(n: Int) -> Percentage = n
 
+fn plus_one(n: Positive) -> Int = n + 1
+
+fn add_one(n: Int) -> Int = n + 1
+
+fn plus_two(n: Positive) -> Int = n |> plus_one |> add_one
+
 test "positive refinement passes" = make_positive(5) == 5
 test "percentage refinement passes" = make_pct(50) == 50
+test "refined arithmetic composes" = plus_one(make_positive(5)) == 6
+test "refined arithmetic composes in pipes" = plus_two(make_positive(5)) == 7
