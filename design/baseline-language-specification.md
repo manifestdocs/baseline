@@ -27,11 +27,11 @@ This specification describes both implemented features and planned v0.2 targets.
 - Code formatter (`blc fmt`) and documentation generator (`blc docs`)
 
 **Not yet available (planned for v0.2):**
-- Algebraic effect *handlers* (`handle...with` — declarations and checking work, runtime handlers do not)
+- Custom effect-handler mock infrastructure for testing
 - User-defined generic functions (builtin generic inference works)
 - Row polymorphism, Char type, Never type
 - List/record destructuring patterns, match guards, or-patterns
-- Concurrency/fibers, REPL
+- User-facing concurrency primitives, REPL
 - Constrained Generation Protocol, LLM Bootstrap Kit (see [roadmap](baseline-language-roadmap.md))
 
 ### Implementation Status Key
@@ -42,7 +42,7 @@ This specification describes both implemented features and planned v0.2 targets.
 
 See conformance tests in `tests/conformance/` for verified behavior.
 
-> **Note:** The Cranelift JIT is the sole execution backend. Algebraic effect handlers (`handle...with`) are fully supported via evidence passing (tail-resumptive) and fiber coroutines (non-tail-resumptive). Concurrency/fibers and REPL are not yet supported in the JIT path.
+> **Note:** The Cranelift JIT is the sole execution backend. Algebraic effect handlers (`handle...with`) are fully supported via evidence passing (tail-resumptive) and one-shot coroutine switching for non-tail-resumptive handlers. User-facing concurrency primitives and REPL are not yet supported in the JIT path.
 
 ---
 
