@@ -1847,21 +1847,21 @@ fn try_fold_binop(op: BinOp, lhs: &Expr, rhs: &Expr) -> Option<Expr> {
 
 fn fold_int_binop(op: BinOp, a: i64, b: i64) -> Option<Expr> {
     match op {
-        BinOp::Add => Some(Expr::Int(a.wrapping_add(b))),
-        BinOp::Sub => Some(Expr::Int(a.wrapping_sub(b))),
-        BinOp::Mul => Some(Expr::Int(a.wrapping_mul(b))),
+        BinOp::Add => a.checked_add(b).map(Expr::Int),
+        BinOp::Sub => a.checked_sub(b).map(Expr::Int),
+        BinOp::Mul => a.checked_mul(b).map(Expr::Int),
         BinOp::Div => {
             if b == 0 {
                 None
             } else {
-                Some(Expr::Int(a / b))
+                a.checked_div(b).map(Expr::Int)
             }
         }
         BinOp::Mod => {
             if b == 0 {
                 None
             } else {
-                Some(Expr::Int(a % b))
+                a.checked_rem(b).map(Expr::Int)
             }
         }
         BinOp::Eq => Some(Expr::Bool(a == b)),

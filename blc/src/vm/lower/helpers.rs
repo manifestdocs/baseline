@@ -258,11 +258,11 @@ pub(super) fn unescape(s: &str) -> String {
 pub(super) fn eval_const_binary(op: &str, a: &Expr, b: &Expr) -> Option<Expr> {
     match (a, b) {
         (Expr::Int(a), Expr::Int(b)) => match op {
-            "+" => Some(Expr::Int(a.wrapping_add(*b))),
-            "-" => Some(Expr::Int(a.wrapping_sub(*b))),
-            "*" => Some(Expr::Int(a.wrapping_mul(*b))),
-            "/" if *b != 0 => Some(Expr::Int(a.wrapping_div(*b))),
-            "%" if *b != 0 => Some(Expr::Int(a.wrapping_rem(*b))),
+            "+" => a.checked_add(*b).map(Expr::Int),
+            "-" => a.checked_sub(*b).map(Expr::Int),
+            "*" => a.checked_mul(*b).map(Expr::Int),
+            "/" if *b != 0 => a.checked_div(*b).map(Expr::Int),
+            "%" if *b != 0 => a.checked_rem(*b).map(Expr::Int),
             "==" => Some(Expr::Bool(a == b)),
             "!=" => Some(Expr::Bool(a != b)),
             "<" => Some(Expr::Bool(a < b)),

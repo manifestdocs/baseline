@@ -249,7 +249,7 @@ impl<'a> super::Lowerer<'a> {
                 let op = node.child(0).map(|c| self.node_text(&c))?;
                 let val = node.named_child(0).and_then(|c| self.try_eval_const(&c))?;
                 match (op.as_str(), &val) {
-                    ("-", Expr::Int(n)) => Some(Expr::Int(n.wrapping_neg())),
+                    ("-", Expr::Int(n)) => n.checked_neg().map(Expr::Int),
                     ("-", Expr::Float(n)) => Some(Expr::Float(-n)),
                     ("not", Expr::Bool(b)) => Some(Expr::Bool(!b)),
                     _ => None,

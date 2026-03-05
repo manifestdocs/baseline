@@ -324,6 +324,14 @@ fn run_runtime_error_has_location_and_stack() {
     );
 }
 
+#[test]
+fn run_runtime_overflow_has_error() {
+    assert_run_fails(
+        "runtime_overflow_test.bl",
+        &["Integer overflow in addition", "runtime_overflow_test.bl:"],
+    );
+}
+
 // ===========================================================================
 // Inline test execution — `blc test` subcommand
 // ===========================================================================

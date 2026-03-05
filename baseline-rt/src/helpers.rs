@@ -232,8 +232,13 @@ pub extern "C" fn jit_enum_field_drop(enum_bits: u64, field_idx: u64) {
         return;
     }
     let fi = field_idx as usize;
-    // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
     let ptr = (enum_bits & PAYLOAD_MASK) as *mut HeapObject;
+    // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
+    debug_assert!(!ptr.is_null(), "jit_enum_field_drop: null heap pointer");
+    debug_assert!(
+        unsafe { matches!(&*ptr, HeapObject::Enum { .. }) },
+        "jit_enum_field_drop: expected Enum, got non-enum HeapObject"
+    );
     unsafe {
         if let HeapObject::Enum { payload, .. } = &mut *ptr
             && fi < payload.len() {
@@ -263,8 +268,13 @@ pub extern "C" fn jit_enum_field_set(
     }
     let new_value = unsafe { jit_take_arg(new_value_bits) };
     let i = field_idx as usize;
-    // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
     let ptr = (enum_bits & PAYLOAD_MASK) as *mut HeapObject;
+    // SAFETY: See doc comment above. We bypass Arc::get_mut and mutate directly.
+    debug_assert!(!ptr.is_null(), "jit_enum_field_set: null heap pointer");
+    debug_assert!(
+        unsafe { matches!(&*ptr, HeapObject::Enum { .. }) },
+        "jit_enum_field_set: expected Enum, got non-enum HeapObject"
+    );
     unsafe {
         if let HeapObject::Enum { payload, .. } = &mut *ptr
             && i < payload.len() {
@@ -1033,22 +1043,37 @@ pub extern "C" fn jit_int_from_i64(val: i64) -> u64 {
 /// Add two NaN-boxed integers (handles BigInt inputs and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_add(a: u64, b: u64) -> u64 {
-    let result = nv_as_any_int(a).wrapping_add(nv_as_any_int(b));
-    jit_own(NValue::int(result))
+    match nv_as_any_int(a).checked_add(nv_as_any_int(b)) {
+        Some(result) => jit_own(NValue::int(result)),
+        None => {
+            jit_set_error("Integer overflow in addition".to_string());
+            NV_UNIT
+        }
+    }
 }
 
 /// Subtract two NaN-boxed integers (handles BigInt inputs and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_sub(a: u64, b: u64) -> u64 {
-    let result = nv_as_any_int(a).wrapping_sub(nv_as_any_int(b));
-    jit_own(NValue::int(result))
+    match nv_as_any_int(a).checked_sub(nv_as_any_int(b)) {
+        Some(result) => jit_own(NValue::int(result)),
+        None => {
+            jit_set_error("Integer overflow in subtraction".to_string());
+            NV_UNIT
+        }
+    }
 }
 
 /// Multiply two NaN-boxed integers (handles BigInt inputs and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_mul(a: u64, b: u64) -> u64 {
-    let result = nv_as_any_int(a).wrapping_mul(nv_as_any_int(b));
-    jit_own(NValue::int(result))
+    match nv_as_any_int(a).checked_mul(nv_as_any_int(b)) {
+        Some(result) => jit_own(NValue::int(result)),
+        None => {
+            jit_set_error("Integer overflow in multiplication".to_string());
+            NV_UNIT
+        }
+    }
 }
 
 /// Divide two NaN-boxed integers (handles BigInt inputs).
@@ -1059,8 +1084,13 @@ pub extern "C" fn jit_int_div(a: u64, b: u64) -> u64 {
         jit_set_error("Division by zero".to_string());
         return NV_UNIT;
     }
-    let result = nv_as_any_int(a) / bv;
-    jit_own(NValue::int(result))
+    match nv_as_any_int(a).checked_div(bv) {
+        Some(result) => jit_own(NValue::int(result)),
+        None => {
+            jit_set_error("Integer overflow in division".to_string());
+            NV_UNIT
+        }
+    }
 }
 
 /// Modulo two NaN-boxed integers (handles BigInt inputs).
@@ -1071,15 +1101,25 @@ pub extern "C" fn jit_int_mod(a: u64, b: u64) -> u64 {
         jit_set_error("Modulo by zero".to_string());
         return NV_UNIT;
     }
-    let result = nv_as_any_int(a) % bv;
-    jit_own(NValue::int(result))
+    match nv_as_any_int(a).checked_rem(bv) {
+        Some(result) => jit_own(NValue::int(result)),
+        None => {
+            jit_set_error("Integer overflow in modulo".to_string());
+            NV_UNIT
+        }
+    }
 }
 
 /// Negate a NaN-boxed integer (handles BigInt input and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_neg(a: u64) -> u64 {
-    let result = nv_as_any_int(a).wrapping_neg();
-    jit_own(NValue::int(result))
+    match nv_as_any_int(a).checked_neg() {
+        Some(result) => jit_own(NValue::int(result)),
+        None => {
+            jit_set_error("Integer overflow in negation".to_string());
+            NV_UNIT
+        }
+    }
 }
 
 /// Compare two NaN-boxed integers: a < b (handles BigInt inputs).
