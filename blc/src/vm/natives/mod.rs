@@ -379,6 +379,7 @@ impl NativeRegistry {
         self.register_owning("List.concat", native_list_concat, native_list_concat_owning);
         self.register("List.contains", native_list_contains);
         self.register("List.get", native_list_get);
+        self.register("List.get_or", native_list_get_or);
         self.register_owning("List.set", native_list_set, native_list_set_owning);
         self.register("List.slice", native_list_slice);
         self.register("List.fill", native_list_fill);
@@ -794,6 +795,11 @@ impl NativeRegistry {
         self.register("Async.interval", native_async_placeholder);
         self.register("Async.timeout!", native_async_placeholder);
         self.register("Async.timeout", native_async_placeholder);
+
+        // -- Fiber-based effect handler internals --
+        self.register("__fiber.perform", native_fiber_perform);
+        self.register("__handler.resume", native_handler_resume);
+        self.register("__fiber.run_handler", native_fiber_run_handler);
     }
 }
 
@@ -807,6 +813,96 @@ fn native_async_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
     Err(NativeError(
         "Async primitives must be executed by VM, not called directly".into(),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Fiber-based effect handler native functions
+// ---------------------------------------------------------------------------
+
+use baseline_rt::fiber;
+
+/// Native wrapper for __fiber.perform(effect_key, ...args).
+/// Called from within a fiber body when it performs an effect.
+/// Yields to the parent handler dispatch loop.
+fn native_fiber_perform(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.is_empty() {
+        return Err(NativeError("__fiber.perform: missing effect key".into()));
+    }
+    let key = args[0]
+        .as_string()
+        .ok_or_else(|| NativeError("__fiber.perform: effect key must be a string".into()))?
+        .to_string();
+
+    // Collect effect args as raw u64 bits.
+    let raw_args: Vec<u64> = args[1..].iter().map(|a| a.raw()).collect();
+
+    // Yield to the handler.
+    let result_bits = fiber::fiber_yield(key, raw_args);
+
+    // Reconstruct NValue from the bits passed by resume.
+    Ok(unsafe { NValue::borrow_from_raw(result_bits) })
+}
+
+/// Native wrapper for __handler.resume(value).
+/// Called from a handler clause body to resume the suspended fiber.
+fn native_handler_resume(args: &[NValue]) -> Result<NValue, NativeError> {
+    let value = if args.is_empty() {
+        NValue::unit()
+    } else {
+        args[0].clone()
+    };
+
+    let value_bits = value.raw();
+    // Don't drop value — we pass raw bits to the fiber. The fiber will
+    // reconstruct the NValue via borrow_from_raw (which clones+forgets).
+    // But we need the original to stay alive until the fiber processes it.
+    // Actually, fiber_yield stores the raw bits and switch_context returns.
+    // The fiber reads the bits in take_transfer(). Since NValue is NaN-boxed,
+    // non-heap values are fine. For heap values, we need to ensure the
+    // reference count is maintained.
+
+    let result_bits = baseline_rt::helpers::jit_handler_resume(value_bits);
+
+    Ok(unsafe { NValue::borrow_from_raw(result_bits) })
+}
+
+/// Native wrapper for __fiber.run_handler(body_closure, keys_list, handlers_list).
+/// Runs the body on a fiber, dispatches effects to handler clauses.
+fn native_fiber_run_handler(args: &[NValue]) -> Result<NValue, NativeError> {
+    if args.len() < 3 {
+        return Err(NativeError(
+            "__fiber.run_handler: expected 3 args (body, keys, handlers)".into(),
+        ));
+    }
+
+    let body_closure = &args[0];
+    let keys_list = args[1]
+        .as_list()
+        .ok_or_else(|| NativeError("__fiber.run_handler: keys must be a list".into()))?;
+    let handlers_list = args[2]
+        .as_list()
+        .ok_or_else(|| NativeError("__fiber.run_handler: handlers must be a list".into()))?;
+
+    let body_bits = body_closure.raw();
+    let n = keys_list.len().min(handlers_list.len());
+
+    // Build arrays of raw bits for keys and handler functions.
+    let key_bits: Vec<u64> = keys_list.iter().take(n).map(|k| k.raw()).collect();
+    let fn_bits: Vec<u64> = handlers_list.iter().take(n).map(|f| f.raw()).collect();
+
+    let result_bits = baseline_rt::helpers::jit_run_fiber_handler(
+        body_bits,
+        key_bits.as_ptr() as u64,
+        fn_bits.as_ptr() as u64,
+        n as u64,
+    );
+
+    // Check for errors set by the fiber runtime.
+    if let Some(err) = baseline_rt::helpers::jit_take_error() {
+        return Err(NativeError(err));
+    }
+
+    Ok(unsafe { NValue::borrow_from_raw(result_bits) })
 }
 
 #[cfg(test)]

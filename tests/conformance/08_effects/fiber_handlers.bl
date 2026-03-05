@@ -1,6 +1,4 @@
-// check-only
 // Conformance: non-tail-resumptive effect handlers (fiber-based)
-// Requires fiber-based JIT support (BASEL-332) to execute.
 //
 // These handlers do work AFTER resume(), requiring fiber-based coroutines.
 // Tail-resumptive handlers (where the body is just `resume(expr)`) use
@@ -41,16 +39,16 @@ test "multiple performs" = handle {
 } == 102
 
 // Test 4: Handler transforms resume value
-// The handler passes a different value to the continuation.
+// The handler passes a value to the continuation via resume.
 test "handler transforms resume value" = handle {
   let x = Console.println!("get value")
   x + 10
 } with {
   Console.println!(msg, resume) -> {
-    let r = resume(())
+    let r = resume(42)
     r
   }
-} == 10
+} == 52
 
 // Test 5: Nested handlers — tail-resumptive inside non-tail-resumptive
 test "nested tail inside non-tail" = handle {
@@ -66,3 +64,37 @@ test "nested tail inside non-tail" = handle {
     r + 7
   }
 } == 50
+
+// Test 6: Nested non-tail-resumptive inside non-tail-resumptive (same effect)
+// Inner handler catches the first perform, outer catches the second.
+// Inner handler adds 10, outer handler adds 100.
+test "nested non-tail inside non-tail" = handle {
+  let x = handle {
+    Console.println!("inner")
+    0
+  } with {
+    Console.println!(msg, resume) -> {
+      let r = resume(())
+      r + 10
+    }
+  }
+  Console.println!("outer")
+  x
+} with {
+  Console.println!(msg, resume) -> {
+    let r = resume(())
+    r + 100
+  }
+} == 110
+
+// Test 7: Effect args flow through fiber
+// The handler reads the argument passed to the performed effect.
+test "effect args flow through fiber" = handle {
+  let x = Console.println!("msg")
+  x + 10
+} with {
+  Console.println!(msg, resume) -> {
+    let r = resume(42)
+    r
+  }
+} == 52

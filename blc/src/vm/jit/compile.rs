@@ -1766,6 +1766,109 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 self.compile_expect(actual, matcher)
             }
 
+            // -- Perceus reuse analysis --
+            Expr::Drop { name, token, body } => {
+                // Load the variable being dropped
+                let var_val = if let Some(&var) = self.vars.get(name) {
+                    self.builder.use_var(var)
+                } else {
+                    return Err(format!("Drop: unknown variable '{}'", name));
+                };
+
+                // Call jit_drop_reuse to drain inner fields, get reuse token
+                let reuse_bits = self.call_helper("jit_drop_reuse", &[var_val]);
+
+                // Null out the consumed variable so function-level pop_rc_scope
+                // decrefs UNIT (a no-op) instead of the reused allocation.
+                // Same pattern as CoW (jit_enum_field_set) which nulls subj_var.
+                // Without this, the return value aliases the consumed param,
+                // causing over-decrement when both the function exit and the
+                // caller's scope exit decref the same Rc allocation.
+                if let Some(&var) = self.vars.get(name) {
+                    let unit = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                    self.builder.def_var(var, unit);
+                }
+
+                // Bind the reuse token if requested
+                if let Some(tok_name) = token {
+                    let tok_var = self.builder.declare_var(types::I64);
+                    self.builder.def_var(tok_var, reuse_bits);
+                    self.vars.insert(tok_name.clone(), tok_var);
+                }
+
+                // Compile the continuation body
+                self.compile_expr(body)
+            }
+
+            Expr::Reuse { token, alloc } => {
+                // Load the reuse token
+                let token_val = if let Some(&var) = self.vars.get(token) {
+                    self.builder.use_var(var)
+                } else {
+                    return Err(format!("Reuse: unknown token '{}'", token));
+                };
+
+                // Compile the inner allocation with reuse variants
+                match alloc.as_ref() {
+                    Expr::MakeEnum { tag, payload, .. } => {
+                        if let Some(id) = self.tags.get_id(tag) {
+                            if let Expr::MakeTuple(items, _) = payload.as_ref() {
+                                // Multi-arg flat enum reuse
+                                let item_vals = self.compile_exprs_stashed(items)?;
+                                let tag_val = self.emit_string_value(tag)?;
+                                let id_val = self.builder.ins().iconst(types::I64, id as i64);
+                                let addr = self.spill_to_stack(&item_vals);
+                                let count = self.builder.ins().iconst(types::I64, item_vals.len() as i64);
+                                Ok(self.call_helper(
+                                    "jit_make_enum_flat_reuse",
+                                    &[token_val, tag_val, id_val, addr, count],
+                                ))
+                            } else {
+                                // Single-arg enum reuse
+                                let tag_val = self.emit_string_value(tag)?;
+                                let tag_val = self.stash_in_var(tag_val);
+                                let payload_val = self.compile_expr(payload)?;
+                                let id_val = self.builder.ins().iconst(types::I64, id as i64);
+                                Ok(self.call_helper(
+                                    "jit_make_enum_reuse",
+                                    &[token_val, tag_val, id_val, payload_val],
+                                ))
+                            }
+                        } else {
+                            // No tag_id: fall back to non-reuse path
+                            self.compile_expr(alloc)
+                        }
+                    }
+                    Expr::MakeRecord(fields, _) => {
+                        let mut pair_vals = Vec::with_capacity(fields.len() * 2);
+                        for (fname, fexpr) in fields {
+                            let key_val = self.emit_string_value(fname)?;
+                            let key_val = self.stash_in_var(key_val);
+                            let val = self.compile_expr(fexpr)?;
+                            pair_vals.push(key_val);
+                            pair_vals.push(val);
+                        }
+                        let addr = self.spill_to_stack(&pair_vals);
+                        let count = self.builder.ins().iconst(types::I64, fields.len() as i64);
+                        Ok(self.call_helper("jit_make_record_reuse", &[token_val, addr, count]))
+                    }
+                    Expr::MakeTuple(items, _) => {
+                        let item_vals = if items.is_empty() {
+                            vec![]
+                        } else {
+                            self.compile_exprs_stashed(items)?
+                        };
+                        let addr = self.spill_to_stack(&item_vals);
+                        let count = self.builder.ins().iconst(types::I64, item_vals.len() as i64);
+                        Ok(self.call_helper("jit_make_tuple_reuse", &[token_val, addr, count]))
+                    }
+                    _ => {
+                        // Unsupported alloc type for reuse — compile normally
+                        self.compile_expr(alloc)
+                    }
+                }
+            }
+
             // Typed hole: unreachable at runtime if control flow is correct.
             // Emit a trap so the function body still compiles.
             Expr::Hole => {

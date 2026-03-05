@@ -12,5 +12,8 @@ default = []
 # ~2x faster refcount ops but NValue becomes !Send + !Sync.
 non-atomic-rc = []
 
+[dependencies]
+libc = "0.2"
+
 [lib]
 crate-type = ["lib", "staticlib"]

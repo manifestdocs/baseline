@@ -168,8 +168,12 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
         Expr::Expect { actual, matcher } => {
             expr_can_jit(actual, natives) && matcher_can_jit(matcher, natives)
         }
-        // WithHandlers, effects not yet JIT-supported
-        // (tail-resumptive handlers are eliminated by evidence transform before can_jit)
+        // Perceus reuse nodes — fully JIT-compilable
+        Expr::Drop { body, .. } => expr_can_jit(body, natives),
+        Expr::Reuse { alloc, .. } => expr_can_jit(alloc, natives),
+        // Effect handler nodes should not reach can_jit — both tail-resumptive
+        // (evidence transform) and non-tail-resumptive (fiber transform) are
+        // eliminated before this check. This false is a safety net only.
         Expr::WithHandlers { .. }
         | Expr::HandleEffect { .. }
         | Expr::PerformEffect { .. } => false,
@@ -448,6 +452,12 @@ fn collect_indirect_targets_expr(
         }
         Expr::Expect { actual, .. } => {
             collect_indirect_targets_expr(actual, func_names, targets);
+        }
+        Expr::Drop { body, .. } => {
+            collect_indirect_targets_expr(body, func_names, targets);
+        }
+        Expr::Reuse { alloc, .. } => {
+            collect_indirect_targets_expr(alloc, func_names, targets);
         }
     }
 }

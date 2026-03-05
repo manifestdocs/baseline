@@ -128,6 +128,8 @@ fn optimize_inner(module: &mut IrModule, lift: bool) {
         evidence_transform(module);
         // Lambda lifting: transform Lambda nodes into MakeClosure + lifted functions
         lift_lambdas(module);
+        // Perceus reuse analysis: insert Drop/Reuse for match-destructure-reconstruct
+        insert_drop_reuse(module);
     }
     // Build tag registry: assign integer IDs to all enum tags
     build_tag_registry(module);
@@ -469,27 +471,22 @@ fn expr_has_unhandled_perform(expr: &Expr, handled: &mut HashSet<String>) -> boo
             }
         }
         Expr::HandleEffect { body, clauses } => {
-            let all_tail_resumptive = clauses.iter().all(|c| c.is_tail_resumptive);
-            if all_tail_resumptive {
-                // These clauses handle their effects — add them to scope.
-                let mut added = Vec::new();
-                for c in clauses {
-                    let key = format!("{}.{}", c.effect, c.method);
-                    if handled.insert(key.clone()) {
-                        added.push(key);
-                    }
+            // Both tail-resumptive and non-tail-resumptive handlers handle
+            // their effects (tail-resumptive via evidence passing, non-tail
+            // via fiber transform). Add handled effects to scope.
+            let mut added = Vec::new();
+            for c in clauses {
+                let key = format!("{}.{}", c.effect, c.method);
+                if handled.insert(key.clone()) {
+                    added.push(key);
                 }
-                let result = expr_has_unhandled_perform(body, handled);
-                // Restore handled set (clause bodies are lambdas, not effectful).
-                for key in added {
-                    handled.remove(&key);
-                }
-                result
-            } else {
-                // Non-tail-resumptive handler — check body and clause bodies.
-                expr_has_unhandled_perform(body, handled)
-                    || clauses.iter().any(|c| expr_has_unhandled_perform(&c.body, handled))
             }
+            let result = expr_has_unhandled_perform(body, handled);
+            // Restore handled set.
+            for key in added {
+                handled.remove(&key);
+            }
+            result
         }
         Expr::WithHandlers { handlers, body } => {
             // WithHandlers provides evidence for its effects.
@@ -588,20 +585,11 @@ fn transform_evidence_expr(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
         Expr::HandleEffect { body, clauses } => {
             let all_tail_resumptive = clauses.iter().all(|c| c.is_tail_resumptive);
             if !all_tail_resumptive {
-                // Leave non-tail-resumptive handlers untouched for VM fallback.
-                // Still recurse into children in case there are nested transforms.
-                let body = transform_evidence_expr(*body, ctx);
-                let clauses = clauses
-                    .into_iter()
-                    .map(|c| HandlerClause {
-                        body: transform_evidence_expr(c.body, ctx),
-                        ..c
-                    })
-                    .collect();
-                return Expr::HandleEffect {
-                    body: Box::new(body),
-                    clauses,
-                };
+                // Non-tail-resumptive handler: transform to fiber-based dispatch.
+                // 1. Body → Lambda with PerformEffect replaced by __fiber.perform
+                // 2. Handler clauses → Lambdas with resume() replaced by __handler.resume
+                // 3. Wrap in __fiber.run_handler(body_lambda, keys_list, handlers_list)
+                return transform_fiber_handler(*body, clauses, ctx);
             }
 
             let ev_name = ctx.fresh_ev();
@@ -614,7 +602,7 @@ fn transform_evidence_expr(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
                 // Strip the resume(expr) wrapper to get just the inner expr.
                 let stripped_body = strip_tail_resume_owned(&clause.body);
                 let lambda = Expr::Lambda {
-                    params: clause.params.clone(),
+                    params: clause.params.iter().filter(|p| *p != "resume").cloned().collect(),
                     body: Box::new(stripped_body),
                     ty: None,
                 };
@@ -828,6 +816,384 @@ fn strip_tail_resume_owned(expr: &Expr) -> Expr {
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Fiber-based handler transform (non-tail-resumptive)
+// ---------------------------------------------------------------------------
+
+/// Transform a non-tail-resumptive HandleEffect into a fiber-based dispatch.
+///
+/// ```text
+/// handle { body } with { E.m!(msg, resume) -> { let r = resume(()); work; r } }
+/// ```
+/// becomes:
+/// ```text
+/// __fiber.run_handler(
+///     Lambda { body_with_performs_replaced },
+///     ["E.m", ...],
+///     [Lambda { handler_clause_with_resume_replaced }, ...]
+/// )
+/// ```
+fn transform_fiber_handler(
+    body: Expr,
+    clauses: Vec<HandlerClause>,
+    ctx: &mut EvidenceCtx,
+) -> Expr {
+    // Collect effect keys handled by these clauses, so we know which
+    // PerformEffect nodes in the body to replace.
+    let handled_keys: HashSet<String> = clauses
+        .iter()
+        .map(|c| format!("{}.{}", c.effect, c.method))
+        .collect();
+
+    // 1. Transform body: replace PerformEffect with CallNative("__fiber.perform")
+    let transformed_body = replace_perform_in_body(body, &handled_keys, ctx);
+    let body_lambda = Expr::Lambda {
+        params: vec![],
+        body: Box::new(transformed_body),
+        ty: None,
+    };
+
+    // 2. Build handler keys and handler lambdas
+    let mut key_exprs = Vec::new();
+    let mut handler_exprs = Vec::new();
+
+    for clause in clauses {
+        let field_key = format!("{}.{}", clause.effect, clause.method);
+        key_exprs.push(Expr::String(field_key));
+
+        // Transform handler clause body: replace resume(val) with
+        // CallNative("__handler.resume", [val])
+        let transformed_clause = replace_resume_in_clause(clause.body, ctx);
+        // Handler lambda params = clause.params (the effect operation args,
+        // NOT including resume — resume is replaced with __handler.resume)
+        let handler_lambda = Expr::Lambda {
+            params: clause.params.into_iter().filter(|p| p != "resume").collect(),
+            body: Box::new(transformed_clause),
+            ty: None,
+        };
+        handler_exprs.push(handler_lambda);
+    }
+
+    // 3. Build the CallNative: __fiber.run_handler(body, keys_list, handlers_list)
+    Expr::CallNative {
+        module: "__fiber".to_string(),
+        method: "run_handler".to_string(),
+        args: vec![
+            body_lambda,
+            Expr::MakeList(key_exprs, None),
+            Expr::MakeList(handler_exprs, None),
+        ],
+        ty: None,
+    }
+}
+
+/// Replace PerformEffect nodes in a handler body with CallNative("__fiber.perform").
+/// Only replaces performs for effects in `handled_keys` (this handler's clauses).
+/// Nested HandleEffect/WithHandlers that handle the same effects shadow them.
+fn replace_perform_in_body(expr: Expr, handled_keys: &HashSet<String>, ctx: &mut EvidenceCtx) -> Expr {
+    match expr {
+        Expr::PerformEffect { effect, method, args, ty } => {
+            let key = format!("{}.{}", effect, method);
+            if handled_keys.contains(&key) {
+                // This perform is handled by our fiber handler → replace with fiber yield
+                let transformed_args: Vec<Expr> = args
+                    .into_iter()
+                    .map(|a| replace_perform_in_body(a, handled_keys, ctx))
+                    .collect();
+                let mut native_args = vec![Expr::String(key)];
+                native_args.extend(transformed_args);
+                Expr::CallNative {
+                    module: "__fiber".to_string(),
+                    method: "perform".to_string(),
+                    args: native_args,
+                    ty,
+                }
+            } else if ctx.current_ev.is_some() {
+                // Not handled by us, but evidence is in scope — use evidence transform
+                let args = args
+                    .into_iter()
+                    .map(|a| replace_perform_in_body(a, handled_keys, ctx))
+                    .collect();
+                transform_evidence_expr(
+                    Expr::PerformEffect { effect, method, args, ty },
+                    ctx,
+                )
+            } else {
+                // No evidence in scope — leave as PerformEffect for an outer
+                // fiber handler to pick up during its own transform pass.
+                let args = args
+                    .into_iter()
+                    .map(|a| replace_perform_in_body(a, handled_keys, ctx))
+                    .collect();
+                Expr::PerformEffect { effect, method, args, ty }
+            }
+        }
+        // Nested HandleEffect shadows some keys — don't replace those
+        Expr::HandleEffect { body, clauses } => {
+            let nested_all_tail = clauses.iter().all(|c| c.is_tail_resumptive);
+            if nested_all_tail {
+                // Nested tail-resumptive: use normal evidence transform
+                transform_evidence_expr(Expr::HandleEffect { body, clauses }, ctx)
+            } else {
+                // Nested non-tail-resumptive: recurse with fiber transform
+                // The nested handler will get its own fiber.
+                let nested_handled: HashSet<String> = clauses
+                    .iter()
+                    .map(|c| format!("{}.{}", c.effect, c.method))
+                    .collect();
+                let mut remaining_keys = handled_keys.clone();
+                for k in &nested_handled {
+                    remaining_keys.remove(k);
+                }
+                let body = replace_perform_in_body(*body, &remaining_keys, ctx);
+                let clauses = clauses
+                    .into_iter()
+                    .map(|c| HandlerClause {
+                        body: replace_perform_in_body(c.body, &remaining_keys, ctx),
+                        ..c
+                    })
+                    .collect();
+                transform_fiber_handler(body, clauses, ctx)
+            }
+        }
+        // Recurse into children
+        other => walk_expr_children(other, |child| replace_perform_in_body(child, handled_keys, ctx)),
+    }
+}
+
+/// Replace `resume(val)` calls in a handler clause body with
+/// `CallNative("__handler.resume", [val])`.
+fn replace_resume_in_clause(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
+    match expr {
+        // resume(val) → __handler.resume(val)
+        Expr::CallIndirect { callee, args, ty }
+            if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") =>
+        {
+            let transformed_args: Vec<Expr> = args
+                .into_iter()
+                .map(|a| replace_resume_in_clause(a, ctx))
+                .collect();
+            Expr::CallNative {
+                module: "__handler".to_string(),
+                method: "resume".to_string(),
+                args: transformed_args,
+                ty,
+            }
+        }
+        // TailCallIndirect to resume → also replace
+        Expr::TailCallIndirect { callee, args, ty }
+            if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") =>
+        {
+            let transformed_args: Vec<Expr> = args
+                .into_iter()
+                .map(|a| replace_resume_in_clause(a, ctx))
+                .collect();
+            Expr::CallNative {
+                module: "__handler".to_string(),
+                method: "resume".to_string(),
+                args: transformed_args,
+                ty,
+            }
+        }
+        // Recurse into children
+        other => walk_expr_children(other, |child| replace_resume_in_clause(child, ctx)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Perceus Reuse Analysis: Drop/Reuse insertion
+// ---------------------------------------------------------------------------
+
+/// Insert Drop/Reuse nodes for match-destructure-reconstruct patterns.
+///
+/// Scans each function for `Match { subject: Var(name), arms }` where `name`
+/// has exactly 1 use (this match). For each arm that reconstructs a heap
+/// value (MakeEnum/MakeStruct/MakeRecord/MakeTuple), wraps the arm body in
+/// `Drop { name, token, body: Reuse { token, alloc } }` to enable in-place
+/// allocation reuse.
+fn insert_drop_reuse(module: &mut IrModule) {
+    let mut token_counter: usize = 0;
+    for func in &mut module.functions {
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        count_var_uses(&func.body, &mut counts);
+        func.body = insert_reuse_in_expr(func.body.clone(), &counts, &mut token_counter);
+    }
+}
+
+/// Recursively walk an expression, inserting Drop/Reuse where appropriate.
+fn insert_reuse_in_expr(
+    expr: Expr,
+    counts: &HashMap<String, usize>,
+    counter: &mut usize,
+) -> Expr {
+    match expr {
+        Expr::Match { subject, arms, ty } => {
+            // Check if subject is a single-use variable
+            let reuse_name = if let Expr::Var(ref name, _) = *subject {
+                if counts.get(name).copied().unwrap_or(0) == 1 {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // Recurse into arms first
+            let arms: Vec<MatchArm> = arms
+                .into_iter()
+                .map(|arm| MatchArm {
+                    body: insert_reuse_in_expr(arm.body, counts, counter),
+                    guard: arm.guard.map(|g| insert_reuse_in_expr(g, counts, counter)),
+                    pattern: arm.pattern,
+                })
+                .collect();
+
+            if let Some(ref name) = reuse_name {
+                // Try to wrap each arm with Drop/Reuse if it contains a constructor
+                let arms = arms
+                    .into_iter()
+                    .map(|arm| {
+                        if is_cow_arm(&arm) {
+                            return arm; // Skip arms already handled by CoW
+                        }
+                        // Skip nullary constructor patterns — the JIT bakes these as
+                        // compile-time constants (emit_heap_nvalue), so jit_drop_reuse
+                        // would mutate a shared constant, corrupting all future uses.
+                        if matches!(&arm.pattern, Pattern::Constructor(_, fields) if fields.is_empty()) {
+                            return arm;
+                        }
+                        if let Some(rewritten) =
+                            try_wrap_with_reuse(&arm.body, name, counter)
+                        {
+                            MatchArm {
+                                body: rewritten,
+                                ..arm
+                            }
+                        } else {
+                            arm
+                        }
+                    })
+                    .collect();
+                Expr::Match {
+                    subject,
+                    arms,
+                    ty,
+                }
+            } else {
+                Expr::Match {
+                    subject,
+                    arms,
+                    ty,
+                }
+            }
+        }
+        // Recurse into all other expressions
+        other => walk_expr_children(other, |child| insert_reuse_in_expr(child, counts, counter)),
+    }
+}
+
+/// Check if a match arm exhibits the CoW single-field-update pattern
+/// (same enum tag with only one field changed). Skip reuse for these.
+fn is_cow_arm(arm: &MatchArm) -> bool {
+    // CoW pattern: Constructor(tag, fields) -> MakeEnum { same_tag, ... }
+    // with all fields except one identical to bindings from the pattern.
+    // For simplicity, detect the narrow case: pattern is a Constructor
+    // and the body is a MakeEnum with the same tag.
+    if let Pattern::Constructor(pat_tag, _) = &arm.pattern {
+        if let Expr::MakeEnum { tag, .. } = find_outermost_constructor(&arm.body) {
+            return tag == pat_tag;
+        }
+    }
+    false
+}
+
+/// Find the outermost constructor in an expression (skipping through Blocks/Lets).
+fn find_outermost_constructor(expr: &Expr) -> &Expr {
+    match expr {
+        Expr::Block(exprs, _) if !exprs.is_empty() => {
+            find_outermost_constructor(exprs.last().unwrap())
+        }
+        Expr::Let { .. } => expr, // Let bindings — don't look deeper
+        other => other,
+    }
+}
+
+/// Try to find a constructor in the arm body and wrap it with Drop/Reuse.
+/// Returns Some(wrapped_expr) if successful.
+fn try_wrap_with_reuse(body: &Expr, drop_name: &str, counter: &mut usize) -> Option<Expr> {
+    // Find the outermost constructor allocation in the body
+    if !contains_constructor(body) {
+        return None;
+    }
+
+    let token = format!("_reuse_{}", *counter);
+    *counter += 1;
+
+    // Wrap the entire body: Drop { name, token, body: <body with Reuse around constructor> }
+    let rewritten_body = wrap_constructor_with_reuse(body.clone(), &token);
+    Some(Expr::Drop {
+        name: drop_name.to_string(),
+        token: Some(token),
+        body: Box::new(rewritten_body),
+    })
+}
+
+/// Check if an expression contains a constructor at its "result" position.
+/// Recurses through Block, If/else, and Let to find tail constructors.
+fn contains_constructor(expr: &Expr) -> bool {
+    match expr {
+        Expr::MakeEnum { .. }
+        | Expr::MakeStruct { .. }
+        | Expr::MakeRecord(_, _)
+        | Expr::MakeTuple(_, _) => true,
+        Expr::Block(exprs, _) if !exprs.is_empty() => {
+            contains_constructor(exprs.last().unwrap())
+        }
+        Expr::If {
+            then_branch,
+            else_branch: Some(else_branch),
+            ..
+        } => {
+            // Both branches must have constructors for reuse to be worthwhile
+            contains_constructor(then_branch) && contains_constructor(else_branch)
+        }
+        _ => false,
+    }
+}
+
+/// Wrap the outermost constructor in an expression with Reuse.
+/// Descends through Block, If/else, and Let to find tail constructors.
+fn wrap_constructor_with_reuse(expr: Expr, token: &str) -> Expr {
+    match expr {
+        Expr::MakeEnum { .. }
+        | Expr::MakeStruct { .. }
+        | Expr::MakeRecord(_, _)
+        | Expr::MakeTuple(_, _) => Expr::Reuse {
+            token: token.to_string(),
+            alloc: Box::new(expr),
+        },
+        Expr::Block(mut exprs, ty) if !exprs.is_empty() => {
+            let last = exprs.pop().unwrap();
+            let wrapped = wrap_constructor_with_reuse(last, token);
+            exprs.push(wrapped);
+            Expr::Block(exprs, ty)
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch: Some(else_branch),
+            ty,
+        } => Expr::If {
+            condition,
+            then_branch: Box::new(wrap_constructor_with_reuse(*then_branch, token)),
+            else_branch: Some(Box::new(wrap_constructor_with_reuse(*else_branch, token))),
+            ty,
+        },
+        other => other,
+    }
+}
 
 /// Walk all functions in the module, collecting enum tags from `MakeEnum` and
 /// `Pattern::Constructor` nodes, and register them in the module's TagRegistry.
@@ -1092,6 +1458,17 @@ fn walk_expr_children(expr: Expr, mut f: impl FnMut(Expr) -> Expr) -> Expr {
                 matcher: Box::new(matcher),
             }
         }
+
+        // Perceus reuse analysis
+        Expr::Drop { name, token, body } => Expr::Drop {
+            name,
+            token,
+            body: Box::new(f(*body)),
+        },
+        Expr::Reuse { token, alloc } => Expr::Reuse {
+            token,
+            alloc: Box::new(f(*alloc)),
+        },
     }
 }
 
@@ -1173,6 +1550,8 @@ fn visit_immediate_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
                 _ => {}
             }
         }
+        Expr::Drop { body, .. } => f(body),
+        Expr::Reuse { alloc, .. } => f(alloc),
     }
 }
 
@@ -1328,6 +1707,10 @@ fn visit_expr_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
                 _ => {}
             }
         }
+
+        // Perceus reuse analysis
+        Expr::Drop { body, .. } => visit_expr(body, f),
+        Expr::Reuse { alloc, .. } => visit_expr(alloc, f),
     }
 }
 
@@ -2738,8 +3121,8 @@ mod tests {
     }
 
     #[test]
-    fn evidence_transform_non_tail_resumptive_untouched() {
-        // Non-tail-resumptive handler should be left untouched.
+    fn evidence_transform_non_tail_resumptive_fiber_transform() {
+        // Non-tail-resumptive handler should be transformed to fiber dispatch.
         use crate::vm::ir::HandlerClause;
         let handler_body = Expr::HandleEffect {
             body: Box::new(Expr::PerformEffect {
@@ -2780,16 +3163,26 @@ mod tests {
 
         super::evidence_transform(&mut module);
 
-        // HandleEffect should still be present.
+        // HandleEffect should be eliminated — replaced with CallNative to __fiber.run_handler.
         let mut has_handle = false;
+        let mut has_fiber_call = false;
         super::visit_expr(&module.functions[0].body, &mut |e| {
             if matches!(e, Expr::HandleEffect { .. }) {
                 has_handle = true;
             }
+            if let Expr::CallNative { module: m, method, .. } = e {
+                if m == "__fiber" && method == "run_handler" {
+                    has_fiber_call = true;
+                }
+            }
         });
         assert!(
-            has_handle,
-            "Non-tail-resumptive handler should remain as HandleEffect"
+            !has_handle,
+            "HandleEffect should be eliminated by fiber transform"
+        );
+        assert!(
+            has_fiber_call,
+            "Should have __fiber.run_handler CallNative"
         );
     }
 

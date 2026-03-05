@@ -1150,3 +1150,281 @@ fn jit_expect_have_length() {
     };
     assert!(compile_and_run_bool(&module));
 }
+
+// ---------------------------------------------------------------------------
+// Fiber-based handler tests (non-tail-resumptive)
+// ---------------------------------------------------------------------------
+
+use crate::vm::natives::NativeRegistry;
+
+fn compile_and_run_with_natives(module: &IrModule) -> i64 {
+    let registry = NativeRegistry::new();
+    let program =
+        super::compile_with_natives(module, false, Some(&registry)).expect("JIT compilation failed");
+    let nv = program
+        .run_entry_nvalue()
+        .expect("Entry function not compiled");
+    assert!(nv.is_int(), "Expected Int, got: {}", nv);
+    nv.as_int()
+}
+
+#[test]
+fn jit_fiber_handler_basic() {
+    use crate::vm::ir::HandlerClause;
+    use crate::vm::optimize_ir::optimize;
+
+    // handle { perform E.get!() } with { E.get!(resume) -> { let r = resume(42); r + 10 } }
+    // Expected: body returns perform result (42), handler adds 10 → 52
+    let mut module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::HandleEffect {
+                body: Box::new(Expr::PerformEffect {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    args: vec![],
+                    ty: Some(Type::Int),
+                }),
+                clauses: vec![HandlerClause {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    params: vec![],
+                    body: Expr::Block(
+                        vec![
+                            Expr::Let {
+                                pattern: Box::new(Pattern::Var("r".into())),
+                                value: Box::new(Expr::CallIndirect {
+                                    callee: Box::new(Expr::Var("resume".into(), None)),
+                                    args: vec![make_int(42)],
+                                    ty: Some(Type::Int),
+                                }),
+                                ty: None,
+                            },
+                            make_binop(BinOp::Add, make_var("r"), make_int(10)),
+                        ],
+                        Some(Type::Int),
+                    ),
+                    is_tail_resumptive: false,
+                }],
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+
+    optimize(&mut module);
+    assert_eq!(compile_and_run_with_natives(&module), 52);
+}
+
+/// Minimal test: does Block([Let { r = CallNative }, BinOp(Add, r, 10)]) work?
+/// Uses a simple native function (not fiber-based) to isolate the issue.
+#[test]
+fn jit_let_then_add_via_native() {
+    use crate::vm::optimize_ir::optimize;
+
+    // Block([let r = __handler.resume(42), r + 10])
+    // __handler.resume(42) returns 42 (but normally resumes a fiber)
+    // For this test, we just want to see if the JIT correctly returns 52
+
+    // Instead, let's use a trivial identity: CallNative that just returns its arg
+    // We can use __fiber.perform which in this test won't actually yield (no fiber)
+    // Actually, that would panic. Let's construct something simpler.
+
+    // A Block with: let r = Int(42); r + 10  (no natives involved)
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::Block(
+                vec![
+                    Expr::Let {
+                        pattern: Box::new(Pattern::Var("r".into())),
+                        value: Box::new(make_int(42)),
+                        ty: None,
+                    },
+                    make_binop(BinOp::Add, make_var("r"), make_int(10)),
+                ],
+                Some(Type::Int),
+            ),
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    assert_eq!(compile_and_run_with_natives(&module), 52);
+}
+
+#[test]
+fn jit_fiber_handler_abort() {
+    use crate::vm::ir::HandlerClause;
+    use crate::vm::optimize_ir::optimize;
+
+    // handle { perform E.get!(); 999 } with { E.get!() -> -1 }
+    // Abort: handler returns -1 without resuming, body's 999 is never reached.
+    let mut module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::HandleEffect {
+                body: Box::new(Expr::Block(
+                    vec![
+                        Expr::PerformEffect {
+                            effect: "E".into(),
+                            method: "get".into(),
+                            args: vec![],
+                            ty: Some(Type::Int),
+                        },
+                        make_int(999),
+                    ],
+                    Some(Type::Int),
+                )),
+                clauses: vec![HandlerClause {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    params: vec![],
+                    // Abort: return -1 without calling resume
+                    body: make_int(-1),
+                    is_tail_resumptive: false,
+                }],
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+
+    optimize(&mut module);
+    assert_eq!(compile_and_run_with_natives(&module), -1);
+}
+
+#[test]
+fn jit_fiber_handler_multiple_performs() {
+    use crate::vm::ir::HandlerClause;
+    use crate::vm::optimize_ir::optimize;
+
+    // handle { perform E.inc!(); perform E.inc!(); 100 }
+    // with { E.inc!(resume) -> { let r = resume(()); r + 1 } }
+    // Each perform adds 1 to the result: 100 + 1 + 1 = 102
+    let mut module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::HandleEffect {
+                body: Box::new(Expr::Block(
+                    vec![
+                        Expr::PerformEffect {
+                            effect: "E".into(),
+                            method: "inc".into(),
+                            args: vec![],
+                            ty: Some(Type::Unit),
+                        },
+                        Expr::PerformEffect {
+                            effect: "E".into(),
+                            method: "inc".into(),
+                            args: vec![],
+                            ty: Some(Type::Unit),
+                        },
+                        make_int(100),
+                    ],
+                    Some(Type::Int),
+                )),
+                clauses: vec![HandlerClause {
+                    effect: "E".into(),
+                    method: "inc".into(),
+                    params: vec![],
+                    body: Expr::Block(
+                        vec![
+                            Expr::Let {
+                                pattern: Box::new(Pattern::Var("r".into())),
+                                value: Box::new(Expr::CallIndirect {
+                                    callee: Box::new(Expr::Var("resume".into(), None)),
+                                    args: vec![Expr::Unit],
+                                    ty: Some(Type::Int),
+                                }),
+                                ty: None,
+                            },
+                            make_binop(BinOp::Add, make_var("r"), make_int(1)),
+                        ],
+                        Some(Type::Int),
+                    ),
+                    is_tail_resumptive: false,
+                }],
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+
+    optimize(&mut module);
+    assert_eq!(compile_and_run_with_natives(&module), 102);
+}
+
+#[test]
+fn jit_fiber_handler_effect_args() {
+    use crate::vm::ir::HandlerClause;
+    use crate::vm::optimize_ir::optimize;
+
+    // Effect with arguments: handler reads the performed arg.
+    // handle { perform E.add!(7) } with { E.add!(x, resume) -> { let r = resume(()); r + x } }
+    // Body performs with arg 7, handler receives x=7, resumes (body returns 7 from perform),
+    // then handler returns resume_result + x.
+    // But actually: perform returns what resume passes. Let's simplify:
+    // handle { perform E.get!(5); 0 } with { E.get!(x, resume) -> { let r = resume(()); r + x } }
+    // body: perform yields with arg 5, handler gets x=5, resumes with (), body continues to 0
+    // handler gets r=0, returns 0 + 5 = 5
+    let mut module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::HandleEffect {
+                body: Box::new(Expr::Block(
+                    vec![
+                        Expr::PerformEffect {
+                            effect: "E".into(),
+                            method: "get".into(),
+                            args: vec![make_int(5)],
+                            ty: Some(Type::Unit),
+                        },
+                        make_int(0),
+                    ],
+                    Some(Type::Int),
+                )),
+                clauses: vec![HandlerClause {
+                    effect: "E".into(),
+                    method: "get".into(),
+                    params: vec!["x".into()],
+                    body: Expr::Block(
+                        vec![
+                            Expr::Let {
+                                pattern: Box::new(Pattern::Var("r".into())),
+                                value: Box::new(Expr::CallIndirect {
+                                    callee: Box::new(Expr::Var("resume".into(), None)),
+                                    args: vec![Expr::Unit],
+                                    ty: Some(Type::Int),
+                                }),
+                                ty: None,
+                            },
+                            make_binop(BinOp::Add, make_var("r"), make_var("x")),
+                        ],
+                        Some(Type::Int),
+                    ),
+                    is_tail_resumptive: false,
+                }],
+            },
+            ty: Some(Type::Int),
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+
+    optimize(&mut module);
+    assert_eq!(compile_and_run_with_natives(&module), 5);
+}

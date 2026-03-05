@@ -53,7 +53,7 @@ pub const TAG_HEAP: u64 = 0xFFFE_0000_0000_0000;
 // Allocation Statistics — tracks heap object lifecycle
 // ---------------------------------------------------------------------------
 
-static ALLOC_STATS: AllocStats = AllocStats::new();
+pub(crate) static ALLOC_STATS: AllocStats = AllocStats::new();
 
 /// Global allocation statistics for heap-allocated NValues.
 ///
@@ -64,6 +64,7 @@ static ALLOC_STATS: AllocStats = AllocStats::new();
 pub struct AllocStats {
     allocs: AtomicU64,
     frees: AtomicU64,
+    pub reuses: AtomicU64,
 }
 
 impl AllocStats {
@@ -71,6 +72,7 @@ impl AllocStats {
         Self {
             allocs: AtomicU64::new(0),
             frees: AtomicU64::new(0),
+            reuses: AtomicU64::new(0),
         }
     }
 }
@@ -81,14 +83,15 @@ pub struct AllocSnapshot {
     pub allocs: u64,
     pub frees: u64,
     pub live: u64,
+    pub reuses: u64,
 }
 
 impl fmt::Display for AllocSnapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "heap allocs: {}  frees: {}  live: {}",
-            self.allocs, self.frees, self.live
+            "heap allocs: {}  frees: {}  reuses: {}  live: {}",
+            self.allocs, self.frees, self.reuses, self.live
         )?;
         if self.live == 0 {
             write!(f, "  (no leaks detected)")
@@ -105,9 +108,11 @@ pub fn alloc_stats() -> AllocSnapshot {
     {
         let allocs = ALLOC_STATS.allocs.load(Ordering::Relaxed);
         let frees = ALLOC_STATS.frees.load(Ordering::Relaxed);
+        let reuses = ALLOC_STATS.reuses.load(Ordering::Relaxed);
         AllocSnapshot {
             allocs,
             frees,
+            reuses,
             live: allocs.saturating_sub(frees),
         }
     }
@@ -116,6 +121,7 @@ pub fn alloc_stats() -> AllocSnapshot {
         AllocSnapshot {
             allocs: 0,
             frees: 0,
+            reuses: 0,
             live: 0,
         }
     }
@@ -128,6 +134,7 @@ pub fn reset_alloc_stats() {
     {
         ALLOC_STATS.allocs.store(0, Ordering::Relaxed);
         ALLOC_STATS.frees.store(0, Ordering::Relaxed);
+        ALLOC_STATS.reuses.store(0, Ordering::Relaxed);
     }
 }
 

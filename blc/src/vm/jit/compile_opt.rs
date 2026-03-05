@@ -372,6 +372,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
             }
             Expr::Expect { actual, .. } => Self::collect_escaping_vars(actual, escaping),
+            Expr::Drop { body, .. } => Self::collect_escaping_vars(body, escaping),
+            Expr::Reuse { alloc, .. } => Self::collect_escaping_vars(alloc, escaping),
         }
     }
 }

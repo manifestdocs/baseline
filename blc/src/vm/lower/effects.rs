@@ -224,7 +224,6 @@ impl<'a> super::Lowerer<'a> {
                 // Detect tail-resumptive: handler body is exactly `resume(expr)`.
                 // If so, no continuation capture is needed.
                 let is_tr = Self::is_tail_resumptive_body(&handler_body);
-                eprintln!("JIT debug: handler body for {} is {:?} (is_tr={})", effect_name, handler_body, is_tr);
                 let is_tail_resumptive = is_tr;
 
                 clauses.push(HandlerClause {

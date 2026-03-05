@@ -308,6 +308,28 @@ pub enum Expr {
         actual: Box<Expr>,
         matcher: Box<Matcher>,
     },
+
+    // -- Perceus reuse analysis --
+    /// Drop a variable (drain its inner fields, decref children), optionally
+    /// binding the empty Rc shell as a reuse token for allocation reuse.
+    /// Inserted by `insert_drop_reuse()` in optimize_ir.rs.
+    Drop {
+        /// Variable being consumed (must be statically proven last-use).
+        name: String,
+        /// If Some, bind the empty Rc shell to this name as a reuse token.
+        token: Option<String>,
+        /// Continuation expression (uses the reuse token).
+        body: Box<Expr>,
+    },
+
+    /// Reuse a previously dropped allocation instead of allocating fresh.
+    /// The inner `alloc` must be a constructor (MakeEnum/MakeStruct/MakeRecord/MakeTuple).
+    Reuse {
+        /// Name of the reuse token variable (from a preceding Drop).
+        token: String,
+        /// The constructor expression to write into the reused allocation.
+        alloc: Box<Expr>,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -658,8 +680,21 @@ mod tests {
                 args: vec![],
                 ty: None,
             },
+            Expr::Drop {
+                name: "x".into(),
+                token: Some("_reuse_0".into()),
+                body: Box::new(Expr::Unit),
+            },
+            Expr::Reuse {
+                token: "_reuse_0".into(),
+                alloc: Box::new(Expr::MakeEnum {
+                    tag: "Some".into(),
+                    payload: Box::new(Expr::Int(1)),
+                    ty: None,
+                }),
+            },
         ];
-        assert_eq!(exprs.len(), 37);
+        assert_eq!(exprs.len(), 39);
     }
 
     #[test]

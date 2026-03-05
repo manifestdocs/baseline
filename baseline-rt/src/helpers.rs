@@ -6,9 +6,11 @@
 
 use std::cell::{Cell, RefCell};
 
+use crate::fiber::{self, Fiber, FiberState};
 use crate::rc::{self, Rc};
 use crate::nvalue::{
     HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT,
+    ALLOC_STATS,
 };
 use crate::value::RcStr;
 
@@ -113,6 +115,21 @@ pub fn set_fn_table(table: Vec<*const u8>) {
 
 pub fn clear_fn_table() {
     JIT_FN_TABLE.with(|t| *t.borrow_mut() = None);
+}
+
+// Thread-local per-arity trampolines: bridge platform CC → Tail CC.
+// Each trampoline takes (fn_ptr, arg0, ..., argN) and does a Cranelift
+// indirect call with Tail CC to the target function.
+thread_local! {
+    static JIT_TRAMPOLINES: Cell<[*const u8; 5]> = const { Cell::new([std::ptr::null(); 5]) };
+}
+
+pub fn set_trampolines(trampolines: [*const u8; 5]) {
+    JIT_TRAMPOLINES.with(|t| t.set(trampolines));
+}
+
+pub fn clear_trampolines() {
+    JIT_TRAMPOLINES.with(|t| t.set([std::ptr::null(); 5]));
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +272,158 @@ pub extern "C" fn jit_enum_field_set(
             }
     }
     enum_bits
+}
+
+// ---------------------------------------------------------------------------
+// Perceus reuse helpers
+// ---------------------------------------------------------------------------
+
+/// Drain inner fields of a HeapObject (decrefs children), leaving the Rc shell alive.
+/// Returns the original NaN-boxed bits as a reuse token (0 if not a heap value).
+/// The compiler has statically proven this is the last use.
+///
+/// SAFETY: Uses raw pointer mutation to clear the HeapObject's inner fields.
+/// Same safety model as jit_enum_field_drop — ghost refs only decref, never read payload.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_drop_reuse(bits: u64) -> u64 {
+    if bits & TAG_MASK != TAG_HEAP {
+        return 0;
+    }
+    let ptr = (bits & PAYLOAD_MASK) as *mut HeapObject;
+    // SAFETY: We drain the inner contents to decref children, but keep the Rc shell alive.
+    // The compiler has proven this is the last use of the variable.
+    // Use std::mem::take to replace fields with empty defaults — this properly
+    // drops items AND frees Vec/RcStr buffers (unlike clear() which leaks buffers
+    // when ptr::write overwrites the HeapObject without calling drop).
+    unsafe {
+        match &mut *ptr {
+            HeapObject::Enum { tag, payload, .. } => {
+                drop(std::mem::take(tag));
+                drop(std::mem::take(payload));
+            }
+            HeapObject::Record(fields) | HeapObject::Struct { fields, .. } => {
+                drop(std::mem::take(fields));
+            }
+            HeapObject::Tuple(items) | HeapObject::List(items) => {
+                drop(std::mem::take(items));
+            }
+            HeapObject::String(s) => {
+                drop(std::mem::take(s));
+            }
+            _ => {
+                // Closure, Map, Set, etc. — not reusable, return 0
+                return 0;
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    ALLOC_STATS.reuses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    bits
+}
+
+/// Build an enum variant with integer tag_id, reusing an existing allocation if possible.
+/// If reuse_bits == 0, falls back to fresh allocation.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_enum_reuse(
+    reuse_bits: u64,
+    tag_bits: u64,
+    tag_id: u64,
+    payload_bits: u64,
+) -> u64 {
+    if reuse_bits == 0 {
+        return jit_make_enum_with_id(tag_bits, tag_id, payload_bits);
+    }
+    let tag_nv = unsafe { jit_take_arg(tag_bits) };
+    let payload = unsafe { jit_take_arg(payload_bits) };
+    let Some(tag_str) = tag_nv.as_string().cloned() else {
+        jit_set_error("enum tag must be a string".to_string());
+        return NV_UNIT;
+    };
+    let payload_vec = if payload.is_unit() { vec![] } else { vec![payload] };
+    let new_obj = HeapObject::Enum {
+        tag: tag_str,
+        tag_id: tag_id as u32,
+        payload: payload_vec,
+    };
+    let ptr = (reuse_bits & PAYLOAD_MASK) as *mut HeapObject;
+    unsafe { std::ptr::write(ptr, new_obj) };
+    reuse_bits
+}
+
+/// Build a flat enum variant with reuse.
+/// If reuse_bits == 0, falls back to fresh allocation.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_enum_flat_reuse(
+    reuse_bits: u64,
+    tag_bits: u64,
+    tag_id: u64,
+    items: *const u64,
+    count: u64,
+) -> u64 {
+    if reuse_bits == 0 {
+        return jit_make_enum_flat(tag_bits, tag_id, items, count);
+    }
+    let tag_nv = unsafe { jit_take_arg(tag_bits) };
+    let Some(tag_str) = tag_nv.as_string().cloned() else {
+        jit_set_error("enum tag must be a string".to_string());
+        return NV_UNIT;
+    };
+    let slice = unsafe { std::slice::from_raw_parts(items, count as usize) };
+    let payload: Vec<NValue> = slice
+        .iter()
+        .map(|&bits| unsafe { jit_take_arg(bits) })
+        .collect();
+    let new_obj = HeapObject::Enum {
+        tag: tag_str,
+        tag_id: tag_id as u32,
+        payload,
+    };
+    let ptr = (reuse_bits & PAYLOAD_MASK) as *mut HeapObject;
+    unsafe { std::ptr::write(ptr, new_obj) };
+    reuse_bits
+}
+
+/// Build a record with reuse.
+/// If reuse_bits == 0, falls back to fresh allocation.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_record_reuse(reuse_bits: u64, pairs: *const u64, count: u64) -> u64 {
+    if reuse_bits == 0 {
+        return jit_make_record(pairs, count);
+    }
+    let n = count as usize;
+    let slice = unsafe { std::slice::from_raw_parts(pairs, n * 2) };
+    let mut fields = Vec::with_capacity(n);
+    for i in 0..n {
+        let key_nv = unsafe { jit_take_arg(slice[i * 2]) };
+        let val_nv = unsafe { jit_take_arg(slice[i * 2 + 1]) };
+        let Some(key) = key_nv.as_string().cloned() else {
+            jit_set_error("record key must be a string".to_string());
+            return NV_UNIT;
+        };
+        fields.push((key, val_nv));
+    }
+    let new_obj = HeapObject::Record(fields);
+    let ptr = (reuse_bits & PAYLOAD_MASK) as *mut HeapObject;
+    unsafe { std::ptr::write(ptr, new_obj) };
+    reuse_bits
+}
+
+/// Build a tuple with reuse.
+/// If reuse_bits == 0, falls back to fresh allocation.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_make_tuple_reuse(reuse_bits: u64, items: *const u64, count: u64) -> u64 {
+    if reuse_bits == 0 {
+        return jit_make_tuple(items, count);
+    }
+    let slice = unsafe { std::slice::from_raw_parts(items, count as usize) };
+    let nvalues: Vec<NValue> = slice
+        .iter()
+        .map(|&bits| unsafe { jit_take_arg(bits) })
+        .collect();
+    let new_obj = HeapObject::Tuple(nvalues);
+    let ptr = (reuse_bits & PAYLOAD_MASK) as *mut HeapObject;
+    unsafe { std::ptr::write(ptr, new_obj) };
+    reuse_bits
 }
 
 /// Extract the integer tag_id from a NaN-boxed enum value.
@@ -1036,4 +1205,344 @@ pub extern "C" fn jit_init_fn_table(table_ptr: *const u64, count: u64) -> u64 {
     };
     set_fn_table(ptrs);
     NV_UNIT
+}
+
+// ---------------------------------------------------------------------------
+// Fiber-based effect handler helpers
+// ---------------------------------------------------------------------------
+
+/// Thread-local handler context stack. Each entry represents an active
+/// `handle ... with { ... }` scope. Nested handlers push new entries.
+/// Handler keys and fns are stored here so both the dispatch loop and
+/// jit_handler_resume can access them via short-lived borrows.
+struct HandlerContext {
+    fiber: Box<Fiber>,
+    handler_keys: Vec<String>,
+    handler_fns: Vec<u64>,
+}
+
+thread_local! {
+    static HANDLER_CTX: RefCell<Vec<HandlerContext>> = const { RefCell::new(Vec::new()) };
+}
+
+/// What the dispatch loop should do next (determined by a short-lived borrow).
+enum DispatchAction {
+    Return(u64),
+    CallHandler { handler_fn_bits: u64, args: Vec<u64> },
+    Error(String),
+}
+
+/// Called from within a fiber body when it hits a `perform Effect.method!(args)`.
+/// Yields the effect key and args to the handler dispatch loop.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_fiber_perform(effect_key: u64, args_ptr: u64, args_count: u64) -> u64 {
+    let key_nv = unsafe { NValue::borrow_from_raw(effect_key) };
+    let key_str = match key_nv.as_string() {
+        Some(s) => s.to_string(),
+        None => {
+            jit_set_error("jit_fiber_perform: effect_key is not a string".into());
+            return NV_UNIT;
+        }
+    };
+
+    let argc = args_count as usize;
+    let args: Vec<u64> = if argc == 0 || args_ptr == 0 {
+        vec![]
+    } else {
+        let ptr = args_ptr as *const u64;
+        (0..argc).map(|i| unsafe { *ptr.add(i) }).collect()
+    };
+
+    fiber::fiber_yield(key_str, args)
+}
+
+/// Called from a handler clause body to resume the suspended fiber with a value.
+/// Uses short-lived borrows so it can be called while the dispatch loop is active.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_handler_resume(value: u64) -> u64 {
+    // Get fiber pointer (short-lived borrow released before resume runs body,
+    // which allows nested handlers to borrow HANDLER_CTX).
+    let fiber_ptr: *mut Fiber = HANDLER_CTX.with(|ctx| {
+        let mut stack = ctx.borrow_mut();
+        let handler = stack.last_mut().expect("jit_handler_resume: no handler context");
+        &mut *handler.fiber as *mut Fiber
+    });
+    // SAFETY: fiber is owned by HandlerContext on the stack, single-threaded,
+    // and no other code accesses this fiber during resume.
+    unsafe { (*fiber_ptr).resume(value) };
+
+    // Check fiber state after resume (short-lived borrow).
+    let completed = HANDLER_CTX.with(|ctx| {
+        let stack = ctx.borrow();
+        let handler = stack.last().unwrap();
+        match &handler.fiber.state {
+            FiberState::Completed(result) => Some(*result),
+            FiberState::Yielded { .. } => None,
+            _ => {
+                jit_set_error("jit_handler_resume: fiber in unexpected state".into());
+                Some(NV_UNIT)
+            }
+        }
+    });
+
+    match completed {
+        Some(result) => result,
+        None => dispatch_loop(),
+    }
+}
+
+/// Shared dispatch loop used by both `jit_run_fiber_handler` (initial) and
+/// `jit_handler_resume` (recursive, when fiber yields again after resume).
+///
+/// All HANDLER_CTX borrows are short-lived and released before calling handler
+/// clauses, which avoids re-entrant RefCell panics.
+fn dispatch_loop() -> u64 {
+    loop {
+        // Short-lived borrow: determine what to do next.
+        let action = HANDLER_CTX.with(|ctx| {
+            let stack = ctx.borrow();
+            let handler = stack.last().unwrap();
+            match &handler.fiber.state {
+                FiberState::Completed(result) => DispatchAction::Return(*result),
+                FiberState::Yielded { key, args } => {
+                    let key = key.clone();
+                    let args = args.clone();
+                    let clause_idx = handler.handler_keys.iter().position(|k| k == &key);
+                    match clause_idx {
+                        Some(idx) => DispatchAction::CallHandler {
+                            handler_fn_bits: handler.handler_fns[idx],
+                            args,
+                        },
+                        None => DispatchAction::Error(format!(
+                            "jit_run_fiber_handler: no handler for effect '{}'",
+                            key
+                        )),
+                    }
+                }
+                FiberState::Ready => {
+                    DispatchAction::Error("fiber in Ready state after resume".into())
+                }
+                FiberState::Aborted => DispatchAction::Error("fiber was aborted".into()),
+            }
+        }); // borrow dropped — safe to call handler clauses
+
+        match action {
+            DispatchAction::Return(result) => return result,
+            DispatchAction::CallHandler {
+                handler_fn_bits,
+                args,
+            } => {
+                let result = call_handler_clause(handler_fn_bits, &args);
+
+                // If the handler didn't call resume (abort pattern), the fiber
+                // is still in Yielded state — mark it aborted.
+                HANDLER_CTX.with(|ctx| {
+                    let mut stack = ctx.borrow_mut();
+                    let handler = stack.last_mut().unwrap();
+                    if let FiberState::Yielded { .. } = &handler.fiber.state {
+                        handler.fiber.state = FiberState::Aborted;
+                    }
+                });
+
+                return result;
+            }
+            DispatchAction::Error(msg) => {
+                jit_set_error(msg);
+                return NV_UNIT;
+            }
+        }
+    }
+}
+
+/// Run a fiber-based effect handler.
+///
+/// 1. Wraps the body in a fiber
+/// 2. Runs the fiber until it completes or yields an effect
+/// 3. On yield: matches the effect key to a handler clause and calls it
+/// 4. Handler clause may call jit_handler_resume to continue the fiber
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_run_fiber_handler(
+    body_closure: u64,
+    handler_keys_ptr: u64,
+    handler_fns_ptr: u64,
+    handler_count: u64,
+) -> u64 {
+    let n = handler_count as usize;
+
+    let keys_ptr = handler_keys_ptr as *const u64;
+    let fns_ptr = handler_fns_ptr as *const u64;
+    let handler_keys: Vec<String> = (0..n)
+        .map(|i| {
+            let bits = unsafe { *keys_ptr.add(i) };
+            let nv = unsafe { NValue::borrow_from_raw(bits) };
+            nv.as_string()
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        })
+        .collect();
+    let handler_fns: Vec<u64> = (0..n).map(|i| unsafe { *fns_ptr.add(i) }).collect();
+
+    // Store body closure in thread-local for the fiber entry to retrieve.
+    FIBER_BODY_CLOSURE.with(|c| c.set(body_closure));
+
+    let fiber = Fiber::new(fiber_body_entry, 0);
+
+    // Push handler context (short-lived borrow).
+    HANDLER_CTX.with(|ctx| {
+        ctx.borrow_mut().push(HandlerContext {
+            fiber,
+            handler_keys,
+            handler_fns,
+        });
+    });
+
+    // Get fiber pointer (short-lived borrow released before resume runs body,
+    // which allows nested handlers to borrow HANDLER_CTX).
+    let fiber_ptr: *mut Fiber = HANDLER_CTX.with(|ctx| {
+        let mut stack = ctx.borrow_mut();
+        let handler = stack.last_mut().unwrap();
+        &mut *handler.fiber as *mut Fiber
+    });
+    // SAFETY: fiber is owned by HandlerContext on the stack, single-threaded,
+    // and no other code accesses this fiber during resume.
+    unsafe { (*fiber_ptr).resume(0) };
+
+    // Dispatch loop (uses only short-lived borrows internally).
+    let result = dispatch_loop();
+
+    // Pop handler context (short-lived borrow).
+    HANDLER_CTX.with(|ctx| {
+        ctx.borrow_mut().pop();
+    });
+
+    result
+}
+
+/// Call a handler clause function with the yielded args.
+/// The handler function may be a closure (with captures) or a plain function.
+fn call_handler_clause(handler_fn_bits: u64, args: &[u64]) -> u64 {
+    // Get the function pointer from the JIT fn table.
+    let nv = unsafe { NValue::borrow_from_raw(handler_fn_bits) };
+    let (fn_ptr, is_closure) = if nv.is_heap() {
+        match nv.as_heap_ref() {
+            HeapObject::Closure { chunk_idx, .. } => {
+                let ptr = get_fn_ptr_from_table(*chunk_idx);
+                (ptr, true)
+            }
+            _ => {
+                jit_set_error("call_handler_clause: expected function or closure".into());
+                return NV_UNIT;
+            }
+        }
+    } else if nv.is_function() {
+        let idx = (nv.raw() & PAYLOAD_MASK) as usize;
+        let ptr = get_fn_ptr_from_table(idx);
+        (ptr, false)
+    } else {
+        jit_set_error("call_handler_clause: expected function or closure".into());
+        return NV_UNIT;
+    };
+
+    if fn_ptr.is_null() {
+        jit_set_error("call_handler_clause: fn_ptr is null".into());
+        return NV_UNIT;
+    }
+
+    // Build the argument list. For closures, prepend the closure value itself.
+    // Then append the effect args.
+    call_jit_fn(fn_ptr, handler_fn_bits, is_closure, args)
+}
+
+/// Get a function pointer from the JIT fn table by chunk index.
+fn get_fn_ptr_from_table(chunk_idx: usize) -> *const u8 {
+    JIT_FN_TABLE.with(|table| {
+        let guard = table.borrow();
+        match guard.as_ref() {
+            Some(tbl) => tbl.get(chunk_idx).copied().unwrap_or(std::ptr::null()),
+            None => std::ptr::null(),
+        }
+    })
+}
+
+/// Call a JIT-compiled function with the given args.
+/// Handles both closure calls (prepend closure value) and plain function calls.
+///
+/// JIT functions use Cranelift Tail CC. Calls go through per-arity trampolines
+/// that bridge platform CC → Tail CC via Cranelift indirect calls.
+fn call_jit_fn(fn_ptr: *const u8, fn_bits: u64, is_closure: bool, args: &[u64]) -> u64 {
+    let total_args = if is_closure { 1 + args.len() } else { args.len() };
+
+    if total_args > 4 {
+        jit_set_error(format!(
+            "call_jit_fn: too many args ({}), max 4 supported",
+            total_args
+        ));
+        return NV_UNIT;
+    }
+
+    let trampolines = JIT_TRAMPOLINES.with(|t| t.get());
+    let trampoline = trampolines[total_args];
+
+    if trampoline.is_null() {
+        jit_set_error("call_jit_fn: trampoline not initialized".into());
+        return NV_UNIT;
+    }
+
+    // Each trampoline takes (fn_ptr, arg0, ..., argN) -> u64
+    // fn_ptr is a raw pointer, passed as the first argument.
+    let fn_ptr_u64 = fn_ptr as u64;
+
+    match total_args {
+        0 => {
+            let t: extern "C" fn(u64) -> u64 = unsafe { std::mem::transmute(trampoline) };
+            t(fn_ptr_u64)
+        }
+        1 => {
+            let t: extern "C" fn(u64, u64) -> u64 = unsafe { std::mem::transmute(trampoline) };
+            if is_closure {
+                t(fn_ptr_u64, fn_bits)
+            } else {
+                t(fn_ptr_u64, args[0])
+            }
+        }
+        2 => {
+            let t: extern "C" fn(u64, u64, u64) -> u64 =
+                unsafe { std::mem::transmute(trampoline) };
+            if is_closure {
+                t(fn_ptr_u64, fn_bits, args[0])
+            } else {
+                t(fn_ptr_u64, args[0], args[1])
+            }
+        }
+        3 => {
+            let t: extern "C" fn(u64, u64, u64, u64) -> u64 =
+                unsafe { std::mem::transmute(trampoline) };
+            if is_closure {
+                t(fn_ptr_u64, fn_bits, args[0], args[1])
+            } else {
+                t(fn_ptr_u64, args[0], args[1], args[2])
+            }
+        }
+        4 => {
+            let t: extern "C" fn(u64, u64, u64, u64, u64) -> u64 =
+                unsafe { std::mem::transmute(trampoline) };
+            if is_closure {
+                t(fn_ptr_u64, fn_bits, args[0], args[1], args[2])
+            } else {
+                t(fn_ptr_u64, args[0], args[1], args[2], args[3])
+            }
+        }
+        _ => unreachable!(),
+    }
+}
+
+thread_local! {
+    static FIBER_BODY_CLOSURE: Cell<u64> = const { Cell::new(0) };
+}
+
+/// Entry point for the fiber body. Called on the fiber stack by the trampoline.
+/// Retrieves the body closure from the thread-local and calls it.
+extern "C" fn fiber_body_entry(_arg: u64) -> u64 {
+    let body_bits = FIBER_BODY_CLOSURE.with(|c| c.get());
+    call_handler_clause(body_bits, &[])
 }

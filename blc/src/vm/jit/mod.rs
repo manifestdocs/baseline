@@ -61,6 +61,9 @@ pub struct JitProgram {
     /// Entry wrapper pointer (platform-default CC, safe to call via transmute).
     /// All language functions use Tail CC; this wrapper bridges to the host ABI.
     entry_wrapper: *const u8,
+    /// Per-arity trampolines bridging platform CC → Tail CC for indirect calls.
+    /// Index = arity (0..=4). Used by call_jit_fn to call JIT functions from Rust.
+    trampolines: [*const u8; 5],
     /// Whether RC codegen is enabled (scope-based incref/decref).
     rc_enabled: bool,
 }
@@ -103,6 +106,7 @@ impl JitProgram {
             .map(|opt| opt.unwrap_or(std::ptr::null()))
             .collect();
         helpers::set_fn_table(fn_table);
+        helpers::set_trampolines(self.trampolines);
 
         // Enable RC mode if this program was compiled with RC.
         // In RC mode, allocation helpers use mem::forget instead of arena push.
@@ -119,6 +123,7 @@ impl JitProgram {
         impl Drop for CleanupGuard {
             fn drop(&mut self) {
                 helpers::clear_fn_table();
+                helpers::clear_trampolines();
                 if self.rc_enabled {
                     helpers::jit_set_rc_mode(false);
                 } else {
@@ -255,6 +260,12 @@ pub(super) const HELPER_NAMES: &[&str] = &[
     "jit_rc_incref",
     "jit_rc_decref",
     "jit_set_rc_mode_raw",
+    // Perceus reuse helpers
+    "jit_drop_reuse",
+    "jit_make_enum_reuse",
+    "jit_make_enum_flat_reuse",
+    "jit_make_record_reuse",
+    "jit_make_tuple_reuse",
 ];
 
 /// Compiles an IrModule to native code via Cranelift (RC enabled by default).
@@ -370,6 +381,12 @@ fn compile_inner(
     builder.symbol("jit_rc_incref", jit_rc_incref as *const u8);
     builder.symbol("jit_rc_decref", jit_rc_decref as *const u8);
     builder.symbol("jit_set_rc_mode_raw", jit_set_rc_mode_raw as *const u8);
+    // Perceus reuse helpers
+    builder.symbol("jit_drop_reuse", jit_drop_reuse as *const u8);
+    builder.symbol("jit_make_enum_reuse", jit_make_enum_reuse as *const u8);
+    builder.symbol("jit_make_enum_flat_reuse", jit_make_enum_flat_reuse as *const u8);
+    builder.symbol("jit_make_record_reuse", jit_make_record_reuse as *const u8);
+    builder.symbol("jit_make_tuple_reuse", jit_make_tuple_reuse as *const u8);
 
     let mut jit_module = JITModule::new(builder);
     let ptr_type = jit_module.target_config().pointer_type();
@@ -638,6 +655,64 @@ fn compile_inner(
         None
     };
 
+    // Phase 2.6: Create per-arity trampolines (platform CC → Tail CC).
+    // These allow Rust code (call_jit_fn) to call JIT functions via extern "C"
+    // transmute without ABI mismatch. Each trampoline takes a function pointer
+    // (as first arg) plus N args, and does a Cranelift indirect call with Tail CC.
+    let mut trampoline_ids: [Option<FuncId>; 5] = [None; 5];
+    for arity in 0..5usize {
+        let tramp_name = format!("__trampoline_{}", arity);
+
+        // Platform CC signature: (fn_ptr, arg0, arg1, ..., argN) -> u64
+        let mut tramp_sig = jit_module.make_signature();
+        tramp_sig.params.push(AbiParam::new(ptr_type)); // fn_ptr
+        for _ in 0..arity {
+            tramp_sig.params.push(AbiParam::new(types::I64));
+        }
+        tramp_sig.returns.push(AbiParam::new(types::I64));
+
+        let tramp_id = jit_module
+            .declare_function(&tramp_name, Linkage::Local, &tramp_sig)
+            .map_err(|e| e.to_string())?;
+
+        let mut cl_func = cranelift_codegen::ir::Function::new();
+        cl_func.signature = tramp_sig;
+
+        {
+            let mut fn_builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
+            let block = fn_builder.create_block();
+            fn_builder.append_block_params_for_function_params(block);
+            fn_builder.switch_to_block(block);
+            fn_builder.seal_block(block);
+
+            let fn_ptr_val = fn_builder.block_params(block)[0];
+            let args: Vec<cranelift_codegen::ir::Value> = (0..arity)
+                .map(|i| fn_builder.block_params(block)[i + 1])
+                .collect();
+
+            // Tail CC signature for the indirect call target
+            let mut target_sig = jit_module.make_signature();
+            target_sig.call_conv = CallConv::Tail;
+            for _ in 0..arity {
+                target_sig.params.push(AbiParam::new(types::I64));
+            }
+            target_sig.returns.push(AbiParam::new(types::I64));
+            let sig_ref = fn_builder.import_signature(target_sig);
+
+            let call = fn_builder.ins().call_indirect(sig_ref, fn_ptr_val, &args);
+            let result = fn_builder.inst_results(call)[0];
+            fn_builder.ins().return_(&[result]);
+            fn_builder.finalize();
+        }
+
+        let mut ctx = cranelift_codegen::Context::for_function(cl_func);
+        jit_module
+            .define_function(tramp_id, &mut ctx)
+            .map_err(|e| format!("JIT: trampoline_{} error: {}", arity, e))?;
+
+        trampoline_ids[arity] = Some(tramp_id);
+    }
+
     // Phase 3: Finalize and get function pointers.
     // Wrap in catch_unwind because Cranelift may panic on unresolvable symbols
     // (e.g., unsupported IR constructs that produce undefined function references).
@@ -677,6 +752,13 @@ fn compile_inner(
         .map(|id| jit_module.get_finalized_function(id))
         .unwrap_or(std::ptr::null());
 
+    let mut trampolines = [std::ptr::null(); 5];
+    for (i, tid) in trampoline_ids.iter().enumerate() {
+        if let Some(id) = tid {
+            trampolines[i] = jit_module.get_finalized_function(*id);
+        }
+    }
+
     Ok(JitProgram {
         _module: jit_module,
         dispatch,
@@ -684,6 +766,7 @@ fn compile_inner(
         entry_unboxed: unboxed_flags.get(module.entry).copied().unwrap_or(false),
         _heap_roots: heap_roots,
         entry_wrapper: entry_wrapper_ptr,
+        trampolines,
         rc_enabled,
     })
 }
@@ -701,6 +784,11 @@ fn build_signature(
     // Enables guaranteed tail call elimination via return_call, at performance
     // parity with SystemV for non-tail calls. The host entry point uses a
     // platform-CC wrapper (__entry_wrapper) to avoid ABI mismatch on transmute.
+    // Tail CC for all language-internal functions. Enables guaranteed tail call
+    // elimination via return_call. The host entry point uses a platform-CC
+    // wrapper (__entry_wrapper), and runtime helpers that call JIT functions
+    // indirectly (call_jit_fn, jit_call_indirect) use per-arity trampolines
+    // that bridge platform CC → Tail CC via Cranelift indirect calls.
     sig.call_conv = CallConv::Tail;
     for _ in 0..param_count {
         sig.params.push(AbiParam::new(types::I64));
@@ -883,6 +971,43 @@ pub(super) fn make_helper_sig<M: Module>(
         "jit_set_rc_mode_raw" => {
             // (enabled: i64) -> void
             sig.params.push(AbiParam::new(types::I64));
+        }
+        // Perceus reuse helpers
+        "jit_drop_reuse" => {
+            // (bits: i64) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_enum_reuse" => {
+            // (reuse_bits, tag_bits, tag_id, payload_bits) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_enum_flat_reuse" => {
+            // (reuse_bits, tag_bits, tag_id, items_ptr, count) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_record_reuse" => {
+            // (reuse_bits, pairs_ptr, field_count) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_make_tuple_reuse" => {
+            // (reuse_bits, items_ptr, count) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
         }
         _ => return Err(format!("JIT: unknown runtime helper '{}'", name)),
     }
