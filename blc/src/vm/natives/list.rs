@@ -217,6 +217,23 @@ pub(super) fn native_list_get(args: &[NValue]) -> Result<NValue, NativeError> {
     }
 }
 
+pub(super) fn native_list_get_or(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let idx = args[1].as_any_int();
+            if idx < 0 || idx as usize >= items.len() {
+                Ok(args[2].clone())
+            } else {
+                Ok(items[idx as usize].clone())
+            }
+        }
+        None => Err(NativeError(format!(
+            "List.get_or: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
 pub(super) fn native_list_set(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_list() {
         Some(items) => {

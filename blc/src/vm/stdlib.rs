@@ -218,6 +218,12 @@ fn patch_references(expr: &mut Expr, prefix: &str, old_name: &str, qualified_nam
         Expr::Expect { actual, .. } => {
             patch_references(actual, prefix, old_name, qualified_name);
         }
+        Expr::Drop { body, .. } => {
+            patch_references(body, prefix, old_name, qualified_name);
+        }
+        Expr::Reuse { alloc, .. } => {
+            patch_references(alloc, prefix, old_name, qualified_name);
+        }
     }
 }
 

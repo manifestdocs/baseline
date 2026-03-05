@@ -24,3 +24,45 @@ test "pipe chain three" = {
   let r = 1 |> increment |> double |> increment
   r == 5
 }
+
+// --- Implicit first-arg piping: x |> f(args) → f(x, args) ---
+
+fn add(a: Int, b: Int) -> Int = a + b
+
+test "pipe into List.map" = {
+  let r = [1, 2, 3] |> List.map(|x| x * 2)
+  r == [2, 4, 6]
+}
+
+test "pipe into List.filter" = {
+  let r = [1, 2, 3, 4, 5] |> List.filter(|x| x > 3)
+  r == [4, 5]
+}
+
+test "pipe into List.fold" = {
+  let r = [1, 2, 3] |> List.fold(0, |acc, x| acc + x)
+  r == 6
+}
+
+test "chained HOF pipes" = {
+  let r = [1, 2, 3, 4, 5]
+    |> List.map(|x| x * 2)
+    |> List.filter(|x| x > 4)
+    |> List.fold(0, |acc, x| acc + x)
+  r == 24
+}
+
+test "pipe into String.split" = {
+  let r = "a,b,c" |> String.split(",")
+  r == ["a", "b", "c"]
+}
+
+test "pipe into user-defined function" = {
+  let r = 10 |> add(5)
+  r == 15
+}
+
+test "pipe chain with user-defined" = {
+  let r = 1 |> add(2) |> double
+  r == 6
+}

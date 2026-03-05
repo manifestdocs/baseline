@@ -442,6 +442,21 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
+    // List.get_or : (List<A>, Int, A) -> A
+    schemas.insert(
+        "List.get_or".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone())), Type::Int, a.clone()],
+                    Box::new(a),
+                )
+            },
+        },
+    );
+
     // List.set : (List<A>, Int, A) -> List<A>
     schemas.insert(
         "List.set".into(),

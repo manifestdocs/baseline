@@ -186,7 +186,7 @@ fn conformance_positive_tests() {
 
     // Regression gate: fail if tests silently disappear.
     // Update this number when you ADD new conformance tests.
-    const MIN_POSITIVE: usize = 143;
+    const MIN_POSITIVE: usize = 144;
     assert!(
         passed >= MIN_POSITIVE,
         "Conformance regression: expected at least {MIN_POSITIVE} positive tests, but only {passed} passed. \
