@@ -1,0 +1,76 @@
+@prelude(script)
+
+// Spectral-Norm benchmark
+// Math-heavy benchmark computing the spectral norm of an infinite matrix A
+
+fn a(i: Int, j: Int) -> Float = {
+    let ij = i + j
+    let denom = (ij * (ij + 1)) / 2 + i + 1
+    1.0 / Float.from_int(denom)
+}
+
+fn multiply_av_row(n: Int, v: List<Float>, i: Int, j: Int, sum: Float) -> Float =
+    if j >= n then sum
+    else multiply_av_row(n, v, i, j + 1, sum + a(i, j) * List.get_or(v, j, 0.0))
+
+fn multiply_av_loop(n: Int, v: List<Float>, i: Int, out: List<Float>) -> List<Float> =
+    if i >= n then out
+    else {
+        let sum = multiply_av_row(n, v, i, 0, 0.0)
+        multiply_av_loop(n, v, i + 1, List.concat([sum], out))
+    }
+
+fn multiply_av(n: Int, v: List<Float>) -> List<Float> =
+    List.reverse(multiply_av_loop(n, v, 0, []))
+
+fn multiply_atv_row(n: Int, v: List<Float>, i: Int, j: Int, sum: Float) -> Float =
+    if j >= n then sum
+    else multiply_atv_row(n, v, i, j + 1, sum + a(j, i) * List.get_or(v, j, 0.0))
+
+fn multiply_atv_loop(n: Int, v: List<Float>, i: Int, out: List<Float>) -> List<Float> =
+    if i >= n then out
+    else {
+        let sum = multiply_atv_row(n, v, i, 0, 0.0)
+        multiply_atv_loop(n, v, i + 1, List.concat([sum], out))
+    }
+
+fn multiply_atv(n: Int, v: List<Float>) -> List<Float> =
+    List.reverse(multiply_atv_loop(n, v, 0, []))
+
+fn multiply_atav(n: Int, v: List<Float>) -> List<Float> = {
+    let temp = multiply_av(n, v)
+    multiply_atv(n, temp)
+}
+
+fn ten_times_loop(n: Int, u: List<Float>, v: List<Float>, k: Int) -> (List<Float>, List<Float>) =
+    if k >= 10 then (u, v)
+    else {
+        let next_v = multiply_atav(n, u)
+        let next_u = multiply_atav(n, next_v)
+        ten_times_loop(n, next_u, next_v, k + 1)
+    }
+
+fn calc_v_b_v(n: Int, u: List<Float>, v: List<Float>, i: Int, v_b_v: Float, v_v: Float) -> (Float, Float) =
+    if i >= n then (v_b_v, v_v)
+    else {
+        let ui = List.get_or(u, i, 0.0)
+        let vi = List.get_or(v, i, 0.0)
+        calc_v_b_v(n, u, v, i + 1, v_b_v + ui * vi, v_v + vi * vi)
+    }
+
+fn main!() -> () = {
+    let args = Env.args!()
+    let n_str = Option.unwrap_or(List.get(args, 0), "100")
+    let n = match Int.parse(n_str)
+        Ok(v) -> v
+        Err(_) -> 100
+
+    let u = List.fill(n, 1.0)
+    let v_init = List.fill(n, 0.0)
+
+    let (u_final, v_final) = ten_times_loop(n, u, v_init, 0)
+    let (v_b_v, v_v) = calc_v_b_v(n, u_final, v_final, 0, 0.0, 0.0)
+
+    let ans = Math.sqrt(v_b_v / v_v)
+    let _ = Console.println!(Float.format(ans, 9))
+}

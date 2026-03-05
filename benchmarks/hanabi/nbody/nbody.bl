@@ -20,19 +20,19 @@ fn sun() -> Body = Body {
 
 fn jupiter() -> Body = Body {
   x: 4.84143144246472090,
-  y: 0.0 - 1.16032004402742839,
-  z: 0.0 - 1.03622044471123109e-1,
+  y: -1.16032004402742839,
+  z: -1.03622044471123109e-1,
   vx: 1.66007664274403694e-3 * days_per_year(),
   vy: 7.69901118419740425e-3 * days_per_year(),
-  vz: 0.0 - 6.90460016972063023e-5 * days_per_year(),
+  vz: -6.90460016972063023e-5 * days_per_year(),
   mass: 9.54791938424326609e-4 * solar_mass()
 }
 
 fn saturn() -> Body = Body {
   x: 8.34336671824457987,
   y: 4.12479856412430479,
-  z: 0.0 - 4.03523417114321381e-1,
-  vx: 0.0 - 2.76742510726862411e-3 * days_per_year(),
+  z: -4.03523417114321381e-1,
+  vx: -2.76742510726862411e-3 * days_per_year(),
   vy: 4.99852801234917238e-3 * days_per_year(),
   vz: 2.30417297573763929e-5 * days_per_year(),
   mass: 2.85885980666130812e-4 * solar_mass()
@@ -40,21 +40,21 @@ fn saturn() -> Body = Body {
 
 fn uranus() -> Body = Body {
   x: 1.28943695621391310e1,
-  y: 0.0 - 1.51111514016986312e1,
-  z: 0.0 - 2.23307578892655734e-1,
+  y: -1.51111514016986312e1,
+  z: -2.23307578892655734e-1,
   vx: 2.96460137564761618e-3 * days_per_year(),
   vy: 2.37847173959480950e-3 * days_per_year(),
-  vz: 0.0 - 2.96589568540237556e-5 * days_per_year(),
+  vz: -2.96589568540237556e-5 * days_per_year(),
   mass: 4.36624404335156298e-5 * solar_mass()
 }
 
 fn neptune() -> Body = Body {
   x: 1.53796971148509165e1,
-  y: 0.0 - 2.59193146099879641e1,
+  y: -2.59193146099879641e1,
   z: 1.79258772950371181e-1,
   vx: 2.68067772490389322e-3 * days_per_year(),
   vy: 1.62824170038242295e-3 * days_per_year(),
-  vz: 0.0 - 9.51592254519715870e-5 * days_per_year(),
+  vz: -9.51592254519715870e-5 * days_per_year(),
   mass: 5.15138902046611451e-5 * solar_mass()
 }
 
@@ -85,67 +85,16 @@ fn move_body(b: Body, dt: Float) -> Body =
 
 // Advance simulation by dt — unrolled for 5 bodies, 10 pairs
 fn advance(b0: Body, b1: Body, b2: Body, b3: Body, b4: Body, dt: Float) -> (Body, Body, Body, Body, Body) = {
-  // pair (0,1)
-  let r = apply_pair(b0, b1, dt)
-  let b0 = match r
-    (a, _) -> a
-  let b1 = match r
-    (_, a) -> a
-  // pair (0,2)
-  let r = apply_pair(b0, b2, dt)
-  let b0 = match r
-    (a, _) -> a
-  let b2 = match r
-    (_, a) -> a
-  // pair (0,3)
-  let r = apply_pair(b0, b3, dt)
-  let b0 = match r
-    (a, _) -> a
-  let b3 = match r
-    (_, a) -> a
-  // pair (0,4)
-  let r = apply_pair(b0, b4, dt)
-  let b0 = match r
-    (a, _) -> a
-  let b4 = match r
-    (_, a) -> a
-  // pair (1,2)
-  let r = apply_pair(b1, b2, dt)
-  let b1 = match r
-    (a, _) -> a
-  let b2 = match r
-    (_, a) -> a
-  // pair (1,3)
-  let r = apply_pair(b1, b3, dt)
-  let b1 = match r
-    (a, _) -> a
-  let b3 = match r
-    (_, a) -> a
-  // pair (1,4)
-  let r = apply_pair(b1, b4, dt)
-  let b1 = match r
-    (a, _) -> a
-  let b4 = match r
-    (_, a) -> a
-  // pair (2,3)
-  let r = apply_pair(b2, b3, dt)
-  let b2 = match r
-    (a, _) -> a
-  let b3 = match r
-    (_, a) -> a
-  // pair (2,4)
-  let r = apply_pair(b2, b4, dt)
-  let b2 = match r
-    (a, _) -> a
-  let b4 = match r
-    (_, a) -> a
-  // pair (3,4)
-  let r = apply_pair(b3, b4, dt)
-  let b3 = match r
-    (a, _) -> a
-  let b4 = match r
-    (_, a) -> a
-  // move all bodies
+  let (b0, b1) = apply_pair(b0, b1, dt)
+  let (b0, b2) = apply_pair(b0, b2, dt)
+  let (b0, b3) = apply_pair(b0, b3, dt)
+  let (b0, b4) = apply_pair(b0, b4, dt)
+  let (b1, b2) = apply_pair(b1, b2, dt)
+  let (b1, b3) = apply_pair(b1, b3, dt)
+  let (b1, b4) = apply_pair(b1, b4, dt)
+  let (b2, b3) = apply_pair(b2, b3, dt)
+  let (b2, b4) = apply_pair(b2, b4, dt)
+  let (b3, b4) = apply_pair(b3, b4, dt)
   let b0 = move_body(b0, dt)
   let b1 = move_body(b1, dt)
   let b2 = move_body(b2, dt)
@@ -154,26 +103,13 @@ fn advance(b0: Body, b1: Body, b2: Body, b3: Body, b4: Body, dt: Float) -> (Body
   (b0, b1, b2, b3, b4)
 }
 
-// Advance taking/returning a state tuple
-fn advance_s(s: (Body, Body, Body, Body, Body), dt: Float) -> (Body, Body, Body, Body, Body) = {
-  let b0 = match s
-    (a, _, _, _, _) -> a
-  let b1 = match s
-    (_, a, _, _, _) -> a
-  let b2 = match s
-    (_, _, a, _, _) -> a
-  let b3 = match s
-    (_, _, _, a, _) -> a
-  let b4 = match s
-    (_, _, _, _, a) -> a
-  let next = advance(b0, b1, b2, b3, b4, dt)
-  next
-}
-
-// Tail-recursive step loop (tuple in/out for true tail call)
+// Tail-recursive step loop
 fn run_steps(s: (Body, Body, Body, Body, Body), n: Int, dt: Float) -> (Body, Body, Body, Body, Body) =
   if n <= 0 then s
-  else run_steps(advance_s(s, dt), n - 1, dt)
+  else {
+    let (b0, b1, b2, b3, b4) = s
+    run_steps(advance(b0, b1, b2, b3, b4, dt), n - 1, dt)
+  }
 
 // Offset momentum so total system momentum is zero
 fn offset_momentum(b0: Body, b1: Body, b2: Body, b3: Body, b4: Body) -> (Body, Body, Body, Body, Body) = {
@@ -217,32 +153,12 @@ fn main!() -> () = {
   let b3 = uranus()
   let b4 = neptune()
 
-  let r = offset_momentum(b0, b1, b2, b3, b4)
-  let b0 = match r
-    (a, _, _, _, _) -> a
-  let b1 = match r
-    (_, a, _, _, _) -> a
-  let b2 = match r
-    (_, _, a, _, _) -> a
-  let b3 = match r
-    (_, _, _, a, _) -> a
-  let b4 = match r
-    (_, _, _, _, a) -> a
+  let (b0, b1, b2, b3, b4) = offset_momentum(b0, b1, b2, b3, b4)
 
   let _ = Console.println!(Float.format(energy(b0, b1, b2, b3, b4), 9))
 
   let s = (b0, b1, b2, b3, b4)
-  let r = run_steps(s, n, 0.01)
-  let b0 = match r
-    (a, _, _, _, _) -> a
-  let b1 = match r
-    (_, a, _, _, _) -> a
-  let b2 = match r
-    (_, _, a, _, _) -> a
-  let b3 = match r
-    (_, _, _, a, _) -> a
-  let b4 = match r
-    (_, _, _, _, a) -> a
+  let (b0, b1, b2, b3, b4) = run_steps(s, n, 0.01)
 
   let _ = Console.println!(Float.format(energy(b0, b1, b2, b3, b4), 9))
 }

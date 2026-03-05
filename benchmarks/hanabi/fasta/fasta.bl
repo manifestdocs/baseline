@@ -60,11 +60,7 @@ fn repeat_fasta_loop!(src: String, src_len: Int, pos: Int, n: Int) -> () =
   if n <= 0 then ()
   else {
     let nb = if n < line_length() then n else line_length()
-    let result = repeat_line(src, src_len, pos, nb, "")
-    let line = match result
-      (s, _) -> s
-    let new_pos = match result
-      (_, p) -> p
+    let (line, new_pos) = repeat_line(src, src_len, pos, nb, "")
     let _ = Console.println!(line)
     repeat_fasta_loop!(src, src_len, new_pos, n - nb)
   }
@@ -89,11 +85,7 @@ fn random_fasta_loop!(cum: List<Float>, chars: List<String>, n: Int, seed: Int) 
   if n <= 0 then seed
   else {
     let nb = if n < line_length() then n else line_length()
-    let result = random_line(cum, chars, seed, nb, "")
-    let line = match result
-      (s, _) -> s
-    let new_seed = match result
-      (_, s) -> s
+    let (line, new_seed) = random_line(cum, chars, seed, nb, "")
     let _ = Console.println!(line)
     random_fasta_loop!(cum, chars, n - nb, new_seed)
   }

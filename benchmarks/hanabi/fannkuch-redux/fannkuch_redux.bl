@@ -1,0 +1,70 @@
+@prelude(script)
+
+fn get(list: List<Int>, i: Int) -> Int =
+    Option.unwrap(List.get(list, i))
+
+fn reverse_k(perm: List<Int>, k: Int) -> List<Int> = {
+    let n = List.length(perm)
+    let head = List.reverse(List.slice(perm, 0, k))
+    let tail = List.slice(perm, k, n)
+    List.concat(head, tail)
+}
+
+fn count_flips(perm: List<Int>, flips: Int) -> Int = {
+    let first = get(perm, 0)
+    if first == 0 then flips
+    else count_flips(reverse_k(perm, first + 1), flips + 1)
+}
+
+fn rotate(perm: List<Int>, i: Int) -> List<Int> = {
+    let first = get(perm, 0)
+    let n = List.length(perm)
+    let middle = List.slice(perm, 1, i + 1)
+    let rest = List.slice(perm, i + 1, n)
+    let front = List.concat(middle, [first])
+    List.concat(front, rest)
+}
+
+fn advance_perm(perm: List<Int>, count: List<Int>, n: Int, i: Int) -> (List<Int>, List<Int>, Int) =
+    if i >= n then (perm, count, i)
+    else {
+        let rotated = rotate(perm, i)
+        let ci = get(count, i)
+        if ci >= i then {
+            let new_count = List.set(count, i, 0)
+            advance_perm(rotated, new_count, n, i + 1)
+        } else {
+            let new_count = List.set(count, i, ci + 1)
+            (rotated, new_count, i)
+        }
+    }
+
+fn max_int(a: Int, b: Int) -> Int = if a > b then a else b
+
+fn make_perm(perm: List<Int>, i: Int, n: Int) -> List<Int> =
+    if i >= n then perm
+    else make_perm(List.set(perm, i, i), i + 1, n)
+
+fn run_fannkuch(perm: List<Int>, count: List<Int>, n: Int, sign: Int, max_flips: Int, checksum: Int) -> (Int, Int) = {
+    let flips = count_flips(perm, 0)
+    let next_max = max_int(max_flips, flips)
+    let next_checksum = checksum + sign * flips
+    let next_sign = 0 - sign
+    let result = advance_perm(perm, count, n, 1)
+    let (np, nc, i) = result
+    if i >= n then (next_max, next_checksum)
+    else run_fannkuch(np, nc, n, next_sign, next_max, next_checksum)
+}
+
+fn main!() -> () = {
+    let args = Env.args!()
+    let n_str = Option.unwrap_or(List.get(args, 0), "7")
+    let n = match Int.parse(n_str)
+        Ok(v) -> v
+        Err(_) -> 7
+
+    let perm = make_perm(List.fill(n, 0), 0, n)
+    let count = List.fill(n, 0)
+    let (max_flips, checksum) = run_fannkuch(perm, count, n, 1, 0, 0)
+    let _ = Console.println!("${checksum}\nPfannkuchen(${n}) = ${max_flips}")
+}
