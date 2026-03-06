@@ -1,44 +1,44 @@
 # Baseline Language Specification
 
-**Version 0.1.0 — Beta**
+**Version 0.3.0**
 
 > A fast, verifiable, dual-audience programming language: native to both LLMs and humans.
 
-> For aspirational features planned for v0.2 and beyond (memory model, compilation targets, concurrency, constrained generation, etc.), see [baseline-language-roadmap.md](baseline-language-roadmap.md).
+> For aspirational features (memory model, compilation targets, constrained generation, etc.), see [baseline-language-roadmap.md](baseline-language-roadmap.md).
 
 ---
 
-### Beta Scope
+### Scope
 
-This specification describes both implemented features and planned v0.2 targets. The **beta** includes all features marked `[IMPLEMENTED]` and `[PARTIAL]` below. Features marked `[PLANNED]` are normative design for future releases — they describe how the language *will* work but are **not available in the beta**.
+This specification describes both implemented features and planned targets. Features marked `[IMPLEMENTED]` and `[PARTIAL]` are available now. Features marked `[PLANNED]` are normative design for future releases — they describe how the language *will* work but are **not yet available**.
 
-**What works in beta:**
+**What works today:**
 - Core types: Int, Float, String, Boolean, List, Option, Result, records, enums, tuples
 - Functions with type-checked parameters, return types, and generic inference for builtins
 - Pattern matching with constructors, literals, wildcards, and variable binding
-- Algebraic effect declarations, checking, and inference (including ambient effects, restrict blocks, and @pure)
+- Algebraic effect declarations, checking, inference, and handlers (evidence passing + one-shot continuations)
 - Module system with imports, transitive resolution, and cycle detection
 - Refinement types with integer interval constraints and SMT verification
 - BDD-style testing framework (describe/it/test/expect)
-- Pipe operator (`|>`)
-- Standard library: 30+ modules, 300+ native functions
+- Pipe operator (`|>`) with implicit first-arg piping
+- Standard library: 38 modules, 260+ native functions
 - Cranelift JIT runtime with tail-call optimization and native code execution
 - Language server (diagnostics, hover, go-to-definition, completion)
 - Code formatter (`blc fmt`) and documentation generator (`blc docs`)
+- Server framework: Router, Http client, Jwt, Session, Validate, WebSocket
 
-**Not yet available (planned for v0.2):**
-- Custom effect-handler mock infrastructure for testing
+**Not yet available:**
 - User-defined generic functions (builtin generic inference works)
 - Row polymorphism, Char type, Never type
 - List/record destructuring patterns, match guards, or-patterns
-- User-facing concurrency primitives, REPL
+- REPL
 - Constrained Generation Protocol, LLM Bootstrap Kit (see [roadmap](baseline-language-roadmap.md))
 
 ### Implementation Status Key
 
 - **[IMPLEMENTED]** — Working in grammar, type checker, and JIT runtime
 - **[PARTIAL]** — Partially implemented (e.g., grammar exists but no type checking, or type-checks but no JIT runtime)
-- **[PLANNED]** — Designed but not yet implemented; target for v0.2
+- **[PLANNED]** — Designed but not yet implemented
 
 See conformance tests in `tests/conformance/` for verified behavior.
 
