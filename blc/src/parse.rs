@@ -162,11 +162,7 @@ pub fn parse_int_literal(text: &str) -> Option<i64> {
     } else if s.starts_with("0o") || s.starts_with("0O") {
         i64::from_str_radix(&s[2..], 8).ok()
     } else {
-        let res = s.parse::<i64>();
-        if res.is_err() {
-            eprintln!("parse_int_literal err: {:?} from {:?}", res, text);
-        }
-        res.ok()
+        s.parse::<i64>().ok()
     }
 }
 
@@ -325,7 +321,7 @@ fn has_preceding_match(node: &tree_sitter::Node) -> bool {
             // A match_expression or a let binding whose value is a match
             if child.kind() == "match_expression" {
                 saw_match = true;
-            } else if child.kind() == "let_declaration" {
+            } else if child.kind() == "let_binding" {
                 // Check if the let's value expression is a match
                 let mut inner = child.walk();
                 for grandchild in child.children(&mut inner) {

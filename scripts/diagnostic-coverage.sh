@@ -13,16 +13,21 @@ SRC_DIR="$REPO_ROOT/blc/src"
 TEST_DIR="$REPO_ROOT/blc/tests"
 EXAMPLES_DIR="$REPO_ROOT/examples"
 CONFORMANCE_DIR="$REPO_ROOT/tests/conformance"
+ANALYSIS_DIR="$SRC_DIR/analysis"
+
+SOURCE_FILES=(
+  "$SRC_DIR/resolver.rs"
+)
+while IFS= read -r f; do
+  SOURCE_FILES+=("$f")
+done < <(find "$ANALYSIS_DIR" -type f -name "*.rs" | sort)
 
 # Extract all error codes from source (TYP_xxx, CAP_xxx, REF_xxx, etc.)
 echo "=== Diagnostic Coverage Report ==="
 echo
 
-CODES=$(grep -ohE '"[A-Z]{2,4}_[0-9]{3}"' "$SRC_DIR/analysis/types.rs" \
-                                             "$SRC_DIR/analysis/effects.rs" \
-                                             "$SRC_DIR/analysis/refinements.rs" \
-                                             "$SRC_DIR/resolver.rs" 2>/dev/null \
-        | tr -d '"' | sort -u)
+CODES=$(grep -ohE '"[A-Z]{2,4}_[0-9]{3}"' "${SOURCE_FILES[@]}" 2>/dev/null \
+        | tr -d '"' | sort -u || true)
 
 TOTAL=0
 TESTED=0
@@ -47,10 +52,7 @@ if [ ${#UNTESTED_CODES[@]} -gt 0 ]; then
     echo "--- Untested codes ---"
     for code in "${UNTESTED_CODES[@]}"; do
         # Show where the code is defined
-        location=$(grep -n "\"$code\"" "$SRC_DIR/analysis/types.rs" \
-                                        "$SRC_DIR/analysis/effects.rs" \
-                                        "$SRC_DIR/analysis/refinements.rs" \
-                                        "$SRC_DIR/resolver.rs" 2>/dev/null | head -1)
+        location=$(grep -n "\"$code\"" "${SOURCE_FILES[@]}" 2>/dev/null | head -1 || true)
         echo "  $code  ($location)"
     done
 else
@@ -58,4 +60,8 @@ else
 fi
 
 echo
-echo "Coverage: $TESTED / $TOTAL ($((TESTED * 100 / TOTAL))%)"
+if [ "$TOTAL" -eq 0 ]; then
+    echo "Coverage: 0 / 0 (0%)"
+else
+    echo "Coverage: $TESTED / $TOTAL ($((TESTED * 100 / TOTAL))%)"
+fi

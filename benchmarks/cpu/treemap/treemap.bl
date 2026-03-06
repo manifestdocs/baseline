@@ -1,24 +1,7 @@
 @prelude(script)
 
-// Binary search tree — insert N keys, then sum all values
-// Tests: allocation pressure (node creation), sum types, pattern matching, recursion
-
-type Tree =
-  | Leaf
-  | Node(Int, Int, Tree, Tree)
-
-fn insert(tree: Tree, key: Int, val: Int) -> Tree =
-  match tree
-    Leaf -> Node(key, val, Leaf, Leaf)
-    Node(k, v, left, right) ->
-      if key < k then Node(k, v, insert(left, key, val), right)
-      else if key > k then Node(k, v, left, insert(right, key, val))
-      else Node(k, val, left, right)
-
-fn tree_sum(tree: Tree) -> Int =
-  match tree
-    Leaf -> 0
-    Node(_, v, left, right) -> v + tree_sum(left) + tree_sum(right)
+// Tree-map style workload via built-in Map — insert N keys, then sum values
+// Tests: Map insert/update overhead, allocation pressure, fold over values
 
 // Simple PRNG (xorshift-like with modular arithmetic)
 fn next_rand(seed: Int) -> Int = {
@@ -28,16 +11,16 @@ fn next_rand(seed: Int) -> Int = {
   s % 1000000007
 }
 
-fn build_tree(n: Int, seed: Int, tree: Tree) -> Tree =
-  if n <= 0 then tree
+fn build_map(n: Int, seed: Int, m: Map<Int, Int>) -> Map<Int, Int> =
+  if n <= 0 then m
   else {
     let s = next_rand(seed)
     let key = s % 100000
-    build_tree(n - 1, s, insert(tree, key, key))
+    build_map(n - 1, s, Map.insert(m, key, key))
   }
 
 fn main!() -> {Console} () = {
-  let tree = build_tree(100000, 42, Leaf)
-  let total = tree_sum(tree)
+  let m = build_map(100000, 42, Map.empty())
+  let total = List.fold(Map.values(m), 0, |acc, v| acc + v)
   Console.println!("${total}")
 }

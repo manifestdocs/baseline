@@ -1,0 +1,23 @@
+// Random Numbers — generating random values with the Random effect.
+@prelude(script)
+
+fn main!() -> {Console, Random} () = {
+  // Generate 10 random numbers between 1 and 100
+  let n1 = Random.int!(1, 100)
+  let n2 = Random.int!(1, 100)
+  let n3 = Random.int!(1, 100)
+  let n4 = Random.int!(1, 100)
+  let n5 = Random.int!(1, 100)
+  Console.println!("Five random numbers (1-100):")
+  Console.println!("  ${Int.to_string(n1)}, ${Int.to_string(n2)}, ${Int.to_string(n3)}, ${Int.to_string(n4)}, ${Int.to_string(n5)}")
+
+  // Random booleans for coin flips
+  let c1 = if Random.bool!() then "heads" else "tails"
+  let c2 = if Random.bool!() then "heads" else "tails"
+  let c3 = if Random.bool!() then "heads" else "tails"
+  Console.println!("Three coin flips: ${c1}, ${c2}, ${c3}")
+
+  // Random UUID
+  let id = Random.uuid!()
+  Console.println!("Random UUID: ${id}")
+}

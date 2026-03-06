@@ -1,6 +1,6 @@
 # Baseline Language Extension for Zed
 
-Syntax highlighting and language support for the [Baseline programming language](https://github.com/manifestdocs/baseline).
+Syntax highlighting and language support for the [Baseline programming language](https://github.com/baseline-lang/baseline).
 
 ## Features
 

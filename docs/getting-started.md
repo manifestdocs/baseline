@@ -12,7 +12,7 @@ brew install manifestdocs/tap/baseline
 
 ### Direct Download
 
-Download a pre-built binary from [GitHub Releases](https://github.com/manifestdocs/baseline/releases):
+Download a pre-built binary from [GitHub Releases](https://github.com/baseline-lang/baseline/releases):
 
 | Platform | Binary |
 |----------|--------|
@@ -31,7 +31,7 @@ sudo mv blc /usr/local/bin/
 Requires [Rust](https://rustup.rs/) (1.75+):
 
 ```bash
-git clone https://github.com/manifestdocs/baseline.git
+git clone https://github.com/baseline-lang/baseline.git
 cd baseline
 cargo install --path blc --features jit
 ```

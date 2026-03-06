@@ -58,7 +58,7 @@
 		</ul>
 		<div class="nav-footer">
 			<a
-				href="https://github.com/manifestdocs/baseline"
+				href="https://github.com/baseline-lang/baseline"
 				aria-label="GitHub (external site)">GitHub</a
 			>
 			<a href="/llms.txt">llms.txt</a>

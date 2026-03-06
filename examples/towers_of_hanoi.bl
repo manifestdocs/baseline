@@ -1,0 +1,21 @@
+// Towers of Hanoi — classic recursive puzzle.
+@prelude(script)
+
+// Solve Towers of Hanoi: move n disks from `from` to `to` using `via`
+// Returns a list of moves as "(from -> to)" strings
+fn hanoi(n: Int, from: String, to: String, via: String) -> List<String> =
+  if n <= 0 then []
+  else if n == 1 then ["${from} -> ${to}"]
+  else {
+    let first = hanoi(n - 1, from, via, to)
+    let move = ["${from} -> ${to}"]
+    let last = hanoi(n - 1, via, to, from)
+    List.concat(List.concat(first, move), last)
+  }
+
+fn main!() -> {Console} () = {
+  Console.println!("Towers of Hanoi with 3 disks:")
+  let moves = hanoi(3, "A", "C", "B")
+  let _ = List.map(moves, |m| Console.println!("  ${m}"))
+  Console.println!("Total moves: ${Int.to_string(List.length(moves))}")
+}

@@ -1,6 +1,6 @@
 # Baseline — Hanabi Benchmark Submission
 
-Submission materials for adding [Baseline](https://github.com/manifestdocs/baseline) to [hanabi1224/Programming-Language-Benchmarks](https://github.com/hanabi1224/Programming-Language-Benchmarks).
+Submission materials for adding [Baseline](https://github.com/baseline-lang/baseline) to [hanabi1224/Programming-Language-Benchmarks](https://github.com/hanabi1224/Programming-Language-Benchmarks).
 
 ## Benchmarks Included
 
@@ -78,13 +78,13 @@ Add Baseline as a new language with 4 benchmark implementations:
 - nbody
 - fasta
 
-Baseline is a strongly typed, effect-tracked functional language with a bytecode VM runtime.
+Baseline is a strongly typed, effect-tracked functional language with a Cranelift JIT runtime.
 All outputs validated byte-identical against C reference implementations.
 
 ## Runtime
 
 - Compiler: `blc` (Rust, tree-sitter parser)
-- Backend: Bytecode VM (stack-based, NaN-boxed values)
+- Backend: Cranelift JIT (NaN-boxed values)
 - Docker image: `ghcr.io/<org>/baseline-bench:latest`
 EOF
 )"
@@ -92,8 +92,8 @@ EOF
 
 ## Runtime Notes
 
-- **Backend:** Bytecode VM (`blc run`). A Cranelift JIT backend exists (`blc run --jit`) but has correctness issues on some benchmarks. The VM backend produces correct output for all programs.
-- **Performance:** The VM achieves ~CPython parity on integer recursion (233M ops/sec). JIT reaches 0.8-1.2x C on integer benchmarks when working correctly.
+- **Backend:** Cranelift JIT (`blc run --jit`). NaN-boxed values, tail-call optimization, base-case speculation, IR-level function inlining.
+- **Performance:** JIT reaches 0.8-1.2x C on integer benchmarks.
 - **Source format:** Single-file programs, no build step needed. The harness copies source to `app.bl` and runs `blc run app.bl -- <args>`.
 
 ## File Inventory

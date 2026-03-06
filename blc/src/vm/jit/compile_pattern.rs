@@ -4,7 +4,7 @@
 //! variable binding, for loops, and try expressions.
 
 use cranelift_codegen::ir::condcodes::IntCC;
-use cranelift_codegen::ir::{BlockArg, InstBuilder, types};
+use cranelift_codegen::ir::{BlockArg, InstBuilder, StackSlotData, StackSlotKind, types};
 use cranelift_frontend::Switch;
 use cranelift_module::Module;
 
@@ -690,14 +690,50 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Pattern::Literal(_) => {}
             Pattern::Constructor(_, sub_patterns) => {
                 if !sub_patterns.is_empty() {
-                    // Extract fields directly from flat enum payload
-                    for (i, sub) in sub_patterns.iter().enumerate() {
-                        if matches!(sub, Pattern::Wildcard) {
-                            continue; // skip extraction for wildcards — avoids leaked owned clone
+                    // Count non-wildcard bindings to decide on batch vs individual extraction
+                    let non_wildcard: usize = sub_patterns
+                        .iter()
+                        .filter(|s| !matches!(s, Pattern::Wildcard))
+                        .count();
+                    if non_wildcard > 1 {
+                        // Batch extraction: one helper call extracts all fields
+                        let n = sub_patterns.len();
+                        let slot = self.builder.create_sized_stack_slot(
+                            StackSlotData::new(
+                                StackSlotKind::ExplicitSlot,
+                                (n * 8) as u32,
+                                3, // 8-byte alignment
+                            ),
+                        );
+                        let out_addr =
+                            self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+                        let count_val =
+                            self.builder.ins().iconst(types::I64, n as i64);
+                        self.call_helper_void(
+                            "jit_enum_fields_get_all",
+                            &[subject, out_addr, count_val],
+                        );
+                        for (i, sub) in sub_patterns.iter().enumerate() {
+                            if matches!(sub, Pattern::Wildcard) {
+                                continue;
+                            }
+                            let elem = self
+                                .builder
+                                .ins()
+                                .stack_load(types::I64, slot, (i * 8) as i32);
+                            self.bind_pattern_vars_rc(sub, elem)?;
                         }
-                        let idx = self.builder.ins().iconst(types::I64, i as i64);
-                        let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
-                        self.bind_pattern_vars_rc(sub, elem)?;
+                    } else {
+                        // Single or zero bindings: use individual extraction
+                        for (i, sub) in sub_patterns.iter().enumerate() {
+                            if matches!(sub, Pattern::Wildcard) {
+                                continue;
+                            }
+                            let idx = self.builder.ins().iconst(types::I64, i as i64);
+                            let elem =
+                                self.call_helper("jit_enum_field_get", &[subject, idx]);
+                            self.bind_pattern_vars_rc(sub, elem)?;
+                        }
                     }
                 }
             }

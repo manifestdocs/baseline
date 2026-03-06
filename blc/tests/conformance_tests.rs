@@ -94,7 +94,20 @@ fn is_check_only(path: &Path) -> bool {
         .and_then(|p| p.file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("");
-    parent == "09_modules" || parent == "13_concurrency" || parent == "14_web"
+    parent == "13_concurrency" || parent == "14_web"
+}
+
+/// Extract expected stdout lines from comments like:
+/// // expect: some output
+fn extract_expected_output(path: &Path) -> Vec<String> {
+    let content = std::fs::read_to_string(path).unwrap();
+    let mut out = Vec::new();
+    for line in content.lines() {
+        if let Some(rest) = line.trim().strip_prefix("// expect:") {
+            out.push(rest.trim().to_string());
+        }
+    }
+    out
 }
 
 /// Extract expected error codes from comments like:
@@ -144,8 +157,29 @@ fn conformance_positive_tests() {
         }
 
         let relative = file.strip_prefix(&dir).unwrap().display().to_string();
+        let expected_output = extract_expected_output(file);
 
-        if is_check_only(file) {
+        if !expected_output.is_empty() {
+            let out = blc_cmd(&["run"], file);
+            if out.exit_code != 0 {
+                failed.push(format!(
+                    "{relative}: run failed\n  stdout: {}\n  stderr: {}",
+                    out.stdout.trim(),
+                    out.stderr.trim()
+                ));
+            } else {
+                let actual: Vec<String> =
+                    out.stdout.lines().map(|l| l.trim_end().to_string()).collect();
+                if actual != expected_output {
+                    failed.push(format!(
+                        "{relative}: stdout mismatch\n  expected: {:?}\n  actual: {:?}",
+                        expected_output, actual
+                    ));
+                } else {
+                    passed += 1;
+                }
+            }
+        } else if is_check_only(file) {
             let out = blc_cmd(&["check"], file);
             if out.exit_code != 0 {
                 failed.push(format!(

@@ -7,7 +7,7 @@
 //! On error, calls `jit_set_error()` and returns NV_UNIT.
 
 use crate::helpers::{NV_UNIT, jit_arena_push, jit_set_error};
-use crate::nvalue::{HeapObject, NValue};
+use crate::nvalue::{HeapObject, MapStore, NValue};
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -716,7 +716,7 @@ pub extern "C" fn bl_fs_list_dir(args: *const u64, count: u64) -> u64 {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn bl_map_empty(_args: *const u64, _count: u64) -> u64 {
-    push_result(NValue::map_from_hashmap(std::collections::HashMap::new()))
+    push_result(NValue::map_from_hashmap(MapStore::default()))
 }
 
 #[unsafe(no_mangle)]
@@ -809,7 +809,7 @@ pub extern "C" fn bl_map_from_list(args: *const u64, count: u64) -> u64 {
     let vals = args_from_raw(args, count);
     match vals[0].as_list() {
         Some(items) => {
-            let mut entries = std::collections::HashMap::new();
+            let mut entries = MapStore::with_capacity_and_hasher(items.len(), Default::default());
             for item in items {
                 if let Some(tuple) = item.as_tuple() {
                     if tuple.len() >= 2 {

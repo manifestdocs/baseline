@@ -1,16 +1,16 @@
 {
-  "name": "tree-sitter-rocket",
+  "name": "tree-sitter-baseline",
   "version": "0.1.0",
-  "description": "Tree-sitter grammar for the Rocket programming language",
+  "description": "Tree-sitter grammar for the Baseline programming language",
   "main": "bindings/node",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rocket-lang/tree-sitter-rocket"
+    "url": "https://github.com/baseline-lang/baseline/tree/main/tree-sitter-baseline"
   },
   "keywords": [
     "tree-sitter",
     "parser",
-    "rocket",
+    "baseline",
     "language"
   ],
   "license": "MIT",
@@ -24,10 +24,9 @@
   },
   "tree-sitter": [
     {
-      "scope": "source.rocket",
+      "scope": "source.baseline",
       "file-types": [
-        "rk",
-        "rocket"
+        "bl"
       ],
       "highlights": "queries/highlights.scm",
       "locals": "queries/locals.scm"

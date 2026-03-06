@@ -15,6 +15,7 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::rc::{self, Rc};
+use rustc_hash::FxBuildHasher;
 
 use crate::value::{RcStr, Value};
 
@@ -34,6 +35,7 @@ pub enum SqlValue {
 
 /// Shared column names across all rows from a single query.
 pub type ColumnNames = Rc<Vec<RcStr>>;
+pub type MapStore = std::collections::HashMap<NValue, NValue, FxBuildHasher>;
 
 // ---------------------------------------------------------------------------
 // Tag constants
@@ -177,7 +179,7 @@ pub enum HeapObject {
         remaining_mw: Vec<NValue>,
     },
     /// Map: hash map of key-value pairs.
-    Map(std::collections::HashMap<NValue, NValue>),
+    Map(MapStore),
     /// Set: unique elements.
     Set(Vec<NValue>),
     /// Weak reference to a heap object (does not prevent deallocation).
@@ -448,11 +450,11 @@ impl NValue {
     }
 
     pub fn map(entries: Vec<(NValue, NValue)>) -> Self {
-        let hm: std::collections::HashMap<NValue, NValue> = entries.into_iter().collect();
+        let hm: MapStore = entries.into_iter().collect();
         Self::from_heap(HeapObject::Map(hm))
     }
 
-    pub fn map_from_hashmap(hm: std::collections::HashMap<NValue, NValue>) -> Self {
+    pub fn map_from_hashmap(hm: MapStore) -> Self {
         Self::from_heap(HeapObject::Map(hm))
     }
 

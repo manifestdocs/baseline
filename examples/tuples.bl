@@ -1,0 +1,25 @@
+// Tuples — creating, destructuring, and pattern matching tuples.
+@prelude(script)
+
+fn main!() -> {Console} () = {
+  // A tuple combining different types
+  let simple = ("A String", true, 15000000)
+
+  // Destructure via pattern matching
+  let (first, second, third) = simple
+  let second_str = if second then "true" else "false"
+
+  Console.println!("First is: ${first}")
+  Console.println!("Second is: ${second_str}")
+  Console.println!("Third is: ${Int.to_string(third)}")
+
+  // Tuples in match expressions
+  let fruit = "Pear"
+  let quantity = 12
+  let msg = match (fruit, quantity)
+    ("Apple", _) -> "You have some apples."
+    ("Pear", _) -> "You have some pears."
+    ("Banana", _) -> "You have some bananas."
+    _ -> "Unknown fruit."
+  let _ = Console.println!(msg)
+}

@@ -14,5 +14,5 @@ fn main() {
         println!("cargo:rerun-if-changed={}", scanner_path.display());
     }
 
-    c_config.compile("tree-sitter-rocket");
+    c_config.compile("tree-sitter-baseline");
 }

@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/manifestdocs/baseline"
+    "url": "https://github.com/baseline-lang/baseline"
   },
   "engines": {
     "vscode": "^1.75.0"

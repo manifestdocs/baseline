@@ -1,0 +1,66 @@
+// Pattern Matching — matching on lists, options, and enums.
+@prelude(core)
+
+// Match empty vs non-empty list
+fn classify_list(input: List<Int>) -> String =
+  match input
+    [] -> "empty"
+    [_h, .._t] -> "non-empty"
+
+test "match empty list" = {
+  classify_list([]) == "empty"
+}
+
+test "match non-empty list" = {
+  classify_list([1, 2, 3]) == "non-empty"
+}
+
+// Match head element of a list
+fn starts_with_one(input: List<Int>) -> Boolean =
+  match input
+    [1, .._rest] -> true
+    _ -> false
+
+test "starts with one" = {
+  starts_with_one([1, 2, 3]) == true
+}
+
+test "does not start with one" = {
+  starts_with_one([2, 3, 4]) == false
+}
+
+// Head and tail destructuring
+fn sum_list(xs: List<Int>) -> Int =
+  match xs
+    [] -> 0
+    [h, ..t] -> h + sum_list(t)
+
+test "sum empty list" = { sum_list([]) == 0 }
+test "sum list" = { sum_list([1, 2, 3, 4, 5]) == 15 }
+
+// Match on Option
+fn describe_option(opt: Option<Int>) -> String =
+  match opt
+    Some(v) -> "has value: ${Int.to_string(v)}"
+    None -> "empty"
+
+test "some option" = { describe_option(Some(42)) == "has value: 42" }
+test "none option" = { describe_option(None) == "empty" }
+
+// Match on Result
+fn describe_result(res: Result<Int, String>) -> String =
+  match res
+    Ok(v) -> "ok: ${Int.to_string(v)}"
+    Err(e) -> "error: ${e}"
+
+test "ok result" = { describe_result(Ok(10)) == "ok: 10" }
+test "err result" = { describe_result(Err("fail")) == "error: fail" }
+
+// Nested pattern matching
+fn safe_head(xs: List<Int>) -> String =
+  match List.head(xs)
+    Some(v) -> "first: ${Int.to_string(v)}"
+    None -> "list was empty"
+
+test "safe head non-empty" = { safe_head([7, 8, 9]) == "first: 7" }
+test "safe head empty" = { safe_head([]) == "list was empty" }

@@ -5,19 +5,10 @@ use super::ir::{
     TagRegistry, UnaryOp,
 };
 
-/// Run all IR optimization passes on the module.
-/// Run all IR optimization passes on the module.
-/// When `lift_lambdas_pass` is true, performs lambda lifting (required for JIT).
-/// The bytecode codegen handles lambdas natively, so lambda lifting should be
-/// skipped when targeting bytecode.
+/// Run all IR optimization passes on the module, including lambda lifting
+/// (required for JIT codegen).
 pub fn optimize(module: &mut IrModule) {
     optimize_inner(module, true);
-}
-
-/// Optimize for bytecode codegen: skip lambda lifting (bytecode handles
-/// `Expr::Lambda` directly via its own closure compilation).
-pub fn optimize_for_bytecode(module: &mut IrModule) {
-    optimize_inner(module, false);
 }
 
 /// Detect mutually-capturing closure pairs in a module.
@@ -1109,12 +1100,13 @@ fn is_cow_arm(arm: &MatchArm) -> bool {
     false
 }
 
-/// Find the outermost constructor in an expression (skipping through Blocks/Lets).
+/// Find the outermost constructor in an expression (skipping through Blocks/Lets/Ifs).
 fn find_outermost_constructor(expr: &Expr) -> &Expr {
     match expr {
         Expr::Block(exprs, _) if !exprs.is_empty() => {
             find_outermost_constructor(exprs.last().unwrap())
         }
+        Expr::If { then_branch, .. } => find_outermost_constructor(then_branch),
         Expr::Let { .. } => expr, // Let bindings — don't look deeper
         other => other,
     }

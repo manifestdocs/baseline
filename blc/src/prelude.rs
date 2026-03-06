@@ -79,6 +79,10 @@ impl Prelude {
                 "DateTime",
                 "Crypto",
                 "Row",
+                "Jwt",
+                "Session",
+                "Validate",
+                "Random",
             ],
         }
     }
@@ -92,7 +96,7 @@ impl Prelude {
                 "Math", "Console", "Log", "Time", "Random", "Env", "Fs", "Async",
             ],
             Prelude::Server => &[
-                "Math", "Console", "Log", "Time", "Env", "Server", "Sqlite", "Postgres", "Mysql",
+                "Math", "Console", "Log", "Time", "Random", "Env", "Server", "Sqlite", "Postgres", "Mysql",
                 "Sql", "Metrics", "Async",
             ],
         }
@@ -173,6 +177,10 @@ impl Prelude {
                 "DateTime",
                 "Crypto",
                 "Row",
+                "Jwt",
+                "Session",
+                "Validate",
+                "Random",
             ],
         }
     }
@@ -332,11 +340,18 @@ mod tests {
         let p = Prelude::Server;
         assert!(p.native_modules().contains(&"Router"));
         assert!(p.native_modules().contains(&"Http"));
+        assert!(p.native_modules().contains(&"Jwt"));
+        assert!(p.native_modules().contains(&"Session"));
+        assert!(p.native_modules().contains(&"Validate"));
         assert!(p.builtin_modules().contains(&"Server"));
         assert!(p.builtin_modules().contains(&"Sqlite"));
         assert!(p.builtin_modules().contains(&"Metrics"));
+        assert!(p.builtin_modules().contains(&"Random"));
         assert!(p.type_modules().contains(&"Router"));
         assert!(p.type_modules().contains(&"Server"));
+        assert!(p.type_modules().contains(&"Jwt"));
+        assert!(p.type_modules().contains(&"Session"));
+        assert!(p.type_modules().contains(&"Validate"));
     }
 
     #[test]

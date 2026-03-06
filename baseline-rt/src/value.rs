@@ -10,8 +10,8 @@ pub type RcStr = Rc<str>;
 // Value
 // ---------------------------------------------------------------------------
 
-/// Lifetime-free value type for the bytecode VM.
-/// Functions and closures are represented as bytecode offsets, not tree-sitter nodes.
+/// Lifetime-free value type for the runtime.
+/// Functions and closures are represented as indices, not tree-sitter nodes.
 /// Heap-allocated variants use Rc for O(1) clone on stack operations.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {

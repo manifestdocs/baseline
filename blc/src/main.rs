@@ -304,7 +304,10 @@ fn main() {
         #[cfg(feature = "mcp")]
         Commands::Mcp => {
             let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
-            rt.block_on(blc::mcp::run_server());
+            if let Err(err) = rt.block_on(blc::mcp::run_server()) {
+                eprintln!("{}", err);
+                std::process::exit(1);
+            }
         }
         Commands::Docs {
             json,

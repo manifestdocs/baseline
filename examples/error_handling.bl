@@ -1,0 +1,64 @@
+// Error Handling — using Result, the ? operator, and match for robust error handling.
+@prelude(core)
+
+// Parse a "Name was born in Year" sentence using ? for early return
+fn parse_person(line: String) -> Result<(String, Int), String> = {
+  let parts = String.split(line, " was born in ")
+  let name: String = Option.ok_or(List.head(parts), "invalid format")?
+  let year_str: String = Option.ok_or(List.get(parts, 1), "missing birth year")?
+  let year: Int = Option.ok_or(String.to_int(year_str), "invalid year")?
+  Ok((name, year))
+}
+
+test "parse valid person" = {
+  match parse_person("George Harrison was born in 1943")
+    Ok(("George Harrison", 1943)) -> true
+    _ -> false
+}
+
+test "parse missing year" = {
+  Result.is_err(parse_person("Alice"))
+}
+
+test "parse invalid year" = {
+  Result.is_err(parse_person("Alice was born in abc"))
+}
+
+// Chain operations with ? operator
+fn get_first_positive(xs: List<Int>) -> Result<Int, String> = {
+  let first: Int = Option.ok_or(List.head(xs), "empty list")?
+  if first > 0 then Ok(first)
+  else Err("first element is not positive")
+}
+
+test "first positive found" = {
+  get_first_positive([3, -1, 5]) == Ok(3)
+}
+
+test "first positive empty" = {
+  get_first_positive([]) == Err("empty list")
+}
+
+test "first positive negative" = {
+  get_first_positive([-5, 3, 1]) == Err("first element is not positive")
+}
+
+// Result.map and Result.and_then for chaining
+fn double_if_positive(x: Int) -> Result<Int, String> =
+  if x > 0 then Ok(x * 2)
+  else Err("not positive")
+
+test "result map" = {
+  let r = Result.map(Ok(5), |x| x + 1)
+  r == Ok(6)
+}
+
+test "result and_then success" = {
+  let r = Result.and_then(Ok(5), double_if_positive)
+  r == Ok(10)
+}
+
+test "result and_then error" = {
+  let r = Result.and_then(Ok(-3), double_if_positive)
+  r == Err("not positive")
+}

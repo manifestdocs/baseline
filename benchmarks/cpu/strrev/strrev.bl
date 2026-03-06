@@ -4,11 +4,8 @@
 // Build a string, reverse it character by character, repeat N times
 // Tests: string allocation, character iteration, string building
 
-fn reverse_string(s: String) -> String = {
-  let chars = String.chars(s)
-  let reversed = List.reverse(chars)
-  String.join(reversed, "")
-}
+fn reverse_string(s: String) -> String =
+  String.reverse(s)
 
 fn build_string(n: Int, acc: String) -> String =
   if n <= 0 then acc

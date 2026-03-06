@@ -1,0 +1,25 @@
+// Sort Strings — sorting lists of strings in ascending and descending order.
+@prelude(script)
+
+fn to_str(n: Int) -> String = Int.to_string(n)
+
+fn main!() -> {Console} () = {
+  let fruits = ["banana", "apple", "cherry", "date", "elderberry"]
+
+  // Sort ascending (List.sort works on strings)
+  let ascending = List.sort(fruits)
+  let asc_str = String.join(ascending, ", ")
+
+  // Sort descending (sort then reverse)
+  let descending = List.sort(fruits) |> List.reverse
+  let desc_str = String.join(descending, ", ")
+
+  Console.println!("Sorted fruits:")
+  Console.println!("  ascending:  ${asc_str}")
+  Console.println!("  descending: ${desc_str}")
+
+  // Sort numbers too
+  let numbers = [42, 7, 15, 3, 99, 23]
+  let sorted_nums = List.sort(numbers) |> List.map(to_str) |> String.join(", ")
+  Console.println!("Sorted numbers: ${sorted_nums}")
+}

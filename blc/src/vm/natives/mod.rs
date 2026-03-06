@@ -79,7 +79,7 @@ const FLAG_SERVER_LISTEN: u8 = 0x04;
 /// Flag indicating the native has an owning variant for clone-on-write dispatch.
 const FLAG_OWNING: u8 = 0x08;
 
-/// Registry of native functions callable from bytecode via CallNative.
+/// Registry of native functions callable from JIT-compiled code via CallNative.
 pub struct NativeRegistry {
     entries: Vec<NativeEntry>,
     /// Name → index for O(1) lookup during compilation.
@@ -107,10 +107,16 @@ impl NativeRegistry {
         self.name_index.get(name).copied()
     }
 
+    #[inline(always)]
+    fn entry(&self, id: u16) -> Option<&NativeEntry> {
+        self.entries.get(id as usize)
+    }
+
     /// Call a native function by ID.
     pub fn call(&self, id: u16, args: &[NValue]) -> Result<NValue, NativeError> {
-        debug_assert!((id as usize) < self.entries.len(), "native call id {id} out of bounds");
-        let entry = unsafe { self.entries.get_unchecked(id as usize) };
+        let Some(entry) = self.entry(id) else {
+            return Err(NativeError(format!("unknown native id {}", id)));
+        };
         if let Some(arity) = entry.arity
             && args.len() != arity as usize
         {
@@ -127,36 +133,34 @@ impl NativeRegistry {
     /// Check if a function is a HOF — O(1) flag lookup.
     #[inline(always)]
     pub fn is_hof(&self, id: u16) -> bool {
-        debug_assert!((id as usize) < self.entries.len(), "is_hof id {id} out of bounds");
-        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_HOF != 0 }
+        self.entry(id).is_some_and(|entry| entry.flags & FLAG_HOF != 0)
     }
 
     /// Check if a function requires VM re-entrancy — O(1) flag lookup.
     #[inline(always)]
     pub fn is_server_listen(&self, id: u16) -> bool {
-        debug_assert!((id as usize) < self.entries.len(), "is_server_listen id {id} out of bounds");
-        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_SERVER_LISTEN != 0 }
+        self.entry(id)
+            .is_some_and(|entry| entry.flags & FLAG_SERVER_LISTEN != 0)
     }
 
     /// Check if a function is an async fiber primitive — O(1) flag lookup.
     #[inline(always)]
     pub fn is_async(&self, id: u16) -> bool {
-        debug_assert!((id as usize) < self.entries.len(), "is_async id {id} out of bounds");
-        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_ASYNC != 0 }
+        self.entry(id).is_some_and(|entry| entry.flags & FLAG_ASYNC != 0)
     }
 
     /// Check if a function has an owning (CoW) variant — O(1) flag lookup.
     #[inline(always)]
     pub fn is_owning(&self, id: u16) -> bool {
-        debug_assert!((id as usize) < self.entries.len(), "is_owning id {id} out of bounds");
-        unsafe { self.entries.get_unchecked(id as usize).flags & FLAG_OWNING != 0 }
+        self.entry(id).is_some_and(|entry| entry.flags & FLAG_OWNING != 0)
     }
 
     /// Call the owning variant of a native function by ID.
     /// The caller must drain the args off the stack into a Vec before calling.
     pub fn call_owning(&self, id: u16, args: Vec<NValue>) -> Result<NValue, NativeError> {
-        debug_assert!((id as usize) < self.entries.len(), "call_owning id {id} out of bounds");
-        let entry = unsafe { self.entries.get_unchecked(id as usize) };
+        let Some(entry) = self.entry(id) else {
+            return Err(NativeError(format!("unknown native id {}", id)));
+        };
         if let Some(arity) = entry.arity
             && args.len() != arity as usize
         {
@@ -167,14 +171,21 @@ impl NativeRegistry {
                 args.len()
             )));
         }
-        (entry.owning_func.expect("call_owning called on non-owning native"))(args)
+        match entry.owning_func {
+            Some(owning) => owning(args),
+            None => Err(NativeError(format!(
+                "{} has no owning dispatch variant",
+                entry.name
+            ))),
+        }
     }
 
     /// Get the function name by ID (for error messages).
     #[inline(always)]
     pub fn name(&self, id: u16) -> &str {
-        debug_assert!((id as usize) < self.entries.len(), "name id {id} out of bounds");
-        unsafe { self.entries.get_unchecked(id as usize).name }
+        self.entry(id)
+            .map(|entry| entry.name)
+            .unwrap_or("<invalid-native-id>")
     }
 
     fn register(&mut self, name: &'static str, func: SimpleFn) {
@@ -359,6 +370,7 @@ impl NativeRegistry {
         self.register("String.char_code", native_string_char_code);
 
         // -- String (additional) --
+        self.register("String.reverse", native_string_reverse);
         self.register("String.replace", native_string_replace);
 
         // -- String (regex) --
@@ -645,15 +657,15 @@ impl NativeRegistry {
         self.register("Map.get", native_map_get);
         self.register_owning("Map.remove", native_map_remove, native_map_remove_owning);
         self.register("Map.contains", native_map_contains);
-        self.register("Map.keys", native_map_keys);
-        self.register("Map.values", native_map_values);
+        self.register_owning("Map.keys", native_map_keys, native_map_keys_owning);
+        self.register_owning("Map.values", native_map_values, native_map_values_owning);
         self.register("Map.len", native_map_len);
         // Spec-aligned aliases
         self.register_owning("Map.set", native_map_insert, native_map_insert_owning);
         self.register("Map.has", native_map_contains);
         self.register("Map.size", native_map_len);
         self.register("Map.from_list", native_map_from_list);
-        self.register("Map.entries", native_map_entries);
+        self.register_owning("Map.entries", native_map_entries, native_map_entries_owning);
 
         // -- Set --
         self.register("Set.empty", native_set_empty);

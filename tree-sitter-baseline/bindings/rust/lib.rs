@@ -20,7 +20,7 @@ unsafe extern "C" {
 /// ```
 pub const LANGUAGE: LanguageFn = unsafe { LanguageFn::from_raw(tree_sitter_baseline) };
 
-/// Returns the syntax highlighting query for Rocket.
+/// Returns the syntax highlighting query for Baseline.
 pub const HIGHLIGHTS_QUERY: &str = include_str!("../../queries/highlights.scm");
 
 /// Returns the locals query for scope tracking.
@@ -35,6 +35,6 @@ mod tests {
         let mut parser = tree_sitter::Parser::new();
         parser
             .set_language(&LANGUAGE.into())
-            .expect("Error loading Rocket grammar");
+            .expect("Error loading Baseline grammar");
     }
 }

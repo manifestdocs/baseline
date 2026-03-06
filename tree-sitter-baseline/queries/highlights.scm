@@ -27,8 +27,8 @@
 ; ============================================================================
 
 (type_identifier) @type
-(type_params
-  (type_identifier) @type.parameter)
+(type_param
+  name: (type_identifier) @type.parameter)
 
 ; Generic types
 (generic_type
@@ -84,7 +84,7 @@
 
 ; Function parameters
 (param
-  name: (identifier) @variable.parameter)
+  pattern: (identifier) @variable.parameter)
 
 ; Return type arrow in function_def
 (function_def
@@ -133,7 +133,6 @@
   ">="
   "&&"
   "||"
-  "!"
   "|>"
   ".."
 ] @operator

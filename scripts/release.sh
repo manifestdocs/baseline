@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:?Usage: release.sh <version>  (e.g. 0.1.0)}"
-TARGET="aarch64-apple-darwin"
+VERSION="${1:?Usage: release.sh <version|tag> [target] [repo]  (e.g. 0.1.0)}"
+if [[ "$VERSION" == v* ]]; then
+  TAG="$VERSION"
+else
+  TAG="v${VERSION}"
+fi
+TARGET="${2:-aarch64-apple-darwin}"
 BINARY="blc"
-ARCHIVE="${BINARY}-v${VERSION}-${TARGET}.tar.gz"
-REPO="manifestdocs/baseline"
+ARCHIVE="${BINARY}-${TAG}-${TARGET}.tar.gz"
+REPO="${3:-baseline-lang/baseline}"
 
-echo "==> Building ${BINARY} v${VERSION} (${TARGET}, release)..."
+echo "==> Building ${BINARY} ${TAG} (${TARGET}, release)..."
 cargo build --release --target "${TARGET}"
 
 BINARY_PATH="target/${TARGET}/release/${BINARY}"
@@ -22,15 +27,15 @@ tar -czf "${ARCHIVE}" -C "target/${TARGET}/release" "${BINARY}"
 SHA256=$(shasum -a 256 "${ARCHIVE}" | awk '{print $1}')
 echo "==> SHA256: ${SHA256}"
 
-echo "==> Creating GitHub release v${VERSION}..."
-gh release create "v${VERSION}" "${ARCHIVE}" \
+echo "==> Creating GitHub release ${TAG}..."
+gh release create "${TAG}" "${ARCHIVE}" \
   --repo "${REPO}" \
-  --title "v${VERSION}" \
-  --notes "Baseline Language v${VERSION}" \
+  --title "${TAG}" \
+  --notes "Baseline Language ${TAG}" \
   --latest
 
 echo ""
-echo "Done! Release: https://github.com/${REPO}/releases/tag/v${VERSION}"
+echo "Done! Release: https://github.com/${REPO}/releases/tag/${TAG}"
 echo ""
 echo "SHA256 for Homebrew formula:"
 echo "  ${SHA256}"

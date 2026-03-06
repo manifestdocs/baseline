@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use super::{HeapObject, NValue, NativeError};
+use baseline_rt::nvalue::MapStore;
 
 pub(super) fn native_map_empty(_args: &[NValue]) -> Result<NValue, NativeError> {
-    Ok(NValue::map_from_hashmap(HashMap::new()))
+    Ok(NValue::map_from_hashmap(MapStore::default()))
 }
 
 pub(super) fn native_map_insert(args: &[NValue]) -> Result<NValue, NativeError> {
@@ -123,6 +122,25 @@ pub(super) fn native_map_keys(args: &[NValue]) -> Result<NValue, NativeError> {
     }
 }
 
+/// Owning CoW variant of Map.keys. When uniquely owned, moves keys without cloning.
+pub(super) fn native_map_keys_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let map_val = args.into_iter().next().unwrap();
+    match map_val.try_unwrap_heap() {
+        Ok(HeapObject::Map(entries)) => {
+            let keys: Vec<_> = entries.into_keys().collect();
+            Ok(NValue::list(keys))
+        }
+        Ok(_) => Err(NativeError("Map.keys: expected Map".into())),
+        Err(map_val) => match map_val.as_heap_ref() {
+            HeapObject::Map(entries) => {
+                let keys: Vec<_> = entries.keys().cloned().collect();
+                Ok(NValue::list(keys))
+            }
+            _ => Err(NativeError("Map.keys: expected Map".into())),
+        },
+    }
+}
+
 pub(super) fn native_map_values(args: &[NValue]) -> Result<NValue, NativeError> {
     let map_val = &args[0];
     match map_val.as_heap_ref() {
@@ -131,6 +149,25 @@ pub(super) fn native_map_values(args: &[NValue]) -> Result<NValue, NativeError> 
             Ok(NValue::list(vals))
         }
         _ => Err(NativeError("Map.values: expected Map".into())),
+    }
+}
+
+/// Owning CoW variant of Map.values. When uniquely owned, moves values without cloning.
+pub(super) fn native_map_values_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let map_val = args.into_iter().next().unwrap();
+    match map_val.try_unwrap_heap() {
+        Ok(HeapObject::Map(entries)) => {
+            let vals: Vec<_> = entries.into_values().collect();
+            Ok(NValue::list(vals))
+        }
+        Ok(_) => Err(NativeError("Map.values: expected Map".into())),
+        Err(map_val) => match map_val.as_heap_ref() {
+            HeapObject::Map(entries) => {
+                let vals: Vec<_> = entries.values().cloned().collect();
+                Ok(NValue::list(vals))
+            }
+            _ => Err(NativeError("Map.values: expected Map".into())),
+        },
     }
 }
 
@@ -155,10 +192,35 @@ pub(super) fn native_map_entries(args: &[NValue]) -> Result<NValue, NativeError>
     }
 }
 
+/// Owning CoW variant of Map.entries. When uniquely owned, moves pairs without cloning.
+pub(super) fn native_map_entries_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let map_val = args.into_iter().next().unwrap();
+    match map_val.try_unwrap_heap() {
+        Ok(HeapObject::Map(entries)) => {
+            let pairs: Vec<_> = entries
+                .into_iter()
+                .map(|(k, v)| NValue::tuple(vec![k, v]))
+                .collect();
+            Ok(NValue::list(pairs))
+        }
+        Ok(_) => Err(NativeError("Map.entries: expected Map".into())),
+        Err(map_val) => match map_val.as_heap_ref() {
+            HeapObject::Map(entries) => {
+                let pairs: Vec<_> = entries
+                    .iter()
+                    .map(|(k, v)| NValue::tuple(vec![k.clone(), v.clone()]))
+                    .collect();
+                Ok(NValue::list(pairs))
+            }
+            _ => Err(NativeError("Map.entries: expected Map".into())),
+        },
+    }
+}
+
 pub(super) fn native_map_from_list(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_list() {
         Some(items) => {
-            let mut entries = HashMap::new();
+            let mut entries = MapStore::with_capacity_and_hasher(items.len(), Default::default());
             for item in items {
                 if let Some(tuple) = item.as_tuple() {
                     if tuple.len() >= 2 {

@@ -8,7 +8,10 @@ test "basic addition" = 1 + 1 == 2
 
 (source_file
   (inline_test
-    (string_literal)
+    (string_literal
+      (string_start)
+      (string_content)
+      (string_end))
     (binary_expression
       (binary_expression
         (literal
@@ -30,21 +33,30 @@ test "booleans" = true == true
 
 (source_file
   (inline_test
-    (string_literal)
+    (string_literal
+      (string_start)
+      (string_content)
+      (string_end))
     (binary_expression
       (literal
         (integer_literal))
       (literal
         (integer_literal))))
   (inline_test
-    (string_literal)
+    (string_literal
+      (string_start)
+      (string_content)
+      (string_end))
     (binary_expression
       (literal
         (float_literal))
       (literal
         (float_literal))))
   (inline_test
-    (string_literal)
+    (string_literal
+      (string_start)
+      (string_content)
+      (string_end))
     (binary_expression
       (literal
         (boolean_literal))
@@ -61,12 +73,21 @@ test "strings" = "hello" == "hello"
 
 (source_file
   (inline_test
-    (string_literal)
+    (string_literal
+      (string_start)
+      (string_content)
+      (string_end))
     (binary_expression
       (literal
-        (string_literal))
+        (string_literal
+          (string_start)
+          (string_content)
+          (string_end)))
       (literal
-        (string_literal)))))
+        (string_literal
+          (string_start)
+          (string_content)
+          (string_end))))))
 
 ================================================================================
 Inline test with function call
@@ -78,7 +99,10 @@ test "add works" = add(1, 2) == 3
 
 (source_file
   (inline_test
-    (string_literal)
+    (string_literal
+      (string_start)
+      (string_content)
+      (string_end))
     (binary_expression
       (call_expression
         (identifier)

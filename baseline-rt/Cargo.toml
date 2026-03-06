@@ -14,6 +14,7 @@ non-atomic-rc = []
 
 [dependencies]
 libc = "0.2"
+rustc-hash = "2"
 
 [lib]
 crate-type = ["lib", "staticlib"]

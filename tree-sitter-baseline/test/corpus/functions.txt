@@ -2,105 +2,99 @@
 Simple function definition
 ================================================================================
 
-add : Int -> Int
-add = |a| a + 1
+fn add(a: Int) -> Int = a + 1
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (binary_expression
       (identifier)
-      (binary_expression
-        (identifier)
-        (literal
-          (integer_literal))))))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 Function with tuple type signature
 ================================================================================
 
-add : (Int, Int) -> Int
-add = |a, b| a + b
+fn add(a: Int, b: Int) -> Int = a + b
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (tuple_type
-        (type_identifier)
-        (type_identifier))
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier))
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (binary_expression
       (identifier)
-      (identifier)
-      (binary_expression
-        (identifier)
-        (identifier)))))
+      (identifier))))
 
 ================================================================================
 Function with string interpolation
 ================================================================================
 
-greet : String -> String
-greet = |name| "Hello, ${name}"
+fn greet(name: String) -> String = "Hello, ${name}"
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (literal
-        (string_literal
-          (interpolation
-            (identifier)))))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (literal
+      (string_literal
+        (string_start)
+        (string_content)
+        (interpolation
+          (identifier))
+        (string_end)))))
 
 ================================================================================
 Effectful function
 ================================================================================
 
-fetch! : String -> {Http} String
-fetch! = |url| Http.get!(url)
+fn fetch!(url: String) -> {Http} String = Http.get!(url)
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (effect_identifier)
-    signature: (type_signature
-      (type_identifier)
-      (effect_set
-        (type_identifier))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    effects: (effect_set
       (type_identifier))
-    name: (effect_identifier)
-    body: (lambda
-      (identifier)
-      (call_expression
-        (field_expression
-          (type_identifier)
-          (effect_identifier))
-        (identifier)))))
+    return_type: (type_identifier)
+    body: (call_expression
+      (field_expression
+        (type_identifier)
+        (effect_identifier))
+      (identifier))))
 
 ================================================================================
 Function with block body
 ================================================================================
 
-process : String -> String
-process = |input| {
+fn process(input: String) -> String = {
   let validated = validate(input);
   transform(validated)
 }
@@ -110,42 +104,42 @@ process = |input| {
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (block
-        (let_binding
-          (identifier)
-          (call_expression
-            (identifier)
-            (identifier)))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (block
+      (let_binding
+        (identifier)
         (call_expression
           (identifier)
-          (identifier))))))
+          (identifier)))
+      (call_expression
+        (identifier)
+        (identifier)))))
 
 ================================================================================
 Export function
 ================================================================================
 
-export greet : String -> String
-greet = |name| "Hello"
+export fn greet(name: String) -> String = "Hello"
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (literal
-        (string_literal)))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (literal
+      (string_literal
+        (string_start)
+        (string_content)
+        (string_end)))))
 
 ================================================================================
 Function with @test section

@@ -1,7 +1,7 @@
 //! Cranelift JIT compiler for Baseline IR.
 //!
 //! Compiles `IrFunction`s to native machine code using NaN-boxed NValue
-//! representation throughout — the same encoding used by the bytecode VM.
+//! representation throughout — the same encoding used by the runtime.
 //!
 //! All Expr variants are supported. Heap-allocating operations (strings,
 //! lists, records, enums, etc.) use `extern "C"` runtime helper functions
@@ -81,8 +81,10 @@ pub struct JitProgram {
     /// Owns the compiled code pages (leaked on drop by Cranelift's design —
     /// see cranelift-jit Memory::drop which calls mem::forget on allocations).
     _module: JITModule,
-    /// function index → native fn pointer (None = fell back to interpreter).
+    /// function index → native fn pointer (None = not JIT-compiled).
     dispatch: Vec<Option<*const u8>>,
+    /// Cached function pointer table used for indirect calls.
+    fn_table: Vec<*const u8>,
     /// Entry function index.
     pub entry: usize,
     /// Whether the entry function uses unboxed codegen (returns raw i64).
@@ -141,13 +143,8 @@ impl JitProgram {
     pub fn run_entry_nvalue(&self) -> Option<NValue> {
         let func = self.entry_fn()?;
 
-        // Set up the function pointer table for indirect calls
-        let fn_table: Vec<*const u8> = self
-            .dispatch
-            .iter()
-            .map(|opt| opt.unwrap_or(std::ptr::null()))
-            .collect();
-        helpers::set_fn_table(fn_table);
+        // Set up the function pointer table for indirect calls.
+        helpers::set_fn_table(&self.fn_table);
         helpers::set_trampolines(self.trampolines);
 
         // Enable RC mode if this program was compiled with RC.
@@ -254,6 +251,7 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("jit_enum_tag_id", jit_enum_tag_id as *const u8),
     ("jit_enum_payload", jit_enum_payload as *const u8),
     ("jit_enum_field_get", jit_enum_field_get as *const u8),
+    ("jit_enum_fields_get_all", jit_enum_fields_get_all as *const u8),
     ("jit_enum_field_drop", jit_enum_field_drop as *const u8),
     ("jit_enum_field_set", jit_enum_field_set as *const u8),
     ("jit_tuple_get", jit_tuple_get as *const u8),
@@ -270,6 +268,7 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("jit_function_fn_ptr", jit_function_fn_ptr as *const u8),
     ("jit_list_concat", jit_list_concat as *const u8),
     ("jit_string_concat", jit_string_concat as *const u8),
+    ("jit_string_reverse", jit_string_reverse as *const u8),
     // AOT-specific helpers
     ("jit_make_string", jit_make_string as *const u8),
     ("jit_print_result", jit_print_result as *const u8),
@@ -642,6 +641,10 @@ fn compile_inner(
 
     Ok(JitProgram {
         _module: jit_module,
+        fn_table: dispatch
+            .iter()
+            .map(|opt| opt.unwrap_or(std::ptr::null()))
+            .collect(),
         dispatch,
         entry: module.entry,
         entry_unboxed: unboxed_flags.get(module.entry).copied().unwrap_or(false),
@@ -837,6 +840,12 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
+        "jit_enum_fields_get_all" => {
+            // (subject_bits, out_ptr, count) -> void
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+        }
         "jit_enum_field_drop" => {
             // (enum_bits, field_idx) -> void
             sig.params.push(AbiParam::new(types::I64));
@@ -849,8 +858,8 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }
-        "jit_enum_tag_id" | "jit_enum_payload" | "jit_list_length" | "jit_is_err"
-        | "jit_is_none" | "jit_int_from_i64" | "jit_int_neg" => {
+        "jit_string_reverse" | "jit_enum_tag_id" | "jit_enum_payload" | "jit_list_length"
+        | "jit_is_err" | "jit_is_none" | "jit_int_from_i64" | "jit_int_neg" => {
             // (val) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));

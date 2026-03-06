@@ -100,34 +100,31 @@ effect Storage {
 Effectful function with effect set
 ================================================================================
 
-fetch! : String -> {Http} String
-fetch! = |url| Http.get!(url)
+fn fetch!(url: String) -> {Http} String = Http.get!(url)
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (effect_identifier)
-    signature: (type_signature
-      (type_identifier)
-      (effect_set
-        (type_identifier))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    effects: (effect_set
       (type_identifier))
-    name: (effect_identifier)
-    body: (lambda
-      (identifier)
-      (call_expression
-        (field_expression
-          (type_identifier)
-          (effect_identifier))
-        (identifier)))))
+    return_type: (type_identifier)
+    body: (call_expression
+      (field_expression
+        (type_identifier)
+        (effect_identifier))
+      (identifier))))
 
 ================================================================================
 Multi-effect function with block
 ================================================================================
 
-log! : String -> {Log, Console} String
-log! = |msg| {
+fn log!(msg: String) -> {Log, Console} String = {
   Log.info!(msg);
   Console.print!(msg)
 }
@@ -137,26 +134,25 @@ log! = |msg| {
 (source_file
   (function_def
     name: (effect_identifier)
-    signature: (type_signature
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    effects: (effect_set
       (type_identifier)
-      (effect_set
-        (type_identifier)
-        (type_identifier))
       (type_identifier))
-    name: (effect_identifier)
-    body: (lambda
-      (identifier)
-      (block
-        (call_expression
-          (field_expression
-            (type_identifier)
-            (effect_identifier))
-          (identifier))
-        (call_expression
-          (field_expression
-            (type_identifier)
-            (effect_identifier))
-          (identifier))))))
+    return_type: (type_identifier)
+    body: (block
+      (call_expression
+        (field_expression
+          (type_identifier)
+          (effect_identifier))
+        (identifier))
+      (call_expression
+        (field_expression
+          (type_identifier)
+          (effect_identifier))
+        (identifier)))))
 
 ================================================================================
 Export effect
@@ -181,24 +177,22 @@ export effect MyEffect {
 Calling effectful operations
 ================================================================================
 
-main! : String -> {Console} String
-main! = |s| Console.print!(s)
+fn main!(s: String) -> {Console} String = Console.print!(s)
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (effect_identifier)
-    signature: (type_signature
-      (type_identifier)
-      (effect_set
-        (type_identifier))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    effects: (effect_set
       (type_identifier))
-    name: (effect_identifier)
-    body: (lambda
-      (identifier)
-      (call_expression
-        (field_expression
-          (type_identifier)
-          (effect_identifier))
-        (identifier)))))
+    return_type: (type_identifier)
+    body: (call_expression
+      (field_expression
+        (type_identifier)
+        (effect_identifier))
+      (identifier))))

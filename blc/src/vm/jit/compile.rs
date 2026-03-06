@@ -1328,6 +1328,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     format!("{}.{}", mod_name, method)
                 };
 
+                // Direct JIT helper for String.reverse (bypass native dispatch)
+                if qualified == "String.reverse" && args.len() == 1 {
+                    let arg = self.compile_expr(&args[0])?;
+                    return Ok(self.call_helper("jit_string_reverse", &[arg]));
+                }
+
                 // AOT path: direct call to extern "C" symbol in libbaseline_rt
                 if let Some(native_ids) = self.aot_native_ids {
                     let func_id = native_ids

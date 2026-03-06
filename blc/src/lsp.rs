@@ -6,8 +6,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Mutex;
 
+use tokio::sync::{Mutex, RwLock};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::*;
 use tower_lsp::{Client, LanguageServer, LspService, Server};
@@ -49,10 +49,10 @@ struct SymbolInfo {
 /// The LSP backend holding a client handle and per-file state.
 pub struct BaselineLanguageServer {
     client: Client,
-    files: Mutex<HashMap<Url, FileState>>,
-    workspace_root: Mutex<Option<PathBuf>>,
+    files: RwLock<HashMap<Url, FileState>>,
+    workspace_root: RwLock<Option<PathBuf>>,
     /// Reverse dependency map: file_path -> set of URIs that import it.
-    reverse_deps: Mutex<HashMap<PathBuf, HashSet<Url>>>,
+    reverse_deps: RwLock<HashMap<PathBuf, HashSet<Url>>>,
     /// Guard against re-entrant analysis during dependent re-analysis.
     analyzing: Mutex<HashSet<Url>>,
 }
@@ -61,17 +61,17 @@ impl BaselineLanguageServer {
     pub fn new(client: Client) -> Self {
         Self {
             client,
-            files: Mutex::new(HashMap::new()),
-            workspace_root: Mutex::new(None),
-            reverse_deps: Mutex::new(HashMap::new()),
+            files: RwLock::new(HashMap::new()),
+            workspace_root: RwLock::new(None),
+            reverse_deps: RwLock::new(HashMap::new()),
             analyzing: Mutex::new(HashSet::new()),
         }
     }
 
     /// Derive base directory for import resolution.
-    fn base_dir_for_uri(&self, uri: &Url) -> Option<PathBuf> {
+    async fn base_dir_for_uri(&self, uri: &Url) -> Option<PathBuf> {
         // Prefer workspace root, fall back to file's parent directory
-        let ws = self.workspace_root.lock().unwrap();
+        let ws = self.workspace_root.read().await;
         if let Some(root) = ws.as_ref() {
             return Some(root.clone());
         }
@@ -118,7 +118,7 @@ impl BaselineLanguageServer {
         // Re-analyze dependents (one level only — the analyzing guard prevents cycles)
         let file_path = uri.to_file_path().ok();
         if let Some(path) = file_path {
-            let dependents = self.collect_dependents(&path);
+            let dependents = self.collect_dependents(&path).await;
             for (dep_uri, dep_source) in dependents {
                 self.analyze_file(dep_uri, dep_source).await;
             }
@@ -129,7 +129,7 @@ impl BaselineLanguageServer {
     async fn analyze_file(&self, uri: Url, text: String) {
         // Guard against re-entrant analysis
         {
-            let mut analyzing = self.analyzing.lock().unwrap();
+            let mut analyzing = self.analyzing.lock().await;
             if analyzing.contains(&uri) {
                 return;
             }
@@ -161,7 +161,7 @@ impl BaselineLanguageServer {
         let mut imports = Vec::new();
         let mut module_methods = HashMap::new();
 
-        if let Some(base_dir) = self.base_dir_for_uri(&uri) {
+        if let Some(base_dir) = self.base_dir_for_uri(&uri).await {
             let file_name = uri.path().to_string();
             let loader = ModuleLoader::with_base_dir(base_dir);
 
@@ -220,7 +220,7 @@ impl BaselineLanguageServer {
 
         // Update reverse dependency map
         {
-            let mut rev_deps = self.reverse_deps.lock().unwrap();
+            let mut rev_deps = self.reverse_deps.write().await;
             // Remove old reverse deps for this URI
             for deps in rev_deps.values_mut() {
                 deps.remove(&uri);
@@ -236,7 +236,7 @@ impl BaselineLanguageServer {
 
         // Store file state
         {
-            let mut files = self.files.lock().unwrap();
+            let mut files = self.files.write().await;
             files.insert(
                 uri.clone(),
                 FileState {
@@ -250,19 +250,19 @@ impl BaselineLanguageServer {
 
         // Remove from analyzing set
         {
-            let mut analyzing = self.analyzing.lock().unwrap();
+            let mut analyzing = self.analyzing.lock().await;
             analyzing.remove(&uri);
         }
     }
 
     /// Collect files that import a changed module (for re-analysis).
-    fn collect_dependents(&self, changed_path: &PathBuf) -> Vec<(Url, String)> {
+    async fn collect_dependents(&self, changed_path: &PathBuf) -> Vec<(Url, String)> {
         let canonical = changed_path
             .canonicalize()
             .unwrap_or_else(|_| changed_path.clone());
 
-        let rev_deps = self.reverse_deps.lock().unwrap();
-        let files = self.files.lock().unwrap();
+        let rev_deps = self.reverse_deps.read().await;
+        let files = self.files.read().await;
 
         let mut deps = Vec::new();
         // Check both canonical and original path
@@ -296,7 +296,7 @@ impl LanguageServer for BaselineLanguageServer {
             });
 
         if let Some(root) = root {
-            *self.workspace_root.lock().unwrap() = Some(root);
+            *self.workspace_root.write().await = Some(root);
         }
 
         Ok(InitializeResult {
@@ -345,7 +345,7 @@ impl LanguageServer for BaselineLanguageServer {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
 
-        let files = self.files.lock().unwrap();
+        let files = self.files.read().await;
         let Some(state) = files.get(&uri) else {
             return Ok(None);
         };
@@ -398,7 +398,7 @@ impl LanguageServer for BaselineLanguageServer {
         let uri = params.text_document_position_params.text_document.uri;
         let pos = params.text_document_position_params.position;
 
-        let files = self.files.lock().unwrap();
+        let files = self.files.read().await;
         let Some(state) = files.get(&uri) else {
             return Ok(None);
         };
@@ -476,7 +476,7 @@ impl LanguageServer for BaselineLanguageServer {
         let uri = params.text_document_position.text_document.uri;
         let pos = params.text_document_position.position;
 
-        let files = self.files.lock().unwrap();
+        let files = self.files.read().await;
         let Some(state) = files.get(&uri) else {
             return Ok(None);
         };
@@ -529,7 +529,7 @@ impl LanguageServer for BaselineLanguageServer {
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
         let query = params.query.to_lowercase();
-        let files = self.files.lock().unwrap();
+        let files = self.files.read().await;
 
         let mut results = Vec::new();
         for (file_uri, state) in files.iter() {

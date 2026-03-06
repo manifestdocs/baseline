@@ -2,296 +2,277 @@
 Binary expression - addition
 ================================================================================
 
-bin_add : Int -> Int
-bin_add = |a| a + 1
+fn bin_add(a: Int) -> Int = a + 1
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (binary_expression
       (identifier)
-      (binary_expression
-        (identifier)
-        (literal
-          (integer_literal))))))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 Binary expression - comparison
 ================================================================================
 
-eq : Int -> Boolean
-eq = |a| a == 1
+fn eq(a: Int) -> Boolean = a == 1
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (binary_expression
       (identifier)
-      (binary_expression
-        (identifier)
-        (literal
-          (integer_literal))))))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 Binary expression - logical and
 ================================================================================
 
-both : Int -> Int
-both = |n| n && m
+fn both(n: Int) -> Int = n && m
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (binary_expression
       (identifier)
-      (binary_expression
-        (identifier)
-        (identifier)))))
+      (identifier))))
 
 ================================================================================
 Binary expression - logical or
 ================================================================================
 
-either : Int -> Int
-either = |n| n || m
+fn either(n: Int) -> Int = n || m
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (binary_expression
       (identifier)
-      (binary_expression
-        (identifier)
-        (identifier)))))
+      (identifier))))
 
 ================================================================================
 Unary expression - negation
 ================================================================================
 
-neg : Int -> Int
-neg = |x| -x
+fn neg(x: Int) -> Int = -x
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (unary_expression
-        (identifier)))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (unary_expression
+      (identifier))))
 
 ================================================================================
 Unary expression - logical not
 ================================================================================
 
-inv : Int -> Int
-inv = |n| !n
+fn inv(n: Int) -> Int = not n
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (unary_expression
-        (identifier)))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (unary_expression
+      (identifier))))
 
 ================================================================================
 Pipe expression
 ================================================================================
 
-piped : Int -> Int
-piped = |x| x |> f |> g
+fn piped(x: Int) -> Int = x |> f |> g
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (pipe_expression
       (pipe_expression
-        (pipe_expression
-          (identifier)
-          (identifier))
-        (identifier)))))
+        (identifier)
+        (identifier))
+      (identifier))))
 
 ================================================================================
 Field access
 ================================================================================
 
-get_name : String -> String
-get_name = |user| user.name
+fn get_name(user: String) -> String = user.name
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (field_expression
       (identifier)
-      (field_expression
-        (identifier)
-        (identifier)))))
+      (identifier))))
 
 ================================================================================
 Nested field access
 ================================================================================
 
-deep : Int -> Int
-deep = |n| response.body.data
+fn deep(n: Int) -> Int = response.body.data
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (field_expression
       (field_expression
-        (field_expression
-          (identifier)
-          (identifier))
-        (identifier)))))
+        (identifier)
+        (identifier))
+      (identifier))))
 
 ================================================================================
 Call expression
 ================================================================================
 
-app : Int -> Int
-app = |x| f(x)
+fn app(x: Int) -> Int = f(x)
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (call_expression
       (identifier)
-      (call_expression
-        (identifier)
-        (identifier)))))
+      (identifier))))
 
 ================================================================================
 Call expression with multiple arguments
 ================================================================================
 
-app : Int -> Int
-app = |n| add(1, 2)
+fn app(n: Int) -> Int = add(1, 2)
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (call_expression
       (identifier)
-      (call_expression
-        (identifier)
-        (literal
-          (integer_literal))
-        (literal
-          (integer_literal))))))
+      (literal
+        (integer_literal))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 If expression
 ================================================================================
 
-choose : Int -> Int
-choose = |a| if a > 0 then a else 0
+fn choose(a: Int) -> Int = if a > 0 then a else 0
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (if_expression
-        (binary_expression
-          (identifier)
-          (literal
-            (integer_literal)))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (if_expression
+      (binary_expression
         (identifier)
         (literal
-          (integer_literal))))))
+          (integer_literal)))
+      (identifier)
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 Chained if expression
 ================================================================================
 
-chained : Int -> Int
-chained = |a| if a > 0 then 1 else if a < 0 then 2 else 0
+fn chained(a: Int) -> Int = if a > 0 then 1 else if a < 0 then 2 else 0
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (if_expression
+      (binary_expression
+        (identifier)
+        (literal
+          (integer_literal)))
+      (literal
+        (integer_literal))
       (if_expression
         (binary_expression
           (identifier)
@@ -299,22 +280,14 @@ chained = |a| if a > 0 then 1 else if a < 0 then 2 else 0
             (integer_literal)))
         (literal
           (integer_literal))
-        (if_expression
-          (binary_expression
-            (identifier)
-            (literal
-              (integer_literal)))
-          (literal
-            (integer_literal))
-          (literal
-            (integer_literal)))))))
+        (literal
+          (integer_literal))))))
 
 ================================================================================
 Match expression with constructor patterns
 ================================================================================
 
-unwrap : Int -> Int
-unwrap = |x| match x
+fn unwrap(x: Int) -> Int = match x
   Some(v) -> v
   None -> 0
 
@@ -323,30 +296,28 @@ unwrap = |x| match x
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (match_expression
       (identifier)
-      (match_expression
-        (identifier)
-        (match_arm
-          (constructor_pattern
-            (type_identifier)
-            (identifier))
-          (identifier))
-        (match_arm
+      (match_arm
+        (constructor_pattern
           (type_identifier)
-          (literal
-            (integer_literal)))))))
+          (identifier))
+        (identifier))
+      (match_arm
+        (type_identifier)
+        (literal
+          (integer_literal))))))
 
 ================================================================================
 Match expression with literal patterns
 ================================================================================
 
-describe : Int -> String
-describe = |n| match n
+fn describe(n: Int) -> String = match n
   1 -> "one"
   2 -> "two"
   _ -> "other"
@@ -356,35 +327,42 @@ describe = |n| match n
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (match_expression
       (identifier)
-      (match_expression
-        (identifier)
-        (match_arm
-          (literal
-            (integer_literal))
-          (literal
-            (string_literal)))
-        (match_arm
-          (literal
-            (integer_literal))
-          (literal
-            (string_literal)))
-        (match_arm
-          (wildcard_pattern)
-          (literal
-            (string_literal)))))))
+      (match_arm
+        (literal
+          (integer_literal))
+        (literal
+          (string_literal
+            (string_start)
+            (string_content)
+            (string_end))))
+      (match_arm
+        (literal
+          (integer_literal))
+        (literal
+          (string_literal
+            (string_start)
+            (string_content)
+            (string_end))))
+      (match_arm
+        (wildcard_pattern)
+        (literal
+          (string_literal
+            (string_start)
+            (string_content)
+            (string_end)))))))
 
 ================================================================================
 Match expression with tuple pattern
 ================================================================================
 
-sum_pair : Int -> Int
-sum_pair = |n| match n
+fn sum_pair(n: Int) -> Int = match n
   (a, b) -> a + b
   _ -> 0
 
@@ -393,158 +371,149 @@ sum_pair = |n| match n
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (match_expression
       (identifier)
-      (match_expression
-        (identifier)
-        (match_arm
-          (tuple_pattern
-            (identifier)
-            (identifier))
-          (binary_expression
-            (identifier)
-            (identifier)))
-        (match_arm
-          (wildcard_pattern)
-          (literal
-            (integer_literal)))))))
+      (match_arm
+        (tuple_pattern
+          (identifier)
+          (identifier))
+        (binary_expression
+          (identifier)
+          (identifier)))
+      (match_arm
+        (wildcard_pattern)
+        (literal
+          (integer_literal))))))
 
 ================================================================================
 List expression
 ================================================================================
 
-nums : Int -> List<Int>
-nums = |n| [1, 2, 3]
+fn nums(n: Int) -> List<Int> = [1, 2, 3]
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (generic_type
       (type_identifier)
-      (generic_type
-        (type_identifier)
-        (type_identifier)))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (list_expression
-        (literal
-          (integer_literal))
-        (literal
-          (integer_literal))
-        (literal
-          (integer_literal))))))
+      (type_identifier))
+    body: (list_expression
+      (literal
+        (integer_literal))
+      (literal
+        (integer_literal))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 Empty list expression
 ================================================================================
 
-empty : Int -> Int
-empty = |n| []
+fn empty(n: Int) -> Int = []
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (list_expression))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (list_expression)))
 
 ================================================================================
 Record expression
 ================================================================================
 
-rec : Int -> Int
-rec = |n| { name: "Alice", age: 30 }
+fn rec(n: Int) -> Int = { name: "Alice", age: 30 }
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (record_expression
-        (record_field_init
-          (identifier)
-          (literal
-            (string_literal)))
-        (record_field_init
-          (identifier)
-          (literal
-            (integer_literal)))))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (record_expression
+      (record_field_init
+        (identifier)
+        (literal
+          (string_literal
+            (string_start)
+            (string_content)
+            (string_end))))
+      (record_field_init
+        (identifier)
+        (literal
+          (integer_literal))))))
 
 ================================================================================
 Struct expression
 ================================================================================
 
-make_user : String -> String
-make_user = |n| User { name: n }
+fn make_user(n: String) -> String = User { name: n }
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (struct_expression
       (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (struct_expression
-        (type_identifier)
-        (record_field_init
-          (identifier)
-          (identifier))))))
+      (record_field_init
+        (identifier)
+        (identifier)))))
 
 ================================================================================
 Tuple expression
 ================================================================================
 
-mk : Int -> Int
-mk = |n| (1, 2, 3)
+fn mk(n: Int) -> Int = (1, 2, 3)
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (tuple_expression
-        (literal
-          (integer_literal))
-        (literal
-          (integer_literal))
-        (literal
-          (integer_literal))))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (tuple_expression
+      (literal
+        (integer_literal))
+      (literal
+        (integer_literal))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 Block expression
 ================================================================================
 
-compute : Int -> Int
-compute = |n| {
+fn compute(n: Int) -> Int = {
   let x = 10;
   let y = 20;
   x + y
@@ -555,31 +524,29 @@ compute = |n| {
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (block
-        (let_binding
-          (identifier)
-          (literal
-            (integer_literal)))
-        (let_binding
-          (identifier)
-          (literal
-            (integer_literal)))
-        (binary_expression
-          (identifier)
-          (identifier))))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (block
+      (let_binding
+        (identifier)
+        (literal
+          (integer_literal)))
+      (let_binding
+        (identifier)
+        (literal
+          (integer_literal)))
+      (binary_expression
+        (identifier)
+        (identifier)))))
 
 ================================================================================
 Let binding with type annotation
 ================================================================================
 
-typed : Int -> Int
-typed = |n| {
+fn typed(n: Int) -> Int = {
   let x : Int = 10;
   x
 }
@@ -589,93 +556,86 @@ typed = |n| {
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (block
-        (let_binding
-          (identifier)
-          type: (type_annotation
-            (type_identifier))
-          (literal
-            (integer_literal)))
-        (identifier)))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (block
+      (let_binding
+        (identifier)
+        type: (type_annotation
+          (type_identifier))
+        (literal
+          (integer_literal)))
+      (identifier))))
 
 ================================================================================
 Range expression
 ================================================================================
 
-rng : Int -> Int
-rng = |n| 1..10
+fn rng(n: Int) -> Int = 1..10
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (range_expression
-        (literal
-          (integer_literal))
-        (literal
-          (integer_literal))))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (range_expression
+      (literal
+        (integer_literal))
+      (literal
+        (integer_literal)))))
 
 ================================================================================
 For expression
 ================================================================================
 
-each : Int -> Int
-each = |n| for x in [1, 2, 3] do x + 1
+fn each(n: Int) -> Int = for x in [1, 2, 3] do x + 1
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (for_expression
       (identifier)
-      (for_expression
+      (list_expression
+        (literal
+          (integer_literal))
+        (literal
+          (integer_literal))
+        (literal
+          (integer_literal)))
+      (binary_expression
         (identifier)
-        (list_expression
-          (literal
-            (integer_literal))
-          (literal
-            (integer_literal))
-          (literal
-            (integer_literal)))
-        (binary_expression
-          (identifier)
-          (literal
-            (integer_literal)))))))
+        (literal
+          (integer_literal))))))
 
 ================================================================================
 Unit expression
 ================================================================================
 
-unit : Int -> Int
-unit = |x| ()
+fn unit(x: Int) -> Int = ()
 
 --------------------------------------------------------------------------------
 
 (source_file
   (function_def
     name: (identifier)
-    signature: (type_signature
-      (type_identifier)
-      (type_identifier))
-    name: (identifier)
-    body: (lambda
-      (identifier)
-      (tuple_expression))))
+    params: (param_list
+      (param
+        pattern: (identifier)
+        type: (type_identifier)))
+    return_type: (type_identifier)
+    body: (tuple_expression)))

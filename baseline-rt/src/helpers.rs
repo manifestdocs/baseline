@@ -109,8 +109,16 @@ thread_local! {
     static JIT_FN_TABLE: RefCell<Option<Vec<*const u8>>> = const { RefCell::new(None) };
 }
 
-pub fn set_fn_table(table: Vec<*const u8>) {
-    JIT_FN_TABLE.with(|t| *t.borrow_mut() = Some(table));
+pub fn set_fn_table(table: &[*const u8]) {
+    JIT_FN_TABLE.with(|t| {
+        let mut guard = t.borrow_mut();
+        if let Some(existing) = guard.as_mut() {
+            existing.clear();
+            existing.extend_from_slice(table);
+        } else {
+            *guard = Some(table.to_vec());
+        }
+    });
 }
 
 pub fn clear_fn_table() {
@@ -140,7 +148,17 @@ pub fn clear_trampolines() {
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_concat(parts: *const u64, count: u64) -> u64 {
     let slice = unsafe { std::slice::from_raw_parts(parts, count as usize) };
-    let mut result = String::new();
+    // Estimate capacity from string lengths to avoid repeated reallocs
+    let mut cap = 0usize;
+    for &bits in slice {
+        let nv = unsafe { NValue::borrow_from_raw(bits) };
+        if let Some(s) = nv.as_string() {
+            cap += s.len();
+        } else {
+            cap += 20; // conservative estimate for non-string values
+        }
+    }
+    let mut result = String::with_capacity(cap);
     for &bits in slice {
         let nv = unsafe { jit_take_arg(bits) };
         result.push_str(&nv.to_string());
@@ -214,6 +232,40 @@ pub extern "C" fn jit_enum_field_get(subject_bits: u64, index: u64) -> u64 {
             }
         }
         _ => NV_UNIT,
+    }
+}
+
+/// Extract all fields from a flat enum payload into a caller-provided buffer.
+/// Writes `count` owned u64 values to `out_ptr`. More efficient than
+/// calling `jit_enum_field_get` per field (single borrow_from_raw + match).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_enum_fields_get_all(subject_bits: u64, out_ptr: *mut u64, count: u64) {
+    let n = count as usize;
+    let subject = unsafe { NValue::borrow_from_raw(subject_bits) };
+    if !subject.is_heap() {
+        let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, n) };
+        for slot in out.iter_mut() {
+            *slot = NV_UNIT;
+        }
+        return;
+    }
+    match subject.as_heap_ref() {
+        HeapObject::Enum { payload, .. } => {
+            let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, n) };
+            for (i, slot) in out.iter_mut().enumerate() {
+                *slot = if i < payload.len() {
+                    jit_own(payload[i].clone())
+                } else {
+                    NV_UNIT
+                };
+            }
+        }
+        _ => {
+            let out = unsafe { std::slice::from_raw_parts_mut(out_ptr, n) };
+            for slot in out.iter_mut() {
+                *slot = NV_UNIT;
+            }
+        }
     }
 }
 
@@ -870,6 +922,22 @@ pub extern "C" fn jit_string_concat(a_bits: u64, b_bits: u64) -> u64 {
     jit_own(result)
 }
 
+/// Reverse a string (single allocation, no intermediate list).
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_string_reverse(s_bits: u64) -> u64 {
+    let s = unsafe { jit_take_arg(s_bits) };
+    match s.as_string() {
+        Some(st) => {
+            let reversed: String = st.chars().rev().collect();
+            jit_own(NValue::string(reversed.into()))
+        }
+        None => {
+            jit_set_error("String.reverse: expected String".to_string());
+            NV_UNIT
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // AOT-specific helpers
 // ---------------------------------------------------------------------------
@@ -1021,14 +1089,22 @@ pub extern "C" fn jit_is_truthy(val_bits: u64) -> u64 {
 
 /// Extract a full i64 from a NaN-boxed value (handles both inline int and BigInt).
 #[inline(always)]
-fn nv_as_any_int(bits: u64) -> i64 {
+fn nv_as_any_int(bits: u64) -> Option<i64> {
     if bits & TAG_MASK == TAG_INT {
         // Inline int: sign-extend from 48 bits
-        ((bits << 16) as i64) >> 16
-    } else {
-        // Must be BigInt on the heap
+        Some(((bits << 16) as i64) >> 16)
+    } else if bits & TAG_MASK == TAG_HEAP {
         let nv = unsafe { NValue::borrow_from_raw(bits) };
-        nv.as_any_int()
+        match nv.as_heap_ref() {
+            HeapObject::BigInt(i) => Some(*i),
+            _ => {
+                jit_set_error("Type error: expected Int".to_string());
+                None
+            }
+        }
+    } else {
+        jit_set_error("Type error: expected Int".to_string());
+        None
     }
 }
 
@@ -1043,7 +1119,10 @@ pub extern "C" fn jit_int_from_i64(val: i64) -> u64 {
 /// Add two NaN-boxed integers (handles BigInt inputs and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_add(a: u64, b: u64) -> u64 {
-    match nv_as_any_int(a).checked_add(nv_as_any_int(b)) {
+    let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
+        return NV_UNIT;
+    };
+    match a.checked_add(b) {
         Some(result) => jit_own(NValue::int(result)),
         None => {
             jit_set_error("Integer overflow in addition".to_string());
@@ -1055,7 +1134,10 @@ pub extern "C" fn jit_int_add(a: u64, b: u64) -> u64 {
 /// Subtract two NaN-boxed integers (handles BigInt inputs and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_sub(a: u64, b: u64) -> u64 {
-    match nv_as_any_int(a).checked_sub(nv_as_any_int(b)) {
+    let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
+        return NV_UNIT;
+    };
+    match a.checked_sub(b) {
         Some(result) => jit_own(NValue::int(result)),
         None => {
             jit_set_error("Integer overflow in subtraction".to_string());
@@ -1067,7 +1149,10 @@ pub extern "C" fn jit_int_sub(a: u64, b: u64) -> u64 {
 /// Multiply two NaN-boxed integers (handles BigInt inputs and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_mul(a: u64, b: u64) -> u64 {
-    match nv_as_any_int(a).checked_mul(nv_as_any_int(b)) {
+    let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
+        return NV_UNIT;
+    };
+    match a.checked_mul(b) {
         Some(result) => jit_own(NValue::int(result)),
         None => {
             jit_set_error("Integer overflow in multiplication".to_string());
@@ -1079,12 +1164,17 @@ pub extern "C" fn jit_int_mul(a: u64, b: u64) -> u64 {
 /// Divide two NaN-boxed integers (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_div(a: u64, b: u64) -> u64 {
-    let bv = nv_as_any_int(b);
+    let Some(bv) = nv_as_any_int(b) else {
+        return NV_UNIT;
+    };
     if bv == 0 {
         jit_set_error("Division by zero".to_string());
         return NV_UNIT;
     }
-    match nv_as_any_int(a).checked_div(bv) {
+    let Some(av) = nv_as_any_int(a) else {
+        return NV_UNIT;
+    };
+    match av.checked_div(bv) {
         Some(result) => jit_own(NValue::int(result)),
         None => {
             jit_set_error("Integer overflow in division".to_string());
@@ -1096,12 +1186,17 @@ pub extern "C" fn jit_int_div(a: u64, b: u64) -> u64 {
 /// Modulo two NaN-boxed integers (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_mod(a: u64, b: u64) -> u64 {
-    let bv = nv_as_any_int(b);
+    let Some(bv) = nv_as_any_int(b) else {
+        return NV_UNIT;
+    };
     if bv == 0 {
         jit_set_error("Modulo by zero".to_string());
         return NV_UNIT;
     }
-    match nv_as_any_int(a).checked_rem(bv) {
+    let Some(av) = nv_as_any_int(a) else {
+        return NV_UNIT;
+    };
+    match av.checked_rem(bv) {
         Some(result) => jit_own(NValue::int(result)),
         None => {
             jit_set_error("Integer overflow in modulo".to_string());
@@ -1113,7 +1208,10 @@ pub extern "C" fn jit_int_mod(a: u64, b: u64) -> u64 {
 /// Negate a NaN-boxed integer (handles BigInt input and overflow).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_neg(a: u64) -> u64 {
-    match nv_as_any_int(a).checked_neg() {
+    let Some(a) = nv_as_any_int(a) else {
+        return NV_UNIT;
+    };
+    match a.checked_neg() {
         Some(result) => jit_own(NValue::int(result)),
         None => {
             jit_set_error("Integer overflow in negation".to_string());
@@ -1125,7 +1223,10 @@ pub extern "C" fn jit_int_neg(a: u64) -> u64 {
 /// Compare two NaN-boxed integers: a < b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_lt(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) < nv_as_any_int(b) {
+    let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
+        return NV_UNIT;
+    };
+    if a < b {
         NV_TRUE
     } else {
         NV_FALSE
@@ -1135,7 +1236,10 @@ pub extern "C" fn jit_int_lt(a: u64, b: u64) -> u64 {
 /// Compare two NaN-boxed integers: a <= b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_le(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) <= nv_as_any_int(b) {
+    let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
+        return NV_UNIT;
+    };
+    if a <= b {
         NV_TRUE
     } else {
         NV_FALSE
@@ -1145,7 +1249,10 @@ pub extern "C" fn jit_int_le(a: u64, b: u64) -> u64 {
 /// Compare two NaN-boxed integers: a > b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_gt(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) > nv_as_any_int(b) {
+    let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
+        return NV_UNIT;
+    };
+    if a > b {
         NV_TRUE
     } else {
         NV_FALSE
@@ -1155,7 +1262,10 @@ pub extern "C" fn jit_int_gt(a: u64, b: u64) -> u64 {
 /// Compare two NaN-boxed integers: a >= b (handles BigInt inputs).
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_int_ge(a: u64, b: u64) -> u64 {
-    if nv_as_any_int(a) >= nv_as_any_int(b) {
+    let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
+        return NV_UNIT;
+    };
+    if a >= b {
         NV_TRUE
     } else {
         NV_FALSE
@@ -1243,7 +1353,7 @@ pub extern "C" fn jit_init_fn_table(table_ptr: *const u64, count: u64) -> u64 {
         let slice = unsafe { std::slice::from_raw_parts(table_ptr, n) };
         slice.iter().map(|&v| v as *const u8).collect()
     };
-    set_fn_table(ptrs);
+    set_fn_table(&ptrs);
     NV_UNIT
 }
 

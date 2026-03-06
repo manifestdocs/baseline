@@ -43,7 +43,7 @@
             <div class="btn-group" style="margin-top: var(--sp-4);">
                 <a href="#start" class="button button-primary">Install</a>
                 <a
-                    href="https://github.com/manifestdocs/baseline"
+                    href="https://github.com/baseline-lang/baseline"
                     class="button"
                     aria-label="View on GitHub (external site)"
                     >View on GitHub</a

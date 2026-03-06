@@ -174,6 +174,7 @@ thread_local! {
 /// our register save/restore.
 #[cfg(target_arch = "aarch64")]
 #[unsafe(naked)]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberContext) {
     // x0 = from, x1 = to (C calling convention)
     core::arch::naked_asm!(
@@ -212,6 +213,7 @@ unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberC
 }
 
 #[cfg(not(target_arch = "aarch64"))]
+#[unsafe(no_mangle)]
 unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberContext) {
     unimplemented!("fiber: context switch not implemented for this architecture. Only aarch64 is supported.");
 }

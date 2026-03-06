@@ -32,7 +32,7 @@ case "$MODE" in
     ;;
 
   *)
-    echo "Usage: $0 {fast|full}"
+    echo "Usage: $0 {fast|gates|full}"
     exit 1
     ;;
 esac

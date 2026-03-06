@@ -198,6 +198,16 @@ pub(super) fn native_string_char_code(args: &[NValue]) -> Result<NValue, NativeE
     }
 }
 
+pub(super) fn native_string_reverse(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => Ok(NValue::string(s.chars().rev().collect::<String>().into())),
+        None => Err(NativeError(format!(
+            "String.reverse: expected String, got {}",
+            args[0]
+        ))),
+    }
+}
+
 pub(super) fn native_string_replace(args: &[NValue]) -> Result<NValue, NativeError> {
     match (
         args[0].as_string(),

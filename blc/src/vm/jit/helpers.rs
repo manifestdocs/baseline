@@ -26,6 +26,10 @@ fn args_bits<'a>(args: *const u64, count: u64) -> Result<&'a [u64], &'static str
     Ok(unsafe { std::slice::from_raw_parts(ptr.as_ptr(), len) })
 }
 
+fn native_id(id: u64) -> Result<u16, &'static str> {
+    u16::try_from(id).map_err(|_| "native id exceeds u16 range")
+}
+
 /// Call a native function by ID (borrowing args).
 ///
 /// # Safety
@@ -54,12 +58,34 @@ pub(super) extern "C" fn jit_call_native(
             return NV_UNIT;
         }
     };
-    let nvalues: Vec<NValue> = arg_slice
-        .iter()
-        .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
-        .collect();
-    match registry.call(id as u16, &nvalues) {
-        Ok(result) => jit_own(result),
+    let id = match native_id(id) {
+        Ok(id) => id,
+        Err(msg) => {
+            jit_set_error(format!("Native function error: {}", msg));
+            return NV_UNIT;
+        }
+    };
+    // Use stack buffer for small arg counts (most native calls have 1-3 args)
+    let len = arg_slice.len();
+    let result = if len <= 4 {
+        let mut buf: [std::mem::MaybeUninit<NValue>; 4] =
+            [const { std::mem::MaybeUninit::uninit() }; 4];
+        for (i, &bits) in arg_slice.iter().enumerate() {
+            buf[i].write(unsafe { NValue::borrow_from_raw(bits) });
+        }
+        // SAFETY: first `len` elements are initialized above
+        let nvalues =
+            unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const NValue, len) };
+        registry.call(id, nvalues)
+    } else {
+        let nvalues: Vec<NValue> = arg_slice
+            .iter()
+            .map(|&bits| unsafe { NValue::borrow_from_raw(bits) })
+            .collect();
+        registry.call(id, &nvalues)
+    };
+    match result {
+        Ok(r) => jit_own(r),
         Err(e) => {
             jit_set_error(format!("Native function error: {}", e.0));
             NV_UNIT
@@ -96,11 +122,17 @@ pub(super) extern "C" fn jit_call_native_owning(
             return NV_UNIT;
         }
     };
-    let nvalues: Vec<NValue> = arg_slice
-        .iter()
-        .map(|&bits| unsafe { NValue::from_raw(bits) })
-        .collect();
-    match registry.call_owning(id as u16, nvalues) {
+    let id = match native_id(id) {
+        Ok(id) => id,
+        Err(msg) => {
+            jit_set_error(format!("Native function error: {}", msg));
+            return NV_UNIT;
+        }
+    };
+    // Pre-allocate Vec with known capacity to avoid growth reallocs
+    let mut nvalues = Vec::with_capacity(arg_slice.len());
+    nvalues.extend(arg_slice.iter().map(|&bits| unsafe { NValue::from_raw(bits) }));
+    match registry.call_owning(id, nvalues) {
         Ok(result) => jit_own(result),
         Err(e) => {
             jit_set_error(format!("Native function error: {}", e.0));

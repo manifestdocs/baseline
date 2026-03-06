@@ -1,0 +1,13 @@
+// Least Square Difference — find the smallest n where n² - (n-1)² > 1000.
+@prelude(script)
+
+fn least_square_difference(n: Int) -> Int = {
+  let diff = (n * n) - ((n - 1) * (n - 1))
+  if diff > 1000 then n
+  else least_square_difference(n + 1)
+}
+
+fn main!() -> {Console} () = {
+  let n = least_square_difference(1)
+  Console.println!("The least positive integer n, where n*n - (n-1)*(n-1) > 1000, is ${Int.to_string(n)}")
+}

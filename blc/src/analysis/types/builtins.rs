@@ -560,6 +560,10 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             Type::Function(vec![Type::String], Box::new(Type::String)),
         );
         sigs.insert(
+            "String.reverse".into(),
+            Type::Function(vec![Type::String], Box::new(Type::String)),
+        );
+        sigs.insert(
             "String.split".into(),
             Type::Function(
                 vec![Type::String, Type::String],
@@ -1387,51 +1391,6 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
                 query_one_as_fallback.clone(),
             );
         }
-    }
-
-    // -- Db helpers (pure row-parsing functions) --
-    if native_modules.contains(&"Db") {
-        let row_ty = Type::Map(Box::new(Type::String), Box::new(Type::String));
-        let rows_ty = Type::List(Box::new(row_ty.clone()));
-        let option_string = Type::Enum(
-            "Option".to_string(),
-            vec![
-                ("Some".to_string(), vec![Type::String]),
-                ("None".to_string(), vec![]),
-            ],
-        );
-        let option_row = Type::Enum(
-            "Option".to_string(),
-            vec![
-                ("Some".to_string(), vec![row_ty.clone()]),
-                ("None".to_string(), vec![]),
-            ],
-        );
-
-        sigs.insert(
-            "Db.require".into(),
-            Type::Function(vec![row_ty.clone(), Type::String], Box::new(Type::String)),
-        );
-        sigs.insert(
-            "Db.optional".into(),
-            Type::Function(vec![row_ty.clone(), Type::String], Box::new(option_string)),
-        );
-        sigs.insert(
-            "Db.int_field".into(),
-            Type::Function(vec![row_ty.clone(), Type::String], Box::new(Type::Int)),
-        );
-        sigs.insert(
-            "Db.bool_field".into(),
-            Type::Function(vec![row_ty, Type::String], Box::new(Type::Bool)),
-        );
-        sigs.insert(
-            "Db.first_row".into(),
-            Type::Function(vec![rows_ty.clone()], Box::new(option_row)),
-        );
-        sigs.insert(
-            "Db.has_rows".into(),
-            Type::Function(vec![rows_ty], Box::new(Type::Bool)),
-        );
     }
 
     sigs

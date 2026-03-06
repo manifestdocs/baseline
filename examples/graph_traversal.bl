@@ -1,0 +1,100 @@
+// Graph Traversal — depth-first and breadth-first search.
+@prelude(core)
+
+// Graph represented as adjacency list: List<(Int, List<Int>)>
+// Each entry is (node, [neighbors])
+
+// Find neighbors of a node in the adjacency list
+fn neighbors(graph: List<(Int, List<Int>)>, node: Int) -> List<Int> =
+  match graph
+    [] -> []
+    [(n, edges), ..rest] ->
+      if n == node then edges
+      else neighbors(rest, node)
+
+// Depth-first search: find a path from start to target
+fn dfs(graph: List<(Int, List<Int>)>, start: Int, target: Int) -> Option<List<Int>> = {
+  // Helper with visited tracking
+  let result = dfs_helper(graph, [start], target, [])
+  result
+}
+
+fn dfs_helper(graph: List<(Int, List<Int>)>, stack: List<Int>, target: Int, visited: List<Int>) -> Option<List<Int>> =
+  match stack
+    [] -> None
+    [current, ..rest] ->
+      if current == target then Some(List.concat(visited, [current]))
+      else if List.contains(visited, current) then dfs_helper(graph, rest, target, visited)
+      else {
+        let new_visited = List.concat(visited, [current])
+        let nbrs = neighbors(graph, current)
+        let new_stack = List.concat(nbrs, rest)
+        dfs_helper(graph, new_stack, target, new_visited)
+      }
+
+// Breadth-first search: find shortest path from start to target
+fn bfs(graph: List<(Int, List<Int>)>, start: Int, target: Int) -> Option<List<Int>> = {
+  bfs_helper(graph, [(start, [start])], target, [])
+}
+
+fn bfs_helper(graph: List<(Int, List<Int>)>, queue: List<(Int, List<Int>)>, target: Int, visited: List<Int>) -> Option<List<Int>> =
+  match queue
+    [] -> None
+    [(current, path), ..rest] ->
+      if current == target then Some(path)
+      else if List.contains(visited, current) then bfs_helper(graph, rest, target, visited)
+      else {
+        let new_visited = List.concat(visited, [current])
+        let nbrs = neighbors(graph, current)
+        // Add unvisited neighbors to queue with extended path
+        let new_entries = List.filter(nbrs, |n| not List.contains(new_visited, n))
+          |> List.map(|n| (n, List.concat(path, [n])))
+        let new_queue = List.concat(rest, new_entries)
+        bfs_helper(graph, new_queue, target, new_visited)
+      }
+
+// Test graph:
+//   1 -> [2, 3]
+//   2 -> [4]
+//   3 -> [4, 5]
+//   4 -> [5]
+//   5 -> []
+fn empty_neighbors() -> List<Int> = []
+
+fn test_graph() -> List<(Int, List<Int>)> =
+  [(1, [2, 3]), (2, [4]), (3, [4, 5]), (4, [5]), (5, empty_neighbors())]
+
+test "dfs finds target" = {
+  Option.is_some(dfs(test_graph(), 1, 5))
+}
+
+test "dfs returns None for missing target" = {
+  dfs(test_graph(), 1, 99) == None
+}
+
+test "bfs finds target" = {
+  Option.is_some(bfs(test_graph(), 1, 5))
+}
+
+test "bfs finds shortest path" = {
+  // BFS should find 1 -> 3 -> 5 (length 3), not 1 -> 2 -> 4 -> 5 (length 4)
+  match bfs(test_graph(), 1, 5)
+    Some(path) -> List.length(path) == 3
+    None -> false
+}
+
+test "bfs returns None for missing target" = {
+  bfs(test_graph(), 1, 99) == None
+}
+
+test "neighbors finds edges" = {
+  neighbors(test_graph(), 1) == [2, 3]
+}
+
+test "neighbors returns empty for leaf" = {
+  neighbors(test_graph(), 5) == []
+}
+
+test "neighbors returns empty for unknown" = {
+  neighbors(test_graph(), 99) == []
+}

@@ -6,12 +6,12 @@
 	</p>
 	<div class="btn-group">
 		<a
-			href="https://github.com/manifestdocs/baseline"
+			href="https://github.com/baseline-lang/baseline"
 			class="button button-primary"
 			aria-label="View on GitHub (external site)">View on GitHub</a
 		>
 		<a
-			href="https://github.com/manifestdocs/baseline/blob/main/design/baseline-language-specification.md"
+			href="https://github.com/baseline-lang/baseline/blob/main/design/baseline-language-specification.md"
 			class="button"
 			aria-label="Read the Specification on GitHub (external site)"
 			>Read the Specification</a

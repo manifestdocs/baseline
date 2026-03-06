@@ -1528,6 +1528,9 @@ fn check_node_inner(
                             suggestions: vec![],
                         });
                         Type::Unknown
+                    } else if symbols.lookup_generic_schema(&qualified).is_some() {
+                        // Generic schema method (e.g. List.map) — resolved at call site
+                        Type::Unknown
                     } else {
                         // Builtin module — allow unknown methods for forward compat
                         Type::Unknown

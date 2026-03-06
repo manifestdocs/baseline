@@ -1,0 +1,35 @@
+// Try Operator — the ? operator for concise error propagation.
+@prelude(script)
+
+// With ? operator — concise error propagation
+fn parse_age(s: String) -> Result<Int, String> = {
+  let age: Int = Option.ok_or(String.to_int(s), "not a number")?
+  if age < 0 then Err("age cannot be negative")
+  else if age > 150 then Err("age too large")
+  else Ok(age)
+}
+
+// Without ? operator — equivalent manual code
+fn parse_age_manual(s: String) -> Result<Int, String> =
+  match String.to_int(s)
+    None -> Err("not a number")
+    Some(age) ->
+      if age < 0 then Err("age cannot be negative")
+      else if age > 150 then Err("age too large")
+      else Ok(age)
+
+fn show_result(r: Result<Int, String>) -> String =
+  match r
+    Ok(v) -> "Ok(${Int.to_string(v)})"
+    Err(e) -> "Err(${e})"
+
+fn main!() -> {Console} () = {
+  // Both produce the same result
+  Console.println!("With ?:    ${show_result(parse_age("25"))}")
+  Console.println!("Manual:    ${show_result(parse_age_manual("25"))}")
+
+  // Error cases
+  Console.println!("Bad input: ${show_result(parse_age("abc"))}")
+  Console.println!("Negative:  ${show_result(parse_age("-5"))}")
+  Console.println!("Too large: ${show_result(parse_age("200"))}")
+}

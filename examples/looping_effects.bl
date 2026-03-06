@@ -1,0 +1,19 @@
+// Looping Effectful Functions — reading input in a loop and accumulating.
+@prelude(script)
+
+fn main!() -> {Console, Loop} () = {
+  Console.println!("Enter numbers one per line. Press Enter on empty line to sum.")
+  let total = loop!(0)
+  Console.println!("Sum: ${Int.to_string(total)}")
+}
+
+fn loop!(sum: Int) -> Int = {
+  let line = Console.read_line!()
+  if line == "" then sum
+  else match String.to_int(line)
+    Some(n) -> loop!(sum + n)
+    None -> {
+      let _ = Console.println!("'${line}' is not a valid number, skipping.")
+      loop!(sum)
+    }
+}

@@ -7,3 +7,4 @@ repository.workspace = true
 description = "Python bindings for the Baseline programming language"
 
 [dependencies]
+blc = { path = "../blc" }

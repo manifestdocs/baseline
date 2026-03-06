@@ -1,7 +1,7 @@
 mod rosetta;
 mod tools;
 
-pub async fn run_server() {
+pub async fn run_server() -> Result<(), String> {
     use rmcp::ServiceExt;
     use tokio::io::{stdin, stdout};
 
@@ -9,6 +9,10 @@ pub async fn run_server() {
     let server = service
         .serve((stdin(), stdout()))
         .await
-        .expect("Failed to start MCP server");
-    server.waiting().await.expect("MCP server error");
+        .map_err(|e| format!("Failed to start MCP server: {}", e))?;
+    server
+        .waiting()
+        .await
+        .map_err(|e| format!("MCP server error: {}", e))?;
+    Ok(())
 }
