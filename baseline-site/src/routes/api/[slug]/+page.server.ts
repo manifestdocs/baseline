@@ -9,17 +9,11 @@ const categoryMeta: Record<string, { title: string; description: string; guide?:
         description:
             'General-purpose modules available across all prelude levels — collections, strings, math, JSON, and more.'
     },
-    web: {
-        title: 'Web Framework',
+    server: {
+        title: 'Server',
         description:
-            'Build HTTP servers with routing, middleware, request handling, and structured error responses.',
+            'Web framework, database access, authentication, and real-time communication.',
         guide: '/guides/web'
-    },
-    database: {
-        title: 'Database',
-        description:
-            'Query SQLite, Postgres, and MySQL with parameterized statements and connection management.',
-        guide: '/guides/database'
     }
 };
 

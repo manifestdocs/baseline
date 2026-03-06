@@ -7,7 +7,7 @@ export const features: Feature[] = [
 	{
 		title: 'Algebraic Effects',
 		description:
-			'Side effects declared in type signatures and enforced by the compiler. Built-in: Console, Http, Fs, Log, Time, Random, Env, and more.'
+			'Side effects declared in type signatures and enforced by the compiler. Define custom effect handlers to control how effects run. Built-in: Console, Http, Fs, Log, Time, Random, Env, and more.'
 	},
 	{
 		title: 'Refinement Types',

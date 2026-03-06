@@ -7,15 +7,11 @@ const categoryMeta: Record<string, { title: string; description: string; guide?:
 		title: 'Language',
 		description: 'General-purpose modules — collections, strings, math, JSON, and more.'
 	},
-	web: {
-		title: 'Web Framework',
-		description: 'Routing, middleware, request handling, and structured error responses.',
+	server: {
+		title: 'Server',
+		description:
+			'Web framework, database access, authentication, and real-time communication.',
 		guide: '/guides/web'
-	},
-	database: {
-		title: 'Database',
-		description: 'SQLite, Postgres, and MySQL with parameterized queries.',
-		guide: '/guides/database'
 	}
 };
 
