@@ -133,7 +133,8 @@ impl NativeRegistry {
     /// Check if a function is a HOF — O(1) flag lookup.
     #[inline(always)]
     pub fn is_hof(&self, id: u16) -> bool {
-        self.entry(id).is_some_and(|entry| entry.flags & FLAG_HOF != 0)
+        self.entry(id)
+            .is_some_and(|entry| entry.flags & FLAG_HOF != 0)
     }
 
     /// Check if a function requires VM re-entrancy — O(1) flag lookup.
@@ -146,13 +147,15 @@ impl NativeRegistry {
     /// Check if a function is an async fiber primitive — O(1) flag lookup.
     #[inline(always)]
     pub fn is_async(&self, id: u16) -> bool {
-        self.entry(id).is_some_and(|entry| entry.flags & FLAG_ASYNC != 0)
+        self.entry(id)
+            .is_some_and(|entry| entry.flags & FLAG_ASYNC != 0)
     }
 
     /// Check if a function has an owning (CoW) variant — O(1) flag lookup.
     #[inline(always)]
     pub fn is_owning(&self, id: u16) -> bool {
-        self.entry(id).is_some_and(|entry| entry.flags & FLAG_OWNING != 0)
+        self.entry(id)
+            .is_some_and(|entry| entry.flags & FLAG_OWNING != 0)
     }
 
     /// Call the owning variant of a native function by ID.

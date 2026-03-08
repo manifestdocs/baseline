@@ -280,10 +280,12 @@ impl ModuleLoader {
                 } else {
                     let dir_parts = &sub_parts[..sub_parts.len() - 1];
                     let exact_dir: PathBuf = dir_parts.iter().collect();
-                    let lower_dir: PathBuf =
-                        dir_parts.iter().map(|p| p.to_lowercase()).collect();
+                    let lower_dir: PathBuf = dir_parts.iter().map(|p| p.to_lowercase()).collect();
                     vec![
-                        dep_dir.join("src").join(&exact_dir).join(format!("{}.bl", last)),
+                        dep_dir
+                            .join("src")
+                            .join(&exact_dir)
+                            .join(format!("{}.bl", last)),
                         dep_dir
                             .join("src")
                             .join(&lower_dir)

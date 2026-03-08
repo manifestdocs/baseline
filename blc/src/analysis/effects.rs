@@ -923,8 +923,7 @@ fn check_handler_clause_resume(
     let mut has_resume = false;
     let mut cursor = clause.walk();
     for child in clause.children(&mut cursor) {
-        if child.kind() == "identifier"
-            && child.utf8_text(source.as_bytes()).ok() == Some("resume")
+        if child.kind() == "identifier" && child.utf8_text(source.as_bytes()).ok() == Some("resume")
         {
             // Only count identifiers that appear before the "->" (parameters),
             // not identifiers inside the handler_body field.
@@ -952,9 +951,7 @@ fn check_resume_usage_in_body(
     file: &str,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    if node.kind() == "identifier"
-        && node.utf8_text(source.as_bytes()).ok() == Some("resume")
-    {
+    if node.kind() == "identifier" && node.utf8_text(source.as_bytes()).ok() == Some("resume") {
         // Check if this is a direct call: parent is call_expression and this is the callee
         let is_direct_call = node.parent().is_some_and(|parent| {
             parent.kind() == "call_expression"

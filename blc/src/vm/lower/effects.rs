@@ -32,7 +32,7 @@ impl<'a> super::Lowerer<'a> {
                         pattern: Pattern::Wildcard,
                         guard: None,
                         body: Expr::Bool(false),
-                    }
+                    },
                 ],
                 ty: Some(crate::analysis::types::Type::Bool),
             }
@@ -51,19 +51,17 @@ impl<'a> super::Lowerer<'a> {
             "to_be_ok" => Ok(make_enum_match(actual, "Ok")),
             "to_be_some" => Ok(make_enum_match(actual, "Some")),
             "to_be_none" => Ok(make_enum_match(actual, "None")),
-            "to_be_empty" => {
-                Ok(Expr::BinOp {
-                    op: BinOp::Eq,
-                    lhs: Box::new(Expr::CallNative {
-                        module: "List".into(),
-                        method: "length".into(),
-                        args: vec![actual],
-                        ty: Some(crate::analysis::types::Type::Int),
-                    }),
-                    rhs: Box::new(Expr::Int(0)),
-                    ty: Some(crate::analysis::types::Type::Bool),
-                })
-            }
+            "to_be_empty" => Ok(Expr::BinOp {
+                op: BinOp::Eq,
+                lhs: Box::new(Expr::CallNative {
+                    module: "List".into(),
+                    method: "length".into(),
+                    args: vec![actual],
+                    ty: Some(crate::analysis::types::Type::Int),
+                }),
+                rhs: Box::new(Expr::Int(0)),
+                ty: Some(crate::analysis::types::Type::Bool),
+            }),
             "to_have_length" => {
                 let expected = self.lower_matcher_arg(&matcher_node)?;
                 Ok(Expr::BinOp {
@@ -122,7 +120,7 @@ impl<'a> super::Lowerer<'a> {
                             pattern: Pattern::Wildcard,
                             guard: None,
                             body: Expr::Bool(false),
-                        }
+                        },
                     ],
                     ty: Some(crate::analysis::types::Type::Bool),
                 })
@@ -275,7 +273,8 @@ impl<'a> super::Lowerer<'a> {
     /// Check if a handler body is tail-resumptive (body is exactly `resume(expr)`).
     fn is_tail_resumptive_body(expr: &Expr) -> bool {
         match expr {
-            Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
+            Expr::CallIndirect { callee, args, .. }
+            | Expr::TailCallIndirect { callee, args, .. } => {
                 matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") && args.len() == 1
             }
             Expr::Block(stmts, _) if stmts.len() == 1 => Self::is_tail_resumptive_body(&stmts[0]),

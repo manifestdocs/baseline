@@ -40,5 +40,7 @@ pub(super) fn native_float_format(args: &[NValue]) -> Result<NValue, NativeError
     }
     let value = args[0].as_f64();
     let decimals = args[1].as_any_int() as usize;
-    Ok(NValue::string(format!("{:.prec$}", value, prec = decimals).into()))
+    Ok(NValue::string(
+        format!("{:.prec$}", value, prec = decimals).into(),
+    ))
 }

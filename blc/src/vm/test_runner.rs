@@ -23,7 +23,11 @@ pub fn run_test_file_jit(path: &Path) -> TestSuiteResult {
     let root = tree.root_node();
 
     let check_result = crate::parse::parse_source_with_path(&source, path);
-    if check_result.diagnostics.iter().any(|d| d.severity == crate::diagnostics::Severity::Error) {
+    if check_result
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == crate::diagnostics::Severity::Error)
+    {
         return empty_fail_result_msg("Analysis failed");
     }
 
@@ -62,7 +66,8 @@ pub fn run_test_file_jit(path: &Path) -> TestSuiteResult {
     let mut execute_module = ir_test_module.into_executable_module();
     crate::vm::optimize_ir::optimize(&mut execute_module);
 
-    let program = match crate::vm::jit::compile_with_natives(&execute_module, false, Some(&natives)) {
+    let program = match crate::vm::jit::compile_with_natives(&execute_module, false, Some(&natives))
+    {
         Ok(p) => p,
         Err(e) => return empty_fail_result_msg(&format!("JIT compile error: {}", e)),
     };
@@ -96,7 +101,11 @@ pub fn run_test_file_aot(path: &Path) -> TestSuiteResult {
     let root = tree.root_node();
 
     let check_result = crate::parse::parse_source_with_path(&source, path);
-    if check_result.diagnostics.iter().any(|d| d.severity == crate::diagnostics::Severity::Error) {
+    if check_result
+        .diagnostics
+        .iter()
+        .any(|d| d.severity == crate::diagnostics::Severity::Error)
+    {
         return empty_fail_result_msg("Analysis failed");
     }
 
@@ -156,7 +165,9 @@ pub fn run_test_file_aot(path: &Path) -> TestSuiteResult {
         }
     }
 
-    if let Err(e) = crate::vm::jit::aot::link_executable(&obj_bytes, &exe_path, rt_lib.as_deref(), false) {
+    if let Err(e) =
+        crate::vm::jit::aot::link_executable(&obj_bytes, &exe_path, rt_lib.as_deref(), false)
+    {
         return empty_fail_result_msg(&format!("AOT link error: {}", e));
     }
 
@@ -186,7 +197,12 @@ fn empty_fail_result() -> TestSuiteResult {
     TestSuiteResult {
         status: "fail".to_string(),
         tests: vec![],
-        summary: TestSummary { total: 0, passed: 0, failed: 0, skipped: 0 },
+        summary: TestSummary {
+            total: 0,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+        },
     }
 }
 
@@ -197,9 +213,20 @@ fn empty_fail_result_msg(msg: &str) -> TestSuiteResult {
             name: "setup".to_string(),
             status: TestStatus::Fail,
             message: Some(msg.to_string()),
-            location: Location { file: String::new(), line: 0, col: 0, end_line: None, end_col: None },
+            location: Location {
+                file: String::new(),
+                line: 0,
+                col: 0,
+                end_line: None,
+                end_col: None,
+            },
         }],
-        summary: TestSummary { total: 1, passed: 0, failed: 1, skipped: 0 },
+        summary: TestSummary {
+            total: 1,
+            passed: 0,
+            failed: 1,
+            skipped: 0,
+        },
     }
 }
 
@@ -207,7 +234,12 @@ fn empty_pass_result() -> TestSuiteResult {
     TestSuiteResult {
         status: "pass".to_string(),
         tests: vec![],
-        summary: TestSummary { total: 0, passed: 0, failed: 0, skipped: 0 },
+        summary: TestSummary {
+            total: 0,
+            passed: 0,
+            failed: 0,
+            skipped: 0,
+        },
     }
 }
 
@@ -225,8 +257,16 @@ fn build_suite_result_counted(
         let is_pass = i < passed_count;
         tests.push(TestResult {
             name: name.clone(),
-            status: if is_pass { TestStatus::Pass } else { TestStatus::Fail },
-            message: if is_pass { None } else { Some("Assertion failed".to_string()) },
+            status: if is_pass {
+                TestStatus::Pass
+            } else {
+                TestStatus::Fail
+            },
+            message: if is_pass {
+                None
+            } else {
+                Some("Assertion failed".to_string())
+            },
             location: Location {
                 file: String::new(),
                 line: *line,

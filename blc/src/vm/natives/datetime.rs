@@ -35,7 +35,9 @@ pub(super) fn native_datetime_to_string(args: &[NValue]) -> Result<NValue, Nativ
     let secs = ms / 1000;
     let nsecs = ((ms % 1000) * 1_000_000) as u32;
     match Utc.timestamp_opt(secs, nsecs) {
-        chrono::LocalResult::Single(dt) => Ok(NValue::string(RcStr::from(dt.to_rfc3339().as_str()))),
+        chrono::LocalResult::Single(dt) => {
+            Ok(NValue::string(RcStr::from(dt.to_rfc3339().as_str())))
+        }
         _ => Err(NativeError(format!(
             "DateTime.to_string: invalid epoch ms {}",
             ms

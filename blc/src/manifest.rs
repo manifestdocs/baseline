@@ -380,7 +380,11 @@ Validation = { path = "../shared/validation" }
         };
         let result = append_dependency(content, "Pkg", &dep);
         assert!(result.contains("[dependencies]"));
-        assert!(result.contains("Pkg = { url = \"https://example.com/pkg.tar.gz\", hash = \"sha256-xyz\" }"));
+        assert!(
+            result.contains(
+                "Pkg = { url = \"https://example.com/pkg.tar.gz\", hash = \"sha256-xyz\" }"
+            )
+        );
 
         // Roundtrip: parse the result
         let m = parse_manifest(&result);

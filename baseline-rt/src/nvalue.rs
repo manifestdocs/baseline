@@ -510,7 +510,10 @@ impl NValue {
     }
 
     /// Create a native object NValue (Scope handle, Cell handle, etc.).
-    pub fn native_object(tag: &'static str, data: std::sync::Arc<dyn std::any::Any + Send + Sync>) -> Self {
+    pub fn native_object(
+        tag: &'static str,
+        data: std::sync::Arc<dyn std::any::Any + Send + Sync>,
+    ) -> Self {
         Self::from_heap(HeapObject::NativeObject { tag, data })
     }
 

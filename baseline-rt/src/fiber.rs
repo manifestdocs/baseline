@@ -21,10 +21,7 @@ pub enum FiberState {
     /// Created but not yet started.
     Ready,
     /// Yielded an effect to the parent. Contains (effect_key, args).
-    Yielded {
-        key: String,
-        args: Vec<u64>,
-    },
+    Yielded { key: String, args: Vec<u64> },
     /// Fiber ran to completion with a return value.
     Completed(u64),
     /// Fiber was destroyed without completing (abort handler).
@@ -180,34 +177,32 @@ unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberC
     core::arch::naked_asm!(
         // Save callee-saved registers to `from` (x0)
         "mov x9, sp",
-        "str x9,  [x0, #0]",       // sp
+        "str x9,  [x0, #0]", // sp
         "stp x19, x20, [x0, #8]",
         "stp x21, x22, [x0, #24]",
         "stp x23, x24, [x0, #40]",
         "stp x25, x26, [x0, #56]",
         "stp x27, x28, [x0, #72]",
-        "stp x29, x30, [x0, #88]",  // fp, lr
+        "stp x29, x30, [x0, #88]", // fp, lr
         // Save SIMD callee-saved (d8-d15)
         "stp d8,  d9,  [x0, #104]",
         "stp d10, d11, [x0, #120]",
         "stp d12, d13, [x0, #136]",
         "stp d14, d15, [x0, #152]",
-
         // Load callee-saved registers from `to` (x1)
-        "ldr x9,  [x1, #0]",       // sp
+        "ldr x9,  [x1, #0]", // sp
         "mov sp, x9",
         "ldp x19, x20, [x1, #8]",
         "ldp x21, x22, [x1, #24]",
         "ldp x23, x24, [x1, #40]",
         "ldp x25, x26, [x1, #56]",
         "ldp x27, x28, [x1, #72]",
-        "ldp x29, x30, [x1, #88]",  // fp, lr
+        "ldp x29, x30, [x1, #88]", // fp, lr
         // Restore SIMD callee-saved (d8-d15)
         "ldp d8,  d9,  [x1, #104]",
         "ldp d10, d11, [x1, #120]",
         "ldp d12, d13, [x1, #136]",
         "ldp d14, d15, [x1, #152]",
-
         "ret",
     );
 }
@@ -215,7 +210,9 @@ unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberC
 #[cfg(not(target_arch = "aarch64"))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberContext) {
-    unimplemented!("fiber: context switch not implemented for this architecture. Only aarch64 is supported.");
+    unimplemented!(
+        "fiber: context switch not implemented for this architecture. Only aarch64 is supported."
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -280,9 +277,9 @@ impl Fiber {
         // Reserve space for the trampoline's stack frame (16 bytes min).
         let initial_sp = unsafe { stack_top.sub(16) } as u64;
 
-        fiber.fiber_ctx.regs[0] = initial_sp;                                // sp
-        fiber.fiber_ctx.regs[12] = fiber_trampoline as *const () as u64;      // lr (x30)
-        fiber.fiber_ctx.regs[11] = initial_sp;                               // fp (x29)
+        fiber.fiber_ctx.regs[0] = initial_sp; // sp
+        fiber.fiber_ctx.regs[12] = fiber_trampoline as *const () as u64; // lr (x30)
+        fiber.fiber_ctx.regs[11] = initial_sp; // fp (x29)
 
         // Pass fiber pointer as x0 to the trampoline. We store it in x19
         // (first callee-saved) and the trampoline reads it from there.
@@ -292,7 +289,7 @@ impl Fiber {
         //
         // Solution: use a shim that reads x19 → x0, then calls the real
         // trampoline. Store fiber_ptr in x19.
-        fiber.fiber_ctx.regs[1] = &*fiber as *const Fiber as u64;  // x19 = fiber_ptr
+        fiber.fiber_ctx.regs[1] = &*fiber as *const Fiber as u64; // x19 = fiber_ptr
         fiber.fiber_ctx.regs[12] = fiber_entry_shim as *const () as u64; // lr = shim
 
         fiber
@@ -305,7 +302,10 @@ impl Fiber {
     pub fn resume(&mut self, value: u64) -> &FiberState {
         match &self.state {
             FiberState::Completed(_) | FiberState::Aborted => {
-                panic!("one-shot continuation violated: fiber already {:?}", self.state);
+                panic!(
+                    "one-shot continuation violated: fiber already {:?}",
+                    self.state
+                );
             }
             _ => {}
         }
@@ -410,7 +410,10 @@ mod tests {
         let state = fiber.resume(0);
         match state {
             FiberState::Completed(val) => assert_eq!(*val, 142),
-            other => panic!("expected Completed, got {:?}", std::mem::discriminant(other)),
+            other => panic!(
+                "expected Completed, got {:?}",
+                std::mem::discriminant(other)
+            ),
         }
     }
 
@@ -438,7 +441,10 @@ mod tests {
         let state = fiber.resume(99);
         match state {
             FiberState::Completed(val) => assert_eq!(*val, 100), // 99 + 1
-            other => panic!("expected Completed, got {:?}", std::mem::discriminant(other)),
+            other => panic!(
+                "expected Completed, got {:?}",
+                std::mem::discriminant(other)
+            ),
         }
     }
 

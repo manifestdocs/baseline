@@ -191,10 +191,7 @@ pub(super) fn native_row_optional_int(args: &[NValue]) -> Result<NValue, NativeE
 
 /// Look up a key in a Map's entries, returning the value if found.
 #[allow(dead_code)]
-fn map_lookup<'a>(
-    entries: &'a baseline_rt::nvalue::MapStore,
-    key: &NValue,
-) -> Option<&'a NValue> {
+fn map_lookup<'a>(entries: &'a baseline_rt::nvalue::MapStore, key: &NValue) -> Option<&'a NValue> {
     entries.get(key)
 }
 

@@ -303,9 +303,7 @@ pub(super) fn native_list_slice(args: &[NValue]) -> Result<NValue, NativeError> 
     match args[0].as_list() {
         Some(items) => {
             if !args[1].is_any_int() || !args[2].is_any_int() {
-                return Err(NativeError(
-                    "List.slice: expected (List, Int, Int)".into(),
-                ));
+                return Err(NativeError("List.slice: expected (List, Int, Int)".into()));
             }
             let start = args[1].as_any_int().max(0) as usize;
             let end = args[2].as_any_int().max(0) as usize;

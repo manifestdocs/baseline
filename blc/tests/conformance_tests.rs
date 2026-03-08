@@ -168,8 +168,11 @@ fn conformance_positive_tests() {
                     out.stderr.trim()
                 ));
             } else {
-                let actual: Vec<String> =
-                    out.stdout.lines().map(|l| l.trim_end().to_string()).collect();
+                let actual: Vec<String> = out
+                    .stdout
+                    .lines()
+                    .map(|l| l.trim_end().to_string())
+                    .collect();
                 if actual != expected_output {
                     failed.push(format!(
                         "{relative}: stdout mismatch\n  expected: {:?}\n  actual: {:?}",

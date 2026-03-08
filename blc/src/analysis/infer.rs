@@ -1048,7 +1048,10 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                 let k = ctx.fresh_var();
                 let v = ctx.fresh_var();
                 Type::Function(
-                    vec![Type::List(Box::new(Type::Tuple(vec![k.clone(), v.clone()])))],
+                    vec![Type::List(Box::new(Type::Tuple(vec![
+                        k.clone(),
+                        v.clone(),
+                    ])))],
                     Box::new(Type::Map(Box::new(k), Box::new(v))),
                 )
             },

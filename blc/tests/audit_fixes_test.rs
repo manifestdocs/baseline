@@ -49,9 +49,6 @@ fn test_check_result_has_verification_level() {
     assert!(result.unchecked.contains(&"smt".to_string()));
 }
 
-
-
-
 #[test]
 fn test_suggestion_has_confidence_field() {
     use blc::diagnostics::Suggestion;

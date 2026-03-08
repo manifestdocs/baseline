@@ -311,11 +311,7 @@ fn test_test_tool_failing() {
 
     let dir = tempfile::tempdir().unwrap();
     let test_file = dir.path().join("test_fail.bl");
-    std::fs::write(
-        &test_file,
-        "@prelude(core)\ntest \"wrong\" = 1 + 1 == 3\n",
-    )
-    .unwrap();
+    std::fs::write(&test_file, "@prelude(core)\ntest \"wrong\" = 1 + 1 == 3\n").unwrap();
 
     send_jsonrpc(
         &mut stdin,

@@ -512,7 +512,9 @@ fn known_functions() -> Vec<(
             "String",
             "find_matches",
             "Return all substrings matching a regular expression pattern.",
-            Some("String.find_matches(\"a1 b2 c3\", \"[a-z][0-9]\")  // => [\"a1\", \"b2\", \"c3\"]"),
+            Some(
+                "String.find_matches(\"a1 b2 c3\", \"[a-z][0-9]\")  // => [\"a1\", \"b2\", \"c3\"]",
+            ),
         ),
         (
             "String",
@@ -1355,7 +1357,9 @@ fn known_functions() -> Vec<(
             "Router",
             "resources",
             "Register RESTful CRUD routes for a resource path.",
-            Some("router |> Router.resources(\"/users\", {\n  index: list_users,\n  show: get_user,\n  create: create_user,\n  update: update_user,\n  destroy: delete_user\n})"),
+            Some(
+                "router |> Router.resources(\"/users\", {\n  index: list_users,\n  show: get_user,\n  create: create_user,\n  update: update_user,\n  destroy: delete_user\n})",
+            ),
         ),
         (
             "Router",
@@ -2601,10 +2605,7 @@ fn build_type_signatures() -> HashMap<String, Type> {
     );
     sigs.insert(
         "Jwt.verify".into(),
-        Type::Function(
-            vec![Type::String, Type::String],
-            Box::new(Type::Unknown),
-        ),
+        Type::Function(vec![Type::String, Type::String], Box::new(Type::Unknown)),
     );
     sigs.insert(
         "Jwt.decode".into(),
@@ -2680,7 +2681,11 @@ fn build_type_signatures() -> HashMap<String, Type> {
     sigs.insert(
         "Validate.one_of".into(),
         Type::Function(
-            vec![Type::String, Type::List(Box::new(Type::String)), Type::String],
+            vec![
+                Type::String,
+                Type::List(Box::new(Type::String)),
+                Type::String,
+            ],
             Box::new(Type::Unknown),
         ),
     );

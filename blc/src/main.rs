@@ -359,14 +359,21 @@ fn init_project(name: Option<String>) {
     };
 
     if project_dir.join("baseline.toml").exists() {
-        eprintln!("Error: baseline.toml already exists in {}", project_dir.display());
+        eprintln!(
+            "Error: baseline.toml already exists in {}",
+            project_dir.display()
+        );
         std::process::exit(1);
     }
 
     // Create the project directory if it doesn't exist (named project case)
     if !project_dir.exists() {
         std::fs::create_dir_all(&project_dir).unwrap_or_else(|e| {
-            eprintln!("Failed to create directory '{}': {}", project_dir.display(), e);
+            eprintln!(
+                "Failed to create directory '{}': {}",
+                project_dir.display(),
+                e
+            );
             std::process::exit(1);
         });
     }
@@ -627,11 +634,7 @@ fn compile_to_ir(file: &PathBuf) -> CompileResult {
                 };
                 e.insert(exported);
 
-                let short_name = import
-                    .module_name
-                    .split('.')
-                    .next_back()
-                    .unwrap_or("?");
+                let short_name = import.module_name.split('.').next_back().unwrap_or("?");
                 for f in mod_fns {
                     global_functions.insert(f.name.clone());
                     global_functions.insert(format!("{}.{}", short_name, f.name));
@@ -1166,8 +1169,7 @@ fn extract_tarball(bytes: &[u8], dest: &Path) -> Result<(), String> {
         if entry.header().entry_type().is_dir() {
             std::fs::create_dir_all(&target).map_err(|e| format!("mkdir: {}", e))?;
         } else {
-            let mut file =
-                std::fs::File::create(&target).map_err(|e| format!("create: {}", e))?;
+            let mut file = std::fs::File::create(&target).map_err(|e| format!("create: {}", e))?;
             std::io::copy(&mut entry, &mut file).map_err(|e| format!("copy: {}", e))?;
         }
     }

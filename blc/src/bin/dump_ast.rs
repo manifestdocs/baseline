@@ -2,7 +2,9 @@ use tree_sitter::Parser;
 
 fn main() {
     let mut parser = Parser::new();
-    parser.set_language(&tree_sitter_baseline::LANGUAGE.into()).unwrap();
+    parser
+        .set_language(&tree_sitter_baseline::LANGUAGE.into())
+        .unwrap();
     let source = r#"
 type Tree =
   | Leaf(Int)

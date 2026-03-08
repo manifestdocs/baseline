@@ -41,9 +41,12 @@ impl<'a> super::Lowerer<'a> {
             _ => return Err(self.error(format!("Unknown unary operator: {}", op_text), node)),
         };
 
-        let ty = if self.type_map.as_ref().is_some_and(|tm| {
-            matches!(tm.get(&operand.start_byte()), Some(Type::Float))
-        }) || self.is_float_expr(&operand) {
+        let ty = if self
+            .type_map
+            .as_ref()
+            .is_some_and(|tm| matches!(tm.get(&operand.start_byte()), Some(Type::Float)))
+            || self.is_float_expr(&operand)
+        {
             Some(Type::Float)
         } else {
             None
@@ -122,7 +125,10 @@ impl<'a> super::Lowerer<'a> {
             )
         }) || (self.is_string_expr(&lhs_node) && self.is_string_expr(&rhs_node));
 
-        let explicit_ty = self.type_map.as_ref().and_then(|tm| tm.get(&node.start_byte()).cloned());
+        let explicit_ty = self
+            .type_map
+            .as_ref()
+            .and_then(|tm| tm.get(&node.start_byte()).cloned());
 
         let mut ty = explicit_ty.or({
             if both_int {
@@ -153,7 +159,7 @@ impl<'a> super::Lowerer<'a> {
                     ty = Some(Type::String);
                 }
                 BinOp::ListConcat
-            },
+            }
             _ => return Err(self.error(format!("Unknown binary operator: {}", op_text), node)),
         };
 
@@ -207,7 +213,10 @@ impl<'a> super::Lowerer<'a> {
 
     pub(super) fn is_string_expr(&self, node: &Node) -> bool {
         match node.kind() {
-            "string_literal" | "raw_string_literal" | "raw_hash_string_literal" | "multiline_string_literal" => true,
+            "string_literal"
+            | "raw_string_literal"
+            | "raw_hash_string_literal"
+            | "multiline_string_literal" => true,
             "literal" | "parenthesized_expression" => {
                 node.named_child(0).is_some_and(|c| self.is_string_expr(&c))
             }
