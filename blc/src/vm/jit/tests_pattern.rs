@@ -8,7 +8,6 @@ use crate::vm::ir::{
 };
 use crate::vm::nvalue::{HeapObject, NValue};
 
-
 // -- Phase 4 tests --
 
 #[test]
@@ -27,6 +26,7 @@ fn jit_match_wildcard() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -51,6 +51,7 @@ fn jit_match_var() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -90,6 +91,7 @@ fn jit_match_constructor() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -127,6 +129,7 @@ fn jit_match_literal() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -153,6 +156,7 @@ fn jit_for_loop() {
                 body: Box::new(Expr::Unit),
             },
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -188,6 +192,7 @@ fn jit_try_ok() {
                 Some(Type::Int),
             ),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -218,6 +223,7 @@ fn jit_try_err_propagates() {
                 None,
             ),
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -264,6 +270,7 @@ fn jit_enum_integer_tag_match() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -303,6 +310,7 @@ fn jit_enum_integer_tag_none_branch() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -344,6 +352,7 @@ fn jit_switch_dispatch_three_arms() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -391,6 +400,7 @@ fn jit_sra_record_field_access() {
                 Some(Type::Int),
             ),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -417,7 +427,7 @@ fn jit_sra_escape_falls_back() {
             ty: None,
         },
     ];
-    let candidates = FnCompileCtx::<JITModule>::find_sra_candidates(&exprs);
+    let candidates = FnCompileCtx::<JITModule>::find_sra_candidates_with_existing(&exprs, &std::collections::HashMap::new(), None);
     assert!(
         candidates.is_empty(),
         "Escaping record should not be SRA candidate"
@@ -443,7 +453,7 @@ fn jit_sra_non_escape_detected() {
             ty: Some(Type::Int),
         },
     ];
-    let candidates = FnCompileCtx::<JITModule>::find_sra_candidates(&exprs);
+    let candidates = FnCompileCtx::<JITModule>::find_sra_candidates_with_existing(&exprs, &std::collections::HashMap::new(), None);
     assert_eq!(candidates.len(), 1);
     assert_eq!(candidates[0].0, "r");
     assert_eq!(candidates[0].1, vec!["x".to_string(), "y".to_string()]);
@@ -465,10 +475,7 @@ fn jit_list_pattern_head_tail() {
                 )),
                 arms: vec![
                     MatchArm {
-                        pattern: Pattern::List(
-                            vec![Pattern::Var("h".into())],
-                            Some("t".into()),
-                        ),
+                        pattern: Pattern::List(vec![Pattern::Var("h".into())], Some("t".into())),
                         guard: None,
                         body: Expr::Var("h".into(), Some(Type::Int)),
                     },
@@ -481,6 +488,7 @@ fn jit_list_pattern_head_tail() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -497,10 +505,7 @@ fn jit_list_pattern_exact_length() {
             name: "main".into(),
             params: vec![],
             body: Expr::Match {
-                subject: Box::new(Expr::MakeList(
-                    vec![make_int(3), make_int(4)],
-                    None,
-                )),
+                subject: Box::new(Expr::MakeList(vec![make_int(3), make_int(4)], None)),
                 arms: vec![
                     MatchArm {
                         pattern: Pattern::List(
@@ -508,7 +513,8 @@ fn jit_list_pattern_exact_length() {
                             None,
                         ),
                         guard: None,
-                        body: make_binop(BinOp::Add,
+                        body: make_binop(
+                            BinOp::Add,
                             Expr::Var("a".into(), Some(Type::Int)),
                             Expr::Var("b".into(), Some(Type::Int)),
                         ),
@@ -522,6 +528,7 @@ fn jit_list_pattern_exact_length() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -561,6 +568,7 @@ fn jit_list_pattern_length_mismatch() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -593,6 +601,7 @@ fn jit_list_pattern_empty() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -615,16 +624,14 @@ fn jit_list_pattern_rest_binding() {
                     None,
                 )),
                 arms: vec![MatchArm {
-                    pattern: Pattern::List(
-                        vec![Pattern::Var("h".into())],
-                        Some("t".into()),
-                    ),
+                    pattern: Pattern::List(vec![Pattern::Var("h".into())], Some("t".into())),
                     guard: None,
                     body: Expr::Var("h".into(), Some(Type::Int)),
                 }],
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -642,10 +649,7 @@ fn jit_tuple_pattern_with_literal() {
             name: "main".into(),
             params: vec![],
             body: Expr::Match {
-                subject: Box::new(Expr::MakeTuple(
-                    vec![make_int(1), make_int(42)],
-                    None,
-                )),
+                subject: Box::new(Expr::MakeTuple(vec![make_int(1), make_int(42)], None)),
                 arms: vec![
                     MatchArm {
                         pattern: Pattern::Tuple(vec![
@@ -664,6 +668,7 @@ fn jit_tuple_pattern_with_literal() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -681,10 +686,7 @@ fn jit_tuple_pattern_literal_mismatch() {
             name: "main".into(),
             params: vec![],
             body: Expr::Match {
-                subject: Box::new(Expr::MakeTuple(
-                    vec![make_int(2), make_int(42)],
-                    None,
-                )),
+                subject: Box::new(Expr::MakeTuple(vec![make_int(2), make_int(42)], None)),
                 arms: vec![
                     MatchArm {
                         pattern: Pattern::Tuple(vec![
@@ -703,6 +705,7 @@ fn jit_tuple_pattern_literal_mismatch() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -720,16 +723,14 @@ fn jit_can_jit_list_pattern() {
         body: Expr::Match {
             subject: Box::new(Expr::MakeList(vec![make_int(1)], None)),
             arms: vec![MatchArm {
-                pattern: Pattern::List(
-                    vec![Pattern::Var("h".into())],
-                    Some("t".into()),
-                ),
+                pattern: Pattern::List(vec![Pattern::Var("h".into())], Some("t".into())),
                 guard: None,
                 body: Expr::Var("h".into(), Some(Type::Int)),
             }],
             ty: Some(Type::Int),
         },
         ty: Some(Type::Int),
+        param_types: vec![],
         span: dummy_span(),
     };
     assert!(can_jit(&func, None));
@@ -754,6 +755,7 @@ fn jit_can_jit_complex_tuple_pattern() {
             ty: Some(Type::Int),
         },
         ty: Some(Type::Int),
+        param_types: vec![],
         span: dummy_span(),
     };
     assert!(can_jit(&func, None));

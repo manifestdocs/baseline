@@ -403,9 +403,8 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
         .collect();
 
     for (i, func) in module.functions.iter().enumerate() {
-        let func_id = func_ids[i].ok_or_else(|| {
-            format!("AOT: function '{}' was not declared", func.name)
-        })?;
+        let func_id =
+            func_ids[i].ok_or_else(|| format!("AOT: function '{}' was not declared", func.name))?;
         let start = std::time::Instant::now();
         let is_unboxed = unboxed_flags[i];
 
@@ -457,13 +456,15 @@ pub fn compile_to_object(module: &IrModule, trace: bool) -> Result<Vec<u8>, Stri
                 unboxed_flags: &unboxed_flags,
                 tags: &module.tags,
                 sra_records: HashMap::new(),
+                param_sra_original: HashMap::new(),
+                sra_hot_vars: Default::default(),
                 aot_strings: Some(&aot_strings),
                 aot_native_ids: if aot_native_ids.is_empty() {
                     None
                 } else {
                     Some(&aot_native_ids)
                 },
-                
+
                 scratch_slot: None,
                 rc_enabled: true,
                 rc_scope_stack: Vec::new(),

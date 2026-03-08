@@ -180,9 +180,8 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
         // Effect handler nodes should not reach can_jit — both tail-resumptive
         // (evidence transform) and non-tail-resumptive (fiber transform) are
         // eliminated before this check. This false is a safety net only.
-        Expr::WithHandlers { .. }
-        | Expr::HandleEffect { .. }
-        | Expr::PerformEffect { .. } => false,
+        Expr::WithHandlers { .. } | Expr::HandleEffect { .. } | Expr::PerformEffect { .. } => false,
+        Expr::Assign { value, .. } => expr_can_jit(value, natives),
     }
 }
 
@@ -464,6 +463,9 @@ fn collect_indirect_targets_expr(
         }
         Expr::Reuse { alloc, .. } => {
             collect_indirect_targets_expr(alloc, func_names, targets);
+        }
+        Expr::Assign { value, .. } => {
+            collect_indirect_targets_expr(value, func_names, targets);
         }
     }
 }

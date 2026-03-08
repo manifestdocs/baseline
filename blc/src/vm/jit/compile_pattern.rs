@@ -8,9 +8,9 @@ use cranelift_codegen::ir::{BlockArg, InstBuilder, StackSlotData, StackSlotKind,
 use cranelift_frontend::Switch;
 use cranelift_module::Module;
 
-use super::compile::{CValue, FnCompileCtx};
 use super::super::ir::{Expr, MatchArm, Pattern};
 use super::super::nvalue::NValue;
+use super::compile::{CValue, FnCompileCtx};
 use super::helpers::{NV_TRUE, NV_UNIT};
 
 impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
@@ -32,7 +32,11 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
     // -- Match compilation --
 
-    pub(super) fn compile_match(&mut self, subject: &Expr, arms: &[MatchArm]) -> Result<CValue, String> {
+    pub(super) fn compile_match(
+        &mut self,
+        subject: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<CValue, String> {
         let subject_val = self.compile_expr(subject)?;
 
         if arms.is_empty() {
@@ -134,33 +138,30 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 self.bind_pattern_vars_rc(&arms[*arm_idx].pattern, subj_again)?;
 
                 // Try CoW optimization for constructor patterns
-                let mut body_val =
-                    if let Pattern::Constructor(tag, sub_pats) = &arms[*arm_idx].pattern {
-                        let bindings: Vec<String> = sub_pats
-                            .iter()
-                            .map(|p| match p {
-                                Pattern::Var(name) => name.clone(),
-                                _ => String::new(),
-                            })
-                            .collect();
-                        if let Some(val) = self.try_gen_enum_update(
-                            &arms[*arm_idx].body,
-                            tag,
-                            &bindings,
-                            subj_var,
-                        )? {
-                            // CoW consumed subject ownership — null out subj_var
-                            // so the merge-block decref is a no-op.
-                            let unit_val =
-                                self.builder.ins().iconst(types::I64, NV_UNIT as i64);
-                            self.builder.def_var(subj_var, unit_val);
-                            val
-                        } else {
-                            self.compile_expr(&arms[*arm_idx].body)?
-                        }
+                let mut body_val = if let Pattern::Constructor(tag, sub_pats) =
+                    &arms[*arm_idx].pattern
+                {
+                    let bindings: Vec<String> = sub_pats
+                        .iter()
+                        .map(|p| match p {
+                            Pattern::Var(name) => name.clone(),
+                            _ => String::new(),
+                        })
+                        .collect();
+                    if let Some(val) =
+                        self.try_gen_enum_update(&arms[*arm_idx].body, tag, &bindings, subj_var)?
+                    {
+                        // CoW consumed subject ownership — null out subj_var
+                        // so the merge-block decref is a no-op.
+                        let unit_val = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
+                        self.builder.def_var(subj_var, unit_val);
+                        val
                     } else {
                         self.compile_expr(&arms[*arm_idx].body)?
-                    };
+                    }
+                } else {
+                    self.compile_expr(&arms[*arm_idx].body)?
+                };
 
                 let ret_var = self.new_var();
                 self.builder.def_var(ret_var, body_val);
@@ -514,10 +515,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         // Constructor sub-patterns inside records: check tag
                         if let Pattern::Constructor(tag, _) = sub {
                             let cmp = if let Some(id) = self.tags.get_id(tag) {
-                                let tag_id_val =
-                                    self.call_helper("jit_enum_tag_id", &[elem]);
-                                let expected =
-                                    self.builder.ins().iconst(types::I64, id as i64);
+                                let tag_id_val = self.call_helper("jit_enum_tag_id", &[elem]);
+                                let expected = self.builder.ins().iconst(types::I64, id as i64);
                                 self.builder.ins().icmp(IntCC::Equal, tag_id_val, expected)
                             } else {
                                 let tag_nv = NValue::string(tag.as_str().into());
@@ -564,13 +563,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let check_elems = self.builder.create_block();
                 let fallthrough = next_test.unwrap_or(merge_block);
                 let fallthrough_args = self.fallthrough_block_args(next_test);
-                self.builder.ins().brif(
-                    cmp,
-                    check_elems,
-                    &[],
-                    fallthrough,
-                    &fallthrough_args,
-                );
+                self.builder
+                    .ins()
+                    .brif(cmp, check_elems, &[], fallthrough, &fallthrough_args);
 
                 self.builder.switch_to_block(check_elems);
                 self.builder.seal_block(check_elems);
@@ -614,6 +609,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Pattern::Var(name) => {
                 let var = self.new_var();
                 self.builder.def_var(var, subject);
+                self.sra_records.remove(name);
                 self.vars.insert(name.clone(), var);
             }
             Pattern::Literal(_) => {}
@@ -665,6 +661,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let tail = self.call_helper("jit_list_tail", &[subject, start]);
                     let var = self.new_var();
                     self.builder.def_var(var, tail);
+                    self.sra_records.remove(rest_name);
                     self.vars.insert(rest_name.clone(), var);
                 }
             }
@@ -684,6 +681,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Pattern::Var(name) => {
                 let var = self.new_var();
                 self.builder.def_var(var, subject);
+                self.sra_records.remove(name);
                 self.vars.insert(name.clone(), var);
                 self.rc_track_var(var);
             }
@@ -698,17 +696,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     if non_wildcard > 1 {
                         // Batch extraction: one helper call extracts all fields
                         let n = sub_patterns.len();
-                        let slot = self.builder.create_sized_stack_slot(
-                            StackSlotData::new(
-                                StackSlotKind::ExplicitSlot,
-                                (n * 8) as u32,
-                                3, // 8-byte alignment
-                            ),
-                        );
-                        let out_addr =
-                            self.builder.ins().stack_addr(self.ptr_type, slot, 0);
-                        let count_val =
-                            self.builder.ins().iconst(types::I64, n as i64);
+                        let slot = self.builder.create_sized_stack_slot(StackSlotData::new(
+                            StackSlotKind::ExplicitSlot,
+                            (n * 8) as u32,
+                            3, // 8-byte alignment
+                        ));
+                        let out_addr = self.builder.ins().stack_addr(self.ptr_type, slot, 0);
+                        let count_val = self.builder.ins().iconst(types::I64, n as i64);
                         self.call_helper_void(
                             "jit_enum_fields_get_all",
                             &[subject, out_addr, count_val],
@@ -717,10 +711,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             if matches!(sub, Pattern::Wildcard) {
                                 continue;
                             }
-                            let elem = self
-                                .builder
-                                .ins()
-                                .stack_load(types::I64, slot, (i * 8) as i32);
+                            let elem =
+                                self.builder
+                                    .ins()
+                                    .stack_load(types::I64, slot, (i * 8) as i32);
                             self.bind_pattern_vars_rc(sub, elem)?;
                         }
                     } else {
@@ -730,8 +724,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                                 continue;
                             }
                             let idx = self.builder.ins().iconst(types::I64, i as i64);
-                            let elem =
-                                self.call_helper("jit_enum_field_get", &[subject, idx]);
+                            let elem = self.call_helper("jit_enum_field_get", &[subject, idx]);
                             self.bind_pattern_vars_rc(sub, elem)?;
                         }
                     }
@@ -772,6 +765,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let tail = self.call_helper("jit_list_tail", &[subject, start]);
                     let var = self.new_var();
                     self.builder.def_var(var, tail);
+                    self.sra_records.remove(rest_name);
                     self.vars.insert(rest_name.clone(), var);
                     self.rc_track_var(var);
                 }
@@ -786,6 +780,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Pattern::Var(name) => {
                 let var = self.new_var();
                 self.builder.def_var(var, val);
+                self.sra_records.remove(name);
                 self.vars.insert(name.clone(), var);
             }
             Pattern::Wildcard => {}
@@ -829,6 +824,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let tail = self.call_helper("jit_list_tail", &[val, start]);
                     let var = self.new_var();
                     self.builder.def_var(var, tail);
+                    self.sra_records.remove(rest_name);
                     self.vars.insert(rest_name.clone(), var);
                 }
             }
@@ -847,6 +843,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Pattern::Var(name) => {
                 let var = self.new_var();
                 self.builder.def_var(var, val);
+                self.sra_records.remove(name);
                 self.vars.insert(name.clone(), var);
                 self.rc_track_var(var);
             }
@@ -903,6 +900,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let tail = self.call_helper("jit_list_tail", &[val, start]);
                     let var = self.new_var();
                     self.builder.def_var(var, tail);
+                    self.sra_records.remove(rest_name);
                     self.vars.insert(rest_name.clone(), var);
                     self.rc_track_var(var);
                 }
@@ -940,6 +938,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let bind_var = self.new_var();
         let unit_val = self.builder.ins().iconst(types::I64, NV_UNIT as i64);
         self.builder.def_var(bind_var, unit_val);
+        self.sra_records.remove(binding);
         self.vars.insert(binding.to_string(), bind_var);
 
         // Loop header

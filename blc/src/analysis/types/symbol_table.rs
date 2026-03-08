@@ -48,6 +48,8 @@ pub struct SymbolTable {
     pub dict_map: HashMap<usize, Vec<DictEntry>>,
     /// Active trait bounds in current generic function scope.
     pub(super) current_bounds: HashMap<String, Vec<String>>,
+    /// Variables declared with `let mut` (mutable bindings).
+    pub(super) mutable_vars: HashSet<String>,
 }
 
 /// Dictionary entry for a single trait bound at a call site.
@@ -74,6 +76,7 @@ impl SymbolTable {
             trait_impls: HashMap::new(),
             dict_map: HashMap::new(),
             current_bounds: HashMap::new(),
+            mutable_vars: HashSet::new(),
         };
 
         // Option/Result types and constructors are language primitives — always registered.
@@ -149,6 +152,15 @@ impl SymbolTable {
         if let Some(scope) = self.scopes.last_mut() {
             scope.insert(name, ty);
         }
+    }
+
+    pub(super) fn insert_mutable(&mut self, name: String, ty: Type) {
+        self.mutable_vars.insert(name.clone());
+        self.insert(name, ty);
+    }
+
+    pub(super) fn is_mutable(&self, name: &str) -> bool {
+        self.mutable_vars.contains(name)
     }
 
     pub(super) fn lookup(&self, name: &str) -> Option<&Type> {

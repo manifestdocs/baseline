@@ -92,6 +92,8 @@ pub struct IrFunction {
     pub body: Expr,
     /// Resolved function type (when type checker succeeded).
     pub ty: Option<Type>,
+    /// Per-parameter types extracted from type annotations.
+    pub param_types: Vec<Option<Type>>,
     pub span: Span,
 }
 
@@ -250,6 +252,11 @@ pub enum Expr {
         pattern: Box<Pattern>,
         value: Box<Expr>,
         ty: Option<Type>,
+    },
+    /// Reassign a mutable variable: `x = new_value`.
+    Assign {
+        name: String,
+        value: Box<Expr>,
     },
     Block(Vec<Expr>, Option<Type>),
 
@@ -445,14 +452,22 @@ impl IrTestModule {
         let mut test_calls = Vec::new();
 
         for (i, test) in self.tests.into_iter().enumerate() {
-            if test.skip { continue; }
+            if test.skip {
+                continue;
+            }
             let name = format!("__test_{}", i);
             functions.push(IrFunction {
                 name: name.clone(),
                 params: vec![],
                 body: test.body,
                 ty: Some(Type::Bool),
-                span: Span { line: test.line, col: test.col, start_byte: 0, end_byte: 0 },
+                param_types: vec![],
+                span: Span {
+                    line: test.line,
+                    col: test.col,
+                    start_byte: 0,
+                    end_byte: 0,
+                },
             });
             test_calls.push(name);
         }
@@ -479,17 +494,23 @@ impl IrTestModule {
                 ty: Some(Type::Int),
             };
         }
-        
+
         functions.push(IrFunction {
             name: "__main_test_runner".to_string(),
             params: vec![],
             body,
             ty: Some(Type::Int),
-            span: Span { line: 0, col: 0, start_byte: 0, end_byte: 0 },
+            param_types: vec![],
+            span: Span {
+                line: 0,
+                col: 0,
+                start_byte: 0,
+                end_byte: 0,
+            },
         });
-        
+
         let entry = functions.len() - 1;
-        
+
         IrModule {
             functions,
             entry,
@@ -537,7 +558,8 @@ mod tests {
                 params: vec![],
                 body: Expr::Int(42),
                 ty: None,
-                span: Span {
+                param_types: vec![],
+            span: Span {
                     line: 1,
                     col: 0,
                     start_byte: 0,

@@ -376,16 +376,24 @@ fn check_node_inner(
                             if let Some(name_node) = param.child_by_field_name("name") {
                                 let arg_name =
                                     name_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                                // Store param type in type_map for IR lowerer
+                                symbols
+                                    .type_map
+                                    .insert(name_node.start_byte(), param_type.clone());
                                 symbols.insert(arg_name.clone(), param_type.clone());
                                 param_names.push(arg_name);
                             } else if let Some(pat_node) = param.child_by_field_name("pattern") {
                                 // Bind pattern variables
-                                bind_pattern(&pat_node, param_type, source, symbols);
+                                bind_pattern(&pat_node, param_type.clone(), source, symbols);
 
                                 // Collect param name for named args if simple identifier
                                 if pat_node.kind() == "identifier" {
                                     let arg_name =
                                         pat_node.utf8_text(source.as_bytes()).unwrap().to_string();
+                                    // Store param type in type_map for IR lowerer
+                                    symbols
+                                        .type_map
+                                        .insert(pat_node.start_byte(), param_type.clone());
                                     param_names.push(arg_name);
                                 } else {
                                     // Complex pattern parameters cannot be targeted by named arguments
@@ -538,17 +546,19 @@ fn check_node_inner(
             Type::Set(Box::new(elem_type))
         }
         "let_binding" => {
-            // Grammar: let pattern [: type_annotation] = expression
-            // named_child(0) = pattern, last named_child = expression
-            // type_annotation accessed via field name "type"
+            // Grammar: let [mut] pattern [: type_annotation] = expression
+            // If mut is present, it's the first named child (mut_keyword node)
+            let is_mutable = node.child_by_field_name("mutable").is_some();
             let named_count = node.named_child_count();
-            if let Some(pattern) = node.named_child(0) {
+
+            // Pattern is first named child, or second if mut_keyword is present
+            let pattern_idx: usize = if is_mutable { 1 } else { 0 };
+            if let Some(pattern) = node.named_child(pattern_idx) {
                 let expr_node = node.named_child(named_count - 1).unwrap();
                 let expr_type = check_node(&expr_node, source, file, symbols, diagnostics);
 
-                // Check type annotation if present
-                if let Some(ann_node) = node.child_by_field_name("type") {
-                    // type_annotation is `: Type`, the type_expr is its named child
+                // Resolve the binding type (annotation or inferred)
+                let bind_type = if let Some(ann_node) = node.child_by_field_name("type") {
                     if let Some(type_node) = ann_node.named_child(0) {
                         let declared_type = parse_type(&type_node, source, symbols);
                         if !types_compatible(&expr_type, &declared_type) {
@@ -569,13 +579,62 @@ fn check_node_inner(
                                 suggestions,
                             });
                         }
-                        bind_pattern(&pattern, declared_type, source, symbols);
+                        declared_type
                     } else {
-                        bind_pattern(&pattern, expr_type, source, symbols);
+                        expr_type
                     }
                 } else {
-                    bind_pattern(&pattern, expr_type, source, symbols);
+                    expr_type
+                };
+
+                if is_mutable {
+                    // For mut bindings, only simple identifiers allowed
+                    let name = pattern.utf8_text(source.as_bytes()).unwrap().to_string();
+                    symbols.insert_mutable(name, bind_type);
+                } else {
+                    bind_pattern(&pattern, bind_type, source, symbols);
                 }
+            }
+            Type::Unit
+        }
+        "assignment_statement" => {
+            let left = node.child_by_field_name("left").unwrap();
+            let right = node.child_by_field_name("right").unwrap();
+            let rhs_type = check_node(&right, source, file, symbols, diagnostics);
+
+            if left.kind() == "identifier" {
+                let name = left.utf8_text(source.as_bytes()).unwrap();
+                if !symbols.is_mutable(name) {
+                    diagnostics.push(Diagnostic {
+                        code: "MUT_001".to_string(),
+                        severity: Severity::Error,
+                        location: Location::from_node(file, &left),
+                        message: format!(
+                            "Cannot assign to immutable variable `{}`. Use `let mut` to make it mutable.",
+                            name
+                        ),
+                        context: "Only variables declared with `let mut` can be reassigned.".to_string(),
+                        suggestions: vec![],
+                    });
+                } else if let Some(var_type) = symbols.lookup(name).cloned() {
+                    if !types_compatible(&rhs_type, &var_type) {
+                        diagnostics.push(Diagnostic {
+                            code: "TYP_021".to_string(),
+                            severity: Severity::Error,
+                            location: Location::from_node(file, &right),
+                            message: format!(
+                                "Assignment type mismatch: variable `{}` is {}, found {}",
+                                name, var_type, rhs_type
+                            ),
+                            context: "Assigned value must match the variable's type.".to_string(),
+                            suggestions: vec![],
+                        });
+                    }
+                }
+            } else {
+                // field_expression: obj.field = value
+                // Type check the LHS as a field access
+                check_node(&left, source, file, symbols, diagnostics);
             }
             Type::Unit
         }
@@ -1613,7 +1672,7 @@ fn check_node_inner(
             let mut last_type = Type::Unit;
             let mut cursor = node.walk();
             for child in node.children(&mut cursor) {
-                if child.kind() == "let_binding" {
+                if child.kind() == "let_binding" || child.kind() == "assignment_statement" {
                     check_node(&child, source, file, symbols, diagnostics);
                     last_type = Type::Unit;
                 } else if child.kind().ends_with("_expression")

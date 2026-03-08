@@ -3,7 +3,7 @@
 //! `FnCompileCtx` holds per-function state during JIT compilation and provides
 //! methods for compiling IR expressions to Cranelift IR.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use cranelift_codegen::ir::condcodes::{FloatCC, IntCC};
 use cranelift_codegen::ir::{
@@ -16,10 +16,10 @@ use cranelift_module::{DataId, FuncId, Module};
 use super::super::ir::{BinOp, Expr, IrFunction, MatchArm, Matcher, Pattern, TagRegistry, UnaryOp};
 use super::super::natives::NativeRegistry;
 use super::super::nvalue::{NValue, PAYLOAD_MASK, TAG_BOOL, TAG_INT};
-use baseline_rt::value::RcStr;
 use super::analysis::expr_only_refs_params;
 use super::helpers::{NV_FALSE, NV_TRUE, NV_UNIT};
 use crate::analysis::types::Type;
+use baseline_rt::value::RcStr;
 
 // ---------------------------------------------------------------------------
 // Function compile context
@@ -46,6 +46,11 @@ pub(super) struct FnCompileCtx<'a, 'b, M: Module> {
     /// SRA: record variables that have been scalar-replaced.
     /// Maps record variable name → (field name → Cranelift Variable).
     pub(super) sra_records: HashMap<String, HashMap<String, Variable>>,
+    /// Original param SRA vars — preserved for tail call loop variable rebinding.
+    /// Maps param name → (field_name → Variable). Never modified after seeding.
+    pub(super) param_sra_original: HashMap<String, HashMap<String, Variable>>,
+    /// Variables that should re-seed SRA field caches when rebound.
+    pub(super) sra_hot_vars: HashSet<String>,
     /// AOT string constants: maps string content → DataId in the object module.
     /// When Some, strings are loaded from global data instead of baked as heap pointers.
     pub(super) aot_strings: Option<&'a HashMap<String, DataId>>,
@@ -87,7 +92,538 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         };
         let mut names: Vec<&str> = fields.keys().map(|s| s.as_str()).collect();
         names.sort();
-        names.iter().position(|&n| n == field_name).map(|i| i as u16)
+        names
+            .iter()
+            .position(|&n| n == field_name)
+            .map(|i| i as u16)
+    }
+
+    /// Best-effort check for expressions that are statically known to produce Float.
+    /// Used for native intrinsics that are only safe on raw float bit-patterns.
+    fn expr_is_known_float(expr: &Expr) -> bool {
+        matches!(
+            expr,
+            Expr::Float(_)
+                | Expr::Var(_, Some(Type::Float))
+                | Expr::CallDirect {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::CallNative {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::CallIndirect {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::TailCall {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::TailCallIndirect {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::GetField {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::BinOp {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::UnaryOp {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::If {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::Match {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::Try {
+                    ty: Some(Type::Float),
+                    ..
+                }
+                | Expr::Block(_, Some(Type::Float))
+        )
+    }
+
+    fn is_scalar_field_type(ty: &Type) -> bool {
+        matches!(ty, Type::Int | Type::Float | Type::Bool | Type::Unit)
+    }
+
+    fn expr_type_hint(expr: &Expr) -> Option<Type> {
+        match expr {
+            Expr::Int(_) => Some(Type::Int),
+            Expr::Float(_) => Some(Type::Float),
+            Expr::String(_) => Some(Type::String),
+            Expr::Bool(_) => Some(Type::Bool),
+            Expr::Unit => Some(Type::Unit),
+            Expr::Var(_, ty)
+            | Expr::CallDirect { ty, .. }
+            | Expr::CallNative { ty, .. }
+            | Expr::CallIndirect { ty, .. }
+            | Expr::TailCall { ty, .. }
+            | Expr::TailCallIndirect { ty, .. }
+            | Expr::MakeEnum { ty, .. }
+            | Expr::MakeStruct { ty, .. }
+            | Expr::UpdateRecord { ty, .. }
+            | Expr::GetField { ty, .. }
+            | Expr::BinOp { ty, .. }
+            | Expr::UnaryOp { ty, .. }
+            | Expr::If { ty, .. }
+            | Expr::Match { ty, .. }
+            | Expr::Let { ty, .. }
+            | Expr::Lambda { ty, .. }
+            | Expr::Try { ty, .. }
+            | Expr::PerformEffect { ty, .. }
+            | Expr::Block(_, ty)
+            | Expr::MakeList(_, ty)
+            | Expr::MakeTuple(_, ty)
+            | Expr::MakeRecord(_, ty) => ty.clone(),
+            Expr::For { .. } => Some(Type::Unit),
+            Expr::And(_, _) | Expr::Or(_, _) => Some(Type::Bool),
+            Expr::MakeRange(_, _) => Some(Type::List(Box::new(Type::Int))),
+            Expr::Concat(_) => Some(Type::String),
+            Expr::Hole
+            | Expr::GetClosureVar(_)
+            | Expr::MakeClosure { .. }
+            | Expr::WithHandlers { .. }
+            | Expr::HandleEffect { .. }
+            | Expr::Expect { .. }
+            | Expr::Drop { .. }
+            | Expr::Reuse { .. }
+            | Expr::Assign { .. } => None,
+        }
+    }
+
+    fn seed_record_field_cache(
+        &mut self,
+        var_name: &str,
+        fields: &HashMap<String, Type>,
+    ) -> Result<(), String> {
+        let Some(&base_var) = self.vars.get(var_name) else {
+            return Ok(());
+        };
+        let base_val = self.builder.use_var(base_var);
+
+        let mut sorted_fields: Vec<_> = fields.iter().collect();
+        sorted_fields.sort_by(|a, b| a.0.cmp(b.0));
+
+        let mut field_vars = HashMap::new();
+        for (field_idx, (field_name, field_ty)) in sorted_fields.iter().enumerate() {
+            if !Self::is_scalar_field_type(field_ty) {
+                continue;
+            }
+            let idx_val = self.builder.ins().iconst(types::I64, field_idx as i64);
+            let field_val = self.call_helper("jit_get_field_idx", &[base_val, idx_val]);
+            let field_var = self.new_var();
+            self.builder.def_var(field_var, field_val);
+            if self.rc_enabled {
+                self.rc_track_var(field_var);
+            }
+            field_vars.insert((*field_name).clone(), field_var);
+        }
+
+        if !field_vars.is_empty() {
+            self.sra_records.insert(var_name.to_string(), field_vars);
+        }
+        Ok(())
+    }
+
+    fn seed_hot_var_cache_from_type(&mut self, var_name: &str, ty: &Type) -> Result<(), String> {
+        let mut current = ty;
+        while let Type::Refined(inner, _) = current {
+            current = inner;
+        }
+        match current {
+            Type::Struct(_, fields) | Type::Record(fields, _) => {
+                self.seed_record_field_cache(var_name, fields)
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn reseed_hot_pattern_vars(&mut self, pattern: &Pattern, ty: &Type) -> Result<(), String> {
+        match pattern {
+            Pattern::Var(name) => {
+                if self.sra_hot_vars.contains(name.as_str()) {
+                    self.seed_hot_var_cache_from_type(name, ty)?;
+                }
+                Ok(())
+            }
+            Pattern::Tuple(items) => {
+                if let Type::Tuple(item_tys) = ty {
+                    for (pat, item_ty) in items.iter().zip(item_tys.iter()) {
+                        self.reseed_hot_pattern_vars(pat, item_ty)?;
+                    }
+                }
+                Ok(())
+            }
+            Pattern::List(items, rest) => {
+                if let Type::List(inner) = ty {
+                    for pat in items {
+                        self.reseed_hot_pattern_vars(pat, inner)?;
+                    }
+                    if let Some(rest_name) = rest.as_ref()
+                        && self.sra_hot_vars.contains(rest_name.as_str())
+                    {
+                        // Rest binding is still a list of the same element type.
+                        self.seed_hot_var_cache_from_type(rest_name, ty)?;
+                    }
+                }
+                Ok(())
+            }
+            Pattern::Constructor(tag, payloads) => {
+                if let Type::Enum(_, variants) = ty {
+                    let payload_ty = variants.iter().find_map(|(variant_name, fields)| {
+                        if variant_name == tag && fields.len() == payloads.len() {
+                            Some(fields)
+                        } else {
+                            None
+                        }
+                    });
+                    if let Some(payload_tys) = payload_ty {
+                        for (pat, field_ty) in payloads.iter().zip(payload_tys.iter()) {
+                            self.reseed_hot_pattern_vars(pat, field_ty)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Pattern::Record(fields) => {
+                let mut current = ty;
+                while let Type::Refined(inner, _) = current {
+                    current = inner;
+                }
+                if let Type::Struct(_, rec_fields) | Type::Record(rec_fields, _) = current {
+                    for (field_name, pat) in fields {
+                        if let Some(field_ty) = rec_fields.get(field_name) {
+                            self.reseed_hot_pattern_vars(pat, field_ty)?;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Pattern::Literal(_) | Pattern::Wildcard => Ok(()),
+        }
+    }
+
+    fn alias_sra_pattern_bindings(&mut self, pattern: &Pattern, value: &Expr) {
+        if let (Pattern::Var(dst), Expr::Var(src, _)) = (pattern, value)
+            && let Some(src_fields) = self.sra_records.get(src.as_str()).cloned()
+        {
+            self.sra_records.insert(dst.clone(), src_fields);
+            self.sra_hot_vars.insert(dst.clone());
+        }
+    }
+
+    fn count_matcher_param_field_reads(matcher: &Matcher, param_name: &str) -> usize {
+        match matcher {
+            Matcher::Equal(expected)
+            | Matcher::HaveLength(expected)
+            | Matcher::Contain(expected)
+            | Matcher::StartWith(expected)
+            | Matcher::Satisfy(expected) => Self::count_param_field_reads(expected, param_name),
+            Matcher::BeOk | Matcher::BeSome | Matcher::BeNone | Matcher::BeEmpty => 0,
+            Matcher::Be(_pattern) => 0,
+        }
+    }
+
+    fn count_param_field_reads(expr: &Expr, param_name: &str) -> usize {
+        match expr {
+            Expr::GetField { object, .. } => {
+                let this_read = usize::from(
+                    matches!(object.as_ref(), Expr::Var(name, _) if name == param_name),
+                );
+                this_read + Self::count_param_field_reads(object, param_name)
+            }
+            Expr::BinOp { lhs, rhs, .. }
+            | Expr::And(lhs, rhs)
+            | Expr::Or(lhs, rhs)
+            | Expr::MakeRange(lhs, rhs) => {
+                Self::count_param_field_reads(lhs, param_name)
+                    + Self::count_param_field_reads(rhs, param_name)
+            }
+            Expr::UnaryOp { operand, .. } => Self::count_param_field_reads(operand, param_name),
+            Expr::If {
+                condition,
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                Self::count_param_field_reads(condition, param_name)
+                    + Self::count_param_field_reads(then_branch, param_name)
+                    + else_branch
+                        .as_ref()
+                        .map_or(0, |e| Self::count_param_field_reads(e, param_name))
+            }
+            Expr::CallDirect { args, .. }
+            | Expr::CallNative { args, .. }
+            | Expr::TailCall { args, .. } => args
+                .iter()
+                .map(|a| Self::count_param_field_reads(a, param_name))
+                .sum(),
+            Expr::CallIndirect { callee, args, .. }
+            | Expr::TailCallIndirect { callee, args, .. } => {
+                Self::count_param_field_reads(callee, param_name)
+                    + args
+                        .iter()
+                        .map(|a| Self::count_param_field_reads(a, param_name))
+                        .sum::<usize>()
+            }
+            Expr::Let { value, .. } | Expr::Assign { value, .. } => Self::count_param_field_reads(value, param_name),
+            Expr::Block(exprs, _) | Expr::MakeList(exprs, _) | Expr::MakeTuple(exprs, _) => exprs
+                .iter()
+                .map(|e| Self::count_param_field_reads(e, param_name))
+                .sum(),
+            Expr::Concat(parts) => parts
+                .iter()
+                .map(|p| Self::count_param_field_reads(p, param_name))
+                .sum(),
+            Expr::Match { subject, arms, .. } => {
+                let mut total = Self::count_param_field_reads(subject, param_name);
+                for arm in arms {
+                    total += Self::count_param_field_reads(&arm.body, param_name);
+                    if let Some(g) = &arm.guard {
+                        total += Self::count_param_field_reads(g, param_name);
+                    }
+                }
+                total
+            }
+            Expr::MakeEnum { payload, .. } => Self::count_param_field_reads(payload, param_name),
+            Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => fields
+                .iter()
+                .map(|(_, v)| Self::count_param_field_reads(v, param_name))
+                .sum(),
+            Expr::UpdateRecord { base, updates, .. } => {
+                Self::count_param_field_reads(base, param_name)
+                    + updates
+                        .iter()
+                        .map(|(_, v)| Self::count_param_field_reads(v, param_name))
+                        .sum::<usize>()
+            }
+            Expr::For { iterable, body, .. } => {
+                Self::count_param_field_reads(iterable, param_name)
+                    + Self::count_param_field_reads(body, param_name)
+            }
+            Expr::Try { expr, .. } => Self::count_param_field_reads(expr, param_name),
+            Expr::MakeClosure { captures, .. } => captures
+                .iter()
+                .map(|c| Self::count_param_field_reads(c, param_name))
+                .sum(),
+            Expr::Lambda { body, .. } => Self::count_param_field_reads(body, param_name),
+            Expr::WithHandlers { handlers, body, .. } => {
+                let mut total = Self::count_param_field_reads(body, param_name);
+                for (_, methods) in handlers {
+                    for (_, h) in methods {
+                        total += Self::count_param_field_reads(h, param_name);
+                    }
+                }
+                total
+            }
+            Expr::HandleEffect { body, clauses, .. } => {
+                let mut total = Self::count_param_field_reads(body, param_name);
+                for clause in clauses {
+                    total += Self::count_param_field_reads(&clause.body, param_name);
+                }
+                total
+            }
+            Expr::PerformEffect { args, .. } => args
+                .iter()
+                .map(|a| Self::count_param_field_reads(a, param_name))
+                .sum(),
+            Expr::Expect { actual, matcher } => {
+                Self::count_param_field_reads(actual, param_name)
+                    + Self::count_matcher_param_field_reads(matcher, param_name)
+            }
+            Expr::Drop { body, .. } => Self::count_param_field_reads(body, param_name),
+            Expr::Reuse { alloc, .. } => Self::count_param_field_reads(alloc, param_name),
+            Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::String(_)
+            | Expr::Bool(_)
+            | Expr::Unit
+            | Expr::Hole
+            | Expr::Var(_, _)
+            | Expr::GetClosureVar(_) => 0,
+        }
+    }
+
+    /// Seed SRA field caches for struct/record parameters when profitable.
+    ///
+    /// This reduces repeated `GetField` helper calls by extracting hot parameter
+    /// fields once at function entry and serving reads from SSA variables.
+    ///
+    /// For tail-recursive functions, ALL record params are SRA'd regardless of
+    /// profitability. This enables SRA-aware tail calls: instead of materializing
+    /// records and re-extracting fields on each loop iteration, field variables
+    /// are directly rebound at the tail call site.
+    pub(super) fn seed_param_field_cache(
+        &mut self,
+        func_ty: Option<&Type>,
+        params: &[String],
+        param_types: &[Option<Type>],
+        body: &Expr,
+        is_tail_recursive: bool,
+    ) -> Result<(), String> {
+        // Get param types: prefer explicit param_types from IR, fall back to
+        // function type signature, then infer from body Var references.
+        let param_tys_from_sig: Vec<Option<Type>> = if !param_types.is_empty() {
+            param_types.to_vec()
+        } else if let Some(Type::Function(pts, _)) = func_ty {
+            params
+                .iter()
+                .enumerate()
+                .map(|(i, _)| pts.get(i).cloned())
+                .collect()
+        } else {
+            // Infer from body: find Var(name, Some(type)) references
+            let inferred = Self::infer_param_types(body, params);
+            params
+                .iter()
+                .map(|name| inferred.get(name.as_str()).cloned())
+                .collect()
+        };
+
+        for (idx, param_name) in params.iter().enumerate() {
+            let Some(param_ty) = param_tys_from_sig.get(idx).and_then(|t| t.as_ref()) else {
+                continue;
+            };
+            let fields = match param_ty {
+                Type::Struct(_, fields) | Type::Record(fields, _) => fields,
+                _ => continue,
+            };
+
+            // For tail-recursive functions, always SRA record params to enable
+            // zero-allocation tail calls. Otherwise, only cache when profitable.
+            if !is_tail_recursive {
+                let read_count = Self::count_param_field_reads(body, param_name);
+                if read_count <= fields.len() {
+                    continue;
+                }
+            }
+
+            self.seed_record_field_cache(param_name, fields)?;
+            self.sra_hot_vars.insert(param_name.clone());
+
+            // For tail-recursive functions, save the original param SRA vars
+            // and remove from vars so reads go through SRA (not boxed param).
+            if is_tail_recursive {
+                if let Some(sra) = self.sra_records.get(param_name) {
+                    self.param_sra_original
+                        .insert(param_name.clone(), sra.clone());
+                }
+                self.vars.remove(param_name);
+            }
+        }
+        Ok(())
+    }
+
+    /// Infer parameter types from Var references in the function body.
+    /// Scans for Var(name, Some(type)) where name matches a param.
+    fn infer_param_types<'e>(
+        body: &'e Expr,
+        params: &[String],
+    ) -> HashMap<&'e str, Type> {
+        let mut result = HashMap::new();
+        Self::collect_var_types(body, params, &mut result);
+        result
+    }
+
+    fn collect_var_types<'e>(
+        expr: &'e Expr,
+        params: &[String],
+        out: &mut HashMap<&'e str, Type>,
+    ) {
+        match expr {
+            Expr::Var(name, Some(ty)) if params.iter().any(|p| p == name) => {
+                out.entry(name.as_str()).or_insert_with(|| ty.clone());
+            }
+            Expr::GetField { object, .. } => Self::collect_var_types(object, params, out),
+            Expr::BinOp { lhs, rhs, .. }
+            | Expr::And(lhs, rhs)
+            | Expr::Or(lhs, rhs) => {
+                Self::collect_var_types(lhs, params, out);
+                Self::collect_var_types(rhs, params, out);
+            }
+            Expr::UnaryOp { operand, .. } => Self::collect_var_types(operand, params, out),
+            Expr::If { condition, then_branch, else_branch, .. } => {
+                Self::collect_var_types(condition, params, out);
+                Self::collect_var_types(then_branch, params, out);
+                if let Some(e) = else_branch {
+                    Self::collect_var_types(e, params, out);
+                }
+            }
+            Expr::Let { value, .. } | Expr::Assign { value, .. } => {
+                Self::collect_var_types(value, params, out);
+            }
+            Expr::Block(exprs, _) => {
+                for e in exprs {
+                    Self::collect_var_types(e, params, out);
+                }
+            }
+            Expr::CallDirect { args, .. }
+            | Expr::TailCall { args, .. }
+            | Expr::CallNative { args, .. } => {
+                for a in args {
+                    Self::collect_var_types(a, params, out);
+                }
+            }
+            Expr::CallIndirect { callee, args, .. }
+            | Expr::TailCallIndirect { callee, args, .. } => {
+                Self::collect_var_types(callee, params, out);
+                for a in args {
+                    Self::collect_var_types(a, params, out);
+                }
+            }
+            Expr::Match { subject, arms, .. } => {
+                Self::collect_var_types(subject, params, out);
+                for arm in arms {
+                    Self::collect_var_types(&arm.body, params, out);
+                }
+            }
+            Expr::MakeRecord(fields, _) | Expr::MakeStruct { fields, .. } => {
+                for (_, v) in fields {
+                    Self::collect_var_types(v, params, out);
+                }
+            }
+            Expr::UpdateRecord { base, updates, .. } => {
+                Self::collect_var_types(base, params, out);
+                for (_, v) in updates {
+                    Self::collect_var_types(v, params, out);
+                }
+            }
+            Expr::MakeTuple(items, _) | Expr::MakeList(items, _) => {
+                for e in items {
+                    Self::collect_var_types(e, params, out);
+                }
+            }
+            Expr::MakeEnum { payload, .. } => Self::collect_var_types(payload, params, out),
+            Expr::MakeClosure { captures, .. } => {
+                for c in captures {
+                    Self::collect_var_types(c, params, out);
+                }
+            }
+            Expr::Try { expr, .. } => Self::collect_var_types(expr, params, out),
+            Expr::Concat(parts) => {
+                for p in parts {
+                    Self::collect_var_types(p, params, out);
+                }
+            }
+            Expr::For { iterable, body, .. } => {
+                Self::collect_var_types(iterable, params, out);
+                Self::collect_var_types(body, params, out);
+            }
+            Expr::Drop { body, .. } => Self::collect_var_types(body, params, out),
+            Expr::Reuse { alloc, .. } => Self::collect_var_types(alloc, params, out),
+            _ => {}
+        }
     }
 
     /// Compile a slice of expressions, stashing each intermediate result
@@ -120,9 +656,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
     /// Track a variable as owned in the current RC scope.
     pub(super) fn rc_track_var(&mut self, var: Variable) {
         if self.rc_enabled
-            && let Some(frame) = self.rc_scope_stack.last_mut() {
-                frame.push(var);
-            }
+            && let Some(frame) = self.rc_scope_stack.last_mut()
+        {
+            frame.push(var);
+        }
     }
 
     /// Pop an RC scope frame, emitting decref for all tracked variables
@@ -431,7 +968,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);
         let func_id = self.func_ids[func_idx].ok_or_else(|| {
-            format!("JIT: speculated function at index {} was not declared", func_idx)
+            format!(
+                "JIT: speculated function at index {} was not declared",
+                func_idx
+            )
         })?;
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let callee_unboxed = func_idx < self.unboxed_flags.len() && self.unboxed_flags[func_idx];
@@ -590,6 +1130,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let var = self.new_var();
                     self.builder.def_var(var, val);
                     self.vars.insert(name.clone(), var);
+                }
+                Ok(self.builder.ins().iconst(types::I64, 0))
+            }
+
+            Expr::Assign { name, value } => {
+                let val = self.compile_expr_unboxed(value)?;
+                if let Some(&var) = self.vars.get(name) {
+                    self.builder.def_var(var, val);
                 }
                 Ok(self.builder.ins().iconst(types::I64, 0))
             }
@@ -868,7 +1416,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
         // Call the unboxed function: pass raw args, receive raw result
         let func_id = self.func_ids[func_idx].ok_or_else(|| {
-            format!("JIT: unboxed speculated function at index {} was not declared", func_idx)
+            format!(
+                "JIT: unboxed speculated function at index {} was not declared",
+                func_idx
+            )
         })?;
         let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
         let call = self.builder.ins().call(func_ref, &arg_vals);
@@ -908,6 +1459,24 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     } else {
                         Ok(val)
                     }
+                } else if let Some(field_vars) = self.sra_records.get(name).cloned() {
+                    // SRA materialization: rebuild a boxed record from scalar fields
+                    let mut sorted_fields: Vec<_> = field_vars.iter().collect();
+                    sorted_fields.sort_by(|a, b| a.0.cmp(b.0));
+                    let mut pair_vals = Vec::with_capacity(sorted_fields.len() * 2);
+                    for &(ref fname, &fvar) in &sorted_fields {
+                        let key_val = self.emit_string_value(fname)?;
+                        let key_val = self.stash_in_var(key_val);
+                        let val = self.builder.use_var(fvar);
+                        pair_vals.push(key_val);
+                        pair_vals.push(val);
+                    }
+                    let addr = self.spill_to_stack(&pair_vals);
+                    let count = self
+                        .builder
+                        .ins()
+                        .iconst(types::I64, sorted_fields.len() as i64);
+                    Ok(self.call_helper("jit_make_record", &[addr, count]))
                 } else if let Some(&func_idx) = self.func_names.get(name) {
                     // Function reference as NaN-boxed Function value
                     Ok(self.emit_nvalue(NValue::function(func_idx)))
@@ -995,10 +1564,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             Ok(self.tag_bool(c))
                         }
                         BinOp::Ge => {
-                            let c = self
-                                .builder
-                                .ins()
-                                .fcmp(FloatCC::GreaterThanOrEqual, lf, rf);
+                            let c = self.builder.ins().fcmp(FloatCC::GreaterThanOrEqual, lf, rf);
                             Ok(self.tag_bool(c))
                         }
                         BinOp::ListConcat => Err("ListConcat on Float is invalid".into()),
@@ -1134,14 +1700,46 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             }
 
             Expr::Let { pattern, value, .. } => {
+                // Optimization: self-rebinding UpdateRecord (let x = { ..x, f: v })
+                // Skip incref on base for in-place mutation when refcount == 1.
+                if self.rc_enabled
+                    && let Pattern::Var(bind_name) = pattern.as_ref()
+                    && let Expr::UpdateRecord { base, .. } = value.as_ref()
+                    && let Expr::Var(base_name, _) = base.as_ref()
+                    && bind_name == base_name
+                    && self.vars.contains_key(bind_name)
+                {
+                    let val =
+                        self.compile_update_record_consuming(value, bind_name)?;
+                    self.bind_pattern_rc(pattern, val)?;
+                } else {
+                    let val = self.compile_expr(value)?;
+                    self.bind_pattern_rc(pattern, val)?;
+                }
+                self.alias_sra_pattern_bindings(pattern, value);
+                if let Some(value_ty) = Self::expr_type_hint(value) {
+                    self.reseed_hot_pattern_vars(pattern, &value_ty)?;
+                }
+                Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
+            }
+
+            Expr::Assign { name, value } => {
                 let val = self.compile_expr(value)?;
-                self.bind_pattern_rc(pattern, val)?;
+                if let Some(&var) = self.vars.get(name) {
+                    // RC: decref the old value before overwriting
+                    if self.rc_enabled {
+                        let old = self.builder.use_var(var);
+                        self.emit_decref(old);
+                    }
+                    self.builder.def_var(var, val);
+                }
                 Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64))
             }
 
             Expr::Block(exprs, _) => {
                 // SRA: find non-escaping record bindings and track them
-                let sra_candidates = Self::find_sra_candidates(exprs);
+                let self_fn = if self.loop_header.is_some() { Some(self.current_func_name.as_str()) } else { None };
+                let sra_candidates = Self::find_sra_candidates_with_existing(exprs, &self.sra_records, self_fn);
                 let sra_names: std::collections::HashSet<&str> =
                     sra_candidates.iter().map(|(n, _)| n.as_str()).collect();
 
@@ -1156,7 +1754,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     }
                     result = self.compile_expr(e)?;
                     // RC: decref intermediate results (not the last expression)
-                    if self.rc_enabled && !is_last && !matches!(e, Expr::Let { .. }) {
+                    if self.rc_enabled && !is_last && !matches!(e, Expr::Let { .. } | Expr::Assign { .. }) {
                         self.emit_decref(result);
                     }
                 }
@@ -1186,7 +1784,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         if callee_unboxed {
                             // Boxed → unboxed: untag args, tag result
                             let arg_vals = self.compile_exprs_stashed(args)?;
-                            let arg_vals: Vec<CValue> = arg_vals.into_iter()
+                            let arg_vals: Vec<CValue> = arg_vals
+                                .into_iter()
                                 .map(|boxed| self.untag_int(boxed))
                                 .collect();
                             let call = self.builder.ins().call(func_ref, &arg_vals);
@@ -1212,6 +1811,14 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 if name == &self.current_func_name
                     && let Some(loop_header) = self.loop_header
                 {
+                    // SRA-aware tail call: for params that are SRA'd, directly
+                    // rebind the param SRA field vars instead of materializing
+                    // boxed records. This eliminates allocation in hot loops.
+                    if !self.param_sra_original.is_empty() {
+                        self.compile_sra_tail_call(args, loop_header)?;
+                        return Ok(self.builder.ins().iconst(types::I64, NV_UNIT as i64));
+                    }
+
                     let arg_vals = self.compile_exprs_stashed(args)?;
 
                     // RC: decref old parameter values before overwriting
@@ -1245,7 +1852,8 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
                         if callee_unboxed {
                             let arg_vals = self.compile_exprs_stashed(args)?;
-                            let arg_vals: Vec<CValue> = arg_vals.into_iter()
+                            let arg_vals: Vec<CValue> = arg_vals
+                                .into_iter()
                                 .map(|boxed| self.untag_int(boxed))
                                 .collect();
                             let call = self.builder.ins().call(func_ref, &arg_vals);
@@ -1331,7 +1939,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 module: mod_name,
                 method,
                 args,
-                ..
+                ty,
             } => {
                 let qualified = if mod_name.is_empty() {
                     method.to_string()
@@ -1343,6 +1951,20 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 if qualified == "String.reverse" && args.len() == 1 {
                     let arg = self.compile_expr(&args[0])?;
                     return Ok(self.call_helper("jit_string_reverse", &[arg]));
+                }
+
+                // Direct Cranelift intrinsic for Math.sqrt on statically-float args.
+                // Keep fallback native dispatch for non-float/unknown numeric shapes
+                // (e.g. Int/BigInt coercions handled by native runtime path).
+                if qualified == "Math.sqrt"
+                    && args.len() == 1
+                    && matches!(ty, Some(Type::Float))
+                    && Self::expr_is_known_float(&args[0])
+                {
+                    let arg = self.compile_expr(&args[0])?;
+                    let arg_f = self.bitcast_to_f64(arg);
+                    let out_f = self.builder.ins().sqrt(arg_f);
+                    return Ok(self.bitcast_to_i64(out_f));
                 }
 
                 // AOT path: direct call to extern "C" symbol in libbaseline_rt
@@ -1391,10 +2013,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 } else {
                     "jit_call_native"
                 };
-                Ok(self.call_helper(
-                    helper,
-                    &[registry_ptr, id_val, args_addr, count_val],
-                ))
+                Ok(self.call_helper(helper, &[registry_ptr, id_val, args_addr, count_val]))
             }
 
             Expr::Concat(parts) => {
@@ -1417,12 +2036,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                         let tag_val = self.emit_string_value(tag)?;
                         let id_val = self.builder.ins().iconst(types::I64, id as i64);
                         let addr = self.spill_to_stack(&item_vals);
-                        let count =
-                            self.builder.ins().iconst(types::I64, item_vals.len() as i64);
-                        return Ok(self.call_helper(
-                            "jit_make_enum_flat",
-                            &[tag_val, id_val, addr, count],
-                        ));
+                        let count = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, item_vals.len() as i64);
+                        return Ok(
+                            self.call_helper("jit_make_enum_flat", &[tag_val, id_val, addr, count])
+                        );
                     }
                     // Nullary: MakeEnum { payload: Unit } → baked constant
                     if matches!(payload.as_ref(), Expr::Unit) {
@@ -1514,10 +2134,13 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 Ok(self.call_helper("jit_make_range", &[start_val, end_val]))
             }
 
-            Expr::UpdateRecord { base, updates, ty, .. } => {
+            Expr::UpdateRecord {
+                base, updates, ty, ..
+            } => {
                 // Indexed path: if we know the base type, resolve field indices.
                 let indices: Option<Vec<u16>> = ty.as_ref().and_then(|t| {
-                    updates.iter()
+                    updates
+                        .iter()
                         .map(|(fname, _)| Self::sorted_field_index(t, fname))
                         .collect()
                 });
@@ -1526,13 +2149,40 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let base_val = self.stash_in_var(base_val);
 
                 if let Some(ref idxs) = indices {
-                    let mut pair_vals = Vec::with_capacity(updates.len() * 2);
+                    let mut update_vals = Vec::with_capacity(updates.len());
                     for (i, (_, fexpr)) in updates.iter().enumerate() {
-                        let idx_val = self.builder.ins().iconst(types::I64, idxs[i] as i64);
-                        let idx_val = self.stash_in_var(idx_val);
                         let val = self.compile_expr(fexpr)?;
+                        if i + 1 < updates.len() {
+                            update_vals.push(self.stash_in_var(val));
+                        } else {
+                            update_vals.push(val);
+                        }
+                    }
+
+                    // Fixed-arity fast path used by nbody spread updates.
+                    if idxs.len() == 3 {
+                        let i0 = self.builder.ins().iconst(types::I64, idxs[0] as i64);
+                        let i1 = self.builder.ins().iconst(types::I64, idxs[1] as i64);
+                        let i2 = self.builder.ins().iconst(types::I64, idxs[2] as i64);
+                        return Ok(self.call_helper(
+                            "jit_update_record_indexed3",
+                            &[
+                                base_val,
+                                i0,
+                                update_vals[0],
+                                i1,
+                                update_vals[1],
+                                i2,
+                                update_vals[2],
+                            ],
+                        ));
+                    }
+
+                    let mut pair_vals = Vec::with_capacity(updates.len() * 2);
+                    for (i, val) in update_vals.iter().enumerate() {
+                        let idx_val = self.builder.ins().iconst(types::I64, idxs[i] as i64);
                         pair_vals.push(idx_val);
-                        pair_vals.push(val);
+                        pair_vals.push(*val);
                     }
                     let addr = self.spill_to_stack(&pair_vals);
                     let count = self.builder.ins().iconst(types::I64, updates.len() as i64);
@@ -1553,13 +2203,19 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
             }
 
-            Expr::GetField { object, field, field_idx, .. } => {
+            Expr::GetField {
+                object,
+                field,
+                field_idx,
+                ..
+            } => {
                 // SRA: if object is a scalar-replaced record, read field variable directly
                 if let Expr::Var(name, _) = object.as_ref()
                     && let Some(field_vars) = self.sra_records.get(name.as_str())
-                        && let Some(&var) = field_vars.get(field.as_str()) {
-                            return Ok(self.builder.use_var(var));
-                        }
+                    && let Some(&var) = field_vars.get(field.as_str())
+                {
+                    return Ok(self.builder.use_var(var));
+                }
                 // Indexed fast path: O(1) field access by compile-time index.
                 if let Some(idx) = field_idx {
                     let obj_val = self.compile_expr(object)?;
@@ -1809,9 +2465,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 }
             }
 
-            Expr::Expect { actual, matcher } => {
-                self.compile_expect(actual, matcher)
-            }
+            Expr::Expect { actual, matcher } => self.compile_expect(actual, matcher),
 
             // -- Perceus reuse analysis --
             Expr::Drop { name, token, body } => {
@@ -1865,7 +2519,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                                 let tag_val = self.emit_string_value(tag)?;
                                 let id_val = self.builder.ins().iconst(types::I64, id as i64);
                                 let addr = self.spill_to_stack(&item_vals);
-                                let count = self.builder.ins().iconst(types::I64, item_vals.len() as i64);
+                                let count = self
+                                    .builder
+                                    .ins()
+                                    .iconst(types::I64, item_vals.len() as i64);
                                 Ok(self.call_helper(
                                     "jit_make_enum_flat_reuse",
                                     &[token_val, tag_val, id_val, addr, count],
@@ -1906,7 +2563,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                             self.compile_exprs_stashed(items)?
                         };
                         let addr = self.spill_to_stack(&item_vals);
-                        let count = self.builder.ins().iconst(types::I64, item_vals.len() as i64);
+                        let count = self
+                            .builder
+                            .ins()
+                            .iconst(types::I64, item_vals.len() as i64);
                         Ok(self.call_helper("jit_make_tuple_reuse", &[token_val, addr, count]))
                     }
                     _ => {
@@ -1931,6 +2591,107 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
 
             // Remaining unsupported constructs
             _ => Err(format!("Unsupported expression in JIT: {:?}", expr)),
+        }
+    }
+
+    /// Compile an UpdateRecord expression that consumes the base variable.
+    /// Used for self-rebinding patterns like `let x = { ..x, field: val }`.
+    /// Reads the base WITHOUT incref so the helper gets refcount==1 and can
+    /// mutate in place, then nulls the old variable to prevent double-free.
+    fn compile_update_record_consuming(
+        &mut self,
+        expr: &Expr,
+        base_name: &str,
+    ) -> Result<CValue, String> {
+        let Expr::UpdateRecord {
+            updates, ty, ..
+        } = expr
+        else {
+            return self.compile_expr(expr);
+        };
+
+        let indices: Option<Vec<u16>> = ty.as_ref().and_then(|t| {
+            updates
+                .iter()
+                .map(|(fname, _)| Self::sorted_field_index(t, fname))
+                .collect()
+        });
+
+        // Read base WITHOUT incref — we're consuming it
+        let base_var = *self.vars.get(base_name).unwrap();
+        let base_val = self.builder.use_var(base_var);
+        let base_val = self.stash_in_var(base_val);
+
+        // Compile update expressions (may read base.field via GetField — safe,
+        // they do their own temporary incref/decref)
+        if let Some(ref idxs) = indices {
+            let mut update_vals = Vec::with_capacity(updates.len());
+            for (i, (_, fexpr)) in updates.iter().enumerate() {
+                let val = self.compile_expr(fexpr)?;
+                if i + 1 < updates.len() {
+                    update_vals.push(self.stash_in_var(val));
+                } else {
+                    update_vals.push(val);
+                }
+            }
+
+            // Null out old variable BEFORE calling helper — prevents double-free
+            // at scope exit (the old var is tracked in RC scope, decref of NV_UNIT
+            // is a no-op).
+            let null_val = self
+                .builder
+                .ins()
+                .iconst(types::I64, NV_UNIT as i64);
+            self.builder.def_var(base_var, null_val);
+
+            if idxs.len() == 3 {
+                let i0 = self.builder.ins().iconst(types::I64, idxs[0] as i64);
+                let i1 = self.builder.ins().iconst(types::I64, idxs[1] as i64);
+                let i2 = self.builder.ins().iconst(types::I64, idxs[2] as i64);
+                return Ok(self.call_helper(
+                    "jit_update_record_indexed3",
+                    &[
+                        base_val,
+                        i0,
+                        update_vals[0],
+                        i1,
+                        update_vals[1],
+                        i2,
+                        update_vals[2],
+                    ],
+                ));
+            }
+
+            let mut pair_vals = Vec::with_capacity(updates.len() * 2);
+            for (i, val) in update_vals.iter().enumerate() {
+                let idx_val = self.builder.ins().iconst(types::I64, idxs[i] as i64);
+                pair_vals.push(idx_val);
+                pair_vals.push(*val);
+            }
+            let addr = self.spill_to_stack(&pair_vals);
+            let count = self.builder.ins().iconst(types::I64, updates.len() as i64);
+            Ok(self.call_helper(
+                "jit_update_record_indexed",
+                &[base_val, addr, count],
+            ))
+        } else {
+            // Fallback: string-based. Null first, then call.
+            let mut pair_vals = Vec::with_capacity(updates.len() * 2);
+            for (fname, fexpr) in updates {
+                let key_val = self.emit_string_value(fname)?;
+                let key_val = self.stash_in_var(key_val);
+                let val = self.compile_expr(fexpr)?;
+                pair_vals.push(key_val);
+                pair_vals.push(val);
+            }
+            let null_val = self
+                .builder
+                .ins()
+                .iconst(types::I64, NV_UNIT as i64);
+            self.builder.def_var(base_var, null_val);
+            let addr = self.spill_to_stack(&pair_vals);
+            let count = self.builder.ins().iconst(types::I64, updates.len() as i64);
+            Ok(self.call_helper("jit_update_record", &[base_val, addr, count]))
         }
     }
 
@@ -2101,10 +2862,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let actual_val = self.stash_in_var(actual_val);
                     let expected_val = self.compile_expr(expected)?;
                     let args_addr = self.spill_to_stack(&[actual_val, expected_val]);
-                    let registry_ptr = self.builder.ins().iconst(
-                        self.ptr_type,
-                        registry as *const NativeRegistry as i64,
-                    );
+                    let registry_ptr = self
+                        .builder
+                        .ins()
+                        .iconst(self.ptr_type, registry as *const NativeRegistry as i64);
                     let id_val = self.builder.ins().iconst(types::I64, native_id as i64);
                     let count_val = self.builder.ins().iconst(types::I64, 2);
                     Ok(self.call_helper(
@@ -2127,10 +2888,10 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     let actual_val = self.stash_in_var(actual_val);
                     let expected_val = self.compile_expr(expected)?;
                     let args_addr = self.spill_to_stack(&[actual_val, expected_val]);
-                    let registry_ptr = self.builder.ins().iconst(
-                        self.ptr_type,
-                        registry as *const NativeRegistry as i64,
-                    );
+                    let registry_ptr = self
+                        .builder
+                        .ins()
+                        .iconst(self.ptr_type, registry as *const NativeRegistry as i64);
                     let id_val = self.builder.ins().iconst(types::I64, native_id as i64);
                     let count_val = self.builder.ins().iconst(types::I64, 2);
                     Ok(self.call_helper(
@@ -2178,5 +2939,4 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         let cmp = self.builder.ins().icmp(IntCC::Equal, a, b);
         Ok(self.builder.ins().select(cmp, true_val, false_val))
     }
-
 }
