@@ -326,6 +326,7 @@ fn lift_lambdas_in_expr(
                 params: lifted_params,
                 body: transformed_body,
                 ty: ty.clone(),
+                param_types: vec![],
                 span: Span {
                     line: 0,
                     col: 0,
@@ -456,7 +457,12 @@ fn expr_has_perform(expr: &Expr) -> bool {
 
 fn expr_has_unhandled_perform(expr: &Expr, handled: &mut HashSet<String>) -> bool {
     match expr {
-        Expr::PerformEffect { effect, method, args, .. } => {
+        Expr::PerformEffect {
+            effect,
+            method,
+            args,
+            ..
+        } => {
             let key = format!("{}.{}", effect, method);
             if handled.contains(&key) {
                 // This effect is handled by an enclosing HandleEffect.
@@ -522,7 +528,10 @@ fn collect_call_targets(expr: &Expr, out: &mut Vec<String>) {
 /// rejects them → VM fallback).
 fn evidence_transform(module: &mut IrModule) {
     // Check if there are any effect nodes at all.
-    let has_any_effects = module.functions.iter().any(|f| expr_has_effect_node(&f.body));
+    let has_any_effects = module
+        .functions
+        .iter()
+        .any(|f| expr_has_effect_node(&f.body));
     if !has_any_effects {
         return;
     }
@@ -598,7 +607,12 @@ fn transform_evidence_expr(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
                 // Strip the resume(expr) wrapper to get just the inner expr.
                 let stripped_body = strip_tail_resume_owned(&clause.body);
                 let lambda = Expr::Lambda {
-                    params: clause.params.iter().filter(|p| *p != "resume").cloned().collect(),
+                    params: clause
+                        .params
+                        .iter()
+                        .filter(|p| *p != "resume")
+                        .cloned()
+                        .collect(),
                     body: Box::new(stripped_body),
                     ty: None,
                 };
@@ -651,7 +665,8 @@ fn transform_evidence_expr(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
                     // and let PerformEffect do a two-level lookup or store flat.
                     // Simpler: store as flat fields using a temp.
                     let handler_tmp = format!("__ev_wh_{}", effect_name);
-                    let handler_expr = transform_evidence_expr(methods.into_iter().next().unwrap().1, ctx);
+                    let handler_expr =
+                        transform_evidence_expr(methods.into_iter().next().unwrap().1, ctx);
                     block.push(Expr::Let {
                         pattern: Box::new(Pattern::Var(handler_tmp.clone())),
                         value: Box::new(handler_expr),
@@ -790,9 +805,7 @@ fn transform_evidence_expr(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
         // -----------------------------------------------------------------
         // All other nodes: recurse into children
         // -----------------------------------------------------------------
-        other => {
-            walk_expr_children(other, |child| transform_evidence_expr(child, ctx))
-        }
+        other => walk_expr_children(other, |child| transform_evidence_expr(child, ctx)),
     }
 }
 
@@ -811,8 +824,6 @@ fn strip_tail_resume_owned(expr: &Expr) -> Expr {
     }
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Fiber-based handler transform (non-tail-resumptive)
 // ---------------------------------------------------------------------------
@@ -830,11 +841,7 @@ fn strip_tail_resume_owned(expr: &Expr) -> Expr {
 ///     [Lambda { handler_clause_with_resume_replaced }, ...]
 /// )
 /// ```
-fn transform_fiber_handler(
-    body: Expr,
-    clauses: Vec<HandlerClause>,
-    ctx: &mut EvidenceCtx,
-) -> Expr {
+fn transform_fiber_handler(body: Expr, clauses: Vec<HandlerClause>, ctx: &mut EvidenceCtx) -> Expr {
     // Collect effect keys handled by these clauses, so we know which
     // PerformEffect nodes in the body to replace.
     let handled_keys: HashSet<String> = clauses
@@ -864,7 +871,11 @@ fn transform_fiber_handler(
         // Handler lambda params = clause.params (the effect operation args,
         // NOT including resume — resume is replaced with __handler.resume)
         let handler_lambda = Expr::Lambda {
-            params: clause.params.into_iter().filter(|p| p != "resume").collect(),
+            params: clause
+                .params
+                .into_iter()
+                .filter(|p| p != "resume")
+                .collect(),
             body: Box::new(transformed_clause),
             ty: None,
         };
@@ -887,9 +898,18 @@ fn transform_fiber_handler(
 /// Replace PerformEffect nodes in a handler body with CallNative("__fiber.perform").
 /// Only replaces performs for effects in `handled_keys` (this handler's clauses).
 /// Nested HandleEffect/WithHandlers that handle the same effects shadow them.
-fn replace_perform_in_body(expr: Expr, handled_keys: &HashSet<String>, ctx: &mut EvidenceCtx) -> Expr {
+fn replace_perform_in_body(
+    expr: Expr,
+    handled_keys: &HashSet<String>,
+    ctx: &mut EvidenceCtx,
+) -> Expr {
     match expr {
-        Expr::PerformEffect { effect, method, args, ty } => {
+        Expr::PerformEffect {
+            effect,
+            method,
+            args,
+            ty,
+        } => {
             let key = format!("{}.{}", effect, method);
             if handled_keys.contains(&key) {
                 // This perform is handled by our fiber handler → replace with fiber yield
@@ -912,7 +932,12 @@ fn replace_perform_in_body(expr: Expr, handled_keys: &HashSet<String>, ctx: &mut
                     .map(|a| replace_perform_in_body(a, handled_keys, ctx))
                     .collect();
                 transform_evidence_expr(
-                    Expr::PerformEffect { effect, method, args, ty },
+                    Expr::PerformEffect {
+                        effect,
+                        method,
+                        args,
+                        ty,
+                    },
                     ctx,
                 )
             } else {
@@ -922,7 +947,12 @@ fn replace_perform_in_body(expr: Expr, handled_keys: &HashSet<String>, ctx: &mut
                     .into_iter()
                     .map(|a| replace_perform_in_body(a, handled_keys, ctx))
                     .collect();
-                Expr::PerformEffect { effect, method, args, ty }
+                Expr::PerformEffect {
+                    effect,
+                    method,
+                    args,
+                    ty,
+                }
             }
         }
         // Nested HandleEffect shadows some keys — don't replace those
@@ -954,7 +984,9 @@ fn replace_perform_in_body(expr: Expr, handled_keys: &HashSet<String>, ctx: &mut
             }
         }
         // Recurse into children
-        other => walk_expr_children(other, |child| replace_perform_in_body(child, handled_keys, ctx)),
+        other => walk_expr_children(other, |child| {
+            replace_perform_in_body(child, handled_keys, ctx)
+        }),
     }
 }
 
@@ -963,8 +995,7 @@ fn replace_perform_in_body(expr: Expr, handled_keys: &HashSet<String>, ctx: &mut
 fn replace_resume_in_clause(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
     match expr {
         // resume(val) → __handler.resume(val)
-        Expr::CallIndirect { callee, args, ty }
-            if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") =>
+        Expr::CallIndirect { callee, args, ty } if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") =>
         {
             let transformed_args: Vec<Expr> = args
                 .into_iter()
@@ -978,8 +1009,7 @@ fn replace_resume_in_clause(expr: Expr, ctx: &mut EvidenceCtx) -> Expr {
             }
         }
         // TailCallIndirect to resume → also replace
-        Expr::TailCallIndirect { callee, args, ty }
-            if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") =>
+        Expr::TailCallIndirect { callee, args, ty } if matches!(callee.as_ref(), Expr::Var(name, _) if name == "resume") =>
         {
             let transformed_args: Vec<Expr> = args
                 .into_iter()
@@ -1018,11 +1048,7 @@ fn insert_drop_reuse(module: &mut IrModule) {
 }
 
 /// Recursively walk an expression, inserting Drop/Reuse where appropriate.
-fn insert_reuse_in_expr(
-    expr: Expr,
-    counts: &HashMap<String, usize>,
-    counter: &mut usize,
-) -> Expr {
+fn insert_reuse_in_expr(expr: Expr, counts: &HashMap<String, usize>, counter: &mut usize) -> Expr {
     match expr {
         Expr::Match { subject, arms, ty } => {
             // Check if subject is a single-use variable
@@ -1072,17 +1098,9 @@ fn insert_reuse_in_expr(
                         }
                     })
                     .collect();
-                Expr::Match {
-                    subject,
-                    arms,
-                    ty,
-                }
+                Expr::Match { subject, arms, ty }
             } else {
-                Expr::Match {
-                    subject,
-                    arms,
-                    ty,
-                }
+                Expr::Match { subject, arms, ty }
             }
         }
         // Recurse into all other expressions
@@ -1145,9 +1163,7 @@ fn contains_constructor(expr: &Expr) -> bool {
         | Expr::MakeStruct { .. }
         | Expr::MakeRecord(_, _)
         | Expr::MakeTuple(_, _) => true,
-        Expr::Block(exprs, _) if !exprs.is_empty() => {
-            contains_constructor(exprs.last().unwrap())
-        }
+        Expr::Block(exprs, _) if !exprs.is_empty() => contains_constructor(exprs.last().unwrap()),
         Expr::If {
             then_branch,
             else_branch: Some(else_branch),
@@ -1309,6 +1325,15 @@ fn walk_expr_children(expr: Expr, mut f: impl FnMut(Expr) -> Expr) -> Expr {
             pattern,
             value: Box::new(f(*value)),
             ty,
+        },
+        Expr::Assign { name, value } => Expr::Assign {
+            name,
+            value: Box::new(f(*value)),
+        },
+        Expr::FieldAssign { object, field, value } => Expr::FieldAssign {
+            object,
+            field,
+            value: Box::new(f(*value)),
         },
         Expr::Block(exprs, ty) => Expr::Block(exprs.into_iter().map(&mut f).collect(), ty),
 
@@ -1478,72 +1503,128 @@ fn visit_expr(expr: &Expr, f: &mut impl FnMut(&Expr)) {
 /// Visit all immediate children of an expression (read-only).
 fn visit_immediate_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
     match expr {
-        Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_) | Expr::Unit | Expr::Hole | Expr::Var(_, _) => {}
-        Expr::BinOp { lhs, rhs, .. } => { f(lhs); f(rhs); }
+        Expr::Int(_)
+        | Expr::Float(_)
+        | Expr::String(_)
+        | Expr::Bool(_)
+        | Expr::Unit
+        | Expr::Hole
+        | Expr::Var(_, _) => {}
+        Expr::BinOp { lhs, rhs, .. } => {
+            f(lhs);
+            f(rhs);
+        }
         Expr::UnaryOp { operand, .. } => f(operand),
-        Expr::And(l, r) | Expr::Or(l, r) => { f(l); f(r); }
-        Expr::If { condition, then_branch, else_branch, .. } => {
-            f(condition); f(then_branch);
-            if let Some(e) = else_branch { f(e); }
+        Expr::And(l, r) | Expr::Or(l, r) => {
+            f(l);
+            f(r);
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            f(condition);
+            f(then_branch);
+            if let Some(e) = else_branch {
+                f(e);
+            }
         }
         Expr::Match { subject, arms, .. } => {
             f(subject);
             for arm in arms {
-                if let Some(guard) = &arm.guard { f(guard); }
+                if let Some(guard) = &arm.guard {
+                    f(guard);
+                }
                 f(&arm.body);
             }
         }
-        Expr::For { iterable, body, .. } => { f(iterable); f(body); }
-        Expr::Let { value, .. } => f(value),
-        Expr::Block(exprs, _) => {
-            for e in exprs { f(e); }
+        Expr::For { iterable, body, .. } => {
+            f(iterable);
+            f(body);
         }
-        Expr::CallDirect { args, .. } | Expr::CallNative { args, .. } | Expr::TailCall { args, .. } => {
-            for a in args { f(a); }
+        Expr::Let { value, .. } | Expr::Assign { value, .. } | Expr::FieldAssign { value, .. } => f(value),
+        Expr::Block(exprs, _) => {
+            for e in exprs {
+                f(e);
+            }
+        }
+        Expr::CallDirect { args, .. }
+        | Expr::CallNative { args, .. }
+        | Expr::TailCall { args, .. } => {
+            for a in args {
+                f(a);
+            }
         }
         Expr::CallIndirect { callee, args, .. } | Expr::TailCallIndirect { callee, args, .. } => {
             f(callee);
-            for a in args { f(a); }
+            for a in args {
+                f(a);
+            }
         }
         Expr::MakeEnum { payload, .. } => f(payload),
         Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
-            for (_, v) in fields { f(v); }
+            for (_, v) in fields {
+                f(v);
+            }
         }
         Expr::MakeList(items, _) | Expr::MakeTuple(items, _) => {
-            for item in items { f(item); }
+            for item in items {
+                f(item);
+            }
         }
-        Expr::MakeRange(s, e) => { f(s); f(e); }
+        Expr::MakeRange(s, e) => {
+            f(s);
+            f(e);
+        }
         Expr::UpdateRecord { base, updates, .. } => {
             f(base);
-            for (_, v) in updates { f(v); }
+            for (_, v) in updates {
+                f(v);
+            }
         }
         Expr::GetField { object, .. } => f(object),
         Expr::Lambda { body, .. } => f(body),
         Expr::MakeClosure { captures, .. } => {
-            for c in captures { f(c); }
+            for c in captures {
+                f(c);
+            }
         }
         Expr::GetClosureVar(_) => {}
         Expr::Try { expr, .. } => f(expr),
         Expr::Concat(parts) => {
-            for p in parts { f(p); }
+            for p in parts {
+                f(p);
+            }
         }
         Expr::WithHandlers { handlers, body, .. } => {
             for (_, methods) in handlers {
-                for (_, h) in methods { f(h); }
+                for (_, h) in methods {
+                    f(h);
+                }
             }
             f(body);
         }
         Expr::HandleEffect { body, clauses, .. } => {
             f(body);
-            for c in clauses { f(&c.body); }
+            for c in clauses {
+                f(&c.body);
+            }
         }
         Expr::PerformEffect { args, .. } => {
-            for a in args { f(a); }
+            for a in args {
+                f(a);
+            }
         }
         Expr::Expect { actual, matcher } => {
             f(actual);
             match matcher.as_ref() {
-                crate::vm::ir::Matcher::Equal(e) | crate::vm::ir::Matcher::HaveLength(e) | crate::vm::ir::Matcher::Contain(e) | crate::vm::ir::Matcher::StartWith(e) | crate::vm::ir::Matcher::Satisfy(e) => f(e),
+                crate::vm::ir::Matcher::Equal(e)
+                | crate::vm::ir::Matcher::HaveLength(e)
+                | crate::vm::ir::Matcher::Contain(e)
+                | crate::vm::ir::Matcher::StartWith(e)
+                | crate::vm::ir::Matcher::Satisfy(e) => f(e),
                 _ => {}
             }
         }
@@ -1602,7 +1683,7 @@ fn visit_expr_children(expr: &Expr, f: &mut impl FnMut(&Expr)) {
         }
 
         // Bindings
-        Expr::Let { value, .. } => visit_expr(value, f),
+        Expr::Let { value, .. } | Expr::Assign { value, .. } | Expr::FieldAssign { value, .. } => visit_expr(value, f),
         Expr::Block(exprs, _) => {
             for e in exprs {
                 visit_expr(e, f);
@@ -1741,6 +1822,7 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
         Expr::Let { pattern, value, ty } => {
             let value = propagate_expr(*value, env);
             // Track simple variable bindings to literals
+            // (but NOT for mutable variables — those are tracked in Block)
             if let Pattern::Var(ref name) = *pattern
                 && is_literal(&value)
                 && let Some(scope) = env.last_mut()
@@ -1755,8 +1837,27 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
         }
 
         Expr::Block(exprs, ty) => {
+            // Collect variables that are assigned anywhere in this block
+            // (including nested For/If/Match bodies) — these must not be
+            // constant-propagated since their values change at runtime.
+            let mut assigned_vars = HashSet::new();
+            for e in &exprs {
+                collect_assigned_vars(e, &mut assigned_vars);
+            }
             env.push(HashMap::new());
-            let exprs = exprs.into_iter().map(|e| propagate_expr(e, env)).collect();
+            let exprs: Vec<Expr> = exprs
+                .into_iter()
+                .map(|e| {
+                    let result = propagate_expr(e, env);
+                    // Remove any assigned vars that snuck into the env from Let
+                    if let Some(scope) = env.last_mut() {
+                        for name in &assigned_vars {
+                            scope.remove(name);
+                        }
+                    }
+                    result
+                })
+                .collect();
             env.pop();
             Expr::Block(exprs, ty)
         }
@@ -1793,6 +1894,18 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
             iterable,
             body,
         } => {
+            // Invalidate any variables assigned inside the loop body — their
+            // values change across iterations so constants from before the loop
+            // must not be propagated into the body.
+            let mut assigned = HashSet::new();
+            collect_assigned_vars(&body, &mut assigned);
+            for name in &assigned {
+                for scope in env.iter_mut().rev() {
+                    if scope.remove(name).is_some() {
+                        break;
+                    }
+                }
+            }
             // The binding shadows, so push a new scope for the body
             env.push(HashMap::new());
             let result = Expr::For {
@@ -1816,8 +1929,80 @@ fn propagate_expr(expr: Expr, env: &mut Vec<HashMap<String, Expr>>) -> Expr {
             result
         }
 
+        Expr::Assign { name, value } => {
+            let value = propagate_expr(*value, env);
+            // Invalidate propagated constant for this variable
+            for scope in env.iter_mut().rev() {
+                if scope.remove(&name).is_some() {
+                    break;
+                }
+            }
+            Expr::Assign {
+                name,
+                value: Box::new(value),
+            }
+        }
+
+        Expr::FieldAssign { object, field, value } => {
+            let value = propagate_expr(*value, env);
+            // Invalidate propagated constant for the object variable
+            for scope in env.iter_mut().rev() {
+                if scope.remove(&object).is_some() {
+                    break;
+                }
+            }
+            Expr::FieldAssign {
+                object,
+                field,
+                value: Box::new(value),
+            }
+        }
+
         // All other nodes: recurse into children with propagate_expr
         other => walk_expr_children(other, |child| propagate_expr(child, env)),
+    }
+}
+
+/// Recursively collect all variable names that are targets of `Assign` in an expression tree.
+fn collect_assigned_vars(expr: &Expr, out: &mut HashSet<String>) {
+    match expr {
+        Expr::Assign { name, value } => {
+            out.insert(name.clone());
+            collect_assigned_vars(value, out);
+        }
+        Expr::FieldAssign { object, value, .. } => {
+            out.insert(object.clone());
+            collect_assigned_vars(value, out);
+        }
+        Expr::Block(exprs, _) => {
+            for e in exprs {
+                collect_assigned_vars(e, out);
+            }
+        }
+        Expr::For { iterable, body, .. } => {
+            collect_assigned_vars(iterable, out);
+            collect_assigned_vars(body, out);
+        }
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            collect_assigned_vars(condition, out);
+            collect_assigned_vars(then_branch, out);
+            if let Some(e) = else_branch {
+                collect_assigned_vars(e, out);
+            }
+        }
+        Expr::Let { value, .. } => collect_assigned_vars(value, out),
+        Expr::Match { subject, arms, .. } => {
+            collect_assigned_vars(subject, out);
+            for arm in arms {
+                collect_assigned_vars(&arm.body, out);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1926,7 +2111,7 @@ const INLINE_THRESHOLD: usize = 30;
 
 /// Higher inline threshold for lightweight functions (only arithmetic + record ops,
 /// no closures, effects, or list construction).
-const INLINE_THRESHOLD_LARGE: usize = 120;
+const INLINE_THRESHOLD_LARGE: usize = 900;
 
 /// Maximum number of inlining iterations to handle chains (f calls g calls h).
 const INLINE_MAX_ROUNDS: usize = 4;
@@ -1944,20 +2129,36 @@ fn expr_node_count(expr: &Expr) -> usize {
 fn is_lightweight(expr: &Expr) -> bool {
     let mut lightweight = true;
     visit_expr(expr, &mut |e| {
-        if !lightweight { return; }
+        if !lightweight {
+            return;
+        }
         match e {
-            Expr::Int(_) | Expr::Float(_) | Expr::String(_) | Expr::Bool(_)
-            | Expr::Unit | Expr::Var(_, _)
-            | Expr::BinOp { .. } | Expr::UnaryOp { .. }
-            | Expr::And(_, _) | Expr::Or(_, _)
-            | Expr::GetField { .. } | Expr::MakeRecord(_, _) | Expr::MakeStruct { .. }
+            Expr::Int(_)
+            | Expr::Float(_)
+            | Expr::String(_)
+            | Expr::Bool(_)
+            | Expr::Unit
+            | Expr::Var(_, _)
+            | Expr::BinOp { .. }
+            | Expr::UnaryOp { .. }
+            | Expr::And(_, _)
+            | Expr::Or(_, _)
+            | Expr::GetField { .. }
+            | Expr::MakeRecord(_, _)
+            | Expr::MakeStruct { .. }
             | Expr::UpdateRecord { .. }
-            | Expr::MakeTuple(_, _) | Expr::MakeRange(_, _)
-            | Expr::Let { .. } | Expr::Block(_, _)
-            | Expr::If { .. } | Expr::Match { .. }
-            | Expr::CallDirect { .. } | Expr::TailCall { .. }
+            | Expr::MakeTuple(_, _)
+            | Expr::MakeRange(_, _)
+            | Expr::Let { .. }
+            | Expr::Block(_, _)
+            | Expr::If { .. }
+            | Expr::Match { .. }
+            | Expr::CallDirect { .. }
+            | Expr::TailCall { .. }
             | Expr::CallNative { .. } => {}
-            _ => { lightweight = false; }
+            _ => {
+                lightweight = false;
+            }
         }
     });
     lightweight
@@ -2024,18 +2225,31 @@ fn rename_pattern(pattern: Pattern, rename_map: &HashMap<String, String>) -> Pat
                 Pattern::Var(name)
             }
         }
-        Pattern::Tuple(pats) => {
-            Pattern::Tuple(pats.into_iter().map(|p| rename_pattern(p, rename_map)).collect())
-        }
-        Pattern::Constructor(tag, pats) => {
-            Pattern::Constructor(tag, pats.into_iter().map(|p| rename_pattern(p, rename_map)).collect())
-        }
-        Pattern::Record(fields) => {
-            Pattern::Record(fields.into_iter().map(|(k, p)| (k, rename_pattern(p, rename_map))).collect())
-        }
+        Pattern::Tuple(pats) => Pattern::Tuple(
+            pats.into_iter()
+                .map(|p| rename_pattern(p, rename_map))
+                .collect(),
+        ),
+        Pattern::Constructor(tag, pats) => Pattern::Constructor(
+            tag,
+            pats.into_iter()
+                .map(|p| rename_pattern(p, rename_map))
+                .collect(),
+        ),
+        Pattern::Record(fields) => Pattern::Record(
+            fields
+                .into_iter()
+                .map(|(k, p)| (k, rename_pattern(p, rename_map)))
+                .collect(),
+        ),
         Pattern::List(pats, rest) => {
             let rest = rest.map(|r| rename_map.get(&r).cloned().unwrap_or(r));
-            Pattern::List(pats.into_iter().map(|p| rename_pattern(p, rename_map)).collect(), rest)
+            Pattern::List(
+                pats.into_iter()
+                    .map(|p| rename_pattern(p, rename_map))
+                    .collect(),
+                rest,
+            )
         }
         other => other,
     }
@@ -2077,7 +2291,9 @@ fn inline_functions(module: &mut IrModule) {
             } else {
                 INLINE_THRESHOLD
             };
-            size <= threshold && !references_function(&f.body, &f.name) && !has_early_return(&f.body)
+            size <= threshold
+                && !references_function(&f.body, &f.name)
+                && !has_early_return(&f.body)
         })
         .map(|f| (f.name.clone(), (f.params.clone(), f.body.clone())))
         .collect();
@@ -2156,11 +2372,18 @@ fn exprs_equal(a: &Expr, b: &Expr) -> bool {
 /// and binding each element directly, eliminating the intermediate tuple.
 fn fuse_tuple_lets(expr: Expr) -> Expr {
     transform_expr(expr, &mut |e| {
-        if let Expr::Let { ref pattern, ref value, .. } = e {
+        if let Expr::Let {
+            ref pattern,
+            ref value,
+            ..
+        } = e
+        {
             if let Pattern::Tuple(ref pats) = **pattern {
                 if let Expr::MakeTuple(ref elems, _) = **value {
                     if pats.len() == elems.len() {
-                        let bindings: Vec<Expr> = pats.iter().zip(elems.iter())
+                        let bindings: Vec<Expr> = pats
+                            .iter()
+                            .zip(elems.iter())
                             .map(|(p, v)| Expr::Let {
                                 pattern: Box::new(p.clone()),
                                 value: Box::new(v.clone()),
@@ -2236,10 +2459,20 @@ fn eliminate_dead_lets(expr: Expr) -> Expr {
 }
 
 /// Count variable references in an expression tree.
+/// Also counts Assign targets — a variable that is reassigned must not be eliminated.
 fn count_var_uses(expr: &Expr, counts: &mut HashMap<String, usize>) {
     visit_expr(expr, &mut |e| {
-        if let Expr::Var(name, _) = e {
-            *counts.entry(name.clone()).or_insert(0) += 1;
+        match e {
+            Expr::Var(name, _) => {
+                *counts.entry(name.clone()).or_insert(0) += 1;
+            }
+            Expr::Assign { name, .. } => {
+                *counts.entry(name.clone()).or_insert(0) += 1;
+            }
+            Expr::FieldAssign { object, .. } => {
+                *counts.entry(object.clone()).or_insert(0) += 1;
+            }
+            _ => {}
         }
     });
 }
@@ -2287,6 +2520,7 @@ mod tests {
                 params: vec![],
                 body,
                 ty: None,
+                param_types: vec![],
                 span: dummy_span(),
             }],
             entry: 0,
@@ -2568,6 +2802,7 @@ mod tests {
                     params: vec![],
                     body: caller_body,
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
                 IrFunction {
@@ -2575,6 +2810,7 @@ mod tests {
                     params: callee_params.into_iter().map(String::from).collect(),
                     body: callee_body,
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
             ],
@@ -2769,6 +3005,7 @@ mod tests {
                         ty: None,
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
                 IrFunction {
@@ -2781,6 +3018,7 @@ mod tests {
                         ty: None,
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
                 IrFunction {
@@ -2801,6 +3039,7 @@ mod tests {
                         ty: None,
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
             ],
@@ -3021,6 +3260,7 @@ mod tests {
                 params: vec!["y".into()],
                 body,
                 ty: None,
+                param_types: vec![],
                 span: dummy_span(),
             }],
             entry: 0,
@@ -3067,6 +3307,7 @@ mod tests {
                     ty: None,
                 },
                 ty: None,
+                param_types: vec![],
                 span: dummy_span(),
             }],
             entry: 0,
@@ -3090,6 +3331,7 @@ mod tests {
                         ty: None,
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
                 IrFunction {
@@ -3102,6 +3344,7 @@ mod tests {
                         ty: None,
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
             ],
@@ -3127,6 +3370,7 @@ mod tests {
                     ty: None,
                 },
                 ty: None,
+                param_types: vec![],
                 span: dummy_span(),
             }],
             entry: 0,
@@ -3167,6 +3411,7 @@ mod tests {
                 params: vec![],
                 body: handler_body,
                 ty: None,
+                param_types: vec![],
                 span: dummy_span(),
             }],
             entry: 0,
@@ -3178,10 +3423,7 @@ mod tests {
         // After transform, should have no HandleEffect or PerformEffect nodes.
         let mut has_effect_nodes = false;
         super::visit_expr(&module.functions[0].body, &mut |e| {
-            if matches!(
-                e,
-                Expr::HandleEffect { .. } | Expr::PerformEffect { .. }
-            ) {
+            if matches!(e, Expr::HandleEffect { .. } | Expr::PerformEffect { .. }) {
                 has_effect_nodes = true;
             }
         });
@@ -3241,6 +3483,7 @@ mod tests {
                 params: vec![],
                 body: handler_body,
                 ty: None,
+                param_types: vec![],
                 span: dummy_span(),
             }],
             entry: 0,
@@ -3256,7 +3499,10 @@ mod tests {
             if matches!(e, Expr::HandleEffect { .. }) {
                 has_handle = true;
             }
-            if let Expr::CallNative { module: m, method, .. } = e {
+            if let Expr::CallNative {
+                module: m, method, ..
+            } = e
+            {
                 if m == "__fiber" && method == "run_handler" {
                     has_fiber_call = true;
                 }
@@ -3266,10 +3512,7 @@ mod tests {
             !has_handle,
             "HandleEffect should be eliminated by fiber transform"
         );
-        assert!(
-            has_fiber_call,
-            "Should have __fiber.run_handler CallNative"
-        );
+        assert!(has_fiber_call, "Should have __fiber.run_handler CallNative");
     }
 
     #[test]
@@ -3305,6 +3548,7 @@ mod tests {
                         }],
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
                 IrFunction {
@@ -3317,6 +3561,7 @@ mod tests {
                         ty: None,
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
             ],
@@ -3392,6 +3637,7 @@ mod tests {
                 params: vec![],
                 body,
                 ty: None,
+                param_types: vec![],
                 span: dummy_span(),
             }],
             entry: 0,
@@ -3403,14 +3649,14 @@ mod tests {
         // Should have no effect nodes remaining.
         let mut has_effect = false;
         super::visit_expr(&module.functions[0].body, &mut |e| {
-            if matches!(
-                e,
-                Expr::HandleEffect { .. } | Expr::PerformEffect { .. }
-            ) {
+            if matches!(e, Expr::HandleEffect { .. } | Expr::PerformEffect { .. }) {
                 has_effect = true;
             }
         });
-        assert!(!has_effect, "Nested handler should eliminate all effect nodes");
+        assert!(
+            !has_effect,
+            "Nested handler should eliminate all effect nodes"
+        );
 
         // Should have an UpdateRecord (inner handler merges with outer).
         let mut has_update = false;
@@ -3453,6 +3699,7 @@ mod tests {
                         }],
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
                 IrFunction {
@@ -3490,6 +3737,7 @@ mod tests {
                         ty: None,
                     },
                     ty: None,
+                    param_types: vec![],
                     span: dummy_span(),
                 },
             ],

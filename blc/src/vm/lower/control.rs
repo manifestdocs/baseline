@@ -33,8 +33,12 @@ impl<'a> super::Lowerer<'a> {
     }
 
     pub(super) fn lower_let(&mut self, node: &Node) -> Result<Expr, CompileError> {
+        // Skip mut_keyword if present (it shifts the pattern to child index 1)
+        let has_mut = node.child_by_field_name("mutable").is_some();
+        let pattern_idx: usize = if has_mut { 1 } else { 0 };
+
         let pattern_node = node
-            .named_child(0)
+            .named_child(pattern_idx)
             .ok_or_else(|| self.error("Let binding missing pattern".into(), node))?;
 
         let value_node = node
@@ -43,14 +47,13 @@ impl<'a> super::Lowerer<'a> {
 
         let value = self.lower_expression(&value_node)?;
 
-        let pattern = if pattern_node.kind() == "tuple_pattern"
-            || pattern_node.kind() == "record_pattern"
-        {
-            self.lower_pattern(&pattern_node)?
-        } else {
-            let name = self.node_text(&pattern_node);
-            Pattern::Var(name)
-        };
+        let pattern =
+            if pattern_node.kind() == "tuple_pattern" || pattern_node.kind() == "record_pattern" {
+                self.lower_pattern(&pattern_node)?
+            } else {
+                let name = self.node_text(&pattern_node);
+                Pattern::Var(name)
+            };
 
         let ty = self
             .type_map
@@ -61,6 +64,39 @@ impl<'a> super::Lowerer<'a> {
             pattern: Box::new(pattern),
             value: Box::new(value),
             ty,
+        })
+    }
+
+    pub(super) fn lower_assignment(&mut self, node: &Node) -> Result<Expr, CompileError> {
+        let left = node
+            .child_by_field_name("left")
+            .ok_or_else(|| self.error("Assignment missing left-hand side".into(), node))?;
+        let right = node
+            .child_by_field_name("right")
+            .ok_or_else(|| self.error("Assignment missing right-hand side".into(), node))?;
+
+        let value = self.lower_expression(&right)?;
+
+        // Field assignment: b.field = val
+        if left.kind() == "field_expression" {
+            let object_node = left.named_child(0)
+                .ok_or_else(|| self.error("Field assignment missing object".into(), &left))?;
+            let field_node = left.named_child(1)
+                .ok_or_else(|| self.error("Field assignment missing field".into(), &left))?;
+            let object = self.node_text(&object_node);
+            let field = self.node_text(&field_node);
+            return Ok(Expr::FieldAssign {
+                object,
+                field,
+                value: Box::new(value),
+            });
+        }
+
+        let name = self.node_text(&left);
+
+        Ok(Expr::Assign {
+            name,
+            value: Box::new(value),
         })
     }
 

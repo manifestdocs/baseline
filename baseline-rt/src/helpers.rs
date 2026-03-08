@@ -7,11 +7,10 @@
 use std::cell::{Cell, RefCell};
 
 use crate::fiber::{self, Fiber, FiberState};
-use crate::rc::{self, Rc};
 use crate::nvalue::{
-    HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT,
-    ALLOC_STATS,
+    ALLOC_STATS, HeapObject, NValue, PAYLOAD_MASK, TAG_BOOL, TAG_HEAP, TAG_INT, TAG_MASK, TAG_UNIT,
 };
+use crate::rc::{self, Rc};
 use crate::value::RcStr;
 
 // ---------------------------------------------------------------------------
@@ -293,9 +292,10 @@ pub extern "C" fn jit_enum_field_drop(enum_bits: u64, field_idx: u64) {
     );
     unsafe {
         if let HeapObject::Enum { payload, .. } = &mut *ptr
-            && fi < payload.len() {
-                payload[fi] = NValue::unit();
-            }
+            && fi < payload.len()
+        {
+            payload[fi] = NValue::unit();
+        }
     }
 }
 
@@ -310,11 +310,7 @@ pub extern "C" fn jit_enum_field_drop(enum_bits: u64, field_idx: u64) {
 ///
 /// Returns the same enum_bits (the Arc pointer is unchanged).
 #[unsafe(no_mangle)]
-pub extern "C" fn jit_enum_field_set(
-    enum_bits: u64,
-    field_idx: u64,
-    new_value_bits: u64,
-) -> u64 {
+pub extern "C" fn jit_enum_field_set(enum_bits: u64, field_idx: u64, new_value_bits: u64) -> u64 {
     if enum_bits & TAG_MASK != TAG_HEAP {
         return NV_UNIT;
     }
@@ -329,9 +325,10 @@ pub extern "C" fn jit_enum_field_set(
     );
     unsafe {
         if let HeapObject::Enum { payload, .. } = &mut *ptr
-            && i < payload.len() {
-                payload[i] = new_value;
-            }
+            && i < payload.len()
+        {
+            payload[i] = new_value;
+        }
     }
     enum_bits
 }
@@ -379,7 +376,9 @@ pub extern "C" fn jit_drop_reuse(bits: u64) -> u64 {
         }
     }
     #[cfg(debug_assertions)]
-    ALLOC_STATS.reuses.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ALLOC_STATS
+        .reuses
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     bits
 }
 
@@ -401,7 +400,11 @@ pub extern "C" fn jit_make_enum_reuse(
         jit_set_error("enum tag must be a string".to_string());
         return NV_UNIT;
     };
-    let payload_vec = if payload.is_unit() { vec![] } else { vec![payload] };
+    let payload_vec = if payload.is_unit() {
+        vec![]
+    } else {
+        vec![payload]
+    };
     let new_obj = HeapObject::Enum {
         tag: tag_str,
         tag_id: tag_id as u32,
@@ -604,12 +607,16 @@ pub extern "C" fn jit_get_field_idx(object_bits: u64, idx: u64) -> u64 {
     let obj = unsafe { NValue::borrow_from_raw(object_bits) };
     let i = idx as usize;
     let result = if let Some(fields) = obj.as_record() {
-        fields.get(i).map(|(_, v)| v.clone()).unwrap_or_else(NValue::unit)
+        fields
+            .get(i)
+            .map(|(_, v)| v.clone())
+            .unwrap_or_else(NValue::unit)
     } else if obj.is_heap() {
         match obj.as_heap_ref() {
-            HeapObject::Struct { fields, .. } => {
-                fields.get(i).map(|(_, v)| v.clone()).unwrap_or_else(NValue::unit)
-            }
+            HeapObject::Struct { fields, .. } => fields
+                .get(i)
+                .map(|(_, v)| v.clone())
+                .unwrap_or_else(NValue::unit),
             _ => NValue::unit(),
         }
     } else {
@@ -672,7 +679,9 @@ pub extern "C" fn jit_update_record(base_bits: u64, updates: *const u64, count: 
     if let Some(obj) = base.as_heap_mut() {
         let updated = match obj {
             HeapObject::Record(fields) => apply_record_updates(fields, slice, n, false, true),
-            HeapObject::Struct { fields, .. } => apply_record_updates(fields, slice, n, false, false),
+            HeapObject::Struct { fields, .. } => {
+                apply_record_updates(fields, slice, n, false, false)
+            }
             _ => Err("update_record on non-record".to_string()),
         };
         match updated {
@@ -692,15 +701,21 @@ pub extern "C" fn jit_update_record(base_bits: u64, updates: *const u64, count: 
                 jit_set_error(msg);
                 return NV_UNIT;
             }
-            jit_own(NValue::record(fields))
+            jit_own(NValue::from_heap_obj(HeapObject::Record(fields)))
         }
-        HeapObject::Struct { name, fields: base_fields } => {
+        HeapObject::Struct {
+            name,
+            fields: base_fields,
+        } => {
             let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
             if let Err(msg) = apply_record_updates(&mut fields, slice, n, false, false) {
                 jit_set_error(msg);
                 return NV_UNIT;
             }
-            jit_own(NValue::struct_val(name.clone(), fields))
+            jit_own(NValue::from_heap_obj(HeapObject::Struct {
+                name: name.clone(),
+                fields,
+            }))
         }
         _ => {
             jit_set_error("update_record on non-record".to_string());
@@ -711,7 +726,11 @@ pub extern "C" fn jit_update_record(base_bits: u64, updates: *const u64, count: 
 
 /// Update record with borrowed keys (JIT fast path avoiding key allocation).
 #[unsafe(no_mangle)]
-pub extern "C" fn jit_update_record_borrow_keys(base_bits: u64, updates: *const u64, count: u64) -> u64 {
+pub extern "C" fn jit_update_record_borrow_keys(
+    base_bits: u64,
+    updates: *const u64,
+    count: u64,
+) -> u64 {
     let mut base = unsafe { jit_take_arg(base_bits) };
     let n = count as usize;
     let slice = unsafe { std::slice::from_raw_parts(updates, n * 2) };
@@ -725,7 +744,9 @@ pub extern "C" fn jit_update_record_borrow_keys(base_bits: u64, updates: *const 
     if let Some(obj) = base.as_heap_mut() {
         let updated = match obj {
             HeapObject::Record(fields) => apply_record_updates(fields, slice, n, true, true),
-            HeapObject::Struct { fields, .. } => apply_record_updates(fields, slice, n, true, false),
+            HeapObject::Struct { fields, .. } => {
+                apply_record_updates(fields, slice, n, true, false)
+            }
             _ => Err("update_record on non-record".to_string()),
         };
         match updated {
@@ -744,15 +765,21 @@ pub extern "C" fn jit_update_record_borrow_keys(base_bits: u64, updates: *const 
                 jit_set_error(msg);
                 return NV_UNIT;
             }
-            jit_own(NValue::record(fields))
+            jit_own(NValue::from_heap_obj(HeapObject::Record(fields)))
         }
-        HeapObject::Struct { name, fields: base_fields } => {
+        HeapObject::Struct {
+            name,
+            fields: base_fields,
+        } => {
             let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
             if let Err(msg) = apply_record_updates(&mut fields, slice, n, true, false) {
                 jit_set_error(msg);
                 return NV_UNIT;
             }
-            jit_own(NValue::struct_val(name.clone(), fields))
+            jit_own(NValue::from_heap_obj(HeapObject::Struct {
+                name: name.clone(),
+                fields,
+            }))
         }
         _ => {
             jit_set_error("update_record on non-record".to_string());
@@ -764,7 +791,11 @@ pub extern "C" fn jit_update_record_borrow_keys(base_bits: u64, updates: *const 
 /// Update record by integer field indices (no string comparison).
 /// Updates is interleaved [idx0, val0, idx1, val1, ...].
 #[unsafe(no_mangle)]
-pub extern "C" fn jit_update_record_indexed(base_bits: u64, updates: *const u64, count: u64) -> u64 {
+pub extern "C" fn jit_update_record_indexed(
+    base_bits: u64,
+    updates: *const u64,
+    count: u64,
+) -> u64 {
     let mut base = unsafe { jit_take_arg(base_bits) };
     let n = count as usize;
     let slice = unsafe { std::slice::from_raw_parts(updates, n * 2) };
@@ -804,9 +835,12 @@ pub extern "C" fn jit_update_record_indexed(base_bits: u64, updates: *const u64,
                     fields[idx].1 = val_nv;
                 }
             }
-            jit_own(NValue::record(fields))
+            jit_own(NValue::from_heap_obj(HeapObject::Record(fields)))
         }
-        HeapObject::Struct { name, fields: base_fields } => {
+        HeapObject::Struct {
+            name,
+            fields: base_fields,
+        } => {
             let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
             for i in 0..n {
                 let idx = slice[i * 2] as usize;
@@ -815,7 +849,165 @@ pub extern "C" fn jit_update_record_indexed(base_bits: u64, updates: *const u64,
                     fields[idx].1 = val_nv;
                 }
             }
-            jit_own(NValue::struct_val(name.clone(), fields))
+            jit_own(NValue::from_heap_obj(HeapObject::Struct {
+                name: name.clone(),
+                fields,
+            }))
+        }
+        _ => {
+            jit_set_error("update_record on non-record".to_string());
+            NV_UNIT
+        }
+    }
+}
+
+/// Fixed-arity indexed update fast path for three fields.
+/// Equivalent to `jit_update_record_indexed` with count=3 but avoids
+/// interleaved stack array setup in JIT-generated code.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_update_record_indexed3(
+    base_bits: u64,
+    idx0: u64,
+    val0_bits: u64,
+    idx1: u64,
+    val1_bits: u64,
+    idx2: u64,
+    val2_bits: u64,
+) -> u64 {
+    let mut base = unsafe { jit_take_arg(base_bits) };
+    if !base.is_heap() {
+        jit_set_error("update_record on non-record".to_string());
+        return NV_UNIT;
+    }
+    let i0 = idx0 as usize;
+    let i1 = idx1 as usize;
+    let i2 = idx2 as usize;
+
+    // Fast path: unique ownership allows in-place update.
+    if let Some(obj) = base.as_heap_mut() {
+        let fields = match obj {
+            HeapObject::Record(fields) | HeapObject::Struct { fields, .. } => fields,
+            _ => {
+                jit_set_error("update_record on non-record".to_string());
+                return NV_UNIT;
+            }
+        };
+        let v0 = unsafe { jit_take_arg(val0_bits) };
+        let v1 = unsafe { jit_take_arg(val1_bits) };
+        let v2 = unsafe { jit_take_arg(val2_bits) };
+        if i0 < fields.len() {
+            fields[i0].1 = v0;
+        }
+        if i1 < fields.len() {
+            fields[i1].1 = v1;
+        }
+        if i2 < fields.len() {
+            fields[i2].1 = v2;
+        }
+        return jit_own(base);
+    }
+
+    // Slow path: clone fields, apply indexed updates.
+    match base.as_heap_ref() {
+        HeapObject::Record(base_fields) => {
+            let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
+            let v0 = unsafe { jit_take_arg(val0_bits) };
+            let v1 = unsafe { jit_take_arg(val1_bits) };
+            let v2 = unsafe { jit_take_arg(val2_bits) };
+            if i0 < fields.len() {
+                fields[i0].1 = v0;
+            }
+            if i1 < fields.len() {
+                fields[i1].1 = v1;
+            }
+            if i2 < fields.len() {
+                fields[i2].1 = v2;
+            }
+            jit_own(NValue::from_heap_obj(HeapObject::Record(fields)))
+        }
+        HeapObject::Struct {
+            name,
+            fields: base_fields,
+        } => {
+            let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
+            let v0 = unsafe { jit_take_arg(val0_bits) };
+            let v1 = unsafe { jit_take_arg(val1_bits) };
+            let v2 = unsafe { jit_take_arg(val2_bits) };
+            if i0 < fields.len() {
+                fields[i0].1 = v0;
+            }
+            if i1 < fields.len() {
+                fields[i1].1 = v1;
+            }
+            if i2 < fields.len() {
+                fields[i2].1 = v2;
+            }
+            jit_own(NValue::from_heap_obj(HeapObject::Struct {
+                name: name.clone(),
+                fields,
+            }))
+        }
+        _ => {
+            jit_set_error("update_record on non-record".to_string());
+            NV_UNIT
+        }
+    }
+}
+
+/// Fixed-arity indexed update for a single field.
+/// Used by mutable field assignment: `b.field = val`.
+#[unsafe(no_mangle)]
+pub extern "C" fn jit_update_record_indexed1(
+    base_bits: u64,
+    idx0: u64,
+    val0_bits: u64,
+) -> u64 {
+    let mut base = unsafe { jit_take_arg(base_bits) };
+    if !base.is_heap() {
+        jit_set_error("update_record on non-record".to_string());
+        return NV_UNIT;
+    }
+    let i0 = idx0 as usize;
+
+    // Fast path: unique ownership allows in-place update.
+    if let Some(obj) = base.as_heap_mut() {
+        let fields = match obj {
+            HeapObject::Record(fields) | HeapObject::Struct { fields, .. } => fields,
+            _ => {
+                jit_set_error("update_record on non-record".to_string());
+                return NV_UNIT;
+            }
+        };
+        let v0 = unsafe { jit_take_arg(val0_bits) };
+        if i0 < fields.len() {
+            fields[i0].1 = v0;
+        }
+        return jit_own(base);
+    }
+
+    // Slow path: clone fields, apply update.
+    match base.as_heap_ref() {
+        HeapObject::Record(base_fields) => {
+            let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
+            let v0 = unsafe { jit_take_arg(val0_bits) };
+            if i0 < fields.len() {
+                fields[i0].1 = v0;
+            }
+            jit_own(NValue::from_heap_obj(HeapObject::Record(fields)))
+        }
+        HeapObject::Struct {
+            name,
+            fields: base_fields,
+        } => {
+            let mut fields: Vec<(RcStr, NValue)> = base_fields.clone();
+            let v0 = unsafe { jit_take_arg(val0_bits) };
+            if i0 < fields.len() {
+                fields[i0].1 = v0;
+            }
+            jit_own(NValue::from_heap_obj(HeapObject::Struct {
+                name: name.clone(),
+                fields,
+            }))
         }
         _ => {
             jit_set_error("update_record on non-record".to_string());
@@ -1086,7 +1278,7 @@ pub extern "C" fn jit_string_concat(a_bits: u64, b_bits: u64) -> u64 {
 
     let mut result = a.to_string();
     result.push_str(&b.to_string());
-    
+
     let result = NValue::string(result.into());
     jit_own(result)
 }
@@ -1395,11 +1587,7 @@ pub extern "C" fn jit_int_lt(a: u64, b: u64) -> u64 {
     let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
         return NV_UNIT;
     };
-    if a < b {
-        NV_TRUE
-    } else {
-        NV_FALSE
-    }
+    if a < b { NV_TRUE } else { NV_FALSE }
 }
 
 /// Compare two NaN-boxed integers: a <= b (handles BigInt inputs).
@@ -1408,11 +1596,7 @@ pub extern "C" fn jit_int_le(a: u64, b: u64) -> u64 {
     let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
         return NV_UNIT;
     };
-    if a <= b {
-        NV_TRUE
-    } else {
-        NV_FALSE
-    }
+    if a <= b { NV_TRUE } else { NV_FALSE }
 }
 
 /// Compare two NaN-boxed integers: a > b (handles BigInt inputs).
@@ -1421,11 +1605,7 @@ pub extern "C" fn jit_int_gt(a: u64, b: u64) -> u64 {
     let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
         return NV_UNIT;
     };
-    if a > b {
-        NV_TRUE
-    } else {
-        NV_FALSE
-    }
+    if a > b { NV_TRUE } else { NV_FALSE }
 }
 
 /// Compare two NaN-boxed integers: a >= b (handles BigInt inputs).
@@ -1434,11 +1614,7 @@ pub extern "C" fn jit_int_ge(a: u64, b: u64) -> u64 {
     let (Some(a), Some(b)) = (nv_as_any_int(a), nv_as_any_int(b)) else {
         return NV_UNIT;
     };
-    if a >= b {
-        NV_TRUE
-    } else {
-        NV_FALSE
-    }
+    if a >= b { NV_TRUE } else { NV_FALSE }
 }
 
 // ---------------------------------------------------------------------------
@@ -1547,7 +1723,10 @@ thread_local! {
 /// What the dispatch loop should do next (determined by a short-lived borrow).
 enum DispatchAction {
     Return(u64),
-    CallHandler { handler_fn_bits: u64, args: Vec<u64> },
+    CallHandler {
+        handler_fn_bits: u64,
+        args: Vec<u64>,
+    },
     Error(String),
 }
 
@@ -1583,7 +1762,9 @@ pub extern "C" fn jit_handler_resume(value: u64) -> u64 {
     // which allows nested handlers to borrow HANDLER_CTX).
     let fiber_ptr: *mut Fiber = HANDLER_CTX.with(|ctx| {
         let mut stack = ctx.borrow_mut();
-        let handler = stack.last_mut().expect("jit_handler_resume: no handler context");
+        let handler = stack
+            .last_mut()
+            .expect("jit_handler_resume: no handler context");
         &mut *handler.fiber as *mut Fiber
     });
     // SAFETY: fiber is owned by HandlerContext on the stack, single-threaded,
@@ -1694,9 +1875,7 @@ pub extern "C" fn jit_run_fiber_handler(
         .map(|i| {
             let bits = unsafe { *keys_ptr.add(i) };
             let nv = unsafe { NValue::borrow_from_raw(bits) };
-            nv.as_string()
-                .map(|s| s.to_string())
-                .unwrap_or_default()
+            nv.as_string().map(|s| s.to_string()).unwrap_or_default()
         })
         .collect();
     let handler_fns: Vec<u64> = (0..n).map(|i| unsafe { *fns_ptr.add(i) }).collect();
@@ -1789,7 +1968,11 @@ fn get_fn_ptr_from_table(chunk_idx: usize) -> *const u8 {
 /// JIT functions use Cranelift Tail CC. Calls go through per-arity trampolines
 /// that bridge platform CC → Tail CC via Cranelift indirect calls.
 fn call_jit_fn(fn_ptr: *const u8, fn_bits: u64, is_closure: bool, args: &[u64]) -> u64 {
-    let total_args = if is_closure { 1 + args.len() } else { args.len() };
+    let total_args = if is_closure {
+        1 + args.len()
+    } else {
+        args.len()
+    };
 
     if total_args > 4 {
         jit_set_error(format!(
@@ -1825,8 +2008,7 @@ fn call_jit_fn(fn_ptr: *const u8, fn_bits: u64, is_closure: bool, args: &[u64]) 
             }
         }
         2 => {
-            let t: extern "C" fn(u64, u64, u64) -> u64 =
-                unsafe { std::mem::transmute(trampoline) };
+            let t: extern "C" fn(u64, u64, u64) -> u64 = unsafe { std::mem::transmute(trampoline) };
             if is_closure {
                 t(fn_ptr_u64, fn_bits, args[0])
             } else {

@@ -74,8 +74,7 @@ pub(super) extern "C" fn jit_call_native(
             buf[i].write(unsafe { NValue::borrow_from_raw(bits) });
         }
         // SAFETY: first `len` elements are initialized above
-        let nvalues =
-            unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const NValue, len) };
+        let nvalues = unsafe { std::slice::from_raw_parts(buf.as_ptr() as *const NValue, len) };
         registry.call(id, nvalues)
     } else {
         let nvalues: Vec<NValue> = arg_slice
@@ -131,7 +130,11 @@ pub(super) extern "C" fn jit_call_native_owning(
     };
     // Pre-allocate Vec with known capacity to avoid growth reallocs
     let mut nvalues = Vec::with_capacity(arg_slice.len());
-    nvalues.extend(arg_slice.iter().map(|&bits| unsafe { NValue::from_raw(bits) }));
+    nvalues.extend(
+        arg_slice
+            .iter()
+            .map(|&bits| unsafe { NValue::from_raw(bits) }),
+    );
     match registry.call_owning(id, nvalues) {
         Ok(result) => jit_own(result),
         Err(e) => {

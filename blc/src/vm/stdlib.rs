@@ -105,7 +105,7 @@ fn patch_references(expr: &mut Expr, prefix: &str, old_name: &str, qualified_nam
                 patch_references(e, prefix, old_name, qualified_name);
             }
         }
-        Expr::Let { value, .. } => {
+        Expr::Let { value, .. } | Expr::Assign { value, .. } | Expr::FieldAssign { value, .. } => {
             patch_references(value, prefix, old_name, qualified_name);
         }
         Expr::BinOp { lhs, rhs, .. } => {
@@ -233,7 +233,10 @@ fn patch_references(expr: &mut Expr, prefix: &str, old_name: &str, qualified_nam
 fn is_stdlib_function(prefix: &str, name: &str) -> bool {
     match prefix {
         "List" => matches!(name, "map" | "filter" | "fold" | "find"),
-        "Map" => matches!(name, "map" | "map_loop" | "filter" | "filter_loop" | "fold" | "fold_loop"),
+        "Map" => matches!(
+            name,
+            "map" | "map_loop" | "filter" | "filter_loop" | "fold" | "fold_loop"
+        ),
         "Option" => matches!(name, "map" | "flat_map"),
         "Result" => matches!(name, "map" | "map_err" | "and_then"),
         _ => false,

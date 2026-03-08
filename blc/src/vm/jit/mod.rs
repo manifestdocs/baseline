@@ -9,8 +9,8 @@
 
 mod analysis;
 mod compile;
-mod compile_pattern;
 mod compile_opt;
+mod compile_pattern;
 mod helpers;
 
 #[cfg(feature = "aot")]
@@ -19,9 +19,9 @@ pub mod aot;
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
-mod tests_pattern;
-#[cfg(test)]
 mod tests_closure;
+#[cfg(test)]
+mod tests_pattern;
 #[cfg(test)]
 mod tests_rc;
 
@@ -40,7 +40,7 @@ use super::ir::IrModule;
 use super::natives::NativeRegistry;
 use super::nvalue::NValue;
 
-use analysis::{can_jit, compute_unboxed_flags, has_self_tail_call, is_scalar_only};
+use analysis::{can_jit, compute_multireturn_info, compute_unboxed_flags, has_self_tail_call, is_scalar_only};
 use compile::FnCompileCtx;
 use helpers::*;
 
@@ -173,7 +173,8 @@ impl JitProgram {
         let guard = CleanupGuard { rc_enabled };
 
         // Catch panics from JIT-compiled code to prevent process abort.
-        let raw = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() })) {
+        let raw = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { func() }))
+        {
             Ok(val) => val,
             Err(payload) => {
                 // Extract panic message
@@ -235,7 +236,10 @@ impl JitProgram {
 /// AOT uses HELPER_NAMES (derived below) for declaration only (symbols come from linker).
 const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("jit_call_native", jit_call_native as *const u8),
-    ("jit_call_native_owning", jit_call_native_owning as *const u8),
+    (
+        "jit_call_native_owning",
+        jit_call_native_owning as *const u8,
+    ),
     ("jit_concat", jit_concat as *const u8),
     ("jit_make_enum", jit_make_enum as *const u8),
     ("jit_make_enum_with_id", jit_make_enum_with_id as *const u8),
@@ -247,14 +251,31 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("jit_get_field", jit_get_field as *const u8),
     ("jit_get_field_idx", jit_get_field_idx as *const u8),
     ("jit_update_record", jit_update_record as *const u8),
-    ("jit_update_record_borrow_keys", jit_update_record_borrow_keys as *const u8),
-    ("jit_update_record_indexed", jit_update_record_indexed as *const u8),
+    (
+        "jit_update_record_borrow_keys",
+        jit_update_record_borrow_keys as *const u8,
+    ),
+    (
+        "jit_update_record_indexed",
+        jit_update_record_indexed as *const u8,
+    ),
+    (
+        "jit_update_record_indexed3",
+        jit_update_record_indexed3 as *const u8,
+    ),
+    (
+        "jit_update_record_indexed1",
+        jit_update_record_indexed1 as *const u8,
+    ),
     ("jit_make_range", jit_make_range as *const u8),
     ("jit_enum_tag_eq", jit_enum_tag_eq as *const u8),
     ("jit_enum_tag_id", jit_enum_tag_id as *const u8),
     ("jit_enum_payload", jit_enum_payload as *const u8),
     ("jit_enum_field_get", jit_enum_field_get as *const u8),
-    ("jit_enum_fields_get_all", jit_enum_fields_get_all as *const u8),
+    (
+        "jit_enum_fields_get_all",
+        jit_enum_fields_get_all as *const u8,
+    ),
     ("jit_enum_field_drop", jit_enum_field_drop as *const u8),
     ("jit_enum_field_set", jit_enum_field_set as *const u8),
     ("jit_tuple_get", jit_tuple_get as *const u8),
@@ -282,7 +303,10 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     ("jit_list_get_raw", jit_list_get_raw as *const u8),
     ("jit_list_tail", jit_list_tail as *const u8),
     ("jit_alloc_buf", jit_alloc_buf as *const u8),
-    ("jit_build_list_from_buf", jit_build_list_from_buf as *const u8),
+    (
+        "jit_build_list_from_buf",
+        jit_build_list_from_buf as *const u8,
+    ),
     ("jit_make_some", jit_make_some as *const u8),
     ("jit_make_none", jit_make_none as *const u8),
     ("jit_make_ok", jit_make_ok as *const u8),
@@ -309,7 +333,10 @@ const HELPER_SYMBOLS: &[(&str, *const u8)] = &[
     // Perceus reuse helpers
     ("jit_drop_reuse", jit_drop_reuse as *const u8),
     ("jit_make_enum_reuse", jit_make_enum_reuse as *const u8),
-    ("jit_make_enum_flat_reuse", jit_make_enum_flat_reuse as *const u8),
+    (
+        "jit_make_enum_flat_reuse",
+        jit_make_enum_flat_reuse as *const u8,
+    ),
     ("jit_make_record_reuse", jit_make_record_reuse as *const u8),
     ("jit_make_tuple_reuse", jit_make_tuple_reuse as *const u8),
 ];
@@ -383,14 +410,21 @@ fn compile_inner(
     // Compute unboxed flags (scalar-only functions with scalar-only callees)
     let unboxed_flags = compute_unboxed_flags(module);
 
+    // Compute multi-return info (functions returning all-scalar records)
+    let multireturn_info = compute_multireturn_info(module);
+
     // Phase 1: Declare all functions
     let mut func_ids: Vec<Option<FuncId>> = Vec::with_capacity(module.functions.len());
     let mut compilable: Vec<bool> = Vec::with_capacity(module.functions.len());
 
-    for func in &module.functions {
+    for (i, func) in module.functions.iter().enumerate() {
         let can = can_jit(func, natives);
         if can {
-            let sig = build_signature(&mut jit_module, func.params.len());
+            let sig = if let Some(ref fields) = multireturn_info[i] {
+                build_signature_multireturn(&mut jit_module, func.params.len(), fields.len())
+            } else {
+                build_signature(&mut jit_module, func.params.len())
+            };
             let id = jit_module
                 .declare_function(&func.name, Linkage::Local, &sig)
                 .map_err(|e| e.to_string())?;
@@ -434,13 +468,16 @@ fn compile_inner(
         if !compilable[i] {
             continue;
         }
-        let func_id = func_ids[i].ok_or_else(|| {
-            format!("JIT: function '{}' was not declared", func.name)
-        })?;
+        let func_id =
+            func_ids[i].ok_or_else(|| format!("JIT: function '{}' was not declared", func.name))?;
         let start = std::time::Instant::now();
 
         let mut cl_func = cranelift_codegen::ir::Function::new();
-        cl_func.signature = build_signature(&mut jit_module, func.params.len());
+        cl_func.signature = if let Some(ref fields) = multireturn_info[i] {
+            build_signature_multireturn(&mut jit_module, func.params.len(), fields.len())
+        } else {
+            build_signature(&mut jit_module, func.params.len())
+        };
 
         let compile_result = {
             let mut fn_builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
@@ -463,11 +500,12 @@ fn compile_inner(
             }
 
             let is_tail_recursive = has_self_tail_call(&func.body, &func.name);
-            let loop_header = if is_tail_recursive {
-                let lh = fn_builder.create_block();
-                fn_builder.ins().jump(lh, &[]);
-                fn_builder.switch_to_block(lh);
-                Some(lh)
+
+            // For tail-recursive functions, create loop_header but DON'T jump
+            // yet — seed_param_field_cache must run in the entry block so that
+            // SRA field extractions happen before the loop, not inside it.
+            let loop_header_block = if is_tail_recursive {
+                Some(fn_builder.create_block())
             } else {
                 None
             };
@@ -481,7 +519,7 @@ fn compile_inner(
                 ir_functions: &module.functions,
                 current_func_name: func.name.clone(),
                 param_vars,
-                loop_header,
+                loop_header: loop_header_block,
                 heap_roots: &mut heap_roots,
                 helper_ids: &helper_ids,
                 natives,
@@ -489,13 +527,17 @@ fn compile_inner(
                 unboxed_flags: &unboxed_flags,
                 tags: &module.tags,
                 sra_records: HashMap::new(),
+                param_sra_original: HashMap::new(),
+                sra_hot_vars: Default::default(),
                 aot_strings: None,
                 aot_native_ids: None,
-                
+
                 scratch_slot: None,
                 rc_enabled,
                 rc_scope_stack: Vec::new(),
                 func_call_conv: CallConv::Tail,
+                multireturn_fields: multireturn_info[i].clone(),
+                multireturn_info: &multireturn_info,
             };
 
             // RC: push function-level scope with parameter variables
@@ -505,6 +547,25 @@ fn compile_inner(
                 for pv in pvars {
                     ctx.rc_track_var(pv);
                 }
+            }
+
+            // Seed SRA field cache BEFORE jumping to loop_header.
+            // This ensures field extractions from boxed params happen once
+            // in the entry block, not on every loop iteration.
+            if !is_unboxed {
+                ctx.seed_param_field_cache(
+                    func.ty.as_ref(),
+                    &func.params,
+                    &func.param_types,
+                    &func.body,
+                    is_tail_recursive,
+                )?;
+            }
+
+            // Now jump to loop_header and switch to it for body compilation
+            if let Some(lh) = loop_header_block {
+                ctx.builder.ins().jump(lh, &[]);
+                ctx.builder.switch_to_block(lh);
             }
 
             let result = if is_unboxed {
@@ -534,11 +595,50 @@ fn compile_inner(
             };
 
             let saved_loop_header = ctx.loop_header;
+            let saved_multireturn = ctx.multireturn_fields.clone();
+            let saved_sra = ctx.sra_records.clone();
             drop(ctx);
 
             match result {
                 Ok(val) => {
-                    fn_builder.ins().return_(&[val]);
+                    if let Some(ref field_names) = saved_multireturn {
+                        // Multi-return: decompose the return value into individual fields.
+                        // Check if the value came from an SRA record (fields still in variables).
+                        let mut return_vals = Vec::with_capacity(field_names.len());
+                        let mut used_sra = false;
+
+                        // Try to find an SRA record whose fields match the return type.
+                        // The last expression of the body often produces an SRA record.
+                        for (_name, fields) in &saved_sra {
+                            if fields.len() == field_names.len()
+                                && field_names.iter().all(|f| fields.contains_key(f))
+                            {
+                                for fname in field_names {
+                                    let &fvar = fields.get(fname).unwrap();
+                                    return_vals.push(fn_builder.use_var(fvar));
+                                }
+                                used_sra = true;
+                                break;
+                            }
+                        }
+
+                        if !used_sra {
+                            // Fall back: decompose boxed record using helper calls
+                            for (idx, _fname) in field_names.iter().enumerate() {
+                                let idx_val = fn_builder.ins().iconst(types::I64, idx as i64);
+                                // Import jit_get_field_idx helper
+                                let helper_id = helper_ids.get("jit_get_field_idx").copied()
+                                    .expect("jit_get_field_idx helper not found");
+                                let helper_ref = jit_module.declare_func_in_func(helper_id, fn_builder.func);
+                                let call = fn_builder.ins().call(helper_ref, &[val, idx_val]);
+                                return_vals.push(fn_builder.inst_results(call)[0]);
+                            }
+                        }
+
+                        fn_builder.ins().return_(&return_vals);
+                    } else {
+                        fn_builder.ins().return_(&[val]);
+                    }
                     if let Some(lh) = saved_loop_header {
                         fn_builder.seal_block(lh);
                     }
@@ -582,9 +682,8 @@ fn compile_inner(
     }
 
     let entry_wrapper_id = if compilable.get(module.entry).copied().unwrap_or(false) {
-        let entry_func_id = func_ids[module.entry].ok_or_else(|| {
-            "JIT: entry function was not compiled".to_string()
-        })?;
+        let entry_func_id = func_ids[module.entry]
+            .ok_or_else(|| "JIT: entry function was not compiled".to_string())?;
         let id = create_entry_wrapper(&mut jit_module, &mut fb_ctx, entry_func_id)?;
         if trace {
             eprintln!("JIT: created entry wrapper (platform CC → Tail CC)");
@@ -761,10 +860,7 @@ fn create_trampolines(
     Ok(trampoline_ids)
 }
 
-fn build_signature(
-    module: &mut JITModule,
-    param_count: usize,
-) -> cranelift_codegen::ir::Signature {
+fn build_signature(module: &mut JITModule, param_count: usize) -> cranelift_codegen::ir::Signature {
     let mut sig = module.make_signature();
     // Tail CC for all language-internal functions (per cranelift-guide.md §6, §10).
     // Enables guaranteed tail call elimination via return_call, at performance
@@ -780,6 +876,24 @@ fn build_signature(
         sig.params.push(AbiParam::new(types::I64));
     }
     sig.returns.push(AbiParam::new(types::I64));
+    sig
+}
+
+/// Build a Cranelift signature with multiple return values for functions
+/// returning all-scalar records. Each record field gets its own return register.
+fn build_signature_multireturn(
+    module: &mut JITModule,
+    param_count: usize,
+    return_count: usize,
+) -> cranelift_codegen::ir::Signature {
+    let mut sig = module.make_signature();
+    sig.call_conv = CallConv::Tail;
+    for _ in 0..param_count {
+        sig.params.push(AbiParam::new(types::I64));
+    }
+    for _ in 0..return_count {
+        sig.returns.push(AbiParam::new(types::I64));
+    }
     sig
 }
 
@@ -822,8 +936,7 @@ pub(super) fn make_helper_sig<M: Module>(
             sig.returns.push(AbiParam::new(types::I64));
         }
         "jit_make_enum" | "jit_make_range" | "jit_get_field" | "jit_get_field_idx"
-        | "jit_enum_tag_eq"
-        | "jit_values_equal" | "jit_list_get" | "jit_enum_field_get" => {
+        | "jit_enum_tag_eq" | "jit_values_equal" | "jit_list_get" | "jit_enum_field_get" => {
             // (a, b) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
@@ -859,6 +972,24 @@ pub(super) fn make_helper_sig<M: Module>(
             // (base, updates_ptr, count) -> u64
             sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(ptr_type));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_update_record_indexed3" => {
+            // (base, idx0, val0, idx1, val1, idx2, val2) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
+            sig.returns.push(AbiParam::new(types::I64));
+        }
+        "jit_update_record_indexed1" => {
+            // (base, idx0, val0) -> u64
+            sig.params.push(AbiParam::new(types::I64));
+            sig.params.push(AbiParam::new(types::I64));
             sig.params.push(AbiParam::new(types::I64));
             sig.returns.push(AbiParam::new(types::I64));
         }

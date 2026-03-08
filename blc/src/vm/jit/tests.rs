@@ -72,6 +72,7 @@ fn jit_integer_constant() {
             params: vec![],
             body: make_int(42),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -88,6 +89,7 @@ fn jit_add() {
             params: vec![],
             body: make_binop(BinOp::Add, make_int(3), make_int(4)),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -104,6 +106,7 @@ fn jit_sub() {
             params: vec![],
             body: make_binop(BinOp::Sub, make_int(10), make_int(3)),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -120,6 +123,7 @@ fn jit_mul() {
             params: vec![],
             body: make_binop(BinOp::Mul, make_int(6), make_int(7)),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -136,6 +140,7 @@ fn jit_comparison_le() {
             params: vec![],
             body: make_bool_binop(BinOp::Le, make_int(3), make_int(5)),
             ty: Some(Type::Bool),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -152,6 +157,7 @@ fn jit_comparison_le_false() {
             params: vec![],
             body: make_bool_binop(BinOp::Le, make_int(10), make_int(5)),
             ty: Some(Type::Bool),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -173,6 +179,7 @@ fn jit_if_else() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -194,14 +201,16 @@ fn jit_function_call() {
                     ty: Some(Type::Int),
                 },
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
             IrFunction {
                 name: "double".into(),
                 params: vec!["n".into()],
                 body: make_binop(BinOp::Add, make_var("n"), make_var("n")),
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
         ],
         entry: 0,
@@ -238,7 +247,8 @@ fn jit_recursive_fib10() {
                 params: vec!["n".into()],
                 body: fib_body,
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
             IrFunction {
                 name: "main".into(),
@@ -249,7 +259,8 @@ fn jit_recursive_fib10() {
                     ty: Some(Type::Int),
                 },
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
         ],
         entry: 1,
@@ -278,7 +289,8 @@ fn jit_unboxed_bool_recursive_helper_from_main() {
                 params: vec!["n".into()],
                 body: helper_body,
                 ty: Some(Type::Bool),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
             IrFunction {
                 name: "main".into(),
@@ -289,7 +301,8 @@ fn jit_unboxed_bool_recursive_helper_from_main() {
                     ty: Some(Type::Bool),
                 },
                 ty: Some(Type::Bool),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
         ],
         entry: 1,
@@ -318,7 +331,8 @@ fn jit_unboxed_float_recursive_helper_from_main() {
                 params: vec!["n".into()],
                 body: helper_body,
                 ty: Some(Type::Float),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
             IrFunction {
                 name: "main".into(),
@@ -329,7 +343,8 @@ fn jit_unboxed_float_recursive_helper_from_main() {
                     ty: Some(Type::Float),
                 },
                 ty: Some(Type::Float),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
         ],
         entry: 1,
@@ -363,6 +378,7 @@ fn jit_let_binding() {
                 Some(Type::Int),
             ),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -383,6 +399,7 @@ fn jit_negation() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -403,6 +420,7 @@ fn jit_fallback_for_unsupported() {
             ty: None,
         },
         ty: None,
+        param_types: vec![],
         span: dummy_span(),
     };
     assert!(!can_jit(&func, None));
@@ -426,7 +444,8 @@ fn jit_tail_call_as_regular_call() {
                     ty: Some(Type::Int),
                 },
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
             IrFunction {
                 name: "main".into(),
@@ -437,7 +456,8 @@ fn jit_tail_call_as_regular_call() {
                     ty: Some(Type::Int),
                 },
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
         ],
         entry: 1,
@@ -456,6 +476,7 @@ fn jit_nan_boxed_unit() {
             params: vec![],
             body: Expr::Unit,
             ty: Some(Type::Unit),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -473,6 +494,7 @@ fn jit_nan_boxed_bool_true() {
             params: vec![],
             body: Expr::Bool(true),
             ty: Some(Type::Bool),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -489,6 +511,7 @@ fn jit_nan_boxed_bool_false() {
             params: vec![],
             body: Expr::Bool(false),
             ty: Some(Type::Bool),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -505,6 +528,7 @@ fn jit_negative_int() {
             params: vec![],
             body: make_int(-100),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -523,6 +547,7 @@ fn jit_string_literal() {
             params: vec![],
             body: Expr::String("hello".into()),
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -547,6 +572,7 @@ fn jit_call_native_math_abs() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -561,6 +587,64 @@ fn jit_call_native_math_abs() {
     assert_eq!(nv.as_int(), 42);
 }
 
+#[test]
+fn jit_call_native_math_sqrt_float() {
+    let registry = NativeRegistry::new();
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::CallNative {
+                module: "Math".into(),
+                method: "sqrt".into(),
+                args: vec![Expr::Float(9.0)],
+                ty: Some(Type::Float),
+            },
+            ty: Some(Type::Float),
+            param_types: vec![],
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    let program =
+        compile_with_natives(&module, false, Some(&registry)).expect("JIT compilation failed");
+    let nv = program
+        .run_entry_nvalue()
+        .expect("Entry function not compiled");
+    assert!(nv.is_float());
+    assert!((nv.as_float() - 3.0).abs() < 1e-10);
+}
+
+#[test]
+fn jit_call_native_math_sqrt_int_argument() {
+    let registry = NativeRegistry::new();
+    let module = IrModule {
+        functions: vec![IrFunction {
+            name: "main".into(),
+            params: vec![],
+            body: Expr::CallNative {
+                module: "Math".into(),
+                method: "sqrt".into(),
+                args: vec![make_int(4)],
+                ty: Some(Type::Float),
+            },
+            ty: Some(Type::Float),
+            param_types: vec![],
+            span: dummy_span(),
+        }],
+        entry: 0,
+        tags: TagRegistry::new(),
+    };
+    let program =
+        compile_with_natives(&module, false, Some(&registry)).expect("JIT compilation failed");
+    let nv = program
+        .run_entry_nvalue()
+        .expect("Entry function not compiled");
+    assert!(nv.is_float());
+    assert!((nv.as_float() - 2.0).abs() < 1e-10);
+}
+
 // -- Phase 3 tests --
 
 #[test]
@@ -571,6 +655,7 @@ fn jit_make_tuple() {
             params: vec![],
             body: Expr::MakeTuple(vec![make_int(1), make_int(2), make_int(3)], None),
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -597,6 +682,7 @@ fn jit_make_list() {
             params: vec![],
             body: Expr::MakeList(vec![make_int(10), make_int(20)], None),
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -621,6 +707,7 @@ fn jit_make_enum() {
                 ty: None,
             },
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -643,6 +730,7 @@ fn jit_make_record() {
                 None,
             ),
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -671,6 +759,7 @@ fn jit_get_field() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -702,6 +791,7 @@ fn jit_update_record() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -731,6 +821,7 @@ fn jit_update_record_preserves_other_fields() {
                 ty: Some(Type::Int),
             },
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -752,6 +843,7 @@ fn jit_string_concat() {
                 Expr::String("world".into()),
             ]),
             ty: Some(Type::String),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -770,6 +862,7 @@ fn jit_string_concat_empty() {
             params: vec![],
             body: Expr::Concat(vec![Expr::String("".into()), Expr::String("".into())]),
             ty: Some(Type::String),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -789,6 +882,7 @@ fn jit_nan_boxing_max_inline_int() {
             params: vec![],
             body: make_int(max_inline),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -807,6 +901,7 @@ fn jit_nan_boxing_min_inline_int() {
             params: vec![],
             body: make_int(min_inline),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -823,6 +918,7 @@ fn jit_nan_boxing_zero() {
             params: vec![],
             body: make_int(0),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -839,6 +935,7 @@ fn jit_float_literal() {
             params: vec![],
             body: Expr::Float(3.14),
             ty: Some(Type::Float),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,

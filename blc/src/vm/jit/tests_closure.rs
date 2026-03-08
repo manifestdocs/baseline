@@ -3,11 +3,8 @@
 use super::tests::*;
 use super::*;
 use crate::analysis::types::Type;
-use crate::vm::ir::{
-    BinOp, Expr, IrFunction, IrModule, MatchArm, Pattern, Span, TagRegistry,
-};
+use crate::vm::ir::{BinOp, Expr, IrFunction, IrModule, MatchArm, Pattern, Span, TagRegistry};
 use crate::vm::nvalue::{HeapObject, NValue};
-
 
 // -- Closure / Lambda lifting / CallIndirect tests --
 
@@ -51,6 +48,7 @@ fn jit_lambda_no_captures() {
                 None,
             ),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -102,7 +100,8 @@ fn jit_lambda_with_capture() {
                     None,
                 ),
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
             // Helper function to prevent constant propagation of y
             IrFunction {
@@ -110,7 +109,8 @@ fn jit_lambda_with_capture() {
                 params: vec![],
                 body: make_int(10),
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
         ],
         entry: 0,
@@ -167,6 +167,7 @@ fn jit_nested_lambdas() {
                 None,
             ),
             ty: Some(Type::Int),
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,
@@ -201,14 +202,16 @@ fn jit_call_direct_function_as_value() {
                     None,
                 ),
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
             IrFunction {
                 name: "double".into(),
                 params: vec!["x".into()],
                 body: make_binop(BinOp::Add, make_var("x"), make_var("x")),
                 ty: Some(Type::Int),
-                span: dummy_span(),
+                param_types: vec![],
+            span: dummy_span(),
             },
         ],
         entry: 0,
@@ -233,6 +236,7 @@ fn jit_list_concat() {
                 ty: None,
             },
             ty: None,
+            param_types: vec![],
             span: dummy_span(),
         }],
         entry: 0,

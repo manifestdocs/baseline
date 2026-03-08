@@ -180,9 +180,8 @@ pub(super) fn expr_can_jit(expr: &Expr, natives: Option<&NativeRegistry>) -> boo
         // Effect handler nodes should not reach can_jit — both tail-resumptive
         // (evidence transform) and non-tail-resumptive (fiber transform) are
         // eliminated before this check. This false is a safety net only.
-        Expr::WithHandlers { .. }
-        | Expr::HandleEffect { .. }
-        | Expr::PerformEffect { .. } => false,
+        Expr::WithHandlers { .. } | Expr::HandleEffect { .. } | Expr::PerformEffect { .. } => false,
+        Expr::Assign { value, .. } | Expr::FieldAssign { value, .. } => expr_can_jit(value, natives),
     }
 }
 
@@ -465,6 +464,9 @@ fn collect_indirect_targets_expr(
         Expr::Reuse { alloc, .. } => {
             collect_indirect_targets_expr(alloc, func_names, targets);
         }
+        Expr::Assign { value, .. } | Expr::FieldAssign { value, .. } => {
+            collect_indirect_targets_expr(value, func_names, targets);
+        }
     }
 }
 
@@ -532,6 +534,64 @@ pub(super) fn compute_unboxed_flags(module: &IrModule) -> Vec<bool> {
         }
     }
     unboxed
+}
+
+/// Extract sorted field names from a record type if all fields are scalar (Int, Float, Bool).
+/// Returns None for non-record types or records with non-scalar fields.
+fn record_scalar_fields(ty: &Type) -> Option<Vec<String>> {
+    let fields: &HashMap<String, Type> = match ty {
+        Type::Record(fields, _) => fields,
+        Type::Struct(_, fields) => fields,
+        _ => return None,
+    };
+    let mut names: Vec<String> = Vec::new();
+    for (name, field_ty) in fields {
+        match field_ty {
+            Type::Int | Type::Float | Type::Bool | Type::Unit => {
+                names.push(name.clone());
+            }
+            _ => return None,
+        }
+    }
+    names.sort();
+    Some(names)
+}
+
+/// Compute multi-return info for each function.
+/// Returns a Vec parallel to module.functions where Some(field_names) means the function
+/// can use multi-value returns (one return register per field), and None means standard
+/// single-return ABI.
+///
+/// A function qualifies for multi-return when:
+/// 1. Its return type is a record with all-scalar fields
+/// 2. It's not the entry function
+/// 3. It's not used as an indirect call target (closure, passed as value)
+/// 4. It's not a lambda
+pub(super) fn compute_multireturn_info(module: &IrModule) -> Vec<Option<Vec<String>>> {
+    let indirect_targets = collect_indirect_targets(module);
+
+    module
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| {
+            if i == module.entry {
+                return None;
+            }
+            if f.name.starts_with("__lambda_") {
+                return None;
+            }
+            if indirect_targets.contains(&f.name) {
+                return None;
+            }
+            // Check return type
+            let ret_ty = match &f.ty {
+                Some(Type::Function(_, ret)) => ret.as_ref(),
+                _ => return None,
+            };
+            record_scalar_fields(ret_ty)
+        })
+        .collect()
 }
 
 /// Check if an expression only references the given parameter names

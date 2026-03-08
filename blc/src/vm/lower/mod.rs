@@ -247,6 +247,7 @@ impl<'a> Lowerer<'a> {
 
         // Extract params from param_list
         let mut params = Vec::new();
+        let mut param_types = Vec::new();
         let mut param_lets = Vec::new();
         let mut param_scope_names = HashSet::new();
 
@@ -256,10 +257,23 @@ impl<'a> Lowerer<'a> {
             for param in param_list.named_children(&mut cursor) {
                 if param.kind() == "param" {
                     if let Some(name_node) = param.child_by_field_name("name") {
+                        // Extract param type from the name node (stored by type checker)
+                        let pty = self
+                            .type_map
+                            .as_ref()
+                            .and_then(|tm| tm.get(&name_node.start_byte()).cloned());
+                        param_types.push(pty);
                         let name = self.node_text(&name_node);
                         params.push(name.clone());
                         param_scope_names.insert(name);
                     } else if let Some(pat_node) = param.child_by_field_name("pattern") {
+                        // Pattern params: try to get type from the pattern node
+                        let pty = self
+                            .type_map
+                            .as_ref()
+                            .and_then(|tm| tm.get(&pat_node.start_byte()).cloned());
+                        param_types.push(pty);
+
                         let pattern = self.lower_pattern(&pat_node)?;
                         if let Pattern::Var(name) = pattern {
                             params.push(name.clone());
@@ -333,6 +347,7 @@ impl<'a> Lowerer<'a> {
             params,
             body,
             ty,
+            param_types,
             span,
         })
     }
@@ -533,6 +548,7 @@ impl<'a> Lowerer<'a> {
             "try_expression" => self.lower_try(node),
             "record_update" => self.lower_record_update(node),
             "let_binding" => self.lower_let(node),
+            "assignment_statement" => self.lower_assignment(node),
             "with_expression" => self.lower_with_expression(node),
             "handle_expression" => self.lower_handle_expression(node),
             "restrict_expression" => self.lower_restrict_expression(node),
