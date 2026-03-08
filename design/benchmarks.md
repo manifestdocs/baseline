@@ -29,6 +29,25 @@ From `benchmarks/cpu/results/reference.json`, measured on arm64 Darwin 26.2:
 
 ✦ JIT is *faster* than C on tak — Cranelift tail call optimization is working exceptionally well.
 
+### N-body Performance Methodology (Compiled metric primary)
+
+N-body has a dedicated harness at `benchmarks/hanabi/nbody/bench.sh`:
+
+```bash
+# Default: correctness checks + median-of-5 timings for 100k, 1M, 5M
+./benchmarks/hanabi/nbody/bench.sh
+
+# Include a compiled Baseline binary (primary metric target)
+./benchmarks/hanabi/nbody/bench.sh --baseline-bin /path/to/nbody_bl
+```
+
+Outputs are saved to:
+
+- `benchmarks/hanabi/nbody/results/latest.json`
+- `benchmarks/hanabi/nbody/results/latest.md`
+
+This preserves continuity on `blc run` while tracking the primary goal (`baseline_compiled` vs `c_opt`) once compiled binaries are available.
+
 ---
 
 ## Hanabi Submission Requirements

@@ -103,12 +103,12 @@ fn advance(b0: Body, b1: Body, b2: Body, b3: Body, b4: Body, dt: Float) -> (Body
   (b0, b1, b2, b3, b4)
 }
 
-// Tail-recursive step loop
-fn run_steps(s: (Body, Body, Body, Body, Body), n: Int, dt: Float) -> (Body, Body, Body, Body, Body) =
-  if n <= 0 then s
+// Tail-recursive step loop — individual params for param SRA
+fn run_steps(b0: Body, b1: Body, b2: Body, b3: Body, b4: Body, n: Int, dt: Float) -> (Body, Body, Body, Body, Body) =
+  if n <= 0 then (b0, b1, b2, b3, b4)
   else {
-    let (b0, b1, b2, b3, b4) = s
-    run_steps(advance(b0, b1, b2, b3, b4, dt), n - 1, dt)
+    let (b0, b1, b2, b3, b4) = advance(b0, b1, b2, b3, b4, dt)
+    run_steps(b0, b1, b2, b3, b4, n - 1, dt)
   }
 
 // Offset momentum so total system momentum is zero
@@ -157,8 +157,7 @@ fn main!() -> () = {
 
   let _ = Console.println!(Float.format(energy(b0, b1, b2, b3, b4), 9))
 
-  let s = (b0, b1, b2, b3, b4)
-  let (b0, b1, b2, b3, b4) = run_steps(s, n, 0.01)
+  let (b0, b1, b2, b3, b4) = run_steps(b0, b1, b2, b3, b4, n, 0.01)
 
   let _ = Console.println!(Float.format(energy(b0, b1, b2, b3, b4), 9))
 }
