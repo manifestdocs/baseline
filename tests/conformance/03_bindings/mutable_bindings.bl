@@ -1,0 +1,46 @@
+@prelude(core)
+
+// Conformance: mutable bindings (let mut) and assignment
+
+test "let mut simple rebind" = {
+  let mut x = 1
+  x = 2
+  x == 2
+}
+
+test "let mut preserves original until reassigned" = {
+  let mut x = 10
+  let y = x
+  x = 20
+  y == 10
+}
+
+test "let mut multiple reassignments" = {
+  let mut x = 0
+  x = 1
+  x = 2
+  x = 3
+  x == 3
+}
+
+test "let mut in loop accumulator" = {
+  let mut sum = 0
+  let items = [1, 2, 3, 4, 5]
+  for item in items do {
+    sum = sum + item
+  }
+  sum == 15
+}
+
+test "let mut counter in loop" = {
+  let mut count = 0
+  for _ in 1..4 do {
+    count = count + 1
+  }
+  count == 3
+}
+
+test "immutable let still works" = {
+  let x = 42
+  x == 42
+}

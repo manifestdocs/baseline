@@ -412,9 +412,12 @@ module.exports = grammar({
     block: $ => seq('{', repeat1(seq($._statement, optional(';'))), '}'),
     _statement: $ => choice(
       $.let_binding,
+      $.assignment_statement,
       $._expression
     ),
-    let_binding: $ => seq('let', $._pattern, optional(field('type', $.type_annotation)), '=', $._expression),
+    let_binding: $ => seq('let', optional(field('mutable', $.mut_keyword)), $._pattern, optional(field('type', $.type_annotation)), '=', $._expression),
+    mut_keyword: $ => 'mut',
+    assignment_statement: $ => prec.right(seq(field('left', choice($.identifier, $.field_expression)), '=', field('right', $._expression))),
 
     parenthesized_expression: $ => seq('(', $._expression, ')'),
 

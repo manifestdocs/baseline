@@ -1,0 +1,11 @@
+@prelude(core)
+
+// Conformance: mutable binding errors
+// Expected errors: MUT_001
+
+// MUT_001: Assignment to immutable variable
+fn bad_assign() -> Int = {
+  let x = 1
+  x = 2
+  x
+}
