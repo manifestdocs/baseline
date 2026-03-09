@@ -1,0 +1,19 @@
+@prelude(server)
+
+fn large_json(req: Request) -> {Http} Result<Response, HttpError> = {
+  // Build a large JSON body (>1KB) via concatenation
+  let chunk = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  let big = chunk ++ chunk ++ chunk ++ chunk ++ chunk ++ chunk ++ chunk ++ chunk
+  let bigger = big ++ big ++ big ++ big
+  let body = "{\"data\":\"" ++ bigger ++ "\"}"
+  Ok(Response.json(body))
+}
+
+fn small_json(req: Request) -> {Http} Result<Response, HttpError> =
+  Ok(Response.json("{\"ok\":true}"))
+
+fn main!() -> {Http} () =
+  Router.new()
+    |> Router.get("/large", large_json)
+    |> Router.get("/small", small_json)
+    |> Server.listen!(18201)
