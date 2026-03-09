@@ -131,6 +131,17 @@ fn optimize_inner(module: &mut IrModule, lift: bool) {
     }
     // Build tag registry: assign integer IDs to all enum tags
     build_tag_registry(module);
+
+    // IR dump: print optimized IR when BASELINE_DUMP_IR=1
+    if std::env::var("BASELINE_DUMP_IR").is_ok() {
+        eprintln!("=== Optimized IR ===");
+        for func in &module.functions {
+            eprintln!("--- fn {} ({}) ---", func.name, func.params.join(", "));
+            eprintln!("{:#?}", func.body);
+            eprintln!();
+        }
+        eprintln!("=== End IR ===");
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3037,13 +3048,42 @@ fn fuse_tuple_lets(expr: Expr) -> Expr {
 fn simplify_blocks(expr: Expr) -> Expr {
     transform_expr(expr, &mut |e| {
         if let Expr::Block(exprs, ty) = e {
-            // Flatten nested blocks
+            // Flatten nested blocks and let-float Block values
             let mut simplified: Vec<Expr> = Vec::new();
             for e in exprs {
-                if let Expr::Block(inner, _) = e {
-                    simplified.extend(inner);
-                } else {
-                    simplified.push(e);
+                match e {
+                    Expr::Block(inner, _) => {
+                        simplified.extend(inner);
+                    }
+                    // Let-floating: `let x = Block([s1, s2, final])` →
+                    // `s1; s2; let x = final`
+                    // This exposes UpdateRecord/MakeRecord values to SRA
+                    // after function inlining creates Block-valued Let bindings.
+                    Expr::Let { pattern, value, ty: let_ty }
+                        if matches!(*value, Expr::Block(_, _)) =>
+                    {
+                        let Expr::Block(mut stmts, _) = *value else {
+                            unreachable!()
+                        };
+                        if stmts.is_empty() {
+                            simplified.push(Expr::Let {
+                                pattern,
+                                value: Box::new(Expr::Unit),
+                                ty: let_ty,
+                            });
+                        } else {
+                            let final_expr = stmts.pop().unwrap();
+                            simplified.extend(stmts);
+                            simplified.push(Expr::Let {
+                                pattern,
+                                value: Box::new(final_expr),
+                                ty: let_ty,
+                            });
+                        }
+                    }
+                    other => {
+                        simplified.push(other);
+                    }
                 }
             }
             // Remove non-final Unit expressions

@@ -61,9 +61,15 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                 let base_name = if let Expr::Var(n, _) = base.as_ref() {
                     n.clone()
                 } else {
+                    if std::env::var("BASELINE_JIT_TRACE").is_ok() {
+                        eprintln!("[sra] UpdateRecord for {} skipped: base is not a Var", name);
+                    }
                     return Ok(false);
                 };
                 let Some(base_fields) = self.sra_records.get(&base_name).cloned() else {
+                    if std::env::var("BASELINE_JIT_TRACE").is_ok() {
+                        eprintln!("[sra] UpdateRecord for {} skipped: base {} not in sra_records", name, base_name);
+                    }
                     return Ok(false);
                 };
                 // Start with copies of base field vars
@@ -420,6 +426,7 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
         existing_sra: &HashMap<String, HashMap<String, Variable>>,
         self_fn_name: Option<&str>,
     ) -> Vec<(String, Vec<String>)> {
+        let trace = std::env::var("BASELINE_JIT_TRACE").is_ok();
         // Single pass: collect all variable names that appear in escaping positions
         let mut escaping = std::collections::HashSet::new();
         for expr in exprs {
@@ -494,6 +501,9 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
                     _ => {}
                 }
             }
+        }
+        if trace && !candidates.is_empty() {
+            eprintln!("[sra] candidates: {:?}", candidates.iter().map(|(n, f)| format!("{}({})", n, f.join(","))).collect::<Vec<_>>());
         }
         candidates
     }
@@ -655,7 +665,12 @@ impl<'a, 'b, M: Module> FnCompileCtx<'a, 'b, M> {
             Expr::Expect { actual, .. } => {
                 Self::collect_escaping_vars_ex(actual, escaping, self_fn_name)
             }
-            Expr::Drop { body, .. } => Self::collect_escaping_vars_ex(body, escaping, self_fn_name),
+            Expr::Drop { name, body, .. } => {
+                // The dropped variable must be materialized (not SRA-decomposed)
+                // because compile_drop loads it as a boxed value for the drop helper.
+                escaping.insert(name.as_str());
+                Self::collect_escaping_vars_ex(body, escaping, self_fn_name);
+            }
             Expr::Reuse { alloc, .. } => {
                 Self::collect_escaping_vars_ex(alloc, escaping, self_fn_name)
             }

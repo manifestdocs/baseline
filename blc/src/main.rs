@@ -50,6 +50,10 @@ enum Commands {
         #[arg(long)]
         fs_sandbox: Option<PathBuf>,
 
+        /// Number of server worker processes (uses SO_REUSEPORT for load balancing)
+        #[arg(long, default_value = "1")]
+        workers: usize,
+
         /// Arguments to pass to the Baseline program (after --)
         #[arg(last = true)]
         program_args: Vec<String>,
@@ -220,13 +224,21 @@ fn main() {
             file,
             mem_stats,
             fs_sandbox,
+            workers,
             program_args,
         } => {
             vm::natives::set_program_args(program_args);
             vm::natives::set_fs_sandbox(fs_sandbox);
+            #[cfg(feature = "async-server")]
+            vm::jit::server::set_worker_count(workers);
+            #[cfg(not(feature = "async-server"))]
+            if workers > 1 {
+                eprintln!("Warning: --workers requires the async-server feature");
+            }
             baseline_rt::helpers::jit_counter_reset();
             run_file_jit(&file);
-            if mem_stats {
+            let trace = std::env::var("BASELINE_JIT_TRACE").is_ok();
+            if mem_stats || trace {
                 let stats = vm::nvalue::alloc_stats();
                 eprintln!("[mem] {}", stats);
                 let jit_stats = baseline_rt::helpers::jit_counter_snapshot();

@@ -52,20 +52,26 @@ thread_local! {
 static JIT_HELPER_CALLS: AtomicU64 = AtomicU64::new(0);
 static JIT_BOX_BOUNDARY_CALLS: AtomicU64 = AtomicU64::new(0);
 static JIT_UNBOX_BOUNDARY_CALLS: AtomicU64 = AtomicU64::new(0);
+static JIT_RECORD_ALLOC_CALLS: AtomicU64 = AtomicU64::new(0);
+static JIT_RECORD_UPDATE_CALLS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy)]
 pub struct JitCounterSnapshot {
     pub helper_calls: u64,
     pub box_boundary_calls: u64,
     pub unbox_boundary_calls: u64,
+    pub record_alloc_calls: u64,
+    pub record_update_calls: u64,
 }
 
 impl fmt::Display for JitCounterSnapshot {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "helper_calls: {}  box_boundary_calls: {}  unbox_boundary_calls: {}",
-            self.helper_calls, self.box_boundary_calls, self.unbox_boundary_calls
+            "helper_calls: {}  box_boundary_calls: {}  unbox_boundary_calls: {}  \
+             record_alloc: {}  record_update: {}",
+            self.helper_calls, self.box_boundary_calls, self.unbox_boundary_calls,
+            self.record_alloc_calls, self.record_update_calls
         )
     }
 }
@@ -75,6 +81,8 @@ pub fn jit_counter_snapshot() -> JitCounterSnapshot {
         helper_calls: JIT_HELPER_CALLS.load(Ordering::Relaxed),
         box_boundary_calls: JIT_BOX_BOUNDARY_CALLS.load(Ordering::Relaxed),
         unbox_boundary_calls: JIT_UNBOX_BOUNDARY_CALLS.load(Ordering::Relaxed),
+        record_alloc_calls: JIT_RECORD_ALLOC_CALLS.load(Ordering::Relaxed),
+        record_update_calls: JIT_RECORD_UPDATE_CALLS.load(Ordering::Relaxed),
     }
 }
 
@@ -82,6 +90,8 @@ pub fn jit_counter_reset() {
     JIT_HELPER_CALLS.store(0, Ordering::Relaxed);
     JIT_BOX_BOUNDARY_CALLS.store(0, Ordering::Relaxed);
     JIT_UNBOX_BOUNDARY_CALLS.store(0, Ordering::Relaxed);
+    JIT_RECORD_ALLOC_CALLS.store(0, Ordering::Relaxed);
+    JIT_RECORD_UPDATE_CALLS.store(0, Ordering::Relaxed);
 }
 
 #[unsafe(no_mangle)]
@@ -587,6 +597,7 @@ pub extern "C" fn jit_make_enum_flat_reuse(
 /// If reuse_bits == 0, falls back to fresh allocation.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_make_record_reuse(reuse_bits: u64, pairs: *const u64, count: u64) -> u64 {
+    JIT_RECORD_ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
     if reuse_bits == 0 {
         return jit_make_record(pairs, count);
     }
@@ -668,6 +679,7 @@ pub extern "C" fn jit_make_list(items: *const u64, count: u64) -> u64 {
 /// Build a record from interleaved key/value pairs.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_make_record(pairs: *const u64, count: u64) -> u64 {
+    JIT_RECORD_ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
     let n = count as usize;
     let slice = unsafe { std::slice::from_raw_parts(pairs, n * 2) };
     let mut fields = Vec::with_capacity(n);
@@ -687,6 +699,7 @@ pub extern "C" fn jit_make_record(pairs: *const u64, count: u64) -> u64 {
 /// Build a named struct from interleaved key/value pairs.
 #[unsafe(no_mangle)]
 pub extern "C" fn jit_make_struct(name_bits: u64, pairs: *const u64, count: u64) -> u64 {
+    JIT_RECORD_ALLOC_CALLS.fetch_add(1, Ordering::Relaxed);
     let name_nv = unsafe { jit_take_arg(name_bits) };
     let Some(name) = name_nv.as_string().cloned() else {
         jit_set_error("struct name must be a string".to_string());
@@ -931,6 +944,7 @@ pub extern "C" fn jit_update_record_indexed(
     updates: *const u64,
     count: u64,
 ) -> u64 {
+    JIT_RECORD_UPDATE_CALLS.fetch_add(1, Ordering::Relaxed);
     let mut base = unsafe { jit_take_arg(base_bits) };
     let n = count as usize;
     let slice = unsafe { std::slice::from_raw_parts(updates, n * 2) };
@@ -1009,6 +1023,7 @@ pub extern "C" fn jit_update_record_indexed3(
     idx2: u64,
     val2_bits: u64,
 ) -> u64 {
+    JIT_RECORD_UPDATE_CALLS.fetch_add(1, Ordering::Relaxed);
     let mut base = unsafe { jit_take_arg(base_bits) };
     if !base.is_heap() {
         jit_set_error("update_record on non-record".to_string());
@@ -1895,7 +1910,7 @@ pub extern "C" fn jit_middleware_dispatch(request_bits: u64) -> u64 {
         }
     });
 
-    let (chunk_idx, is_closure, closure_bits, next_chunk_idx, rc_enabled, is_handler) = match action
+    let (chunk_idx, is_closure, closure_bits, next_chunk_idx, _rc_enabled, is_handler) = match action
     {
         Some(info) => info,
         None => return NV_UNIT,
