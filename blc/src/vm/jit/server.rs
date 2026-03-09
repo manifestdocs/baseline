@@ -16,8 +16,12 @@ use hyper::service::service_fn;
 use hyper::{Request, Response, StatusCode};
 use std::cell::Cell;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::net::TcpListener;
+
+/// Global request counter for generating unique request IDs.
+static REQUEST_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 use crate::vm::natives::http_error::{http_error_status_code, http_error_to_response_record};
 use crate::vm::nvalue::NValue;
@@ -492,9 +496,7 @@ fn spawn_connection(
         let tree = tree.clone();
         let middleware = middleware.clone();
         let state = state.clone();
-        async move {
-            handle_request(req, &tree, &middleware, &state, rc_enabled, mw_next_idx).await
-        }
+        async move { handle_request(req, &tree, &middleware, &state, rc_enabled, mw_next_idx).await }
     });
 
     active.set(active.get() + 1);
@@ -503,6 +505,8 @@ fn spawn_connection(
         let io = hyper_util::rt::TokioIo::new(stream);
         let conn = http1::Builder::new()
             .keep_alive(true)
+            .header_read_timeout(KEEP_ALIVE_TIMEOUT)
+            .timer(hyper_util::rt::TokioTimer::new())
             .max_buf_size(MAX_HEADER_BUF_SIZE)
             .max_headers(MAX_HEADERS)
             .serve_connection(io, service);
@@ -548,10 +552,9 @@ async fn accept_loop(
     mw_next_idx: usize,
 ) {
     #[cfg(unix)]
-    let mut sigterm_signal = tokio::signal::unix::signal(
-        tokio::signal::unix::SignalKind::terminate(),
-    )
-    .expect("Failed to register SIGTERM handler");
+    let mut sigterm_signal =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("Failed to register SIGTERM handler");
 
     let sigterm = async {
         #[cfg(unix)]
@@ -582,8 +585,14 @@ async fn accept_loop(
         match accept_result {
             Ok((stream, _)) => {
                 spawn_connection(
-                    stream, tree, middleware, state, shutdown_rx, active,
-                    rc_enabled, mw_next_idx,
+                    stream,
+                    tree,
+                    middleware,
+                    state,
+                    shutdown_rx,
+                    active,
+                    rc_enabled,
+                    mw_next_idx,
                 );
             }
             Err(e) => {
@@ -608,6 +617,9 @@ const MAX_HEADERS: usize = 100;
 
 /// Maximum request body size (1 MB). Prevents memory exhaustion from large payloads.
 const MAX_BODY_SIZE: u64 = 1024 * 1024;
+
+/// Keep-alive timeout (30 seconds). Idle connections close after this duration.
+const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Start the JIT HTTP server with graceful shutdown support.
 ///
@@ -706,8 +718,8 @@ pub fn run_server(
         );
 
         // Phase 3: Wait for connections to finish with timeout
-        let deadline = tokio::time::Instant::now()
-            + Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
+        let deadline =
+            tokio::time::Instant::now() + Duration::from_secs(DEFAULT_SHUTDOWN_TIMEOUT_SECS);
 
         while active_connections.get() > 0 {
             if tokio::time::Instant::now() >= deadline {
@@ -727,7 +739,7 @@ pub fn run_server(
     std::process::exit(exit_code);
 }
 
-/// Handle a single HTTP request.
+/// Handle a single HTTP request with logging, request ID, and health check.
 async fn handle_request(
     req: Request<Incoming>,
     tree: &RadixTree<JitHandlerInfo>,
@@ -736,24 +748,61 @@ async fn handle_request(
     rc_enabled: bool,
     mw_next_idx: usize,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
+    let start = std::time::Instant::now();
     let method = req.method().clone();
     let uri = req.uri().clone();
     let path = uri.path().to_string();
     let query = uri.query().map(|q| q.to_string());
     let headers = req.headers().clone();
 
+    // Generate or extract request ID
+    let request_id = match req.headers().get("x-request-id") {
+        Some(id) => id.to_str().unwrap_or("").to_string(),
+        None => {
+            let id = REQUEST_COUNTER.fetch_add(1, Ordering::Relaxed);
+            format!("req-{}", id)
+        }
+    };
+
+    // Built-in health check endpoint (bypasses route tree and JIT)
+    if path == "/__health" && method == hyper::Method::GET {
+        let resp = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .header("X-Request-Id", &request_id)
+            .body(Full::new(Bytes::from("{\"status\":\"ok\"}")))
+            .unwrap();
+        log_request(
+            &method,
+            &path,
+            resp.status().as_u16(),
+            start.elapsed(),
+            &request_id,
+        );
+        return Ok(resp);
+    }
+
     // Check Content-Length before reading (fast reject)
     if let Some(cl) = req.headers().get(hyper::header::CONTENT_LENGTH) {
         if let Ok(len) = cl.to_str().unwrap_or("0").parse::<u64>() {
             if len > MAX_BODY_SIZE {
-                return Ok(Response::builder()
+                let resp = Response::builder()
                     .status(StatusCode::PAYLOAD_TOO_LARGE)
                     .header("Content-Type", "application/json")
+                    .header("X-Request-Id", &request_id)
                     .body(Full::new(Bytes::from(format!(
                         "{{\"error\":\"Payload Too Large\",\"max_bytes\":{}}}",
                         MAX_BODY_SIZE
                     ))))
-                    .unwrap());
+                    .unwrap();
+                log_request(
+                    &method,
+                    &path,
+                    resp.status().as_u16(),
+                    start.elapsed(),
+                    &request_id,
+                );
+                return Ok(resp);
             }
         }
     }
@@ -764,20 +813,31 @@ async fn handle_request(
         Ok(collected) => collected.to_bytes(),
         Err(e) => {
             let msg = e.to_string();
-            if msg.contains("length limit exceeded") {
-                return Ok(Response::builder()
+            let resp = if msg.contains("length limit exceeded") {
+                Response::builder()
                     .status(StatusCode::PAYLOAD_TOO_LARGE)
                     .header("Content-Type", "application/json")
+                    .header("X-Request-Id", &request_id)
                     .body(Full::new(Bytes::from(format!(
                         "{{\"error\":\"Payload Too Large\",\"max_bytes\":{}}}",
                         MAX_BODY_SIZE
                     ))))
-                    .unwrap());
-            }
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Full::new(Bytes::from("Failed to read request body")))
-                .unwrap());
+                    .unwrap()
+            } else {
+                Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header("X-Request-Id", &request_id)
+                    .body(Full::new(Bytes::from("Failed to read request body")))
+                    .unwrap()
+            };
+            log_request(
+                &method,
+                &path,
+                resp.status().as_u16(),
+                start.elapsed(),
+                &request_id,
+            );
+            return Ok(resp);
         }
     };
 
@@ -788,13 +848,21 @@ async fn handle_request(
     let handler = match handler {
         Some(h) => h,
         None => {
-            // 404 Not Found
             let body = format!("{{\"error\":\"Not Found\",\"path\":\"{}\"}}", path);
-            return Ok(Response::builder()
+            let resp = Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .header("Content-Type", "application/json")
+                .header("X-Request-Id", &request_id)
                 .body(Full::new(Bytes::from(body)))
-                .unwrap());
+                .unwrap();
+            log_request(
+                &method,
+                &path,
+                resp.status().as_u16(),
+                start.elapsed(),
+                &request_id,
+            );
+            return Ok(resp);
         }
     };
 
@@ -827,25 +895,68 @@ async fn handle_request(
     // Check for runtime errors
     if let Some(err) = helpers::jit_take_error() {
         eprintln!("[server] Runtime error: {}", err);
-        return Ok(Response::builder()
+        let resp = Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("Content-Type", "application/json")
+            .header("X-Request-Id", &request_id)
             .body(Full::new(Bytes::from(
                 "{\"error\":\"Internal Server Error\",\"message\":\"Handler runtime error\"}",
             )))
-            .unwrap());
+            .unwrap();
+        log_request(
+            &method,
+            &path,
+            resp.status().as_u16(),
+            start.elapsed(),
+            &request_id,
+        );
+        return Ok(resp);
     }
 
-    match response {
-        Some(val) => Ok(nvalue_to_response(&val)),
-        None => Ok(Response::builder()
+    let resp = match response {
+        Some(val) => {
+            let mut resp = nvalue_to_response(&val);
+            if let Ok(val) = hyper::header::HeaderValue::from_str(&request_id) {
+                resp.headers_mut().insert("x-request-id", val);
+            }
+            resp
+        }
+        None => Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("Content-Type", "application/json")
+            .header("X-Request-Id", &request_id)
             .body(Full::new(Bytes::from(
                 "{\"error\":\"Internal Server Error\",\"message\":\"Handler failed\"}",
             )))
-            .unwrap()),
-    }
+            .unwrap(),
+    };
+
+    log_request(
+        &method,
+        &path,
+        resp.status().as_u16(),
+        start.elapsed(),
+        &request_id,
+    );
+    Ok(resp)
+}
+
+/// Log a structured access log line for a request.
+fn log_request(
+    method: &hyper::Method,
+    path: &str,
+    status: u16,
+    duration: Duration,
+    request_id: &str,
+) {
+    eprintln!(
+        "[server] {} {} {} {}ms id={}",
+        method,
+        path,
+        status,
+        duration.as_millis(),
+        request_id,
+    );
 }
 
 /// Count total routes in the radix tree (for logging).
