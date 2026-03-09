@@ -782,6 +782,40 @@ async fn handle_request(
         return Ok(resp);
     }
 
+    // Built-in CORS preflight handling (OPTIONS requests)
+    if method == hyper::Method::OPTIONS {
+        let origin = headers
+            .get("origin")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("*");
+        let request_method = headers
+            .get("access-control-request-method")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("GET, POST, PUT, DELETE, PATCH");
+        let request_headers = headers
+            .get("access-control-request-headers")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("Content-Type");
+
+        let resp = Response::builder()
+            .status(StatusCode::NO_CONTENT)
+            .header("Access-Control-Allow-Origin", origin)
+            .header("Access-Control-Allow-Methods", request_method)
+            .header("Access-Control-Allow-Headers", request_headers)
+            .header("Access-Control-Max-Age", "86400")
+            .header("X-Request-Id", &request_id)
+            .body(Full::new(Bytes::new()))
+            .unwrap();
+        log_request(
+            &method,
+            &path,
+            resp.status().as_u16(),
+            start.elapsed(),
+            &request_id,
+        );
+        return Ok(resp);
+    }
+
     // Check Content-Length before reading (fast reject)
     if let Some(cl) = req.headers().get(hyper::header::CONTENT_LENGTH) {
         if let Ok(len) = cl.to_str().unwrap_or("0").parse::<u64>() {
