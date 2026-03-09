@@ -51,6 +51,9 @@ selfhost/test_out
 selfhost/.build/
 selfhost/.bootstrap_*
 
+# Design docs (private language design notes)
+design/
+
 # Separate repos
 baseline-site/
 baseline-site-archive/

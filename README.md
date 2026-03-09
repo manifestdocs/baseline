@@ -147,6 +147,18 @@ $ blc check app.bl --json
 
 Baseline is in **v0.1 (Bootstrap Phase)**. The core language, type system, effect system, and developer tooling are functional. See the [language specification](design/baseline-language-specification.md) for the full reference and the [getting started guide](docs/getting-started.md) for a walkthrough.
 
+## Why Baseline
+
+Most languages make you choose: lightweight types that don't enforce much (TypeScript's `type Port = number` compiles with `listen(-1)`), or powerful proofs that require a PhD (Idris, Agda). Baseline sits in between.
+
+**Correctness without ceremony.** Refinement types encode constraints in the type system. The compiler proves them at every call site. No Zod, no branded types, no runtime assertions.
+
+**Refinements + effects together.** Refinements check *data invariants* (is this port in range?). Effects check *behavior invariants* (does this function touch the network?). Together they answer: is this function honest about what it accepts AND what it does? No other practical language combines both.
+
+**Machine-actionable diagnostics.** `blc check --json` produces structured errors with patch suggestions across three verification layers (types, effects, refinements). LLMs can parse the output and fix errors in one shot instead of three.
+
+Baseline is early (v0.1). Refinements are integer intervals only, there's no concurrency yet, and the ecosystem is 38 stdlib modules. See [design/why-baseline.md](design/why-baseline.md) for the full rationale and honest comparison with TypeScript, Rust, OCaml, and Koka.
+
 ## License
 
 MIT
