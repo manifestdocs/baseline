@@ -230,17 +230,17 @@ fn build_request_nvalue(
 /// Handlers return `Result<Response, HttpError>`:
 /// - Ok variant: Response record with { status, body, headers }
 /// - Err variant: HttpError enum, converted via http_error_to_response_record
-fn nvalue_to_response(val: &NValue) -> Response<Full<Bytes>> {
+fn nvalue_to_response(val: &NValue, accept_encoding: Option<&str>) -> Response<Full<Bytes>> {
     // Check if it's a Result enum (Ok/Err)
     if let Some((tag, payload)) = val.as_enum() {
         match &**tag {
-            "Ok" => return response_record_to_hyper(payload),
+            "Ok" => return response_record_to_hyper(payload, accept_encoding),
             "Err" => {
                 // Check if the payload is an HttpError enum
                 if let Some((err_tag, _err_payload)) = payload.as_enum() {
                     if http_error_status_code(&err_tag).is_some() {
                         let resp_record = http_error_to_response_record(&err_tag, _err_payload);
-                        return response_record_to_hyper(&resp_record);
+                        return response_record_to_hyper(&resp_record, accept_encoding);
                     }
                 }
                 // Generic error: return 500
@@ -257,7 +257,7 @@ fn nvalue_to_response(val: &NValue) -> Response<Full<Bytes>> {
 
     // If not a Result, try treating it as a Response record directly
     if val.as_record().is_some() {
-        return response_record_to_hyper(val);
+        return response_record_to_hyper(val, accept_encoding);
     }
 
     // Fallback: return the value as text
@@ -270,7 +270,8 @@ fn nvalue_to_response(val: &NValue) -> Response<Full<Bytes>> {
 }
 
 /// Convert a Response record NValue to a hyper Response.
-fn response_record_to_hyper(val: &NValue) -> Response<Full<Bytes>> {
+/// If `accept_encoding` contains "gzip", compresses eligible bodies.
+fn response_record_to_hyper(val: &NValue, accept_encoding: Option<&str>) -> Response<Full<Bytes>> {
     let fields = match val.as_record() {
         Some(f) => f,
         None => {
@@ -312,7 +313,36 @@ fn response_record_to_hyper(val: &NValue) -> Response<Full<Bytes>> {
         }
     }
 
-    // If no Content-Type was set, infer from body
+    // Determine content type for compression eligibility
+    let content_type = fields
+        .iter()
+        .find(|(k, _)| &**k == "headers")
+        .and_then(|(_, v)| v.as_list())
+        .and_then(|headers| {
+            headers.iter().find_map(|h| {
+                let items = h.as_tuple()?;
+                if items.len() == 2 && items[0].as_str()?.eq_ignore_ascii_case("content-type") {
+                    items[1].as_str().map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
+        });
+
+    let body_bytes = body.as_bytes();
+    let accepts_gzip = accept_encoding
+        .map(|ae| ae.contains("gzip"))
+        .unwrap_or(false);
+
+    if accepts_gzip && should_compress(content_type.as_deref(), body_bytes.len()) {
+        if let Some(compressed) = gzip_compress(body_bytes) {
+            return builder
+                .header("Content-Encoding", "gzip")
+                .body(Full::new(Bytes::from(compressed)))
+                .unwrap();
+        }
+    }
+
     builder
         .body(Full::new(Bytes::from(body.to_string())))
         .unwrap()
@@ -851,6 +881,12 @@ async fn handle_request(
     let query = uri.query().map(|q| q.to_string());
     let headers = req.headers().clone();
 
+    // Capture Accept-Encoding for response compression
+    let accept_encoding = headers
+        .get("accept-encoding")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string());
+
     // Generate or extract request ID
     let request_id = match req.headers().get("x-request-id") {
         Some(id) => id.to_str().unwrap_or("").to_string(),
@@ -1066,7 +1102,7 @@ async fn handle_request(
 
     let resp = match response {
         Some(val) => {
-            let mut resp = nvalue_to_response(&val);
+            let mut resp = nvalue_to_response(&val, accept_encoding.as_deref());
             if let Ok(val) = hyper::header::HeaderValue::from_str(&request_id) {
                 resp.headers_mut().insert("x-request-id", val);
             }
@@ -1090,6 +1126,47 @@ async fn handle_request(
         &request_id,
     );
     Ok(resp)
+}
+
+/// Minimum response body size to apply compression (1 KB).
+const COMPRESSION_MIN_SIZE: usize = 1024;
+
+/// Compress body bytes with gzip if beneficial.
+/// Returns (possibly compressed bytes, true if compressed).
+fn gzip_compress(body: &[u8]) -> Option<Vec<u8>> {
+    use flate2::write::GzEncoder;
+    use flate2::Compression;
+    use std::io::Write;
+
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(body).ok()?;
+    let compressed = encoder.finish().ok()?;
+
+    // Only use compressed version if it's actually smaller
+    if compressed.len() < body.len() {
+        Some(compressed)
+    } else {
+        None
+    }
+}
+
+/// Check if a content type should be compressed.
+fn should_compress(content_type: Option<&str>, body_len: usize) -> bool {
+    if body_len < COMPRESSION_MIN_SIZE {
+        return false;
+    }
+    match content_type {
+        Some(ct)
+            if ct.starts_with("image/")
+                || ct.starts_with("video/")
+                || ct.starts_with("audio/")
+                || ct.contains("gzip")
+                || ct.contains("zip") =>
+        {
+            false
+        }
+        _ => true,
+    }
 }
 
 /// Log a structured access log line for a request.
