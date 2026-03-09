@@ -503,6 +503,8 @@ fn spawn_connection(
         let io = hyper_util::rt::TokioIo::new(stream);
         let conn = http1::Builder::new()
             .keep_alive(true)
+            .max_buf_size(MAX_HEADER_BUF_SIZE)
+            .max_headers(MAX_HEADERS)
             .serve_connection(io, service);
         tokio::pin!(conn);
 
@@ -597,6 +599,15 @@ async fn accept_loop(
 
 /// Default graceful shutdown timeout in seconds.
 const DEFAULT_SHUTDOWN_TIMEOUT_SECS: u64 = 30;
+
+/// Maximum header buffer size (8 KB). Prevents memory exhaustion from oversized headers.
+const MAX_HEADER_BUF_SIZE: usize = 8 * 1024;
+
+/// Maximum number of headers per request (100). Prevents abuse via header flooding.
+const MAX_HEADERS: usize = 100;
+
+/// Maximum request body size (1 MB). Prevents memory exhaustion from large payloads.
+const MAX_BODY_SIZE: u64 = 1024 * 1024;
 
 /// Start the JIT HTTP server with graceful shutdown support.
 ///
@@ -731,10 +742,38 @@ async fn handle_request(
     let query = uri.query().map(|q| q.to_string());
     let headers = req.headers().clone();
 
-    // Read body (with size limit)
-    let body = match req.collect().await {
+    // Check Content-Length before reading (fast reject)
+    if let Some(cl) = req.headers().get(hyper::header::CONTENT_LENGTH) {
+        if let Ok(len) = cl.to_str().unwrap_or("0").parse::<u64>() {
+            if len > MAX_BODY_SIZE {
+                return Ok(Response::builder()
+                    .status(StatusCode::PAYLOAD_TOO_LARGE)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(format!(
+                        "{{\"error\":\"Payload Too Large\",\"max_bytes\":{}}}",
+                        MAX_BODY_SIZE
+                    ))))
+                    .unwrap());
+            }
+        }
+    }
+
+    // Read body with size limit enforced via http_body_util::Limited
+    let limited = http_body_util::Limited::new(req.into_body(), MAX_BODY_SIZE as usize);
+    let body = match limited.collect().await {
         Ok(collected) => collected.to_bytes(),
-        Err(_) => {
+        Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("length limit exceeded") {
+                return Ok(Response::builder()
+                    .status(StatusCode::PAYLOAD_TOO_LARGE)
+                    .header("Content-Type", "application/json")
+                    .body(Full::new(Bytes::from(format!(
+                        "{{\"error\":\"Payload Too Large\",\"max_bytes\":{}}}",
+                        MAX_BODY_SIZE
+                    ))))
+                    .unwrap());
+            }
             return Ok(Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .body(Full::new(Bytes::from("Failed to read request body")))
