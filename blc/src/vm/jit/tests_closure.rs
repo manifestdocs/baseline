@@ -3,8 +3,8 @@
 use super::tests::*;
 use super::*;
 use crate::analysis::types::Type;
-use crate::vm::ir::{BinOp, Expr, IrFunction, IrModule, MatchArm, Pattern, Span, TagRegistry};
-use crate::vm::nvalue::{HeapObject, NValue};
+use crate::vm::ir::{BinOp, Expr, IrFunction, IrModule, Pattern, TagRegistry};
+use crate::vm::nvalue::NValue;
 
 // -- Closure / Lambda lifting / CallIndirect tests --
 

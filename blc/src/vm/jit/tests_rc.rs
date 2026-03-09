@@ -4,9 +4,9 @@ use super::tests::*;
 use super::*;
 use crate::analysis::types::Type;
 use crate::vm::ir::{
-    BinOp, Expr, IrFunction, IrModule, MatchArm, Matcher, Pattern, Span, TagRegistry, UnaryOp,
+    BinOp, Expr, IrFunction, IrModule, MatchArm, Matcher, Pattern, TagRegistry, UnaryOp,
 };
-use crate::vm::nvalue::{HeapObject, NValue};
+use crate::vm::nvalue::NValue;
 
 // -- Arena lifecycle tests (heap value leak prevention) --
 //
@@ -1261,8 +1261,6 @@ fn jit_fiber_handler_basic() {
 /// Uses a simple native function (not fiber-based) to isolate the issue.
 #[test]
 fn jit_let_then_add_via_native() {
-    use crate::vm::optimize_ir::optimize;
-
     // Block([let r = __handler.resume(42), r + 10])
     // __handler.resume(42) returns 42 (but normally resumes a fiber)
     // For this test, we just want to see if the JIT correctly returns 52

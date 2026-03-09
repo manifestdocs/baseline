@@ -1,9 +1,11 @@
 {
-  "timestamp": "2026-03-08T08:10:23Z",
+  "timestamp": "2026-03-09T17:29:37Z",
   "system": "arm64 Darwin 25.2.0",
   "runs": 3,
   "inputs": [
-    500000
+    100000,
+    1000000,
+    5000000
   ],
   "correctness_inputs": [
     1000,
@@ -18,19 +20,51 @@
   "results": [
     {
       "variant": "c_opt",
-      "input": 500000,
-      "time_s": 0.029054,
-      "min_s": 0.028296,
-      "max_s": 0.0301,
+      "input": 100000,
+      "time_s": 0.016259,
+      "min_s": 0.016223,
+      "max_s": 0.016278,
       "ratio_vs_c_opt": 1.0
     },
     {
       "variant": "baseline_source",
-      "input": 500000,
-      "time_s": 2.771537,
-      "min_s": 2.615146,
-      "max_s": 3.12642,
-      "ratio_vs_c_opt": 95.392
+      "input": 100000,
+      "time_s": 0.141852,
+      "min_s": 0.137282,
+      "max_s": 0.145496,
+      "ratio_vs_c_opt": 8.725
+    },
+    {
+      "variant": "c_opt",
+      "input": 1000000,
+      "time_s": 0.045646,
+      "min_s": 0.043446,
+      "max_s": 0.046104,
+      "ratio_vs_c_opt": 1.0
+    },
+    {
+      "variant": "baseline_source",
+      "input": 1000000,
+      "time_s": 1.004006,
+      "min_s": 0.945243,
+      "max_s": 1.086739,
+      "ratio_vs_c_opt": 21.995
+    },
+    {
+      "variant": "c_opt",
+      "input": 5000000,
+      "time_s": 0.164832,
+      "min_s": 0.163396,
+      "max_s": 0.168027,
+      "ratio_vs_c_opt": 1.0
+    },
+    {
+      "variant": "baseline_source",
+      "input": 5000000,
+      "time_s": 5.13222,
+      "min_s": 4.949621,
+      "max_s": 5.256492,
+      "ratio_vs_c_opt": 31.136
     }
   ]
 }

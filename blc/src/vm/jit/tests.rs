@@ -1,10 +1,7 @@
 use super::analysis::{can_jit, collect_indirect_targets, compute_unboxed_flags};
-use super::compile::FnCompileCtx;
 use super::*;
 use crate::analysis::types::Type;
-use crate::vm::ir::{
-    BinOp, Expr, IrFunction, IrModule, MatchArm, Pattern, Span, TagRegistry, UnaryOp,
-};
+use crate::vm::ir::{BinOp, Expr, IrFunction, IrModule, Pattern, Span, TagRegistry, UnaryOp};
 use crate::vm::nvalue::{HeapObject, NValue};
 
 pub(super) fn dummy_span() -> Span {

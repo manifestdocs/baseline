@@ -3,10 +3,7 @@
 use super::tests::*;
 use super::*;
 use crate::analysis::types::Type;
-use crate::vm::ir::{
-    BinOp, Expr, IrFunction, IrModule, MatchArm, Pattern, Span, TagRegistry, UnaryOp,
-};
-use crate::vm::nvalue::{HeapObject, NValue};
+use crate::vm::ir::{BinOp, Expr, IrFunction, IrModule, MatchArm, Pattern, TagRegistry};
 
 // -- Phase 4 tests --
 
@@ -240,7 +237,7 @@ fn jit_try_err_propagates() {
 fn jit_enum_integer_tag_match() {
     // match Some(42) { Some(x) => x, None => 0 }
     // With tag registry, this should use integer comparison
-    let mut tags = TagRegistry::new();
+    let tags = TagRegistry::new();
     // None=0, Some=1 are pre-registered
     let module = IrModule {
         functions: vec![IrFunction {

@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = ["blc", "baseline-rt", "tree-sitter-baseline"]
+exclude = ["benchmarks/axum_server"]
 
 [workspace.package]
 version = "0.1.0"

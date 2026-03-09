@@ -31,6 +31,16 @@ use crate::vm::radix::{RadixTree, SmallParams};
 use baseline_rt::helpers;
 use baseline_rt::nvalue::HeapObject;
 
+use std::sync::atomic::AtomicUsize;
+
+/// Number of worker processes for multi-process mode (set by --workers flag).
+static WORKER_COUNT: AtomicUsize = AtomicUsize::new(1);
+
+/// Set the number of worker processes. Called from CLI parsing.
+pub fn set_worker_count(n: usize) {
+    WORKER_COUNT.store(n.max(1), Ordering::Relaxed);
+}
+
 // ---------------------------------------------------------------------------
 // Handler info extracted from Router NValue at startup
 // ---------------------------------------------------------------------------
@@ -673,7 +683,8 @@ const MAX_BODY_SIZE: u64 = 1024 * 1024;
 const KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Default rate limit: requests per second per IP.
-const RATE_LIMIT_RPS: u32 = 100;
+/// Override with BL_RATE_LIMIT env var (0 = disabled).
+const RATE_LIMIT_RPS: u32 = 10_000;
 
 /// Rate limit window duration.
 const RATE_LIMIT_WINDOW: Duration = Duration::from_secs(1);
@@ -710,7 +721,11 @@ impl RateLimiter {
     }
 
     /// Returns true if the request is allowed, false if rate limited.
+    /// When max_tokens is 0, rate limiting is disabled (all requests allowed).
     fn check(&self, ip: IpAddr) -> bool {
+        if self.max_tokens == 0 {
+            return true;
+        }
         let now = Instant::now();
         let mut buckets = self.buckets.borrow_mut();
 
@@ -779,35 +794,141 @@ pub fn run_server(
     // Count routes for logging
     let route_count = count_routes(&tree.root);
 
+    let workers = WORKER_COUNT.load(Ordering::Relaxed);
+
+    // Multi-process mode: fork worker processes before creating Tokio runtimes.
+    // Each process binds its own SO_REUSEPORT listener on the same port.
+    // The kernel distributes incoming connections across all workers.
+    let worker_id = if workers > 1 {
+        let mut child_pids = Vec::new();
+        for i in 1..workers {
+            match unsafe { libc::fork() } {
+                -1 => {
+                    eprintln!("[server] fork() failed for worker {}", i);
+                    std::process::exit(1);
+                }
+                0 => {
+                    // Child process — run as worker i
+                    run_worker(i, workers, port, route_count, tree, middleware, state, rc_enabled, mw_next_idx);
+                }
+                pid => {
+                    child_pids.push(pid);
+                }
+            }
+        }
+
+        // Parent process — set up SIGTERM/SIGINT forwarding to children
+        let child_pids_clone = child_pids.clone();
+        ctrlc_forward(child_pids_clone);
+
+        // Parent runs as worker 0, but also waits for children on exit
+        std::thread::spawn(move || {
+            // Wait for all children. When the parent exits, children get SIGTERM.
+            for pid in child_pids {
+                unsafe { libc::waitpid(pid, std::ptr::null_mut(), 0) };
+            }
+        });
+
+        0
+    } else {
+        0
+    };
+
+    run_worker(worker_id, workers, port, route_count, tree, middleware, state, rc_enabled, mw_next_idx);
+}
+
+/// Forward SIGTERM/SIGINT to child worker processes.
+fn ctrlc_forward(pids: Vec<i32>) {
+    unsafe {
+        // Install a SIGTERM handler that kills children
+        libc::signal(libc::SIGTERM, sigterm_handler as libc::sighandler_t);
+        libc::signal(libc::SIGINT, sigterm_handler as libc::sighandler_t);
+    }
+    // Stash child PIDs in a global for the signal handler
+    CHILD_PIDS.lock().unwrap().extend(pids);
+}
+
+static CHILD_PIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
+extern "C" fn sigterm_handler(_sig: libc::c_int) {
+    if let Ok(pids) = CHILD_PIDS.lock() {
+        for &pid in pids.iter() {
+            unsafe { libc::kill(pid, libc::SIGTERM) };
+        }
+    }
+    // Re-raise to self so the default handler runs
+    unsafe {
+        libc::signal(_sig, libc::SIG_DFL);
+        libc::raise(_sig);
+    }
+}
+
+fn run_worker(
+    worker_id: usize,
+    worker_count: usize,
+    port: u16,
+    route_count: usize,
+    tree: RadixTree<JitHandlerInfo>,
+    middleware: Vec<JitHandlerInfo>,
+    state: Option<NValue>,
+    rc_enabled: bool,
+    mw_next_idx: usize,
+) -> ! {
     // Build the Tokio runtime (single-threaded for NValue Rc safety)
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("Failed to create Tokio runtime");
 
-    // LocalSet is required for spawn_local on current_thread runtime
     let local = tokio::task::LocalSet::new();
 
     let exit_code = rt.block_on(local.run_until(async move {
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
-        let listener = match TcpListener::bind(addr).await {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("[server] Failed to bind to {}: {}", addr, e);
-                std::process::exit(1);
+
+        let listener = if worker_count > 1 {
+            // Multi-process: create SO_REUSEPORT socket
+            let socket = socket2::Socket::new(
+                socket2::Domain::IPV4,
+                socket2::Type::STREAM,
+                Some(socket2::Protocol::TCP),
+            ).expect("Failed to create socket");
+            socket.set_reuse_port(true).expect("Failed to set SO_REUSEPORT");
+            socket.set_reuse_address(true).expect("Failed to set SO_REUSEADDR");
+            socket.set_nonblocking(true).expect("Failed to set nonblocking");
+            socket.bind(&addr.into()).expect("Failed to bind socket");
+            socket.listen(1024).expect("Failed to listen on socket");
+            TcpListener::from_std(socket.into()).expect("Failed to convert to Tokio listener")
+        } else {
+            match TcpListener::bind(addr).await {
+                Ok(l) => l,
+                Err(e) => {
+                    eprintln!("[server] Failed to bind to {}: {}", addr, e);
+                    std::process::exit(1);
+                }
             }
         };
 
-        eprintln!(
-            "[server] Listening on http://{} ({} routes)",
-            addr, route_count
-        );
+        if worker_count > 1 {
+            eprintln!(
+                "[server] Worker {}/{} listening on http://{} ({} routes)",
+                worker_id + 1, worker_count, addr, route_count
+            );
+        } else {
+            eprintln!(
+                "[server] Listening on http://{} ({} routes)",
+                addr, route_count
+            );
+        }
 
         // Shared state for the service closure
         let tree = std::rc::Rc::new(tree);
         let middleware = std::rc::Rc::new(middleware);
         let state = std::rc::Rc::new(state);
-        let rate_limiter = std::rc::Rc::new(RateLimiter::new(RATE_LIMIT_RPS));
+        let rate_limit = std::env::var("BL_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(RATE_LIMIT_RPS);
+        let rate_limiter = std::rc::Rc::new(RateLimiter::new(rate_limit));
 
         // Graceful shutdown: watch channel signals connections to drain
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
@@ -1190,6 +1311,7 @@ fn should_compress(content_type: Option<&str>, body_len: usize) -> bool {
 }
 
 /// Log a structured access log line for a request.
+/// Suppressed when BL_LOG_REQUESTS=0.
 fn log_request(
     method: &hyper::Method,
     path: &str,
@@ -1197,14 +1319,23 @@ fn log_request(
     duration: Duration,
     request_id: &str,
 ) {
-    eprintln!(
-        "[server] {} {} {} {}ms id={}",
-        method,
-        path,
-        status,
-        duration.as_millis(),
-        request_id,
-    );
+    thread_local! {
+        static ENABLED: bool = std::env::var("BL_LOG_REQUESTS")
+            .map(|v| v != "0")
+            .unwrap_or(true);
+    }
+    ENABLED.with(|&enabled| {
+        if enabled {
+            eprintln!(
+                "[server] {} {} {} {}ms id={}",
+                method,
+                path,
+                status,
+                duration.as_millis(),
+                request_id,
+            );
+        }
+    });
 }
 
 /// Count total routes in the radix tree (for logging).

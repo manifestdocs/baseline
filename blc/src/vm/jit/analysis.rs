@@ -42,13 +42,79 @@ pub(super) fn can_jit_reason(
     }
 }
 
-/// Find the first expression kind that prevents JIT compilation.
+/// Find the deepest expression kind that prevents JIT compilation.
+/// Recurses into children so that e.g. a Block containing an unsupported
+/// Lambda reports "Lambda" rather than "Block".
 fn find_unsupported_expr(expr: &Expr, natives: Option<&NativeRegistry>) -> &'static str {
-    if !expr_can_jit(expr, natives) {
-        expr_kind_name(expr)
-    } else {
-        "unknown"
+    if expr_can_jit(expr, natives) {
+        return "unknown";
     }
+    // Try to find a more specific child that fails
+    let children: Vec<&Expr> = match expr {
+        Expr::BinOp { lhs, rhs, .. } | Expr::And(lhs, rhs) | Expr::Or(lhs, rhs) => {
+            vec![lhs, rhs]
+        }
+        Expr::UnaryOp { operand, .. } => vec![operand],
+        Expr::If {
+            condition,
+            then_branch,
+            else_branch,
+            ..
+        } => {
+            let mut c = vec![condition.as_ref(), then_branch.as_ref()];
+            if let Some(e) = else_branch {
+                c.push(e);
+            }
+            c
+        }
+        Expr::Block(exprs, _) | Expr::Concat(exprs) | Expr::MakeList(exprs, _) | Expr::MakeTuple(exprs, _) => {
+            exprs.iter().collect()
+        }
+        Expr::Let { value, .. } | Expr::Assign { value, .. } | Expr::FieldAssign { value, .. } => {
+            vec![value]
+        }
+        Expr::CallDirect { args, .. }
+        | Expr::TailCall { args, .. }
+        | Expr::CallNative { args, .. }
+        | Expr::PerformEffect { args, .. } => args.iter().collect(),
+        Expr::CallIndirect { callee, args, .. }
+        | Expr::TailCallIndirect { callee, args, .. } => {
+            let mut c: Vec<&Expr> = vec![callee];
+            c.extend(args.iter());
+            c
+        }
+        Expr::MakeEnum { payload, .. } => vec![payload],
+        Expr::MakeStruct { fields, .. } | Expr::MakeRecord(fields, _) => {
+            fields.iter().map(|(_, v)| v).collect()
+        }
+        Expr::MakeRange(a, b) => vec![a, b],
+        Expr::UpdateRecord { base, updates, .. } => {
+            let mut c: Vec<&Expr> = vec![base];
+            c.extend(updates.iter().map(|(_, v)| v));
+            c
+        }
+        Expr::GetField { object, .. } => vec![object],
+        Expr::Match { subject, arms, .. } => {
+            let mut c: Vec<&Expr> = vec![subject];
+            c.extend(arms.iter().map(|a| &a.body));
+            c
+        }
+        Expr::For { iterable, body, .. } => vec![iterable, body],
+        Expr::Try { expr, .. } => vec![expr],
+        Expr::MakeClosure { captures, .. } => captures.iter().collect(),
+        Expr::Lambda { body, .. } => vec![body],
+        Expr::Drop { body, .. } => vec![body],
+        Expr::Reuse { alloc, .. } => vec![alloc],
+        Expr::Expect { actual, .. } => vec![actual],
+        _ => vec![],
+    };
+    for child in children {
+        if !expr_can_jit(child, natives) {
+            return find_unsupported_expr(child, natives);
+        }
+    }
+    // No child is unsupported — this node itself is the culprit
+    expr_kind_name(expr)
 }
 
 fn expr_kind_name(expr: &Expr) -> &'static str {
