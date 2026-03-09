@@ -50,3 +50,7 @@ selfhost/output.c
 selfhost/test_out
 selfhost/.build/
 selfhost/.bootstrap_*
+
+# Separate repos
+baseline-site/
+baseline-site-archive/
