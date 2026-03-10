@@ -1,0 +1,74 @@
+@prelude(script)
+
+// Fasta benchmark — optimized with native String.cyclic_substring and String.random_fasta_line
+
+fn line_length() -> Int = 60
+fn im() -> Int = 139968
+fn ia() -> Int = 3877
+fn ic() -> Int = 29573
+
+fn alu() -> String =
+  "GGCCGGGCGCGGTGGCTCACGCCTGTAATCCCAGCACTTTGGGAGGCCGAGGCGGGCGGATCACCTGAGGTCAGGAGTTCGAGACCAGCCTGGCCAACATGGTGAAACCCCGTCTCTACTAAAAATACAAAAATTAGCCGGGCGTGGTGGCGCGCGCCTGTAATCCCAGCTACTCGGGAGGCTGAGGCAGGAGAATCGCTTGAACCCGGGAGGCGGAGGTTGCAGTGAGCCGAGATCGCGCCACTGCACTCCAGCCTGGGCGACAGAGCGAGACTCCGTCTCAAAAA"
+
+fn iub_chars() -> List<String> =
+  ["a", "c", "g", "t", "B", "D", "H", "K", "M", "N", "R", "S", "V", "W", "Y"]
+
+fn iub_cum() -> List<Float> =
+  [0.27, 0.39, 0.51, 0.78, 0.80, 0.82, 0.84, 0.86, 0.88, 0.90, 0.92, 0.94, 0.96, 0.98, 1.00]
+
+fn hs_chars() -> List<String> = ["a", "c", "g", "t"]
+
+fn hs_cum() -> List<Float> =
+  [0.3029549426680, 0.5009432431601, 0.6984905497992, 1.0]
+
+// --- Repeat fasta using String.cyclic_substring ---
+
+fn make_repeat_fasta!(header: String, src: String, n: Int) -> () = {
+  Console.println!(header)
+  let src_len = String.length(src)
+  repeat_fasta_loop!(src, src_len, 0, n)
+}
+
+fn repeat_fasta_loop!(src: String, src_len: Int, pos: Int, n: Int) -> () =
+  if n <= 0 then ()
+  else {
+    let nb = if n < line_length() then n else line_length()
+    let line = String.cyclic_substring(src, pos, nb)
+    let _ = Console.println!(line)
+    repeat_fasta_loop!(src, src_len, pos + nb, n - nb)
+  }
+
+// --- Random fasta using String.random_fasta_line native ---
+
+fn make_random_fasta!(header: String, cum: List<Float>, chars: List<String>, n: Int, seed: Int) -> Int = {
+  Console.println!(header)
+  random_fasta_loop!(cum, chars, n, seed)
+}
+
+fn random_fasta_loop!(cum: List<Float>, chars: List<String>, n: Int, seed: Int) -> Int =
+  if n <= 0 then seed
+  else {
+    let nb = if n < line_length() then n else line_length()
+    let (line, new_seed) = String.random_fasta_line(cum, chars, seed, nb)
+    let _ = Console.println!(line)
+    random_fasta_loop!(cum, chars, n - nb, new_seed)
+  }
+
+fn main!() -> () = {
+  let args = Env.args!()
+  let n_str = Option.unwrap_or(List.get(args, 0), "1000")
+  let n = match Int.parse(n_str)
+    Ok(v) -> v
+    Err(_) -> 1000
+
+  make_repeat_fasta!(">ONE Homo sapiens alu", alu(), n * 2)
+
+  let iub_c = iub_cum()
+  let iub_ch = iub_chars()
+  let seed = make_random_fasta!(">TWO IUB ambiguity codes", iub_c, iub_ch, n * 3, 42)
+
+  let hs_c = hs_cum()
+  let hs_ch = hs_chars()
+  let _ = make_random_fasta!(">THREE Homo sapiens frequency", hs_c, hs_ch, n * 5, seed)
+  ()
+}
