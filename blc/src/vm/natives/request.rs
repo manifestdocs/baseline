@@ -167,8 +167,10 @@ pub(super) fn native_request_param(args: &[NValue]) -> Result<NValue, NativeErro
     ))
 }
 
-/// Request.param_int(req, name) -> Result<Int, String>
+/// Request.param_int(req, name) -> Result<Int, HttpError>
 /// Extract a path parameter and parse it as an integer.
+/// Returns HttpError.bad_request on missing or non-integer params,
+/// so handlers can use `Request.param_int(req, "id")?` directly.
 pub(super) fn native_request_param_int(args: &[NValue]) -> Result<NValue, NativeError> {
     if args.len() != 2 {
         return Err(NativeError(format!(
@@ -207,13 +209,10 @@ pub(super) fn native_request_param_int(args: &[NValue]) -> Result<NValue, Native
                     match s.parse::<i64>() {
                         Ok(n) => return Ok(NValue::enum_val("Ok".into(), NValue::int(n))),
                         Err(_) => {
-                            return Ok(NValue::enum_val(
-                                "Err".into(),
-                                NValue::string(
-                                    format!("Parameter '{}' is not a valid integer: '{}'", name, s)
-                                        .into(),
-                                ),
-                            ));
+                            return Ok(bad_request_err(&format!(
+                                "Invalid {}: must be an integer",
+                                name
+                            )));
                         }
                     }
                 }
@@ -221,17 +220,17 @@ pub(super) fn native_request_param_int(args: &[NValue]) -> Result<NValue, Native
                 if v.is_any_int() {
                     return Ok(NValue::enum_val("Ok".into(), v.clone()));
                 }
-                return Ok(NValue::enum_val(
-                    "Err".into(),
-                    NValue::string(format!("Parameter '{}' is not a valid integer", name).into()),
-                ));
+                return Ok(bad_request_err(&format!(
+                    "Invalid {}: must be an integer",
+                    name
+                )));
             }
         }
     }
-    Ok(NValue::enum_val(
-        "Err".into(),
-        NValue::string(format!("Parameter '{}' not found", name).into()),
-    ))
+    Ok(bad_request_err(&format!(
+        "Parameter '{}' not found",
+        name
+    )))
 }
 
 /// Request.query(req, name) -> Option<String>
@@ -277,8 +276,9 @@ pub(super) fn native_request_query(args: &[NValue]) -> Result<NValue, NativeErro
     Ok(NValue::enum_val("None".into(), NValue::unit()))
 }
 
-/// Request.query_int(req, name) -> Result<Int, String>
+/// Request.query_int(req, name) -> Result<Int, HttpError>
 /// Extract a query parameter and parse it as an integer.
+/// Returns HttpError.bad_request on missing or non-integer params.
 pub(super) fn native_request_query_int(args: &[NValue]) -> Result<NValue, NativeError> {
     if args.len() != 2 {
         return Err(NativeError(format!(
@@ -317,33 +317,25 @@ pub(super) fn native_request_query_int(args: &[NValue]) -> Result<NValue, Native
                     match s.parse::<i64>() {
                         Ok(n) => return Ok(NValue::enum_val("Ok".into(), NValue::int(n))),
                         Err(_) => {
-                            return Ok(NValue::enum_val(
-                                "Err".into(),
-                                NValue::string(
-                                    format!(
-                                        "Query parameter '{}' is not a valid integer: '{}'",
-                                        name, s
-                                    )
-                                    .into(),
-                                ),
-                            ));
+                            return Ok(bad_request_err(&format!(
+                                "Invalid {}: must be an integer",
+                                name
+                            )));
                         }
                     }
                 }
                 if v.is_any_int() {
                     return Ok(NValue::enum_val("Ok".into(), v.clone()));
                 }
-                return Ok(NValue::enum_val(
-                    "Err".into(),
-                    NValue::string(
-                        format!("Query parameter '{}' is not a valid integer", name).into(),
-                    ),
-                ));
+                return Ok(bad_request_err(&format!(
+                    "Invalid {}: must be an integer",
+                    name
+                )));
             }
         }
     }
-    Ok(NValue::enum_val(
-        "Err".into(),
-        NValue::string(format!("Query parameter '{}' not found", name).into()),
-    ))
+    Ok(bad_request_err(&format!(
+        "Query parameter '{}' not found",
+        name
+    )))
 }
