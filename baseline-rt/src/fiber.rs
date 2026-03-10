@@ -6,8 +6,8 @@
 //!
 //! ## Platform support
 //!
-//! Currently aarch64 only. The context switch is ~30 lines of inline assembly
-//! saving/restoring callee-saved registers + SP.
+//! Supports aarch64 and x86_64. The context switch is ~30 lines of inline
+//! assembly saving/restoring callee-saved registers + SP.
 
 use std::cell::Cell;
 
@@ -32,8 +32,10 @@ pub enum FiberState {
 // Context (callee-saved registers)
 // ---------------------------------------------------------------------------
 
-/// Saved CPU context for context switching. aarch64 callee-saved registers:
-/// sp, x19-x28, x29 (fp), x30 (lr), d8-d15.
+/// Saved CPU context for context switching.
+///
+/// aarch64: sp, x19-x28, x29 (fp), x30 (lr), d8-d15 = 22 slots.
+/// x86_64:  rsp, rbx, rbp, r12, r13, r14, r15 = 7 slots (fits in 22).
 #[repr(C)]
 struct FiberContext {
     regs: [u64; 22],
@@ -60,6 +62,15 @@ impl FiberContext {
 // [11] = x29 (fp)
 // [12] = x30 (lr)
 // [13..20] = d8-d15 (stored as u64 via fmov)
+
+// Register layout indices (x86_64 SysV ABI):
+// [0] = rsp
+// [1] = rbx
+// [2] = rbp
+// [3] = r12
+// [4] = r13
+// [5] = r14
+// [6] = r15
 
 // ---------------------------------------------------------------------------
 // Fiber struct
@@ -207,11 +218,38 @@ unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberC
     );
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+/// x86_64 SysV ABI context switch: save/restore callee-saved registers.
+/// rdi = from, rsi = to (SysV calling convention).
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+#[unsafe(no_mangle)]
+unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberContext) {
+    core::arch::naked_asm!(
+        // Save callee-saved registers to `from` (rdi)
+        "mov [rdi],      rsp",
+        "mov [rdi + 8],  rbx",
+        "mov [rdi + 16], rbp",
+        "mov [rdi + 24], r12",
+        "mov [rdi + 32], r13",
+        "mov [rdi + 40], r14",
+        "mov [rdi + 48], r15",
+        // Load callee-saved registers from `to` (rsi)
+        "mov rsp, [rsi]",
+        "mov rbx, [rsi + 8]",
+        "mov rbp, [rsi + 16]",
+        "mov r12, [rsi + 24]",
+        "mov r13, [rsi + 32]",
+        "mov r14, [rsi + 40]",
+        "mov r15, [rsi + 48]",
+        "ret",
+    );
+}
+
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 #[unsafe(no_mangle)]
 unsafe extern "C" fn switch_context(_from: *mut FiberContext, _to: *const FiberContext) {
     unimplemented!(
-        "fiber: context switch not implemented for this architecture. Only aarch64 is supported."
+        "fiber: context switch not implemented for this architecture"
     );
 }
 
@@ -268,29 +306,33 @@ impl Fiber {
             entry: Some((entry_fn, arg)),
         });
 
-        // Set up the initial context so the first switch_context lands at
-        // fiber_trampoline. Stack grows down on aarch64.
         let stack_top = unsafe { stack.add(stack_size + GUARD_PAGE_SIZE) };
         // Align to 16 bytes (ABI requirement).
         let stack_top = (stack_top as usize & !0xF) as *mut u8;
 
-        // Reserve space for the trampoline's stack frame (16 bytes min).
-        let initial_sp = unsafe { stack_top.sub(16) } as u64;
+        #[cfg(target_arch = "aarch64")]
+        {
+            // Reserve space for the trampoline's stack frame (16 bytes min).
+            let initial_sp = unsafe { stack_top.sub(16) } as u64;
 
-        fiber.fiber_ctx.regs[0] = initial_sp; // sp
-        fiber.fiber_ctx.regs[12] = fiber_trampoline as *const () as u64; // lr (x30)
-        fiber.fiber_ctx.regs[11] = initial_sp; // fp (x29)
+            fiber.fiber_ctx.regs[0] = initial_sp; // sp
+            fiber.fiber_ctx.regs[11] = initial_sp; // fp (x29)
+            // Shim reads x19 → x0, then calls fiber_trampoline.
+            fiber.fiber_ctx.regs[1] = &*fiber as *const Fiber as u64; // x19 = fiber_ptr
+            fiber.fiber_ctx.regs[12] = fiber_entry_shim as *const () as u64; // lr = shim
+        }
 
-        // Pass fiber pointer as x0 to the trampoline. We store it in x19
-        // (first callee-saved) and the trampoline reads it from there.
-        // Actually, we need x0 = fiber_ptr when trampoline is called.
-        // Since switch_context does `ret` (jumps to lr), and aarch64 ABI
-        // says x0 is caller-saved, we need a different approach.
-        //
-        // Solution: use a shim that reads x19 → x0, then calls the real
-        // trampoline. Store fiber_ptr in x19.
-        fiber.fiber_ctx.regs[1] = &*fiber as *const Fiber as u64; // x19 = fiber_ptr
-        fiber.fiber_ctx.regs[12] = fiber_entry_shim as *const () as u64; // lr = shim
+        #[cfg(target_arch = "x86_64")]
+        {
+            // x86_64: `ret` pops the return address from the stack.
+            // Push the shim address so switch_context's `ret` jumps to it.
+            // The shim moves r12 → rdi, then calls fiber_trampoline.
+            let sp = unsafe { stack_top.sub(8) } as *mut u64;
+            unsafe { *sp = fiber_entry_shim as *const () as u64 };
+            fiber.fiber_ctx.regs[0] = sp as u64; // rsp
+            fiber.fiber_ctx.regs[2] = sp as u64; // rbp
+            fiber.fiber_ctx.regs[3] = &*fiber as *const Fiber as u64; // r12 = fiber_ptr
+        }
 
         fiber
     }
@@ -360,7 +402,19 @@ extern "C" fn fiber_entry_shim() {
     );
 }
 
-#[cfg(not(target_arch = "aarch64"))]
+/// x86_64 shim: move r12 (fiber pointer) into rdi (first arg), then call
+/// fiber_trampoline.
+#[cfg(target_arch = "x86_64")]
+#[unsafe(naked)]
+extern "C" fn fiber_entry_shim() {
+    core::arch::naked_asm!(
+        "mov rdi, r12",
+        "call {trampoline}",
+        trampoline = sym fiber_trampoline,
+    );
+}
+
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 extern "C" fn fiber_entry_shim() {
     unimplemented!("fiber: entry shim not implemented for this architecture");
 }

@@ -1,0 +1,40 @@
+// Test: Channel Tx<T>/Rx<T> type propagation through Channel.bounded/send!/recv!
+// Verifies that T flows correctly: send value type -> Tx<T>/Rx<T> -> recv result
+@prelude(core)
+module ChannelTypePropagation
+
+fn is_some_eq_int(opt: Option<Int>, expected: Int) -> Bool =
+  match opt
+    Some(x) -> x == expected
+    None -> false
+
+fn is_some_eq_str(opt: Option<String>, expected: String) -> Bool =
+  match opt
+    Some(x) -> x == expected
+    None -> false
+
+// Test that Channel.recv! returns Option<Int> when values sent are Int
+test "channel int type propagation" = scope!(|s| {
+    let (tx, rx) = Channel.bounded(1)
+
+    let _ = Scope.spawn!(s, || {
+        let _ = Channel.send!(tx, 42)
+        Channel.close!(tx)
+    })
+
+    let result = Channel.recv!(rx)
+    is_some_eq_int(result, 42)
+})
+
+// Test that Channel.recv! returns Option<String> when values sent are String
+test "channel string type propagation" = scope!(|s| {
+    let (tx, rx) = Channel.bounded(1)
+
+    let _ = Scope.spawn!(s, || {
+        let _ = Channel.send!(tx, "hello")
+        Channel.close!(tx)
+    })
+
+    let result = Channel.recv!(rx)
+    is_some_eq_str(result, "hello")
+})

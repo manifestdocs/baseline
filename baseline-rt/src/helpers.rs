@@ -2185,7 +2185,7 @@ pub extern "C" fn jit_run_fiber_handler(
 
 /// Call a handler clause function with the yielded args.
 /// The handler function may be a closure (with captures) or a plain function.
-fn call_handler_clause(handler_fn_bits: u64, args: &[u64]) -> u64 {
+pub fn call_handler_clause(handler_fn_bits: u64, args: &[u64]) -> u64 {
     // Get the function pointer from the JIT fn table.
     let nv = unsafe { NValue::borrow_from_raw(handler_fn_bits) };
     let (fn_ptr, is_closure) = if nv.is_heap() {

@@ -1,0 +1,34 @@
+// Test: Cell<T> type propagation through scope!/Scope.spawn!/Cell.await!
+// Verifies that T flows correctly: closure return type -> Cell<T> -> await result
+@prelude(script)
+
+fn spawn_int() -> {Async} Int = {
+  scope!(|s| {
+    let cell = Scope.spawn!(s, || 42)
+    Cell.await!(cell)
+  })
+}
+
+fn spawn_string() -> {Async} String = {
+  scope!(|s| {
+    let cell = Scope.spawn!(s, || "hello")
+    Cell.await!(cell)
+  })
+}
+
+fn spawn_bool() -> {Async} Bool = {
+  scope!(|s| {
+    let cell = Scope.spawn!(s, || true)
+    Cell.await!(cell)
+  })
+}
+
+fn spawn_and_cancel() -> {Async} () = {
+  scope!(|s| {
+    let cell = Scope.spawn!(s, || 99)
+    Cell.cancel!(cell)
+  })
+}
+
+fn main() -> {Console, Async} () =
+  Console.println!("cell type propagation passed")

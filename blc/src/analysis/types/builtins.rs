@@ -1182,22 +1182,8 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
-    // -- Async builtins (effect: Async) --
-    // scope! is a standalone effectful call (like println!) that takes a closure.
-    if builtin_modules.contains(&"Async") {
-        sigs.insert(
-            "scope!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
-        );
-    }
-
-    // -- Scope native methods (effect: Async) --
-    if native_modules.contains(&"Scope") {
-        sigs.insert(
-            "Scope.spawn!".into(),
-            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
-        );
-    }
+    // scope!, Scope.spawn!, Cell.await!, Cell.cancel! are handled by generic schemas
+    // in infer.rs for proper Cell<T> type propagation.
 
     // -- Async builtins (effect: Async) --
     if builtin_modules.contains(&"Async") {
@@ -1263,49 +1249,9 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
-    // -- Cell native methods (effect: Async) --
-    if native_modules.contains(&"Cell") {
-        sigs.insert(
-            "Cell.await!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
-        );
-        sigs.insert(
-            "Cell.cancel!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unit)),
-        );
-    }
-
     // -- Channel native methods (effect: Async) --
-    if native_modules.contains(&"Channel") {
-        sigs.insert(
-            "Channel.bounded".into(),
-            Type::Function(
-                vec![Type::Int],
-                Box::new(Type::Tuple(vec![Type::Unknown, Type::Unknown])),
-            ),
-        );
-        sigs.insert(
-            "Channel.send!".into(),
-            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unit)),
-        );
-        sigs.insert(
-            "Channel.recv!".into(),
-            Type::Function(
-                vec![Type::Unknown],
-                Box::new(Type::Enum(
-                    "Option".into(),
-                    vec![
-                        ("Some".into(), vec![Type::Unknown]),
-                        ("None".into(), vec![]),
-                    ],
-                )),
-            ),
-        );
-        sigs.insert(
-            "Channel.close!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unit)),
-        );
-    }
+    // NOTE: Channel.bounded, Channel.send!, Channel.recv!, Channel.close!
+    // are handled via generic schemas in infer.rs for proper Tx<T>/Rx<T> type propagation.
 
     // -- Server builtins (effect: Http) --
     if builtin_modules.contains(&"Server") {

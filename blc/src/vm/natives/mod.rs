@@ -1,3 +1,4 @@
+mod async_rt;
 mod console;
 mod crypto;
 mod datetime;
@@ -788,37 +789,37 @@ impl NativeRegistry {
         self.register("Server.listen_async!", native_server_listen_placeholder);
         self.register("Server.listen_async", native_server_listen_placeholder);
 
-        // -- Async fiber primitives (dispatched specially in vm.rs) --
-        self.register("scope!", native_async_placeholder);
-        self.register("scope", native_async_placeholder);
-        self.register("Scope.spawn!", native_async_placeholder);
-        self.register("Scope.spawn", native_async_placeholder);
-        self.register("Cell.await!", native_async_placeholder);
-        self.register("Cell.await", native_async_placeholder);
-        self.register("Cell.cancel!", native_async_placeholder);
-        self.register("Cell.cancel", native_async_placeholder);
+        // -- Async fiber primitives (cooperative concurrency via fibers) --
+        self.register("scope!", async_rt::native_scope);
+        self.register("scope", async_rt::native_scope);
+        self.register("Scope.spawn!", async_rt::native_scope_spawn);
+        self.register("Scope.spawn", async_rt::native_scope_spawn);
+        self.register("Cell.await!", async_rt::native_cell_await);
+        self.register("Cell.await", async_rt::native_cell_await);
+        self.register("Cell.cancel!", async_rt::native_cell_cancel);
+        self.register("Cell.cancel", async_rt::native_cell_cancel);
 
-        self.register("Async.parallel!", native_async_placeholder);
-        self.register("Async.parallel", native_async_placeholder);
-        self.register("Async.race!", native_async_placeholder);
-        self.register("Async.race", native_async_placeholder);
-        self.register("Async.scatter_gather!", native_async_placeholder);
-        self.register("Async.scatter_gather", native_async_placeholder);
+        self.register("Async.parallel!", async_rt::native_async_parallel);
+        self.register("Async.parallel", async_rt::native_async_parallel);
+        self.register("Async.race!", async_rt::native_async_race);
+        self.register("Async.race", async_rt::native_async_race);
+        self.register("Async.scatter_gather!", async_rt::native_async_scatter_gather);
+        self.register("Async.scatter_gather", async_rt::native_async_scatter_gather);
 
-        self.register("Channel.bounded", native_async_placeholder);
-        self.register("Channel.send!", native_async_placeholder);
-        self.register("Channel.send", native_async_placeholder);
-        self.register("Channel.recv!", native_async_placeholder);
-        self.register("Channel.recv", native_async_placeholder);
-        self.register("Channel.close!", native_async_placeholder);
-        self.register("Channel.close", native_async_placeholder);
+        self.register("Channel.bounded", async_rt::native_channel_bounded);
+        self.register("Channel.send!", async_rt::native_channel_send);
+        self.register("Channel.send", async_rt::native_channel_send);
+        self.register("Channel.recv!", async_rt::native_channel_recv);
+        self.register("Channel.recv", async_rt::native_channel_recv);
+        self.register("Channel.close!", async_rt::native_channel_close);
+        self.register("Channel.close", async_rt::native_channel_close);
 
-        self.register("Async.delay!", native_async_placeholder);
-        self.register("Async.delay", native_async_placeholder);
-        self.register("Async.interval!", native_async_placeholder);
-        self.register("Async.interval", native_async_placeholder);
-        self.register("Async.timeout!", native_async_placeholder);
-        self.register("Async.timeout", native_async_placeholder);
+        self.register("Async.delay!", async_rt::native_async_delay);
+        self.register("Async.delay", async_rt::native_async_delay);
+        self.register("Async.interval!", async_rt::native_async_interval);
+        self.register("Async.interval", async_rt::native_async_interval);
+        self.register("Async.timeout!", async_rt::native_async_timeout);
+        self.register("Async.timeout", async_rt::native_async_timeout);
 
         // -- Fiber-based effect handler internals --
         self.register("__fiber.perform", native_fiber_perform);
@@ -864,11 +865,6 @@ fn native_server_listen_placeholder(args: &[NValue]) -> Result<NValue, NativeErr
     Ok(NValue::unit())
 }
 
-fn native_async_placeholder(_args: &[NValue]) -> Result<NValue, NativeError> {
-    Err(NativeError(
-        "Async primitives must be executed by VM, not called directly".into(),
-    ))
-}
 
 // ---------------------------------------------------------------------------
 // Fiber-based effect handler native functions

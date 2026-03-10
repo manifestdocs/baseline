@@ -61,6 +61,9 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         }
         (Type::Set(ia), Type::Set(ib)) => types_compatible(ia, ib),
         (Type::Weak(ia), Type::Weak(ib)) => types_compatible(ia, ib),
+        (Type::Cell(ia), Type::Cell(ib)) => types_compatible(ia, ib),
+        (Type::Tx(ia), Type::Tx(ib)) => types_compatible(ia, ib),
+        (Type::Rx(ia), Type::Rx(ib)) => types_compatible(ia, ib),
         // Function structural compatibility: same arity, compatible arg and return types
         (Type::Function(args_a, ret_a), Type::Function(args_b, ret_b)) => {
             if args_a.len() != args_b.len() {
@@ -232,5 +235,6 @@ pub(super) fn is_builtin_type_name(name: &str) -> bool {
             | "Map"
             | "Set"
             | "Weak"
+            | "Cell"
     )
 }

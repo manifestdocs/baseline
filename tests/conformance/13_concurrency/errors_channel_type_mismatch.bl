@@ -1,0 +1,12 @@
+// Test: Channel type mismatch — sending wrong type through a typed channel
+// Expected errors: TYP_006 (type mismatch)
+@prelude(script)
+
+test "channel type mismatch" = scope!(|s| {
+    let (tx, rx) = Channel.bounded(1)
+    let _ = Channel.send!(tx, 42)
+    // tx is now Tx<Int>, sending a String should fail
+    let _ = Channel.send!(tx, "wrong type")
+    let _ = Channel.close!(tx)
+    true
+})

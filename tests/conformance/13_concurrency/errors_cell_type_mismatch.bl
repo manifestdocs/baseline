@@ -1,0 +1,8 @@
+// Test: Cell<T> type mismatch — Cell.await! on a non-Cell value should fail
+// Expected errors: TYP_006 (type mismatch)
+@prelude(script)
+
+fn bad_await() -> {Async} Int = {
+  let x = 42
+  Cell.await!(x)
+}

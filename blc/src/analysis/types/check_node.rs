@@ -962,7 +962,7 @@ fn check_node_inner(
             // Try generic schema inference for module methods (List.map) and constructors (Some, Ok)
             let schema_name = extract_qualified_name(&func_node, source).or_else(|| {
                 let k = func_node.kind();
-                if k == "identifier" || k == "type_identifier" {
+                if k == "identifier" || k == "type_identifier" || k == "effect_identifier" {
                     func_node
                         .utf8_text(source.as_bytes())
                         .ok()
@@ -1054,7 +1054,52 @@ fn check_node_inner(
                             check_node(&arg_expr, source, file, symbols, diagnostics)
                         };
 
-                        let _ = ctx.unify(&arg_type, schema_param);
+                        if let Err(_) = ctx.unify(&arg_type, schema_param) {
+                            // Only report when both sides are concrete (not Unknown/Var)
+                            if arg_type != Type::Unknown {
+                                let expected = ctx.apply(schema_param);
+                                if expected != Type::Unknown {
+                                    diagnostics.push(Diagnostic {
+                                        code: "TYP_006".to_string(),
+                                        severity: Severity::Error,
+                                        location: Location::from_node(file, &arg_expr),
+                                        message: format!(
+                                            "Type mismatch: expected {}, found {}",
+                                            expected, arg_type
+                                        ),
+                                        context: format!(
+                                            "Argument {} has incompatible type.",
+                                            i + 1
+                                        ),
+                                        suggestions: vec![],
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // After unification: refine Tx<Unknown>/Rx<Unknown>/Cell<Unknown>
+                    // variable bindings with resolved type parameters.
+                    // This enables cross-call type propagation for channels:
+                    // e.g. Channel.send!(tx, 42) pins tx from Tx<Unknown> to Tx<Int>
+                    for i in 0..std::cmp::min(params_provided, schema_params.len()) {
+                        let raw_arg = node.named_child(i + 1).unwrap();
+                        let arg_expr = call_arg_expr(&raw_arg);
+                        if arg_expr.kind() == "identifier" {
+                            let resolved = ctx.apply(&schema_params[i]);
+                            let name = arg_expr.utf8_text(source.as_bytes()).unwrap();
+                            let needs_update = match (&resolved, symbols.lookup(name)) {
+                                (Type::Tx(inner), Some(Type::Tx(old)))
+                                | (Type::Rx(inner), Some(Type::Rx(old)))
+                                | (Type::Cell(inner), Some(Type::Cell(old))) => {
+                                    **inner != Type::Unknown && **old == Type::Unknown
+                                }
+                                _ => false,
+                            };
+                            if needs_update {
+                                symbols.insert(name.to_string(), resolved);
+                            }
+                        }
                     }
 
                     // After unification: validate trait bounds and populate dict_map
