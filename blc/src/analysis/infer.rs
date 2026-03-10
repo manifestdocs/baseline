@@ -502,6 +502,94 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
         },
     );
 
+    // List.push : (List<A>, A) -> List<A>
+    schemas.insert(
+        "List.push".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone())), a.clone()],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
+        },
+    );
+
+    // List.count_flips : (List<Int>) -> Int
+    schemas.insert(
+        "List.count_flips".into(),
+        GenericSchema {
+            type_params: 0,
+            build: |_ctx| {
+                Type::Function(
+                    vec![Type::List(Box::new(Type::Int))],
+                    Box::new(Type::Int),
+                )
+            },
+        },
+    );
+
+    // List.bisect : (List<Float>, Float) -> Int
+    schemas.insert(
+        "List.bisect".into(),
+        GenericSchema {
+            type_params: 0,
+            build: |_ctx| {
+                Type::Function(
+                    vec![Type::List(Box::new(Type::Float)), Type::Float],
+                    Box::new(Type::Int),
+                )
+            },
+        },
+    );
+
+    // List.reverse_prefix : (List<A>, Int) -> List<A>
+    schemas.insert(
+        "List.reverse_prefix".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone())), Type::Int],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
+        },
+    );
+
+    // List.rotate_left : (List<A>, Int) -> List<A>
+    schemas.insert(
+        "List.rotate_left".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone())), Type::Int],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
+        },
+    );
+
+    // List.swap : (List<A>, Int, Int) -> List<A>
+    schemas.insert(
+        "List.swap".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let a = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::List(Box::new(a.clone())), Type::Int, Type::Int],
+                    Box::new(Type::List(Box::new(a))),
+                )
+            },
+        },
+    );
+
     // Option.unwrap : (Option<A>) -> A
     schemas.insert(
         "Option.unwrap".into(),

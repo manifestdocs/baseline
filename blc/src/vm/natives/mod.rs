@@ -361,6 +361,14 @@ impl NativeRegistry {
         // -- String (additional) --
         self.register("String.reverse", native_string_reverse);
         self.register("String.replace", native_string_replace);
+        self.register(
+            "String.cyclic_substring",
+            native_string_cyclic_substring,
+        );
+        self.register(
+            "String.random_fasta_line",
+            native_fasta_random_line,
+        );
 
         // -- String (regex) --
         self.register("String.matches", regex::native_string_matches);
@@ -384,6 +392,20 @@ impl NativeRegistry {
         self.register_owning("List.set", native_list_set, native_list_set_owning);
         self.register("List.slice", native_list_slice);
         self.register("List.fill", native_list_fill);
+        self.register_owning(
+            "List.reverse_prefix",
+            native_list_reverse_prefix,
+            native_list_reverse_prefix_owning,
+        );
+        self.register_owning(
+            "List.rotate_left",
+            native_list_rotate_left,
+            native_list_rotate_left_owning,
+        );
+        self.register_owning("List.swap", native_list_swap, native_list_swap_owning);
+        self.register("List.bisect", native_list_bisect);
+        self.register("List.count_flips", native_list_count_flips);
+        self.register_owning("List.push", native_list_push, native_list_push_owning);
 
         // -- Option --
         self.register("Option.unwrap", native_option_unwrap);

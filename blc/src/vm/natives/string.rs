@@ -198,6 +198,79 @@ pub(super) fn native_string_char_code(args: &[NValue]) -> Result<NValue, NativeE
     }
 }
 
+/// String.cyclic_substring(src, start, length) -> String
+/// Extracts `length` characters from `src` starting at `start`, wrapping around.
+/// Operates on bytes for ASCII strings (O(1) per char instead of O(n) char iteration).
+pub(super) fn native_string_cyclic_substring(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_string() {
+        Some(s) => {
+            let start = args[1].as_any_int().max(0) as usize;
+            let length = args[2].as_any_int().max(0) as usize;
+            let slen = s.len();
+            if slen == 0 || length == 0 {
+                return Ok(NValue::string("".into()));
+            }
+            let mut result = String::with_capacity(length);
+            let bytes = s.as_bytes();
+            // Fast path for ASCII strings
+            if s.is_ascii() {
+                for i in 0..length {
+                    result.push(bytes[(start + i) % slen] as char);
+                }
+            } else {
+                let chars: Vec<char> = s.chars().collect();
+                let clen = chars.len();
+                for i in 0..length {
+                    result.push(chars[(start + i) % clen]);
+                }
+            }
+            Ok(NValue::string(result.into()))
+        }
+        None => Err(NativeError(
+            "String.cyclic_substring: expected (String, Int, Int)".into(),
+        )),
+    }
+}
+
+/// __fasta_random_line(cum, chars, seed, count) -> (String, Int)
+/// Generates `count` random characters using PRNG + cumulative probability lookup.
+/// PRNG: seed = (seed * 3877 + 29573) % 139968; rf = seed / 139968.0
+/// Returns the generated line and final seed.
+pub(super) fn native_fasta_random_line(args: &[NValue]) -> Result<NValue, NativeError> {
+    let cum = args[0].as_list().ok_or_else(|| NativeError("expected List".into()))?;
+    let chars = args[1].as_list().ok_or_else(|| NativeError("expected List".into()))?;
+    let mut seed = args[2].as_any_int();
+    let count = args[3].as_any_int().max(0) as usize;
+
+    let cum_f: Vec<f64> = cum.iter().map(|v| v.as_float()).collect();
+    let chars_s: Vec<String> = chars
+        .iter()
+        .map(|v| v.as_string().map_or_else(|| v.to_string(), |s| s.to_string()))
+        .collect();
+
+    let mut result = String::with_capacity(count);
+    for _ in 0..count {
+        seed = (seed * 3877 + 29573) % 139968;
+        let rf = seed as f64 / 139968.0;
+        let mut idx = cum_f.len() - 1;
+        for (i, &threshold) in cum_f.iter().enumerate() {
+            if rf < threshold {
+                idx = i;
+                break;
+            }
+        }
+        if idx < chars_s.len() {
+            result.push_str(&chars_s[idx]);
+        }
+    }
+
+    // Return (String, Int) tuple
+    Ok(NValue::tuple(vec![
+        NValue::string(result.into()),
+        NValue::int(seed),
+    ]))
+}
+
 pub(super) fn native_string_reverse(args: &[NValue]) -> Result<NValue, NativeError> {
     match args[0].as_string() {
         Some(s) => Ok(NValue::string(s.chars().rev().collect::<String>().into())),

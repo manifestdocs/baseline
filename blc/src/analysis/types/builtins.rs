@@ -623,6 +623,25 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
             ),
         );
         sigs.insert(
+            "String.cyclic_substring".into(),
+            Type::Function(
+                vec![Type::String, Type::Int, Type::Int],
+                Box::new(Type::String),
+            ),
+        );
+        sigs.insert(
+            "String.random_fasta_line".into(),
+            Type::Function(
+                vec![
+                    Type::List(Box::new(Type::Float)),
+                    Type::List(Box::new(Type::String)),
+                    Type::Int,
+                    Type::Int,
+                ],
+                Box::new(Type::Tuple(vec![Type::String, Type::Int])),
+            ),
+        );
+        sigs.insert(
             "String.matches".into(),
             Type::Function(vec![Type::String, Type::String], Box::new(Type::Bool)),
         );
@@ -758,6 +777,48 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         sigs.insert(
             "List.fill".into(),
             Type::Function(vec![Type::Int, Type::Unknown], Box::new(Type::Unknown)),
+        );
+        sigs.insert(
+            "List.reverse_prefix".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Int],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "List.rotate_left".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Int],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "List.swap".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Int, Type::Int],
+                Box::new(Type::Unknown),
+            ),
+        );
+        sigs.insert(
+            "List.count_flips".into(),
+            Type::Function(
+                vec![Type::List(Box::new(Type::Int))],
+                Box::new(Type::Int),
+            ),
+        );
+        sigs.insert(
+            "List.bisect".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Float],
+                Box::new(Type::Int),
+            ),
+        );
+        sigs.insert(
+            "List.push".into(),
+            Type::Function(
+                vec![Type::Unknown, Type::Unknown],
+                Box::new(Type::Unknown),
+            ),
         );
     }
 

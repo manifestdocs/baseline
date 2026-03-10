@@ -330,6 +330,262 @@ pub(super) fn native_list_fill(args: &[NValue]) -> Result<NValue, NativeError> {
     Ok(NValue::list(vec![val; size]))
 }
 
+/// Reverse the first `k` elements of a list in-place.
+/// List.reverse_prefix(list, k) -> List
+pub(super) fn native_list_reverse_prefix(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let k = args[1].as_any_int().max(0) as usize;
+            let k = k.min(items.len());
+            let mut result = items.to_vec();
+            result[..k].reverse();
+            Ok(NValue::list(result))
+        }
+        None => Err(NativeError(format!(
+            "List.reverse_prefix: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
+/// Owning CoW variant of List.reverse_prefix.
+pub(super) fn native_list_reverse_prefix_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let mut args = args;
+    let k_val = args.pop().unwrap();
+    let list_val = args.pop().unwrap();
+    let k = k_val.as_any_int().max(0) as usize;
+
+    match list_val.try_unwrap_heap() {
+        Ok(HeapObject::List(mut vec)) => {
+            let k = k.min(vec.len());
+            vec[..k].reverse();
+            Ok(NValue::list(vec))
+        }
+        Ok(_) => Err(NativeError("List.reverse_prefix: expected List".into())),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                let k = k.min(items.len());
+                let mut result = items.to_vec();
+                result[..k].reverse();
+                Ok(NValue::list(result))
+            }
+            None => Err(NativeError(format!(
+                "List.reverse_prefix: expected List, got {}",
+                list_val
+            ))),
+        },
+    }
+}
+
+/// Rotate the first `k+1` elements left by 1 position.
+/// Element at index 0 moves to index k, elements 1..=k shift left.
+/// List.rotate_left(list, k) -> List
+pub(super) fn native_list_rotate_left(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let k = args[1].as_any_int().max(0) as usize;
+            let k = k.min(items.len().saturating_sub(1));
+            if items.is_empty() || k == 0 {
+                return Ok(args[0].clone());
+            }
+            let mut result = items.to_vec();
+            let first = result[0].clone();
+            for i in 0..k {
+                result[i] = result[i + 1].clone();
+            }
+            result[k] = first;
+            Ok(NValue::list(result))
+        }
+        None => Err(NativeError(format!(
+            "List.rotate_left: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
+/// Owning CoW variant of List.rotate_left.
+pub(super) fn native_list_rotate_left_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let mut args = args;
+    let k_val = args.pop().unwrap();
+    let list_val = args.pop().unwrap();
+    let k = k_val.as_any_int().max(0) as usize;
+
+    match list_val.try_unwrap_heap() {
+        Ok(HeapObject::List(mut vec)) => {
+            let k = k.min(vec.len().saturating_sub(1));
+            if vec.is_empty() || k == 0 {
+                return Ok(NValue::list(vec));
+            }
+            let first = vec[0].clone();
+            for i in 0..k {
+                vec[i] = vec[i + 1].clone();
+            }
+            vec[k] = first;
+            Ok(NValue::list(vec))
+        }
+        Ok(_) => Err(NativeError("List.rotate_left: expected List".into())),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                let k = k.min(items.len().saturating_sub(1));
+                if items.is_empty() || k == 0 {
+                    return Ok(list_val);
+                }
+                let mut result = items.to_vec();
+                let first = result[0].clone();
+                for i in 0..k {
+                    result[i] = result[i + 1].clone();
+                }
+                result[k] = first;
+                Ok(NValue::list(result))
+            }
+            None => Err(NativeError(format!(
+                "List.rotate_left: expected List, got {}",
+                list_val
+            ))),
+        },
+    }
+}
+
+/// Swap two elements in a list.
+/// List.swap(list, i, j) -> List
+pub(super) fn native_list_swap(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let i = args[1].as_any_int().max(0) as usize;
+            let j = args[2].as_any_int().max(0) as usize;
+            if i >= items.len() || j >= items.len() || i == j {
+                return Ok(args[0].clone());
+            }
+            let mut result = items.to_vec();
+            result.swap(i, j);
+            Ok(NValue::list(result))
+        }
+        None => Err(NativeError(format!(
+            "List.swap: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
+/// Owning CoW variant of List.swap.
+pub(super) fn native_list_swap_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let mut args = args;
+    let j_val = args.pop().unwrap();
+    let i_val = args.pop().unwrap();
+    let list_val = args.pop().unwrap();
+    let i = i_val.as_any_int().max(0) as usize;
+    let j = j_val.as_any_int().max(0) as usize;
+
+    match list_val.try_unwrap_heap() {
+        Ok(HeapObject::List(mut vec)) => {
+            if i < vec.len() && j < vec.len() && i != j {
+                vec.swap(i, j);
+            }
+            Ok(NValue::list(vec))
+        }
+        Ok(_) => Err(NativeError("List.swap: expected List".into())),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                if i >= items.len() || j >= items.len() || i == j {
+                    return Ok(list_val);
+                }
+                let mut result = items.to_vec();
+                result.swap(i, j);
+                Ok(NValue::list(result))
+            }
+            None => Err(NativeError(format!(
+                "List.swap: expected List, got {}",
+                list_val
+            ))),
+        },
+    }
+}
+
+/// Append a single element to a list.
+/// List.push(list, element) -> List
+pub(super) fn native_list_push(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let mut result = items.to_vec();
+            result.push(args[1].clone());
+            Ok(NValue::list(result))
+        }
+        None => Err(NativeError(format!(
+            "List.push: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
+/// Owning CoW variant of List.push.
+pub(super) fn native_list_push_owning(args: Vec<NValue>) -> Result<NValue, NativeError> {
+    let mut args = args;
+    let val = args.pop().unwrap();
+    let list_val = args.pop().unwrap();
+
+    match list_val.try_unwrap_heap() {
+        Ok(HeapObject::List(mut vec)) => {
+            vec.push(val);
+            Ok(NValue::list(vec))
+        }
+        Ok(_) => Err(NativeError("List.push: expected List".into())),
+        Err(list_val) => match list_val.as_list() {
+            Some(items) => {
+                let mut result = Vec::with_capacity(items.len() + 1);
+                result.extend_from_slice(items);
+                result.push(val);
+                Ok(NValue::list(result))
+            }
+            None => Err(NativeError(format!(
+                "List.push: expected List, got {}",
+                list_val
+            ))),
+        },
+    }
+}
+
+/// Count the number of prefix-reversals (pancake flips) until element 0 is at position 0.
+/// List.count_flips(perm) -> Int
+/// Each step: reverse the first (perm[0]+1) elements.
+pub(super) fn native_list_count_flips(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let mut perm: Vec<i64> = items.iter().map(|v| v.as_any_int()).collect();
+            let mut flips = 0i64;
+            while perm[0] != 0 {
+                let k = perm[0] as usize + 1;
+                perm[..k].reverse();
+                flips += 1;
+            }
+            Ok(NValue::int(flips))
+        }
+        None => Err(NativeError(format!(
+            "List.count_flips: expected List<Int>, got {}",
+            args[0]
+        ))),
+    }
+}
+
+/// Linear scan on a sorted Float list: find first index where list[i] >= value.
+/// List.bisect(list, value) -> Int
+pub(super) fn native_list_bisect(args: &[NValue]) -> Result<NValue, NativeError> {
+    match args[0].as_list() {
+        Some(items) => {
+            let val = args[1].as_float();
+            for (i, item) in items.iter().enumerate() {
+                if val < item.as_float() {
+                    return Ok(NValue::int(i as i64));
+                }
+            }
+            Ok(NValue::int(items.len().saturating_sub(1) as i64))
+        }
+        None => Err(NativeError(format!(
+            "List.bisect: expected List, got {}",
+            args[0]
+        ))),
+    }
+}
+
 /// Polymorphic contains for test matchers: string -> substring check, list -> element check.
 pub(super) fn native_test_contains(args: &[NValue]) -> Result<NValue, NativeError> {
     if let Some(s) = args[0].as_string() {
