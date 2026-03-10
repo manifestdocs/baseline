@@ -141,6 +141,24 @@ enum Commands {
         /// Look up a specific function by qualified name (e.g. List.map)
         query: Option<String>,
     },
+
+    /// Generate OpenAPI 3.1 specification from source code
+    Openapi {
+        /// The Baseline source file (entry point with Router)
+        file: PathBuf,
+
+        /// Output file (default: stdout)
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+
+        /// API title for the OpenAPI info section
+        #[arg(long, default_value = "Baseline API")]
+        title: String,
+
+        /// API version for the OpenAPI info section
+        #[arg(long, default_value = "0.1.0")]
+        version: String,
+    },
 }
 
 fn main() {
@@ -347,6 +365,37 @@ fn main() {
                 println!("{}", serde_json::to_string_pretty(&docs).unwrap());
             } else {
                 print!("{}", blc::docs::render_markdown(&docs));
+            }
+        }
+
+        Commands::Openapi {
+            file,
+            output,
+            title,
+            version,
+        } => {
+            let model = match blc::openapi::extract_from_file(&file) {
+                Ok(m) => m,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let doc = blc::openapi::to_openapi_json(&model, &title, &version);
+            let json_str = serde_json::to_string_pretty(&doc).unwrap();
+
+            match output {
+                Some(path) => {
+                    std::fs::write(&path, &json_str).unwrap_or_else(|e| {
+                        eprintln!("Failed to write {}: {}", path.display(), e);
+                        std::process::exit(1);
+                    });
+                    eprintln!("OpenAPI spec written to {}", path.display());
+                }
+                None => {
+                    println!("{}", json_str);
+                }
             }
         }
     }
