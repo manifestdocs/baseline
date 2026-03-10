@@ -10,62 +10,37 @@ type Title = String where String.length(self) >= 1 && String.length(self) <= 100
 
 type Status = String where self == "pending" || self == "in_progress" || self == "done"
 
-// --- Request parsing ---
-// These bridge HTTP to domain: raw request data -> parsed values,
-// with errors mapped to proper HTTP error types.
-
-fn parse_id(raw: String) -> Result<Int, HttpError> =
-  match String.to_int(raw)
-    Some(id) -> Ok(id)
-    None -> Err(HttpError.bad_request("Invalid ID: must be an integer"))
-
-fn require_todo(id: Int) -> Result<Unknown, HttpError> =
-  match Todo.find(id)
-    Some(todo) -> Ok(todo)
-    None -> Err(HttpError.not_found("Todo not found"))
-
 // --- Handlers ---
+// Effect annotations are omitted -- the compiler infers them from usage.
+// Only main! needs an explicit annotation to document the app's effect surface.
 
-// GET /health
-
-fn health(req: Request) -> {Http} Result<Response, HttpError> =
+fn health(req: Request) -> Result<Response, HttpError> =
   Ok(Response.json({ status: "ok", version: "0.1.0" }))
 
-// GET /todos
+fn list_todos(req: Request) -> Result<Response, HttpError> = Ok(Response.json(Todo.all()))
 
-fn list_todos(req: Request) -> {Http} Result<Response, HttpError> = Ok(Response.json(Todo.all()))
-
-// GET /todos/:id
-
-fn get_todo(req: Request) -> {Http} Result<Response, HttpError> = {
-  let id = parse_id(req.params.id)?
-  let todo = require_todo(id)?
+fn get_todo(req: Request) -> Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
+  let todo = Option.ok_or(Todo.find(id), HttpError.not_found("Todo not found"))?
   Ok(Response.json(todo))
 }
 
-// POST /todos
-// Request.decode validates the body against the CreateTodo schema.
-
-fn create_todo(req: Request) -> {Http, Random} Result<Response, HttpError> = {
+fn create_todo(req: Request) -> Result<Response, HttpError> = {
   let data = Request.body_json(req)?
   let todo = Todo.create(Random.int!(1, 99999), data.title)
   Ok(Response.created(todo))
 }
 
-// PUT /todos/:id
-
-fn update_todo(req: Request) -> {Http} Result<Response, HttpError> = {
-  let id = parse_id(req.params.id)?
-  let _ = require_todo(id)?
+fn update_todo(req: Request) -> Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
+  let _ = Option.ok_or(Todo.find(id), HttpError.not_found("Todo not found"))?
   let data = Request.body_json(req)?
   Ok(Response.json(Todo.new(id, data.title, data.status)))
 }
 
-// DELETE /todos/:id
-
-fn delete_todo(req: Request) -> {Http} Result<Response, HttpError> = {
-  let id = parse_id(req.params.id)?
-  let _ = require_todo(id)?
+fn delete_todo(req: Request) -> Result<Response, HttpError> = {
+  let id = Request.param_int(req, "id")?
+  let _ = Option.ok_or(Todo.find(id), HttpError.not_found("Todo not found"))?
   Ok(Response.no_content())
 }
 
