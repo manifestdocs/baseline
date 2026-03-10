@@ -1054,7 +1054,28 @@ fn check_node_inner(
                             check_node(&arg_expr, source, file, symbols, diagnostics)
                         };
 
-                        let _ = ctx.unify(&arg_type, schema_param);
+                        if let Err(_) = ctx.unify(&arg_type, schema_param) {
+                            // Only report when both sides are concrete (not Unknown/Var)
+                            if arg_type != Type::Unknown {
+                                let expected = ctx.apply(schema_param);
+                                if expected != Type::Unknown {
+                                    diagnostics.push(Diagnostic {
+                                        code: "TYP_006".to_string(),
+                                        severity: Severity::Error,
+                                        location: Location::from_node(file, &arg_expr),
+                                        message: format!(
+                                            "Type mismatch: expected {}, found {}",
+                                            expected, arg_type
+                                        ),
+                                        context: format!(
+                                            "Argument {} has incompatible type.",
+                                            i + 1
+                                        ),
+                                        suggestions: vec![],
+                                    });
+                                }
+                            }
+                        }
                     }
 
                     // After unification: validate trait bounds and populate dict_map

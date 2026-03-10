@@ -1182,22 +1182,8 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
         );
     }
 
-    // -- Async builtins (effect: Async) --
-    // scope! is a standalone effectful call (like println!) that takes a closure.
-    if builtin_modules.contains(&"Async") {
-        sigs.insert(
-            "scope!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
-        );
-    }
-
-    // -- Scope native methods (effect: Async) --
-    if native_modules.contains(&"Scope") {
-        sigs.insert(
-            "Scope.spawn!".into(),
-            Type::Function(vec![Type::Unknown, Type::Unknown], Box::new(Type::Unknown)),
-        );
-    }
+    // scope!, Scope.spawn!, Cell.await!, Cell.cancel! are handled by generic schemas
+    // in infer.rs for proper Cell<T> type propagation.
 
     // -- Async builtins (effect: Async) --
     if builtin_modules.contains(&"Async") {
@@ -1260,18 +1246,6 @@ pub(super) fn builtin_type_signatures(prelude: &Prelude) -> HashMap<String, Type
                     ],
                 )),
             ),
-        );
-    }
-
-    // -- Cell native methods (effect: Async) --
-    if native_modules.contains(&"Cell") {
-        sigs.insert(
-            "Cell.await!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unknown)),
-        );
-        sigs.insert(
-            "Cell.cancel!".into(),
-            Type::Function(vec![Type::Unknown], Box::new(Type::Unit)),
         );
     }
 

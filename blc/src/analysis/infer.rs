@@ -75,6 +75,7 @@ pub fn substitute_type_params(ty: &Type, mapping: &HashMap<String, Type>) -> Typ
         Type::Set(inner) => Type::Set(Box::new(substitute_type_params(inner, mapping))),
         Type::Weak(inner) => Type::Weak(Box::new(substitute_type_params(inner, mapping))),
         Type::Scoped(inner) => Type::Scoped(Box::new(substitute_type_params(inner, mapping))),
+        Type::Cell(inner) => Type::Cell(Box::new(substitute_type_params(inner, mapping))),
         // Concrete types pass through unchanged
         _ => ty.clone(),
     }
@@ -164,6 +165,7 @@ impl InferCtx {
                 Ok(())
             }
             (Type::Scoped(a), Type::Scoped(b)) => self.unify(a, b),
+            (Type::Cell(a), Type::Cell(b)) => self.unify(a, b),
             (Type::Enum(na, va), Type::Enum(nb, vb)) if na == nb => {
                 // Same-named enums: unify variant payloads pairwise
                 for ((_name_a, payloads_a), (_name_b, payloads_b)) in va.iter().zip(vb.iter()) {
@@ -211,6 +213,7 @@ impl InferCtx {
                 Type::Enum(name.clone(), variants)
             }
             Type::Scoped(inner) => Type::Scoped(Box::new(self.apply(inner))),
+            Type::Cell(inner) => Type::Cell(Box::new(self.apply(inner))),
             Type::Weak(inner) => Type::Weak(Box::new(self.apply(inner))),
             // TypeParam passes through (only appears in templates before instantiation)
             Type::TypeParam(_) => ty.clone(),
@@ -241,6 +244,7 @@ impl InferCtx {
                 .iter()
                 .any(|(_, payloads)| payloads.iter().any(|p| self.occurs_check(var, p))),
             Type::Scoped(inner) => self.occurs_check(var, inner),
+            Type::Cell(inner) => self.occurs_check(var, inner),
             Type::Weak(inner) => self.occurs_check(var, inner),
             _ => false,
         }
@@ -1540,6 +1544,68 @@ pub fn builtin_generic_schemas() -> HashMap<String, GenericSchema> {
                     ],
                     Box::new(t),
                 )
+            },
+        },
+    );
+
+    // -- Concurrency: scope!, Scope.spawn!, Cell.await!, Cell.cancel! --
+
+    // scope! : ((Scope) -> T) -> T
+    schemas.insert(
+        "scope!".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![Type::Function(
+                        vec![Type::Module("Scope".to_string())],
+                        Box::new(t.clone()),
+                    )],
+                    Box::new(t),
+                )
+            },
+        },
+    );
+
+    // Scope.spawn! : (Scope, () -> T) -> Cell<T>
+    schemas.insert(
+        "Scope.spawn!".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(
+                    vec![
+                        Type::Module("Scope".to_string()),
+                        Type::Function(vec![], Box::new(t.clone())),
+                    ],
+                    Box::new(Type::Cell(Box::new(t))),
+                )
+            },
+        },
+    );
+
+    // Cell.await! : (Cell<T>) -> T
+    schemas.insert(
+        "Cell.await!".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(vec![Type::Cell(Box::new(t.clone()))], Box::new(t))
+            },
+        },
+    );
+
+    // Cell.cancel! : (Cell<T>) -> ()
+    schemas.insert(
+        "Cell.cancel!".into(),
+        GenericSchema {
+            type_params: 1,
+            build: |ctx| {
+                let t = ctx.fresh_var();
+                Type::Function(vec![Type::Cell(Box::new(t))], Box::new(Type::Unit))
             },
         },
     );
